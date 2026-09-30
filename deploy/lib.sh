@@ -60,6 +60,18 @@ wait_api_health() {
   return 1
 }
 
+# nginx in a freshly recreated frontend container accepts connections a few
+# seconds after "Started" — a one-shot probe sees "connection reset" and would
+# trigger a needless rollback.
+wait_frontend() {
+  local n="${1:-30}" i
+  for i in $(seq 1 "$n"); do
+    curl -fsS -o /dev/null http://127.0.0.1:3000 2>/dev/null && return 0
+    sleep 2
+  done
+  return 1
+}
+
 # Wait until the FULL topology readiness probe is green (workers need ~45s
 # to acquire leases). Prints the body on success; returns 1 on timeout.
 wait_release_ready() {

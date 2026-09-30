@@ -452,7 +452,7 @@ elif [ "${MODE}" = "--production" ]; then
   echo "   HTTPS verified"
 else
   echo "-- verifying frontend"
-  curl -fsS -o /dev/null http://127.0.0.1:3000 || { echo "ERROR: frontend not reachable on 127.0.0.1:3000"; exit 1; }
+  wait_frontend 30 || { echo "ERROR: frontend not reachable on 127.0.0.1:3000"; exit 1; }
   echo "   frontend serving"
 fi
 

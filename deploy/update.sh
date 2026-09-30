@@ -58,7 +58,7 @@ echo "   API healthy"
 verify_running_sha || rollback
 
 echo "-- verifying frontend"
-curl -fsS -o /dev/null http://127.0.0.1:3000 || rollback
+wait_frontend 30 || rollback
 echo "   frontend serving"
 
 echo "-- verifying release readiness (workers, leases, Mongo, reconciliation, outbox, schema)"
