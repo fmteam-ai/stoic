@@ -184,7 +184,9 @@ On the server, `deploy/update.sh` and a first `--production` install **refuse to
 3. `cosign verify-blob` proves it was signed by **your** repo's GitHub workflow,
 4. the content gate passes: SHA matches, 0 failed/errored tests, ≥ 500 tests, 0 pip-audit vulns, 0 fixable critical image vulns, all gates green, decision `APPROVED`.
 
-The verified record is kept at `release/attestation.current.json`. `ATTESTATION_REQUIRED=false` in `./.env` disables the gate (dev only). cosign is installed automatically on first use.
+The verified record is kept at `release/attestation.current.json`.
+
+**Production detection (r31 fix):** `deploy/lib.sh app_env()` reports `production` when EITHER `./.env` or `backend/.env` says so (the API reads `backend/.env`; older installers wrote only there, so deploy gates silently ran non-strict on production hosts). In production every `update.sh` is fail-closed: tagged + cosign-attested release, strict provenance, `RECONCILE_EXPECT`/`RECONCILE_SCOPE_USER_ID` in `./.env`, signed topology + pre-promotion evidence, and `release-readiness.ready == true`. Gates that fail BEFORE the build (`gate_refused`) restore the checkout and exit without touching the running stack. `ATTESTATION_REQUIRED=false` in `./.env` disables the gate (dev only). cosign is installed automatically on first use.
 
 ### Option A — two clicks + one command (recommended to start)
 

@@ -151,7 +151,7 @@ def test_deploy_scripts_enforce_the_gate():
     upd = open(os.path.join(ROOT, "deploy", "update.sh")).read()
     inst = open(os.path.join(ROOT, "deploy", "install.sh")).read()
     lib = open(os.path.join(ROOT, "deploy", "lib.sh")).read()
-    assert "verify_attestation || rollback" in upd
+    assert "verify_attestation || gate_refused" in upd and "gate_refused() {" in upd
     assert "verify_attestation ||" in inst
     assert "cosign verify-blob" in lib and "--certificate-oidc-issuer" in lib
     rel = open(os.path.join(ROOT, ".github", "workflows", "release.yml")).read()

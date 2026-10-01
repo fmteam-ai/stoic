@@ -43,6 +43,15 @@ else
   exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" bash deploy/update.sh "${REF}"
 fi
 
+# Pre-build gates fail BEFORE anything on the host changed: restore the checkout
+# and stop — never rebuild/restart the running stack for a refused release.
+gate_refused() {
+  echo "!! release refused before build — nothing was changed; checkout restored to ${PREV}"
+  git checkout --detach "${PREV}"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) gate-refused ref=${REF}" >> deploy/releases.log
+  exit 1
+}
+
 rollback() {
   if [ "${UPDATE_HOLD_ON_FAILURE:-0}" = "1" ]; then
     echo "!! verification failed — UPDATE_HOLD_ON_FAILURE=1: leaving $(git rev-parse --short HEAD) running for inspection"
@@ -60,10 +69,10 @@ rollback() {
 }
 
 echo "-- release attestation gate (signed CI record: SHA · tests · scans · gates)"
-verify_attestation || rollback
+verify_attestation || gate_refused
 
 echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test manifest bind to one commit)"
-verify_release_provenance || rollback
+verify_release_provenance || gate_refused
 
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
 ensure_release_secrets
@@ -97,7 +106,7 @@ fi
 # to the production tenant (RECONCILE_SCOPE_USER_ID) and the evidence must carry
 # a non-null signature from the dedicated key. Any missing element → rollback.
 _envval() { { grep -E "^$1=" .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d '"'"'"; }   # never non-zero under pipefail
-APP_ENV_VAL=$(_envval APP_ENV)
+APP_ENV_VAL=$(app_env)   # production if ./.env OR backend/.env says so (lib.sh — the backend reads backend/.env)
 RECONCILE_EXPECT=$(_envval RECONCILE_EXPECT)
 RECONCILE_SCOPE=$(_envval RECONCILE_SCOPE_USER_ID)
 APPROVED_POLICY=$(_envval RECONCILE_APPROVED_POLICY); APPROVED_POLICY="${APPROVED_POLICY:-6/3/3}"
@@ -106,7 +115,7 @@ if [ "${APP_ENV_VAL}" = "production" ]; then
   echo "${RECONCILE_EXPECT}" | grep -Eq '^[0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N)"; rollback; }
   [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY}"; rollback; }
   [ -n "${RECONCILE_SCOPE}" ] || { echo "!! production requires RECONCILE_SCOPE_USER_ID (explicit tenant scope)"; rollback; }
-  [ -n "$(_envval LEDGER_ANCHOR_KEY)" ] || { echo "!! production requires LEDGER_ANCHOR_KEY (dedicated evidence signing key)"; rollback; }
+  [ -n "$(_envval LEDGER_ANCHOR_KEY)" ] || [ -s secrets/ledger_anchor_key ] || { echo "!! production requires LEDGER_ANCHOR_KEY (dedicated evidence signing key — secrets/ledger_anchor_key or ./.env)"; rollback; }
 fi
 if [ -n "${RECONCILE_EXPECT}" ]; then
   echo "-- verifying production topology policy (${RECONCILE_EXPECT}, signed read-only reconciliation)"

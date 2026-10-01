@@ -32,6 +32,12 @@ export const AccountEnvironmentsPanel = () => {
         finally { setSaving(false); }
     };
 
+    const needsOverride = target?.next === "DEMO" && !!target?.proof && !target.proof.ok;
+    const missing = [];
+    if (needsOverride && !form.override) missing.push("tick the override confirmation above");
+    if (needsOverride && form.reason.trim().length < 10) missing.push(`reason needs ${10 - form.reason.trim().length} more character(s)`);
+    if (!form.password) missing.push("enter your password");
+
     return (
         <div className="mt-8" data-testid="account-environments-panel">
             <div className="mb-3">
@@ -95,12 +101,17 @@ export const AccountEnvironmentsPanel = () => {
                                 <span>The EA reports <b>{target.proof.reported_server || "an unnamed server"}</b>, which is not demo-named. I confirm this is a practice account and accept that this override is recorded in the audit chain (reason required, ≥10 chars).</span>
                             </label>
                         )}
-                        <Input data-testid="account-env-reason" placeholder={form.override ? "reason (required for override)" : "reason (optional)"} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+                        <Input data-testid="account-env-reason" placeholder={needsOverride ? "reason (REQUIRED for override, ≥10 chars)" : "reason (optional)"} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} className={needsOverride && form.reason.trim().length < 10 ? "border-[#FF3B30]/60" : ""} />
                         <Input data-testid="account-env-password" type="password" placeholder="your password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="current-password" />
                         <Input data-testid="account-env-otp" inputMode="numeric" placeholder="authenticator code (if enabled)" value={form.otp} onChange={(e) => setForm({ ...form, otp: e.target.value })} autoComplete="one-time-code" />
+                        {missing.length > 0 && (
+                            <ul data-testid="account-env-missing" className="text-[11px] font-mono text-[#FFB000] space-y-0.5">
+                                {missing.map((m) => <li key={m}>· {m}</li>)}
+                            </ul>
+                        )}
                         <div className="flex justify-end gap-2 pt-1">
                             <Button variant="ghost" data-testid="account-env-cancel" onClick={() => setTarget(null)}>Cancel</Button>
-                            <Button data-testid="account-env-submit" disabled={saving || !form.password || (target?.next === "DEMO" && target?.proof && !target.proof.ok && (!form.override || form.reason.trim().length < 10))} onClick={submit}>{saving ? "Applying…" : "Confirm"}</Button>
+                            <Button data-testid="account-env-submit" disabled={saving || missing.length > 0} className="disabled:opacity-40" onClick={submit}>{saving ? "Applying…" : "Confirm"}</Button>
                         </div>
                     </div>
                 </DialogContent>

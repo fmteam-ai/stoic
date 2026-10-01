@@ -11,6 +11,17 @@ set_kv() {
   fi
 }
 
+# APP_ENV as the BACKEND sees it. The API process reads backend/.env (compose
+# env_file); ./.env is the installer/compose file. Earlier installers wrote
+# production only to backend/.env, so deploy gates keyed off ./.env silently ran
+# non-strict on production hosts. Fail closed: production if EITHER file says so.
+app_env() {
+  local a b
+  a=$( { grep -E '^APP_ENV=' .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+  b=$( { grep -E '^APP_ENV=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+  if [ "${a}" = "production" ] || [ "${b}" = "production" ]; then printf 'production'; else printf '%s' "${b:-${a}}"; fi
+}
+
 # Docker secrets introduced by later releases — generated when missing so an
 # existing install upgrades without manual steps (install.sh + update.sh).
 #   order_auth_secret / ledger_anchor_key : signing keys distinct from JWT (boot rule)
@@ -141,7 +152,7 @@ sys.exit(0 if not missing else 1)
 wait_release_ready() {
   local n="${1:-45}" tok body i mode="infra"
   tok=$(metrics_token) || return 1
-  [ "$( { grep -E '^APP_ENV=' .env 2>/dev/null || true; } | cut -d= -f2- | tr -d '"' )" = "production" ] && mode="strict"
+  [ "$(app_env)" = "production" ] && mode="strict"
   for i in $(seq 1 "$n"); do
     body=$(curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null || true)
     if [ -n "${body}" ] && printf '%s' "${body}" | _readiness_eval "${mode}" 2>/dev/null; then
@@ -215,7 +226,12 @@ attestation_required() {
   [ "$(deploy_mode)" = "registry" ] && return 0
   local v
   v=$( { grep -E '^ATTESTATION_REQUIRED=' .env 2>/dev/null || true; } | cut -d= -f2-)
-  if [ -n "${v}" ]; then [ "${v}" = "true" ]; return; fi
+  if [ -n "${v}" ]; then
+    [ "${v}" = "true" ] && return 0
+    [ "$(app_env)" = "production" ] && echo "!! ATTESTATION_REQUIRED=false on a PRODUCTION host — release attestation gate consciously bypassed (remove the line to restore)"
+    return 1
+  fi
+  [ "$(app_env)" = "production" ] && return 0
   grep -q 'docker-compose.tls.yml' .env 2>/dev/null
 }
 

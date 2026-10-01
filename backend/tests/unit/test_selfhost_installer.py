@@ -78,6 +78,28 @@ def test_installer_configures_external_signer_and_prod_hardening():
     d = yaml.safe_load(_read("docker-compose.yml"))
     assert d["services"]["backend"]["environment"]["SECRETS_MASTER_KEY_FILE"] == "/run/secrets/secrets_master_key"
     assert "secrets_master_key" in d["secrets"]
+
+
+def test_deploy_gates_read_app_env_from_backend_env_too(tmp_path):
+    """install.sh wrote APP_ENV=production only to backend/.env while update.sh keyed its
+    production gates off ./.env → gates silently ran non-strict on production hosts."""
+    lib = _read("deploy", "lib.sh")
+    assert "app_env()" in lib and '[ "$(app_env)" = "production" ] && mode="strict"' in lib
+    assert "APP_ENV_VAL=$(app_env)" in _read("deploy", "update.sh")
+    inst = _read("deploy", "install.sh")
+    assert "set_kv .env APP_ENV production" in inst and "set_kv backend/.env APP_ENV production" in inst
+    # behavioural: either file saying production → production (fail closed)
+    script = f'. {os.path.join(ROOT, "deploy", "lib.sh")}; app_env'
+    for root_env, backend_env, want in (("", "APP_ENV=production\n", "production"),
+                                        ("APP_ENV=production\n", "APP_ENV=development\n", "production"),
+                                        ("", "APP_ENV=development\n", "development"),
+                                        ("", "", "")):
+        d = tmp_path / f"case_{want or 'none'}_{len(root_env)}"
+        (d / "backend").mkdir(parents=True)
+        (d / ".env").write_text(root_env)
+        (d / "backend" / ".env").write_text(backend_env)
+        out = subprocess.run(["bash", "-c", script], cwd=d, capture_output=True, text=True, check=True).stdout
+        assert out == want, (root_env, backend_env, out)
     for script in ("deploy/install.sh", "deploy/bootstrap.sh"):
         subprocess.run(["bash", "-n", os.path.join(ROOT, script)], check=True)
 

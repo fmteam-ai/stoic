@@ -242,7 +242,7 @@ def test_r6_update_sh_makes_topology_gate_mandatory_in_production():
                    "LEDGER_ANCHOR_KEY", "evidence unsigned or malformed", "--strict"):
         assert needle in upd, needle
     # every refusal rolls back
-    seg = upd[upd.index("APP_ENV_VAL=$(_envval APP_ENV)"):upd.index("pruning dangling images")]
+    seg = upd[upd.index("APP_ENV_VAL=$(app_env)"):upd.index("pruning dangling images")]
     assert seg.count("rollback") >= 7
 
 

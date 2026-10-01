@@ -31,6 +31,8 @@ try:
     load_dotenv(os.path.join(ROOT, ".env"))
 except Exception:  # noqa: BLE001
     pass
+from secrets_loader import resolve_file_secrets  # noqa: E402 — Docker-secret deployments (*_FILE → value)
+resolve_file_secrets()
 
 FRESH_S = 600
 

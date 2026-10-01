@@ -290,6 +290,7 @@ sed -i '/^STEP_UP_BYPASS_TOKEN=/d; /^RATE_LIMIT_BYPASS_TOKEN=/d' backend/.env
 # 3 · deployment-mode hardening (explicit, not just a warning)
 if [ "${MODE}" = "--production" ] || [ "${MODE}" = "--behind-proxy" ]; then
   set_kv backend/.env APP_ENV production
+  set_kv .env APP_ENV production          # deploy scripts (update/rollback gates) read the same answer
   set_kv backend/.env ADMIN_MFA_ENFORCED true
   set_kv backend/.env CSRF_ENFORCE_ORIGIN true
   set_kv backend/.env CORS_ORIGINS "https://${DOMAIN},https://www.${DOMAIN}"
@@ -299,6 +300,7 @@ else
     echo "ERROR: backend/.env says APP_ENV=production but you ran --dev."
     echo "       Re-run with: deploy/install.sh --production <domain>"; exit 1; }
   set_kv backend/.env APP_ENV development
+  set_kv .env APP_ENV development
   echo "   DEV MODE: all ports bound to 127.0.0.1 only — not publicly reachable."
 fi
 

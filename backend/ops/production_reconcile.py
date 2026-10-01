@@ -32,6 +32,8 @@ try:
     load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"))
 except Exception:  # noqa: BLE001
     pass
+from secrets_loader import resolve_file_secrets  # noqa: E402 — Docker-secret deployments (*_FILE → value)
+resolve_file_secrets()
 
 FRESH_S = 600
 EXPECT_RE = re.compile(r"^\d{1,4}/\d{1,4}/\d{1,4}$")

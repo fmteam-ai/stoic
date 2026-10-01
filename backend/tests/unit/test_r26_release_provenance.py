@@ -61,7 +61,7 @@ def test_installer_and_updater_refuse_inconsistent_provenance():
     inst = open(os.path.join(REPO, "deploy", "install.sh")).read()
     assert inst.index("verify_release_provenance || exit 1") < inst.index("provision_images || exit 1")
     upd = open(os.path.join(REPO, "deploy", "update.sh")).read()
-    assert upd.index("verify_release_provenance || rollback") < upd.index("provision_images || rollback")
+    assert upd.index("verify_release_provenance || gate_refused") < upd.index("provision_images || rollback")   # refused before build → no restart
 
 
 def test_consistency_check_treats_digest_mismatch_as_failure_even_in_snapshot_mode():
