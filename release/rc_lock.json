@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-10-01T15:33:31.862829+00:00",
-  "git_commit": "7efcf31ec773bd1dd11e97743051b745652418a4",
-  "source_sha": "7efcf31ec773bd1dd11e97743051b745652418a4",
+  "captured_at": "2026-10-01T15:55:56.299477+00:00",
+  "git_commit": "512d60f237ed3e09b1230768c06c110d07ae443a",
+  "source_sha": "512d60f237ed3e09b1230768c06c110d07ae443a",
   "images": {
     "backend": null,
     "frontend": null
@@ -99,7 +99,7 @@
       "librt==0.11.0",
       "license-expression==30.4.4",
       "lightgbm==4.6.0",
-      "litellm==1.93.0",
+      "litellm==1.93.2",
       "markdown-it-py==4.2.0",
       "matplotlib==3.11.0",
       "mccabe==0.7.0",
@@ -201,8 +201,8 @@
       "yarl==1.24.2",
       "zipp==4.1.0"
     ],
-    "packages_sha256": "29b935600f82f9d86c2052184fece744646c4532b3a99d43028ce7023393bb1e",
-    "requirements_txt_sha256": "10fdf2a1c5030585ef5ee0e7342a43c07f2afdd27f47060236388d4fe7f515a3"
+    "packages_sha256": "3b3d266a109f25ab2af6fe047643085b06231e3b894214aadb3925156c4d0d88",
+    "requirements_txt_sha256": "2b39983a4299afcbc1a825b790401594a56e3cc7011f8eb42164eb546915f654"
   },
   "node": {
     "version": "v20.20.2",

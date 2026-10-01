@@ -26,7 +26,7 @@ def world(request):
     from database import get_db
     db = get_db()
     uid = str(ObjectId())
-    admin = {"id": str(ObjectId()), "email": f"adm-{uid[-6:]}@example.com", "role": "admin"}
+    admin = {"id": str(ObjectId()), "email": f"adm-{uid[-6:]}@example.com", "role": "admin", "two_factor_enabled": True}
 
     def _cleanup():
         ids = [str(a["_id"]) for a in _run(db.accounts.find({"user_id": uid}).to_list(10))]

@@ -2985,3 +2985,4 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Hardening items accepted/backlog: e-mail test-send re-auth (P3), distinct SECRETS_MASTER_KEY required in prod (P3), omit master_key_id (INFO). `account_limits` live-slot caps still use heuristic broker_environment (billing, not safety).
 - Also de-flaked `test_r17_audit.py::test_recovery_reuses_original_bound_targets` (Event instead of sleep). rc_lock refrozen.
 - Operator step for the user: Admin → Broker Registry → Account Environments → ATTEST DEMO on the RoboForex demo account, then start the bot.
+- CI fix: r27 test admin fixture now carries `two_factor_enabled: True` (CI enforces ADMIN_MFA_ENFORCED=true); `litellm` bumped 1.93.0 → 1.93.2 (CVE-2026-84377, pip-audit). rc_lock refrozen.
