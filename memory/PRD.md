@@ -3002,3 +3002,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## 2026-10-01 — P1-03/P1-04 Signed EX5 chain (code side DONE; needs signer secrets + one workflow run)
 - `.github/workflows/ea-release.yml`: compile → record → sign → commit back. `release.yml` ea-compile asserts reproducibility vs committed record. `verify_ea_release.py`: UTF-16 logs, toolchain from log, version from MQ5 property, `source_commit`, `compiled_by`, writes `release/ea_release.json`; check_entry refuses manual/version-mismatch. `ea_capabilities.expected_ea_sha256` trusts only signed + CI + source-matching records (cached). Dockerfile ships the record. Tests: `tests/unit/test_r30_ea_release_chain.py`. rc_lock refrozen.
 - Operator: provision RELEASE_SIGNER_* secrets, run the ea-release workflow once, then update.sh.
+
+## 2026-06 — Go-live of 625dbf3 (Round-29 + Signed EX5 chain) — HANDED TO OPERATOR
+- Pre-flight done in preview: working tree clean (reverted 2 local test ledger anchors), TEST_MANIFEST up to date, rc_lock --check OK, Dockerfile tolerates missing release/ea_release.json (glob COPY).
+- Operator steps: Save to GitHub → (optional) RELEASE_SIGNER_* secrets + run ea-release workflow → `cd /opt/stoic && ./deploy/update.sh` → verify readiness strip + Broker Registry attestation.
+- Pending after deploy: P1-05 operational acceptance pack, SEC-001 decoy nonce.
