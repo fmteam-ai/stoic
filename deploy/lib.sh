@@ -227,9 +227,13 @@ attestation_required() {
   local v
   v=$( { grep -E '^ATTESTATION_REQUIRED=' .env 2>/dev/null || true; } | cut -d= -f2-)
   if [ -n "${v}" ]; then
-    [ "${v}" = "true" ] && return 0
-    [ "$(app_env)" = "production" ] && echo "!! ATTESTATION_REQUIRED=false on a PRODUCTION host — release attestation gate consciously bypassed (remove the line to restore)"
-    return 1
+    case "${v}" in
+      true) return 0 ;;
+      false)
+        [ "$(app_env)" = "production" ] && echo "!! ATTESTATION_REQUIRED=false on a PRODUCTION host — release attestation gate consciously bypassed (remove the line to restore)"
+        return 1 ;;
+      *) echo "!! ATTESTATION_REQUIRED='${v}' is not true|false — treating as REQUIRED (fail closed)"; return 0 ;;
+    esac
   fi
   [ "$(app_env)" = "production" ] && return 0
   grep -q 'docker-compose.tls.yml' .env 2>/dev/null
