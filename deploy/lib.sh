@@ -30,13 +30,16 @@ ensure_release_secrets() {
   chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/secrets_master_key
 }
 
-# After a failed `compose up`, an app container that EXITED or is UNHEALTHY is a
-# boot failure of the new build — not a mount leak. Print its log and stop
-# retrying so the cause is visible instead of buried under 6 identical attempts.
+# After a failed `compose up`, an app container CREATED BY THIS PASS that exited
+# or is unhealthy is a boot failure of the new build — not a mount leak. Print its
+# log and stop retrying so the cause is visible instead of buried under 6 identical
+# attempts. Containers older than the pass (previous build, mid-recreate) are ignored.
 app_boot_failure() {
-  local c state found=1
+  local since="$1" c created state found=1
   for c in $(docker compose ps -a --format '{{.Name}} {{.State}} {{.Health}}' 2>/dev/null \
              | awk '$1 ~ /-(backend|worker-[a-z]+|frontend)-[0-9]+$/ && ($2 == "exited" || $3 == "unhealthy") {print $1}'); do
+    created=$(date -u -d "$(docker inspect -f '{{.Created}}' "$c" 2>/dev/null)" +%s 2>/dev/null || echo 0)
+    [ "${created}" -ge "${since}" ] || continue
     found=0
     state=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' "$c" 2>/dev/null || true)
     echo "!! ${c}: ${state} — last log lines:"
@@ -560,11 +563,12 @@ reap_zombies() {
 # NEXT container it recreates — reap and retry until compose converges.
 compose_up() {
   reap_zombies || return 1
-  local flags="-d --remove-orphans" attempt
+  local flags="-d --remove-orphans" attempt pass_started
   [ "$(deploy_mode)" = "registry" ] && flags="${flags} --no-build"
   for attempt in 1 2 3 4 5 6; do
+    pass_started=$(date -u +%s)
     docker compose up ${flags} "$@" && return 0
-    if app_boot_failure; then
+    if app_boot_failure "${pass_started}"; then
       echo "ERROR: the new build's container(s) failed to boot (see log above) — this is not a Docker mount problem; fix the cause and re-run"
       return 1
     fi
