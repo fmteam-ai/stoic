@@ -62,6 +62,14 @@ async def persist_progress(db, loop_name: str) -> None:
         {"_id": loop_name}, {"$set": dict(st)}, upsert=True)
 
 
+def _vault_key_id() -> str | None:
+    try:
+        from integrations_settings import master_key_id
+        return master_key_id()
+    except Exception:  # noqa: BLE001
+        return None
+
+
 async def _try_acquire(db, name: str) -> bool:
     now = datetime.now(timezone.utc)
     res = await db.worker_leases.update_one(
@@ -74,7 +82,8 @@ async def _try_acquire(db, name: str) -> bool:
                  {"expires_at": {"$exists": False}}]},
         {"$set": {"holder": HOLDER,
                   "expires_at": now + timedelta(seconds=LEASE_TTL_SEC),
-                  "renewed_at": now}},
+                  "renewed_at": now,
+                  "vault_key_id": _vault_key_id()}},   # r29 P2-04: worker acknowledges the vault key it booted with
         upsert=False)
     if res.matched_count == 1:
         return True

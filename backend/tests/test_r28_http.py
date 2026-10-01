@@ -82,7 +82,11 @@ def test_admin_attest_flow(admin_session):
                 "broker": "VT Markets", "server": "VTMarkets-Demo", "broker_server": "VTMarkets-Demo",
                 "account_number": f"demo-{uid[-6:]}", "bridge_token": f"r28http-demo-{uid}",
                 "ea_version": "1.57", "creds_version": 0,
-                "ea_identity": {"installation_id": f"inst-{uid[-6:]}", "authoritative": True}}
+                # r29 P1-02: attestation needs fresh authoritative EA evidence
+                "broker_account_id_reported": f"demo-{uid[-6:]}",
+                "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+                "ea_identity": {"installation_id": f"inst-{uid[-6:]}", "authoritative": True,
+                                "broker_server": "VTMarkets-Demo"}}
     live_doc = {**demo_doc, "account_type": "live", "bridge_token": f"r28http-live-{uid}",
                 "account_number": f"live-{uid[-6:]}", "server": "VTMarkets-Live", "broker_server": "VTMarkets-Live"}
     demo_id = db.accounts.insert_one(demo_doc).inserted_id

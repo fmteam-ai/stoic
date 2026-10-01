@@ -287,8 +287,9 @@ async def release_readiness(request: Request):
         checks["turnstile_break_glass"] = {"ok": False, "detail": f"turnstile state unavailable: {e}"}
     # audit r28 P2-02 — sealed provider secrets must be openable; production needs a dedicated master key
     try:
-        from integrations_settings import readiness_check as vault_readiness
+        from integrations_settings import readiness_check as vault_readiness, rewrap_readiness
         checks["secrets_vault"] = vault_readiness()
+        checks["secrets_rewrap"] = await rewrap_readiness(db)
     except Exception as e:  # noqa: BLE001
         checks["secrets_vault"] = {"ok": False, "detail": f"vault state unavailable: {e}"}
     # AT-15 rollback drill hook — can ONLY force a failure (fail-closed), never a pass.

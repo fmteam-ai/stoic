@@ -60,6 +60,83 @@ def master_key_source() -> str:
     return "dedicated" if os.environ.get("SECRETS_MASTER_KEY") else "derived_from_jwt_secret"
 
 
+# ── audit r29 P2-04: versioned keys · dual-read / single-write · transactional rewrap ──
+def key_version() -> int:
+    return int(os.environ.get("SECRETS_MASTER_KEY_VERSION") or 1)
+
+
+def _previous_key() -> bytes | None:
+    raw = os.environ.get("SECRETS_MASTER_KEY_PREVIOUS")
+    if not raw:
+        return None
+    k = base64.b64decode(raw)
+    if len(k) != 32:
+        raise RuntimeError("SECRETS_MASTER_KEY_PREVIOUS must be 32 bytes base64")
+    return k
+
+
+def _unseal_with(key: bytes, doc: dict) -> str:
+    return AESGCM(key).decrypt(base64.b64decode(doc["nonce"]), base64.b64decode(doc["ciphertext"]), _AAD).decode()
+
+
+async def rewrap_all(db, actor: dict) -> dict:
+    """Re-seal every vault record under the CURRENT key (reads with current, then
+    previous). Writes a rewrap manifest first, verifies completeness (every record
+    re-openable with the current key), and flips the manifest to `complete` —
+    an incomplete manifest is a readiness blocker until resolved."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).isoformat()
+    docs = await db.secrets_vault.find({}).to_list(500)
+    manifest = {"_id": f"rewrap_{now}", "status": "running", "started_at": now, "actor": actor.get("email"),
+                "to_key_version": key_version(), "to_key_id": master_key_id(),
+                "total": len(docs), "rewrapped": [], "failed": []}
+    await db.secrets_rewrap_manifests.insert_one(dict(manifest))
+    cur, prev = _master_key(), _previous_key()
+    for d in docs:
+        plain = None
+        for k in (cur, prev):
+            if k is None:
+                continue
+            try:
+                plain = _unseal_with(k, d)
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        if plain is None:
+            manifest["failed"].append(d["_id"])
+            continue
+        new = {**seal(plain), "key_version": key_version(), "rewrapped_at": now, "rewrapped_by": actor.get("email")}
+        await db.secrets_vault.update_one({"_id": d["_id"]}, {"$set": new})
+        manifest["rewrapped"].append(d["_id"])
+    # completeness verification: every record must open with the CURRENT key alone
+    unverifiable = []
+    for d in await db.secrets_vault.find({}).to_list(500):
+        try:
+            _unseal_with(cur, d)
+        except Exception:  # noqa: BLE001
+            unverifiable.append(d["_id"])
+    manifest["failed"] = sorted(set(manifest["failed"]) | set(unverifiable))
+    manifest["status"] = "complete" if not manifest["failed"] else "incomplete"
+    manifest["finished_at"] = datetime.now(timezone.utc).isoformat()
+    await db.secrets_rewrap_manifests.replace_one({"_id": manifest["_id"]}, manifest)
+    DECRYPT_FAILURES[:] = manifest["failed"]
+    return {k: v for k, v in manifest.items() if k != "_id"} | {"manifest_id": manifest["_id"]}
+
+
+async def rewrap_readiness(db) -> dict:
+    """Latest rewrap manifest must be complete and every worker must have booted on the current key id."""
+    m = await db.secrets_rewrap_manifests.find_one({}, sort=[("started_at", -1)])
+    if not m:
+        return {"ok": True, "detail": "no rewrap in progress"}
+    acks = await db.worker_leases.find({}, {"_id": 1, "vault_key_id": 1}).to_list(50)
+    stale = [str(a["_id"]) for a in acks if a.get("vault_key_id") and a["vault_key_id"] != m["to_key_id"]]
+    ok = m["status"] == "complete" and not stale
+    return {"ok": ok, "manifest_id": m["_id"], "status": m["status"], "failed": m.get("failed", []),
+            "workers_on_old_key": stale,
+            "detail": "rewrap complete, all workers acknowledged" if ok else
+                      f"rewrap {m['status']}; failed={len(m.get('failed', []))}; workers on old key={len(stale)}"}
+
+
 def master_key_id() -> str:
     return hashlib.sha256(_master_key()).hexdigest()[:12]
 
@@ -68,12 +145,19 @@ def seal(value: str) -> dict:
     nonce = os.urandom(12)
     ct = AESGCM(_master_key()).encrypt(nonce, value.encode(), _AAD)
     return {"nonce": base64.b64encode(nonce).decode(), "ciphertext": base64.b64encode(ct).decode(),
-            "master_key_id": master_key_id()}
+            "master_key_id": master_key_id(), "key_version": key_version()}
 
 
 def unseal(doc: dict) -> str:
-    return AESGCM(_master_key()).decrypt(base64.b64decode(doc["nonce"]), base64.b64decode(doc["ciphertext"]),
-                                         _AAD).decode()
+    """Dual-read: current key first, then SECRETS_MASTER_KEY_PREVIOUS during a rotation window.
+    Writes always use the current key (seal())."""
+    try:
+        return _unseal_with(_master_key(), doc)
+    except Exception:  # noqa: BLE001
+        prev = _previous_key()
+        if prev is None:
+            raise
+        return _unseal_with(prev, doc)
 
 
 def tail(value: str) -> str:
@@ -107,7 +191,10 @@ def readiness_check() -> dict:
     src = master_key_source()
     if _production() and src != "dedicated":
         problems.append("SECRETS_MASTER_KEY missing — vault derived from JWT_SECRET")
-    return {"ok": not problems, "master_key_source": src, "undecryptable_keys": list(DECRYPT_FAILURES),
+    if _production() and os.environ.get("SECRETS_MASTER_KEY_PREVIOUS"):
+        problems.append("SECRETS_MASTER_KEY_PREVIOUS still set — finish the rewrap and remove the old key")
+    return {"ok": not problems, "master_key_source": src, "key_version": key_version(),
+            "undecryptable_keys": list(DECRYPT_FAILURES),
             "detail": "; ".join(problems) or "all sealed secrets opened with the current master key"}
 
 

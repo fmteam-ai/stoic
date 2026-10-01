@@ -34,6 +34,44 @@ def attestation_identity(account: dict) -> str:
     return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()
 
 
+def _norm(v) -> str:
+    return "".join(ch for ch in str(v or "").lower() if ch.isalnum())
+
+
+def demo_proof(account: dict, *, max_heartbeat_age_s: int = 600, now=None) -> dict:
+    """audit r29 P1-02 — independent evidence that the connected endpoint is DEMO.
+    Every check except `server_demo_named` is mandatory; that one may be replaced
+    by an explicitly audited admin override (verifier=admin_override)."""
+    import hashlib
+    from datetime import datetime, timezone
+    now = now or datetime.now(timezone.utc)
+    ident = account.get("ea_identity") or {}
+    reported_server = ident.get("broker_server") or account.get("broker_server") or ""
+    hb = account.get("last_heartbeat")
+    age = None
+    if hb:
+        try:
+            age = int((now - datetime.fromisoformat(str(hb).replace("Z", "+00:00"))).total_seconds())
+        except ValueError:
+            age = None
+    checks = {
+        "terminal_identity_authoritative": bool(ident.get("authoritative")) and bool(ident.get("installation_id")),
+        "server_reported_matches_declared": bool(reported_server) and _norm(reported_server) == _norm(account.get("server")),
+        "login_reported_matches_account": bool(account.get("broker_account_id_reported"))
+                                           and str(account.get("broker_account_id_reported")) == str(account.get("account_number") or ""),
+        "heartbeat_fresh": age is not None and 0 <= age <= max_heartbeat_age_s,
+        "no_live_capital_indicator": str(account.get("account_type") or "").lower() not in ("live", "real")
+                                      and str(account.get("broker_environment") or "").upper() != "LIVE"
+                                      and not account.get("broker_account_mismatch"),
+        "server_demo_named": any(t in str(reported_server).lower() for t in _DEMO_TOKENS),
+    }
+    mandatory_ok = all(v for k, v in checks.items() if k != "server_demo_named")
+    proof_id = hashlib.sha256(f"{attestation_identity(account)}|{sorted(checks.items())}|{hb}".encode()).hexdigest()[:24]
+    return {"ok": mandatory_ok and checks["server_demo_named"], "mandatory_ok": mandatory_ok,
+            "override_eligible": mandatory_ok and not checks["server_demo_named"],
+            "checks": checks, "heartbeat_age_s": age, "reported_server": reported_server, "proof_id": proof_id}
+
+
 def attested_environment(account: dict) -> str:
     """Server-authoritative classification for money-sensitive gates (EX5
     binary proof, PAMM live certification). Only PAPER mode (no broker at
@@ -46,6 +84,7 @@ def attested_environment(account: dict) -> str:
     att = account.get("environment_attestation") or {}
     if (str(att.get("environment") or "").upper() == "DEMO" and att.get("approved_by")
             and att.get("identity_hash") == attestation_identity(account)
+            and (att.get("proof") or {}).get("verifier") in ("ea_heartbeat", "admin_override")
             and broker_environment(account) == "DEMO"):
         return "DEMO"
     return "LIVE"

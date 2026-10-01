@@ -83,9 +83,10 @@ export default function VerifiedPerformance() {
                                     </button>
                                 </div>
                             ) : (
-                                <button onClick={createShare} data-testid="share-create"
-                                    className="px-4 py-2 bg-[#00FF41] text-black font-display font-bold text-xs tracking-widest hover:bg-[#00E53A]">
-                                    CREATE SHARE LINK
+                                <button onClick={createShare} data-testid="share-create" disabled={d.share_allowed === false}
+                                    title={d.share_allowed === false ? "Provenance stale — broker reconciliation watermark missing or outside SLA" : undefined}
+                                    className="px-4 py-2 bg-[#00FF41] text-black font-display font-bold text-xs tracking-widest hover:bg-[#00E53A] disabled:opacity-40 disabled:cursor-not-allowed">
+                                    {d.share_allowed === false ? "SHARE LOCKED · STALE" : "CREATE SHARE LINK"}
                                 </button>
                             )}
                         </div>

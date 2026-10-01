@@ -2,7 +2,7 @@
 broker_deals (the EA-reported deal ledger), never from estimated P&L.
 Includes a data-integrity stamp and an optional revocable public share link."""
 import secrets
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -24,7 +24,7 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             {"user_id": user_id, "status": {"$ne": "deleted"}},
             {"label": 1, "broker": 1, "mode": 1, "account_type": 1,
              "broker_server": 1, "server": 1, "broker_environment": 1,
-             "last_heartbeat": 1}):
+             "last_heartbeat": 1, "last_reconciled_at": 1, "reconciliation_seq": 1}):
         accounts[str(a["_id"])] = a
 
     per = {}
@@ -117,16 +117,41 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
     }
 
     from chart_provenance import build as provenance
+    # audit r29 P2-01 — as_of is the OLDEST of the authoritative watermarks the series depends on
+    # (last broker deal · freshest reconciliation · freshest heartbeat), never response time.
+    recon_marks, recon_ids = [], []
+    for a in accounts.values():
+        if a.get("last_reconciled_at"):
+            try:
+                recon_marks.append(datetime.fromisoformat(str(a["last_reconciled_at"]).replace("Z", "+00:00")))
+                recon_ids.append(f"{str(a['_id'])[-6:]}:{int(a.get('reconciliation_seq') or 0)}")
+            except ValueError:
+                pass
+    last_deal = None
+    if curve:
+        try:
+            last_deal = datetime.fromisoformat(curve[-1]["date"]).replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            last_deal = None
+    marks = [m for m in (last_deal, min(recon_marks) if recon_marks else None,
+                         (now - timedelta(seconds=hb_age)) if hb_age is not None else None) if m]
+    watermark = min(marks) if marks else None
+    prov = provenance(provider="broker_deals", source_kind="broker_reconciled", points=curve[-365:],
+                      time_key="date", expected_interval_s=86400, as_of=watermark,
+                      reconciliation_id=("recon:" + ",".join(sorted(recon_ids))) if recon_ids else None,
+                      cache_status="live" if recon_marks else "unreconciled",
+                      note="broker-confirmed deals only; estimated/unknown outcomes excluded")
+    if watermark is None or not recon_marks:
+        prov["stale"] = True
+    prov["share_allowed"] = not prov["stale"]
     return {"generated_at": now.isoformat(),
             "overall": _stats(total),
             "max_drawdown": round(max_dd, 2),
             "equity_curve": curve[-365:],
             "accounts": account_rows,
             "integrity": integrity,
-            "provenance": provenance(provider="broker_deals", source_kind="broker_reconciled", points=curve[-365:],
-                                     time_key="date", expected_interval_s=86400, as_of=now,
-                                     reconciliation_id=f"hb_age_{hb_age}s" if hb_age is not None else None,
-                                     note="broker-confirmed deals only; estimated/unknown outcomes excluded")}
+            "share_allowed": prov["share_allowed"],
+            "provenance": prov}
 
 
 ATTESTATION_POLICY_VERSION = "attest-v2"
@@ -253,6 +278,9 @@ async def create_share(user=Depends(get_current_user)):
     passes — the public page can never show unverified headline P&L."""
     db = get_db()
     blockers = await _attestation_gate(db, user["id"])
+    payload = await _verified_payload(db, user["id"])
+    if payload.get("provenance", {}).get("stale"):
+        blockers = list(blockers) + ["PROVENANCE_STALE: broker watermark missing or outside SLA — reconcile first"]
     if blockers:
         raise HTTPException(
             status_code=409,

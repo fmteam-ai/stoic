@@ -7,11 +7,11 @@ fails when this file drifts from the tree.
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 636 |
-| integration | real MongoDB service container | CI `backend-integration` | 191 |
+| integration | real MongoDB service container | CI `backend-integration` | 199 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3784 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4622 tests across 475 files.**
+**Total: 4630 tests across 476 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -440,6 +440,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_r26_device_attestation.py` | integration | 15 |
 | `backend/tests/integration/test_r27_account_environment_attestation.py` | integration | 2 |
 | `backend/tests/integration/test_r28_audit.py` | integration | 9 |
+| `backend/tests/integration/test_r29_audit.py` | integration | 8 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 5 |
 | `e2e/tests/dashboard.spec.ts` | ui-e2e | 1 |

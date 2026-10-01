@@ -33,7 +33,8 @@ def _demo_acc(uid):
     return {"user_id": uid, "label": "r28", "mode": "live", "account_type": "demo", "broker": "VT Markets",
             "server": "VTMarkets-Demo", "broker_server": "VTMarkets-Demo", "account_number": "1289887",
             "bridge_token": f"r28-{uid}", "ea_version": "1.57", "creds_version": 0,
-            "ea_identity": {"installation_id": "inst-A", "authoritative": True}}
+            "broker_account_id_reported": "1289887", "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+            "ea_identity": {"installation_id": "inst-A", "authoritative": True, "broker_server": "VTMarkets-Demo"}}
 
 
 def test_attestation_is_void_when_any_bound_identity_field_changes():
@@ -41,12 +42,12 @@ def test_attestation_is_void_when_any_bound_identity_field_changes():
     from ea_capabilities import live_gate
     acc = {**_demo_acc("u"), "_id": ObjectId()}
     att = {"environment": "DEMO", "approved_by": "adm@example.com", "at": "2026-01-01T00:00:00+00:00",
-           "identity_hash": attestation_identity(acc)}
+           "identity_hash": attestation_identity(acc), "proof": {"verifier": "ea_heartbeat", "proof_id": "p"}}
     bound = {**acc, "environment_attestation": att}
     assert attested_environment(bound) == "DEMO" and attestation_state(bound) == "valid" and live_gate(bound) is None
     for mutation in ({"_id": ObjectId()}, {"broker": "Other"}, {"server": "VTMarkets-Live"},
                      {"broker_server": "VTMarkets-Live"}, {"account_number": "999"},
-                     {"ea_identity": {"installation_id": "inst-B"}}, {"creds_version": 1},
+                     {"ea_identity": {**acc["ea_identity"], "installation_id": "inst-B"}}, {"creds_version": 1},
                      {"broker_account_id_reported": "555"}):
         changed = {**bound, **mutation}
         assert attested_environment(changed) == "LIVE", mutation
@@ -222,4 +223,4 @@ def test_trial_grant_is_durable_and_immune_to_later_offer_edits(pricing_snapshot
 
 def test_registration_route_writes_trial_grant():
     src = open(os.path.join(os.path.dirname(__file__), "..", "..", "routes", "auth_routes.py")).read()
-    assert "trial_grant_for_signup" in src and 'user_doc["trial_grant"] = grant' in src
+    assert "decide_trial_at_signup" in src and 'user_doc["trial_decision"]' in src and 'user_doc["trial_grant"]' in src

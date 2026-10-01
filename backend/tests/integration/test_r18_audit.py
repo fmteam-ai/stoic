@@ -125,7 +125,8 @@ def test_ea_capability_gate_numeric_versions_and_hash(monkeypatch):
     from broker_env import attestation_identity
     demo = {"ea_version": "1.57", "account_type": "demo"}
     att = {"environment": "DEMO", "approved_by": "admin@example.com", "at": "2026-01-01T00:00:00+00:00",
-           "identity_hash": attestation_identity(demo)}       # r28 P1-01: bound to the identity digest
+           "identity_hash": attestation_identity(demo),       # r28 P1-01: bound to the identity digest
+           "proof": {"verifier": "ea_heartbeat", "proof_id": "p"}}   # r29 P1-02: independent demo evidence
     assert live_gate(demo)["code"] == "EA_DEMO_UNATTESTED"
     assert live_gate({"ea_version": "1.57", "broker_server": "RoboForex-Demo"})["code"] == "EA_DEMO_UNATTESTED"
     assert live_gate({"ea_version": "1.57", "broker_environment": "DEMO"})["code"] == "EA_DEMO_UNATTESTED"

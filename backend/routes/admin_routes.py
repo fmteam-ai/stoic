@@ -633,23 +633,42 @@ async def admin_integrations_secret(payload: dict, user=Depends(get_current_user
         raise HTTPException(status_code=422, detail={"code": "invalid_value", "message": str(e)})
 
 
+@router.post("/admin/integrations/rewrap")
+async def admin_vault_rewrap(payload: dict, user=Depends(get_current_user)):
+    """audit r29 P2-04 — re-seal every vault secret under the current master key (re-auth)."""
+    from auth import require_admin
+    from audit_chain import append_chained
+    import integrations_settings as integ
+    require_admin(user)
+    db = get_db()
+    await _reauth(db, user, str(payload.get("password") or ""), payload.get("otp"))
+    out = await integ.rewrap_all(db, user)
+    await append_chained(db, {"actor_email": user.get("email"), "action": "vault_rewrap", "target_kind": "vault",
+                              "target_id": out["manifest_id"], "reason": payload.get("reason") or "key rotation",
+                              "meta": {"status": out["status"], "total": out["total"], "failed": out["failed"],
+                                       "to_key_version": out["to_key_version"], "reauth": True}, "at": _now_iso()})
+    return out
+
+
 # ── Admin → Broker Registry → Account Environments (server-authoritative DEMO attestation) ──
 def _env_row(a: dict) -> dict:
-    from broker_env import attestation_state, attested_environment, broker_environment
+    from broker_env import attestation_state, attested_environment, broker_environment, demo_proof
     att = a.get("environment_attestation") or {}
+    proof = demo_proof(a)
     return {"account_id": str(a["_id"]), "user_id": a.get("user_id"), "label": a.get("label"),
             "broker": a.get("broker"), "server": a.get("broker_server") or a.get("server"),
             "account_number": a.get("account_number"), "account_type": a.get("account_type"),
             "declared": broker_environment(a), "effective": attested_environment(a),
             "attestation_state": attestation_state(a),
             "attested_by": att.get("approved_by"), "attested_at": att.get("at"), "reason": att.get("reason"),
-            "identity_hash": att.get("identity_hash")}
+            "identity_hash": att.get("identity_hash"), "verifier": (att.get("proof") or {}).get("verifier"),
+            "proof": proof}
 
 
 _ENV_PROJECTION = {"user_id": 1, "label": 1, "broker": 1, "broker_server": 1, "server": 1,
                    "account_number": 1, "account_type": 1, "broker_environment": 1, "mode": 1,
                    "environment_attestation": 1, "ea_identity": 1, "broker_account_id_reported": 1,
-                   "creds_version": 1}
+                   "creds_version": 1, "last_heartbeat": 1, "broker_account_mismatch": 1}
 
 
 @router.get("/admin/account-environments")
@@ -668,7 +687,7 @@ async def admin_attest_account_environment(account_id: str, payload: dict, user=
     account's identity digest (broker_env.attestation_identity) and only takes effect while the
     declared classification is DEMO and the digest is unchanged."""
     from auth import require_admin
-    from broker_env import attestation_identity, broker_environment
+    from broker_env import attestation_identity, broker_environment, demo_proof
     from audit_chain import append_chained
     require_admin(user)
     db = get_db()
@@ -679,15 +698,35 @@ async def admin_attest_account_environment(account_id: str, payload: dict, user=
     if env not in ("DEMO", "LIVE"):
         raise HTTPException(status_code=422, detail={"code": "invalid_value", "message": "environment must be DEMO or LIVE"})
     reason = str(payload.get("reason") or "").strip()[:300]
+    override = bool(payload.get("override"))
     await _reauth(db, user, str(payload.get("password") or ""), payload.get("otp"))
+    proof = demo_proof(acc)
     if env == "DEMO" and broker_environment(acc) != "DEMO":
         raise HTTPException(status_code=409, detail={
             "code": "declared_not_demo",
             "message": "the account's declared classification is not DEMO — attestation cannot downgrade it"})
+    if env == "DEMO" and not proof["mandatory_ok"]:
+        failed = [k for k, v in proof["checks"].items() if not v and k != "server_demo_named"]
+        raise HTTPException(status_code=409, detail={
+            "code": "demo_proof_missing", "failed_checks": failed, "proof": proof,
+            "message": "DEMO cannot be attested without fresh authoritative terminal evidence: " + ", ".join(failed)})
+    if env == "DEMO" and not proof["ok"]:
+        if not override:
+            raise HTTPException(status_code=409, detail={
+                "code": "server_not_demo_named", "proof": proof,
+                "message": f"EA reports server '{proof['reported_server']}' which is not demo-named — "
+                           "an explicit admin override (audited, shown in red) is required"})
+        if len(reason) < 10:
+            raise HTTPException(status_code=422, detail={"code": "override_reason_required",
+                                                         "message": "an override needs a reason (≥10 chars)"})
+    verifier = "ea_heartbeat" if proof["ok"] else "admin_override"
     now = _now_iso()
     if env == "DEMO":
         att = {"environment": "DEMO", "approved_by": user.get("email"), "at": now, "reason": reason,
-               "identity_hash": attestation_identity(acc)}
+               "identity_hash": attestation_identity(acc),
+               "proof": {"proof_id": proof["proof_id"], "verifier": verifier, "checks": proof["checks"],
+                         "heartbeat_age_s": proof["heartbeat_age_s"], "reported_server": proof["reported_server"],
+                         "at": now}}
         await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"environment_attestation": att}})
     else:
         await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"environment_attestation": ""}})
@@ -695,7 +734,9 @@ async def admin_attest_account_environment(account_id: str, payload: dict, user=
                               "target_kind": "account", "target_id": str(acc["_id"]),
                               "target_label": acc.get("label"), "reason": reason or env,
                               "meta": {"environment": env, "declared": broker_environment(acc), "reauth": True,
-                                       "identity_hash": attestation_identity(acc)},
+                                       "identity_hash": attestation_identity(acc), "proof_id": proof["proof_id"],
+                                       "verifier": verifier if env == "DEMO" else None,
+                                       "override": override and env == "DEMO", "checks": proof["checks"]},
                               "at": now})
     acc = await db.accounts.find_one({"_id": acc["_id"]})
     return _env_row(acc)

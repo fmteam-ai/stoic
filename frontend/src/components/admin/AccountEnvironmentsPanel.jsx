@@ -13,7 +13,7 @@ const Tag = ({ v }) => (
 export const AccountEnvironmentsPanel = () => {
     const [rows, setRows] = useState(null);
     const [target, setTarget] = useState(null);
-    const [form, setForm] = useState({ reason: "", password: "", otp: "" });
+    const [form, setForm] = useState({ reason: "", password: "", otp: "", override: false });
     const [saving, setSaving] = useState(false);
 
     const load = useCallback(async () => {
@@ -26,8 +26,8 @@ export const AccountEnvironmentsPanel = () => {
         setSaving(true);
         try {
             await api.post(`/admin/account-environments/${target.account_id}`, { environment: target.next, ...form, otp: form.otp || null });
-            toast.success(target.next === "DEMO" ? "DEMO attested" : "Attestation revoked");
-            setTarget(null); setForm({ reason: "", password: "", otp: "" }); load();
+            toast.success(target.next === "DEMO" ? (form.override ? "DEMO attested via ADMIN OVERRIDE" : "DEMO attested") : "Attestation revoked");
+            setTarget(null); setForm({ reason: "", password: "", otp: "", override: false }); load();
         } catch (e) { toast.error(formatApiError(e)); }
         finally { setSaving(false); }
     };
@@ -44,7 +44,7 @@ export const AccountEnvironmentsPanel = () => {
                 <div className="border border-[#1F1F1F] rounded-lg overflow-x-auto">
                     <table className="w-full text-xs">
                         <thead className="bg-[#0A0A0A] text-[#52525B] font-mono">
-                            <tr><th className="text-left px-4 py-2">ACCOUNT</th><th className="text-left px-4 py-2">DECLARED</th><th className="text-left px-4 py-2">EFFECTIVE</th><th className="text-left px-4 py-2">ATTESTED</th><th className="text-right px-4 py-2">ACTION</th></tr>
+                            <tr><th className="text-left px-4 py-2">ACCOUNT</th><th className="text-left px-4 py-2">DECLARED</th><th className="text-left px-4 py-2">EFFECTIVE</th><th className="text-left px-4 py-2">DEMO PROOF</th><th className="text-left px-4 py-2">ATTESTED</th><th className="text-right px-4 py-2">ACTION</th></tr>
                         </thead>
                         <tbody>
                             {rows.map((r, i) => (
@@ -52,8 +52,14 @@ export const AccountEnvironmentsPanel = () => {
                                     <td className="px-4 py-2.5"><div className="text-white">{r.label || r.account_number}</div><div className="font-mono text-[10px] text-[#52525B]">{r.broker} · {r.server} · {r.account_type}</div></td>
                                     <td className="px-4 py-2.5"><Tag v={r.declared} /></td>
                                     <td className="px-4 py-2.5"><Tag v={r.effective} /></td>
+                                    <td className="px-4 py-2.5 font-mono text-[10px]" data-testid={`account-env-proof-${r.account_id}`}>
+                                        {r.proof?.ok ? <span className="text-[#00FF41]">EA EVIDENCE OK</span>
+                                            : r.proof?.override_eligible ? <span className="text-[#FFB000]">SERVER NOT DEMO-NAMED · {r.proof.reported_server || "?"}</span>
+                                            : <span className="text-[#FF3B30]">MISSING: {Object.entries(r.proof?.checks || {}).filter(([k, v]) => !v && k !== "server_demo_named").map(([k]) => k).join(", ") || "—"}</span>}
+                                    </td>
                                     <td className="px-4 py-2.5 font-mono text-[10px] text-[#A1A1AA]">
                                         {r.attested_by ? `${r.attested_by} · ${(r.attested_at || "").slice(0, 10)}` : "—"}
+                                        {r.verifier === "admin_override" && <span data-testid={`account-env-override-${r.account_id}`} className="block text-[#FF3B30] font-bold">ADMIN OVERRIDE — server not demo-named</span>}
                                         {r.attestation_state === "invalidated" && <span data-testid={`account-env-invalidated-${r.account_id}`} className="block text-[#FFB000]">INVALIDATED — bound identity changed (broker/server/number/terminal/credentials)</span>}
                                     </td>
                                     <td className="px-4 py-2.5 text-right">
@@ -64,8 +70,10 @@ export const AccountEnvironmentsPanel = () => {
                                             </span>
                                         ) : r.attested_by ? (
                                             <button data-testid={`account-env-revoke-${r.account_id}`} onClick={() => setTarget({ ...r, next: "LIVE" })} className="text-[#FF3B30] font-mono text-[10px] inline-flex items-center gap-1"><ShieldOff className="w-3.5 h-3.5" /> REVOKE</button>
+                                        ) : r.declared === "DEMO" && r.proof?.mandatory_ok ? (
+                                            <button data-testid={`account-env-attest-${r.account_id}`} onClick={() => setTarget({ ...r, next: "DEMO" })} className={`${r.proof.ok ? "text-[#00FF41]" : "text-[#FFB000]"} font-mono text-[10px] inline-flex items-center gap-1`}><ShieldCheck className="w-3.5 h-3.5" /> {r.proof.ok ? "ATTEST DEMO" : "ATTEST (OVERRIDE)"}</button>
                                         ) : r.declared === "DEMO" ? (
-                                            <button data-testid={`account-env-attest-${r.account_id}`} onClick={() => setTarget({ ...r, next: "DEMO" })} className="text-[#00FF41] font-mono text-[10px] inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5" /> ATTEST DEMO</button>
+                                            <span className="font-mono text-[10px] text-[#52525B]">needs fresh EA evidence</span>
                                         ) : <span className="font-mono text-[10px] text-[#52525B]">live — proof required</span>}
                                     </td>
                                 </tr>
@@ -81,12 +89,18 @@ export const AccountEnvironmentsPanel = () => {
                         <DialogDescription className="text-[#71717A] text-xs">Recorded in the admin audit chain. Re-authenticate to apply.</DialogDescription>
                     </DialogHeader>
                     <div className="space-y-3">
-                        <Input data-testid="account-env-reason" placeholder="reason (optional)" value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
+                        {target?.next === "DEMO" && target?.proof && !target.proof.ok && (
+                            <label data-testid="account-env-override-toggle" className="flex items-start gap-2 border border-[#FF3B30]/50 bg-[#FF3B30]/5 p-2 text-xs text-[#FF3B30]">
+                                <input type="checkbox" checked={form.override} onChange={(e) => setForm({ ...form, override: e.target.checked })} className="mt-0.5" />
+                                <span>The EA reports <b>{target.proof.reported_server || "an unnamed server"}</b>, which is not demo-named. I confirm this is a practice account and accept that this override is recorded in the audit chain (reason required, ≥10 chars).</span>
+                            </label>
+                        )}
+                        <Input data-testid="account-env-reason" placeholder={form.override ? "reason (required for override)" : "reason (optional)"} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} />
                         <Input data-testid="account-env-password" type="password" placeholder="your password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="current-password" />
                         <Input data-testid="account-env-otp" inputMode="numeric" placeholder="authenticator code (if enabled)" value={form.otp} onChange={(e) => setForm({ ...form, otp: e.target.value })} autoComplete="one-time-code" />
                         <div className="flex justify-end gap-2 pt-1">
                             <Button variant="ghost" data-testid="account-env-cancel" onClick={() => setTarget(null)}>Cancel</Button>
-                            <Button data-testid="account-env-submit" disabled={saving || !form.password} onClick={submit}>{saving ? "Applying…" : "Confirm"}</Button>
+                            <Button data-testid="account-env-submit" disabled={saving || !form.password || (target?.next === "DEMO" && target?.proof && !target.proof.ok && (!form.override || form.reason.trim().length < 10))} onClick={submit}>{saving ? "Applying…" : "Confirm"}</Button>
                         </div>
                     </div>
                 </DialogContent>

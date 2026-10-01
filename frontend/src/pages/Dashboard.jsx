@@ -653,7 +653,7 @@ export default function Dashboard() {
                             })()}
                         </div>
                     </div>
-                    <div className="px-4"><ChartProvenance p={historyProvenance} testid="price-chart-provenance" /></div>
+                    <div className="px-4"><ChartProvenance p={historyProvenance} loading={historyLoading || history.length === 0} testid="price-chart-provenance" /></div>
                     <div className="h-64 md:h-80 p-2" data-testid="price-chart">
                         {historyLoading ? (
                             <div className="h-full flex items-center justify-center font-mono text-xs text-[#52525B] tracking-widest">LOADING DATA...</div>

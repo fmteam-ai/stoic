@@ -161,16 +161,12 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     if ref_code:
         user_doc["referred_by_code"] = ref_code.upper()
         user_doc["referred_at"] = ref_at or now_iso
-    # audit r28 P2-03 — durable, versioned trial grant decided atomically at sign-up
-    try:
-        import plan_settings
-        from subscription_service import trial_grant_for_signup
-        await plan_settings.ensure_fresh(db)
-        grant = trial_grant_for_signup(datetime.fromisoformat(now_iso))
-        if grant:
-            user_doc["trial_grant"] = grant
-    except Exception:  # noqa: BLE001 — a trial-offer hiccup must never block registration
-        logger.exception("trial grant evaluation failed at registration")
+    # audit r28 P2-03 / r29 P2-02 — durable, versioned trial DECISION at sign-up
+    # (granted | not_eligible | pending_error); never silently "no decision".
+    from subscription_service import decide_trial_at_signup
+    user_doc["trial_decision"] = await decide_trial_at_signup(db, datetime.fromisoformat(now_iso))
+    if user_doc["trial_decision"]["status"] == "granted":
+        user_doc["trial_grant"] = user_doc["trial_decision"]["grant"]
     result = await db.users.insert_one(user_doc)
     uid = str(result.inserted_id)
 

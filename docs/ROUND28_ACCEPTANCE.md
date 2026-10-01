@@ -28,3 +28,19 @@ Run the signed read-only acceptance pack against the promoted digests: `deploy/d
 
 ### P2-06 · execution evidence
 Attach to the release package: CI run URL + signed results, JUnit XML (`test_reports/pytest/*.xml`), coverage, service versions, `docs/TEST_MANIFEST.md` hash (= `rc_lock.test_manifest_sha256`), candidate image digests.
+
+---
+
+# Round 29 — remediation (tests: `tests/integration/test_r29_audit.py`)
+
+| Finding | Fix |
+|---|---|
+| **P1-01** checkout mixes pricing versions | `subscription_plans.pricing_snapshot(plan)` taken right after `ensure_fresh()`; Stripe request, metadata, ledger row (`payment_transactions.snapshot`), response and fulfilment read only the snapshot. Per-checkout `idempotency_key`. Concurrency test: admin update during the Stripe await → ledger/metadata/response all old version, fulfilment accepts the settled old amount. |
+| **P1-02** DEMO truth | `broker_env.demo_proof()` — attestation requires: authoritative terminal identity, EA-reported server == declared, EA-reported login == account number, heartbeat ≤10 min, no live-capital indicator. `server_demo_named` may be replaced only by an explicit admin **override** (`verifier=admin_override`, reason ≥10 chars, red in the panel, in the audit chain). Proof id/checks/verifier stored on the attestation; attestations without a verifier are not honoured. |
+| **P2-01** verified-performance freshness | `as_of` = oldest of (last broker deal, freshest reconciliation watermark, freshest heartbeat); `reconciliation_id = recon:<acct>:<seq>,…`; missing watermark ⇒ `stale`, `share_allowed=false`, `POST /performance/share` refused, UI button locked. |
+| **P2-02** trial decision | `users.trial_decision` = granted / not_eligible / pending_error (+offer_version). `pending_error` retried idempotently before the first entitlement against the ORIGINAL offer version; if the offer moved, it waits for an explicit migration. Explicit decisions never fall back to lazy evaluation. |
+| **P2-03** fulfilment uses current globals | Proration tier/duration/base prices come from `payment_transactions.snapshot`; `subscriptions.fulfilled_pricing_version` recorded. |
+| **P2-04** vault rotation | `key_version` on sealed docs; dual-read via `SECRETS_MASTER_KEY_PREVIOUS`, single-write with current key; `POST /api/admin/integrations/rewrap` (re-auth) writes a `secrets_rewrap_manifests` record, re-seals all, verifies completeness; workers stamp `vault_key_id` on their lease; `release-readiness.secrets_rewrap` blocks until manifest complete and all workers on the new key; production blocks while `_PREVIOUS` is still set. **Rotation procedure**: set `SECRETS_MASTER_KEY=<new>`, `SECRETS_MASTER_KEY_PREVIOUS=<old>`, bump `SECRETS_MASTER_KEY_VERSION`, `deploy/restart.sh`, run rewrap in Admin → Integrations, confirm readiness, remove `_PREVIOUS`, restart. Rollback: swap the two keys back before removing `_PREVIOUS`. |
+| **P2-05** provenance enforcement | Pydantic `ChartProvenance` model validates every contract; `FINANCIAL_SERIES_ENDPOINTS` inventory + CI test asserts each endpoint attaches it and every `<ResponsiveContainer>` chart renders `<ChartProvenance>`; UI renders a red **PROVENANCE MISSING** block for absent/invalid contracts. |
+
+Operator items **P1-03 / P1-04 / P1-05 / P2-06** unchanged — follow the Round-28 runbook above with the v100 source.

@@ -49,10 +49,69 @@ def trial_grant_for_signup(created: datetime) -> Optional[dict]:
             "granted_at": _now().isoformat()}
 
 
+async def decide_trial_at_signup(db, created: datetime) -> dict:
+    """audit r29 P2-02 — immutable decision record. A transient failure yields
+    `pending_error` (with the offer version seen, if any) so it can be retried
+    idempotently against the ORIGINAL offer — never silently no-grant."""
+    import plan_settings
+    at = _now().isoformat()
+    try:
+        await plan_settings.ensure_fresh(db)
+        offer_version = plan_settings.trial_config().get("offer_version")
+        grant = trial_grant_for_signup(created)
+        if grant:
+            return {"status": "granted", "offer_version": offer_version, "grant": grant, "decided_at": at}
+        return {"status": "not_eligible", "offer_version": offer_version, "decided_at": at}
+    except Exception as e:  # noqa: BLE001
+        logger.exception("trial decision failed at registration")
+        return {"status": "pending_error", "offer_version": None, "error": str(e)[:200],
+                "created_at": created.isoformat(), "decided_at": at, "attempts": 1}
+
+
+async def retry_pending_trial_decision(db, user: dict) -> Optional[dict]:
+    """Idempotent retry of a `pending_error` decision before the first entitlement
+    calculation. Evaluates against the offer version that was CURRENT at sign-up
+    (`offer_version` pinned from the pricing audit history), never a newer offer."""
+    import plan_settings
+    dec = (user or {}).get("trial_decision") or {}
+    if dec.get("status") != "pending_error":
+        return None
+    try:
+        created = datetime.fromisoformat(str(dec.get("created_at") or user.get("created_at")).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    try:
+        await plan_settings.ensure_fresh(db)
+        pinned = dec.get("offer_version")
+        cur = plan_settings.trial_config()
+        if pinned is not None and cur.get("offer_version") != pinned:
+            # the offer moved since sign-up — only an explicit, audited migration may re-decide
+            new = {**dec, "attempts": int(dec.get("attempts") or 1) + 1,
+                   "note": f"offer moved {pinned}->{cur.get('offer_version')}; awaiting explicit migration"}
+        else:
+            grant = trial_grant_for_signup(created)
+            new = ({"status": "granted", "offer_version": cur.get("offer_version"), "grant": grant}
+                   if grant else {"status": "not_eligible", "offer_version": cur.get("offer_version")})
+            new.update({"decided_at": _now().isoformat(), "retried_from": "pending_error",
+                        "attempts": int(dec.get("attempts") or 1) + 1})
+    except Exception as e:  # noqa: BLE001
+        new = {**dec, "attempts": int(dec.get("attempts") or 1) + 1, "error": str(e)[:200]}
+    # idempotent: only replace while the stored decision is still the pending one we read
+    upd = {"$set": {"trial_decision": new}}
+    if new.get("status") == "granted":
+        upd["$set"]["trial_grant"] = new["grant"]
+    res = await db.users.update_one({"_id": user["_id"], "trial_decision.status": "pending_error",
+                                     "trial_decision.decided_at": dec.get("decided_at")}, upd)
+    return new if res.modified_count else None
+
+
 def _trial_grant(created: Optional[datetime], user: Optional[dict] = None) -> Optional[dict]:
     """Entitlement from the user's durable grant (preferred). Users registered
-    before durable grants existed fall back to the lazy evaluation once."""
+    before durable decisions existed fall back to the lazy evaluation once;
+    users with an explicit decision never do."""
     grant = (user or {}).get("trial_grant")
+    if not grant and (user or {}).get("trial_decision"):
+        return None            # explicit not_eligible / still pending — never re-evaluate against a newer offer
     if not grant and isinstance(created, datetime):
         grant = trial_grant_for_signup(created)
     if not grant:
@@ -112,6 +171,9 @@ async def get_subscription(user_id: str) -> dict:
     from bson import ObjectId
     try:
         user = await db.users.find_one({"_id": ObjectId(user_id)})
+        if user and (user.get("trial_decision") or {}).get("status") == "pending_error":
+            if await retry_pending_trial_decision(db, user):          # r29 P2-02: retry BEFORE first entitlement
+                user = await db.users.find_one({"_id": ObjectId(user_id)})
     except Exception:
         user = None
     is_admin = user and user.get("role") == "admin"
@@ -200,10 +262,13 @@ async def record_transaction(
     *, user_id: str, user_email: str, plan_id: str,
     session_id: str, amount_usd: float, metadata: dict,
     amount_cents: Optional[int] = None, currency: str = "usd",
-    pricing_version: Optional[int] = None,
+    pricing_version: Optional[int] = None, snapshot: Optional[dict] = None,
 ) -> str:
     db = get_db()
     doc = {
+        # audit r29 P1-01/P2-03 — the immutable checkout snapshot fulfilment must use exclusively
+        "snapshot": {k: v for k, v in (snapshot or {}).items() if k != "public"},
+        "idempotency_key": (snapshot or {}).get("idempotency_key"),
         "user_id": user_id,
         "user_email": user_email,
         "plan_id": plan_id,
@@ -295,6 +360,12 @@ async def apply_successful_payment(session_id: str, *,
                           "skipped_reason": "unknown_plan"}},
             )
             return None
+        # audit r29 P2-03 — the user bought under the checkout snapshot: tier/duration/base
+        # prices for proration come from it, never from the current catalog.
+        snap = txn.get("snapshot") or {}
+        bought_tier = snap.get("tier") or plan.tier
+        bought_months = int(snap.get("duration_months") or plan.duration_months)
+        base_cents = snap.get("tier_base_cents") or TIER_BASE_CENTS
 
         sub = await get_subscription(txn["user_id"])
         current_vu = None
@@ -308,16 +379,17 @@ async def apply_successful_payment(session_id: str, *,
         cur_plan = get_plan(sub.get("current_plan_id") or "")
 
         update = {"last_renewed_at": now.isoformat(),
-                  "last_session_id": session_id}
-        if active_remaining and cur_plan and cur_plan.tier != plan.tier:
+                  "last_session_id": session_id,
+                  "fulfilled_pricing_version": snap.get("pricing_version")}
+        if active_remaining and cur_plan and cur_plan.tier != bought_tier:
             cur_rank = TIER_RANK[canonical_tier(cur_plan.tier)]
-            new_rank = TIER_RANK[canonical_tier(plan.tier)]
+            new_rank = TIER_RANK[canonical_tier(bought_tier)]
             if new_rank > cur_rank:
                 # UPGRADE — convert remaining time into equal-value new-tier days
                 remaining_days = (current_vu - now).total_seconds() / 86400.0
                 credit_days = remaining_days * (
-                    TIER_BASE_CENTS[cur_plan.tier] / TIER_BASE_CENTS[plan.tier])
-                new_vu = (now + relativedelta(months=plan.duration_months)
+                    base_cents[cur_plan.tier] / base_cents[bought_tier])
+                new_vu = (now + relativedelta(months=bought_months)
                           + timedelta(days=credit_days))
                 update.update({
                     "current_plan_id": plan.id,
@@ -329,7 +401,7 @@ async def apply_successful_payment(session_id: str, *,
                 })
             else:
                 # DOWNGRADE — schedule the new pass after the current one ends
-                sched_vu = current_vu + relativedelta(months=plan.duration_months)
+                sched_vu = current_vu + relativedelta(months=bought_months)
                 new_vu = current_vu
                 update.update({
                     "scheduled_plan_id": plan.id,
@@ -343,7 +415,7 @@ async def apply_successful_payment(session_id: str, *,
             # Same tier (or nothing active) — extend from the later of
             # valid_until / now, calendar-aware.
             base = current_vu if active_remaining else now
-            new_vu = base + relativedelta(months=plan.duration_months)
+            new_vu = base + relativedelta(months=bought_months)
             update.update({"current_plan_id": plan.id,
                            "valid_until": new_vu.isoformat()})
 

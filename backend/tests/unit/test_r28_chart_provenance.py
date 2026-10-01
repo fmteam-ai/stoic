@@ -33,12 +33,24 @@ def test_contract_fields_freshness_gaps_and_kinds(monkeypatch):
 
 
 def test_every_chart_endpoint_attaches_the_contract():
+    """r29 P2-05 — CI inventory: every financial-series endpoint attaches the typed contract."""
+    import re
+    import chart_provenance as cp
     root = os.path.join(os.path.dirname(__file__), "..", "..")
-    for rel in ("routes/market_routes.py", "routes/account_routes.py", "routes/performance_routes.py",
-                "modules/pamm/api/__init__.py", "routes/analytics_routes.py"):
+    for endpoint, (rel, series_key) in cp.FINANCIAL_SERIES_ENDPOINTS.items():
         src = open(os.path.join(root, rel)).read()
-        assert "from chart_provenance import build as provenance" in src, rel
-        assert '"provenance": provenance(' in src, rel
+        assert "from chart_provenance import build as provenance" in src, endpoint
+        assert re.search(r'"provenance":\s*(provenance\(|prov\b)', src), endpoint
+        assert f'"{series_key}"' in src, endpoint
+    # every ResponsiveContainer chart in the UI renders the shared component
+    ui_root = os.path.join(root, "..", "frontend", "src")
+    for dirpath, _d, files in os.walk(ui_root):
+        for f in files:
+            if not f.endswith(".jsx"):
+                continue
+            src = open(os.path.join(dirpath, f)).read()
+            if "<ResponsiveContainer" in src and "ChartProvenance" not in src:
+                raise AssertionError(f"{f} draws a chart without <ChartProvenance>")
     ui = open(os.path.join(root, "..", "frontend", "src", "components", "ChartProvenance.jsx")).read()
     for kind in ("broker_reconciled", "indicative", "simulated", "derived"):
         assert kind in ui   # the four kinds are visually distinct in the UI

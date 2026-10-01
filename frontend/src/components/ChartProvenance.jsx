@@ -1,4 +1,4 @@
-import { Clock, Database, FlaskConical, ShieldCheck, Activity } from "lucide-react";
+import { Clock, Database, FlaskConical, ShieldCheck, ShieldAlert, Activity } from "lucide-react";
 
 const KIND = {
     broker_reconciled: { label: "BROKER-RECONCILED", cls: "border-[#00FF41]/50 text-[#00FF41]", Icon: ShieldCheck },
@@ -10,8 +10,16 @@ const KIND = {
 const age = (s) => (s == null ? "—" : s < 90 ? `${s}s` : s < 5400 ? `${Math.round(s / 60)}m` : s < 172800 ? `${Math.round(s / 3600)}h` : `${Math.round(s / 86400)}d`);
 
 // Shared chart provenance strip (audit r28 P2-05) — renders the backend `provenance` contract.
-export const ChartProvenance = ({ p, testid = "chart-provenance" }) => {
-    if (!p) return null;
+export const ChartProvenance = ({ p, testid = "chart-provenance", loading = false }) => {
+    if (loading) return null;
+    if (!p || p.contract_version !== 1 || !KIND[p.source_kind]) {
+        // audit r29 P2-05 — never hide a missing/invalid contract
+        return (
+            <div data-testid={`${testid}-missing`} className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-[#FF3B30]/60 text-[#FF3B30] font-mono text-[9px] tracking-widest mt-1">
+                <ShieldAlert className="w-3 h-3" /> PROVENANCE MISSING — series origin unverified
+            </div>
+        );
+    }
     const k = KIND[p.source_kind] || KIND.derived;
     const Icon = k.Icon;
     const fallback = p.cache_status && !["live", "upstream", "memory_cache"].includes(p.cache_status);

@@ -2994,3 +2994,7 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - New tests: `tests/integration/test_r28_audit.py`, `tests/unit/test_r28_chart_provenance.py`, `tests/test_r28_http.py` (http lane, by testing agent). Manifest regenerated, rc_lock refrozen.
 - Backlog: e-mail test-send re-auth (P3), account_limits live-slot caps still heuristic, Docker php-fpm MountFlags host fix, SEC-001 decoy nonce.
 - Bug fix: BLOCKERS dropdown crashed ("e.account_id is undefined") — canonical_decision blockers were merged into readiness reasons with `accounts: ["label"]` strings; now `{account_id,label}` objects + `recovery` text (trading_readiness.py), and TradingReadinessStrip tolerates both shapes.
+
+## 2026-10-01 — Round-29 audit remediation — DONE (unit+integration 947 passed; r29 tests 8/8)
+- See docs/ROUND28_ACCEPTANCE.md (Round 29 section) for the finding→fix table. Key new surfaces: `pricing_snapshot`, `demo_proof` + admin override, `trial_decision`, vault rewrap endpoint + `secrets_rewrap` readiness, typed `ChartProvenance` + CI inventory, `share_allowed` on verified performance.
+- User steps after deploy: re-attest VT Markets (EA evidence OK); Robo needs ATTEST (OVERRIDE) with reason since EA reports RoboForex-ECN.

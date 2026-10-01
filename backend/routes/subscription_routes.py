@@ -179,6 +179,9 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
     plan = get_plan(plan_id)
     if not plan:
         raise HTTPException(status_code=400, detail=f"unknown plan: {plan_id}")
+    # audit r29 P1-01 — single immutable snapshot; nothing below re-reads pricing globals
+    import subscription_plans as _sp
+    snap = _sp.pricing_snapshot(plan)
 
     host_url = str(request.base_url)
     stripe = _stripe_client(host_url)
@@ -188,16 +191,17 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
     metadata = {
         "user_id": user["id"],
         "user_email": user.get("email", ""),
-        "plan_id": plan.id,
-        "duration_months": str(plan.duration_months),
-        "amount_minor": str(plan.amount_cents),
-        "pricing_version": str(_sp_version()),
+        "plan_id": snap["plan_id"],
+        "duration_months": str(snap["duration_months"]),
+        "amount_minor": str(snap["amount_minor"]),
+        "currency": snap["currency"],
+        "pricing_version": str(snap["pricing_version"]),
+        "idempotency_key": snap["idempotency_key"],
     }
 
-    import subscription_plans as _sp
     req = CheckoutSessionRequest(
-        amount=plan.amount_usd,
-        currency=_sp.CURRENCY,
+        amount=snap["amount_usd"],
+        currency=snap["currency"],
         success_url=success_url,
         cancel_url=cancel_url,
         metadata=metadata,
@@ -214,18 +218,21 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
     await record_transaction(
         user_id=user["id"],
         user_email=user.get("email", ""),
-        plan_id=plan.id,
+        plan_id=snap["plan_id"],
         session_id=session.session_id,
-        amount_usd=plan.amount_usd,
+        amount_usd=snap["amount_usd"],
         metadata=metadata,
-        amount_cents=plan.amount_cents,
-        currency=_sp.CURRENCY,
-        pricing_version=_sp_version(),
+        amount_cents=snap["amount_minor"],
+        currency=snap["currency"],
+        pricing_version=snap["pricing_version"],
+        snapshot=snap,
     )
     return {
         "checkout_url": session.url,
         "session_id": session.session_id,
-        "plan": plan.to_public(),
+        "plan": snap["public"],
+        "pricing_version": snap["pricing_version"],
+        "idempotency_key": snap["idempotency_key"],
     }
 
 

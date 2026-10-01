@@ -285,6 +285,20 @@ def _build_plans() -> dict[str, Plan]:
 PLANS = _build_plans()
 
 
+def pricing_snapshot(plan: "Plan") -> dict:
+    """audit r29 P1-01 — ONE immutable snapshot taken right after ensure_fresh():
+    everything a checkout quotes, records, returns and later fulfils reads from
+    this dict only, never from module globals after the first external await."""
+    import uuid
+    return {
+        "plan_id": plan.id, "tier": plan.tier, "duration_months": plan.duration_months,
+        "amount_minor": plan.amount_cents, "amount_usd": plan.amount_usd, "currency": CURRENCY,
+        "pricing_version": PRICING_VERSION, "tier_base_cents": dict(TIER_BASE_CENTS),
+        "discount_pct": plan.discount_pct, "public": plan.to_public(),
+        "idempotency_key": uuid.uuid4().hex,
+    }
+
+
 def apply_pricing(base_cents: dict, discounts: dict, currency: str, pricing_version: int | None = None) -> None:
     """Runtime override (Admin → Integrations → Plans). Mutates the module
     catalog IN PLACE so every `from subscription_plans import PLANS/TIER_BASE_CENTS`

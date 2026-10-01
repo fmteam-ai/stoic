@@ -6,8 +6,43 @@ broker-reconciled series are never visually interchangeable."""
 import os
 from datetime import datetime, timezone
 
+from typing import Literal, Optional
+
+from pydantic import BaseModel
+
 CONTRACT_VERSION = 1
 SOURCE_KINDS = ("broker_reconciled", "indicative", "simulated", "derived")
+
+
+class ChartProvenance(BaseModel):
+    """Typed contract (audit r29 P2-05) — every financial series response must validate."""
+    contract_version: int
+    provider: str
+    source_kind: Literal["broker_reconciled", "indicative", "simulated", "derived"]
+    as_of: Optional[str]
+    timezone: Literal["UTC"]
+    freshness_s: Optional[int]
+    stale: bool
+    expected_interval_s: int
+    points: int
+    missing_intervals: list
+    missing_intervals_count: int
+    cache_status: str
+    environment: str
+    ledger_id: Optional[str] = None
+    reconciliation_id: Optional[str] = None
+    note: Optional[str] = None
+    share_allowed: Optional[bool] = None
+
+
+# CI inventory: every financial series endpoint → (module path, response key holding the series)
+FINANCIAL_SERIES_ENDPOINTS = {
+    "GET /api/market/history/{symbol}": ("routes/market_routes.py", "history"),
+    "GET /api/accounts/equity-curve": ("routes/account_routes.py", "series"),
+    "GET /api/performance/verified": ("routes/performance_routes.py", "equity_curve"),
+    "GET /api/pamm/programs/{program_id}/nav": ("modules/pamm/api/__init__.py", "nav"),
+    "GET /api/analytics/research": ("routes/analytics_routes.py", "walk_forward"),
+}
 
 
 def _ts(v) -> datetime | None:
@@ -50,7 +85,7 @@ def build(*, provider: str, source_kind: str, points: list | None = None, time_k
             if expected_interval_s >= 86400 and _weekend_only(a, b):
                 continue    # markets closed Sat/Sun — not missing data
             gaps.append({"from": a.isoformat(), "to": b.isoformat(), "missing": int(delta // expected_interval_s) - 1})
-    return {
+    return ChartProvenance.model_validate({
         "contract_version": CONTRACT_VERSION,
         "provider": provider,
         "source_kind": source_kind,
@@ -67,4 +102,4 @@ def build(*, provider: str, source_kind: str, points: list | None = None, time_k
         "ledger_id": ledger_id,
         "reconciliation_id": reconciliation_id,
         "note": note,
-    }
+    }).model_dump()
