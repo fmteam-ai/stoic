@@ -3007,3 +3007,7 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Pre-flight done in preview: working tree clean (reverted 2 local test ledger anchors), TEST_MANIFEST up to date, rc_lock --check OK, Dockerfile tolerates missing release/ea_release.json (glob COPY).
 - Operator steps: Save to GitHub → (optional) RELEASE_SIGNER_* secrets + run ea-release workflow → `cd /opt/stoic && ./deploy/update.sh` → verify readiness strip + Broker Registry attestation.
 - Pending after deploy: P1-05 operational acceptance pack, SEC-001 decoy nonce.
+
+## 2026-06 — Go-live attempt of febc6d6 FAILED on server (backend unhealthy → auto-rollback to 0119599) — ROOT CAUSE FIXED
+- Cause: audit r28 P2-02 boot guard requires dedicated SECRETS_MASTER_KEY in production, but nothing provisioned it (install.sh/compose/preflight only knew KEY_VAULT_MASTER). Retry loop treated the crash as an overlay2 mount leak and hid the log.
+- Fix: compose secret `secrets/secrets_master_key` → `SECRETS_MASTER_KEY_FILE`; `ensure_release_secrets` (lib.sh) generates it idempotently in install.sh AND update.sh; `app_boot_failure` prints exited/unhealthy app container logs and aborts retries; preflight `secrets_master_key` check; legacy JWT-derived vault records auto-migrate at boot (`_migrate_legacy_record`, `migrated_from=jwt_derived`). Tests: r28 legacy migration, iter181 preflight env, selfhost installer. Manifest regenerated, rc_lock refrozen. 921 unit+integration green.

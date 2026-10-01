@@ -27,6 +27,7 @@ GOOD_ENV = {
     "ADMIN_PASSWORD": "TestDummy-Pass-2026-NotReal",  # dummy, not a credential
     "ED25519_SIGNING_KEY_B64": None,  # round 9 P1-01: private key must be ABSENT in production
     "KEY_VAULT_MASTER": "vault-master-material",
+    "SECRETS_MASTER_KEY": "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQ=",  # 32 x 'd', dummy (audit r28 P2-02)
     "RELEASE_SIGNER": "external",
     "RELEASE_SIGNER_URL": "https://signer.internal.example",
     "RELEASE_SIGNER_ALLOWED_HOSTS": "signer.internal.example",

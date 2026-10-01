@@ -18,6 +18,7 @@ x-app-common: &app-common
     MONGO_URL_FILE: /run/secrets/mongo_url
     JWT_SECRET_FILE: /run/secrets/jwt_secret
     KEY_VAULT_MASTER_FILE: /run/secrets/key_vault_master
+    SECRETS_MASTER_KEY_FILE: /run/secrets/secrets_master_key
     METRICS_TOKEN_FILE: /run/secrets/metrics_token
     ORDER_AUTH_SECRET_FILE: /run/secrets/order_auth_secret
     LEDGER_ANCHOR_KEY_FILE: /run/secrets/ledger_anchor_key
@@ -32,6 +33,7 @@ x-app-common: &app-common
     - mongo_url
     - jwt_secret
     - key_vault_master
+    - secrets_master_key
     - metrics_token
     - order_auth_secret
     - ledger_anchor_key
@@ -168,6 +170,8 @@ secrets:
     file: ./secrets/jwt_secret
   key_vault_master:
     file: ./secrets/key_vault_master
+  secrets_master_key:
+    file: ./secrets/secrets_master_key
   metrics_token:
     file: ./secrets/metrics_token
   order_auth_secret:

@@ -114,6 +114,42 @@ def test_vault_requires_dedicated_master_key_in_production(monkeypatch):
     assert integ.master_key_source() == "dedicated" and integ.readiness_check()["ok"]
 
 
+def test_vault_legacy_jwt_derived_records_migrate_to_dedicated_key_at_boot(monkeypatch):
+    """Upgrade path: records sealed by HKDF(JWT_SECRET) before r28 open once with the
+    legacy key and are re-sealed under the dedicated key — never left undecryptable."""
+    import integrations_settings as integ
+    db = _db()
+    key = "SENDER_NAME"
+    saved = _run(db.secrets_vault.find_one({"_id": key}))
+    try:
+        monkeypatch.setenv("APP_ENV", "development")
+        monkeypatch.setenv("JWT_SECRET", "legacy-jwt-secret-for-test")
+        monkeypatch.delenv("SECRETS_MASTER_KEY", raising=False)
+        monkeypatch.delenv("SECRETS_MASTER_KEY_PREVIOUS", raising=False)
+        legacy = {k: v for k, v in integ.seal("STOIC legacy").items() if k != "key_version"}
+        _run(db.secrets_vault.replace_one({"_id": key}, {"_id": key, **legacy}, upsert=True))
+        monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("SECRETS_MASTER_KEY", base64.b64encode(b"d" * 32).decode())
+        monkeypatch.delenv(key, raising=False)
+        n = integ.load_vault_sync(os.environ["MONGO_URL"], os.environ["DB_NAME"])
+        assert n >= 1 and key not in integ.DECRYPT_FAILURES and os.environ[key] == "STOIC legacy"
+        doc = _run(db.secrets_vault.find_one({"_id": key}))
+        assert doc["key_version"] == 1 and doc["migrated_from"] == "jwt_derived"
+        assert doc["master_key_id"] == integ.master_key_id() and integ.unseal(doc) == "STOIC legacy"
+        # a record already on a dedicated key is NEVER opened with the legacy key
+        monkeypatch.setenv("SECRETS_MASTER_KEY", base64.b64encode(b"e" * 32).decode())
+        integ.load_vault_sync(os.environ["MONGO_URL"], os.environ["DB_NAME"])
+        assert key in integ.DECRYPT_FAILURES
+        assert integ.readiness_check()["ok"] is False
+    finally:
+        integ.DECRYPT_FAILURES.clear()
+        monkeypatch.delenv(key, raising=False)
+        if saved:
+            _run(db.secrets_vault.replace_one({"_id": key}, saved, upsert=True))
+        else:
+            _run(db.secrets_vault.delete_one({"_id": key}))
+
+
 def test_vault_decrypt_failures_are_a_readiness_blocker(monkeypatch):
     import integrations_settings as integ
     monkeypatch.setenv("APP_ENV", "development")

@@ -11,6 +11,38 @@ set_kv() {
   fi
 }
 
+# Docker secrets introduced by later releases — generated when missing so an
+# existing install upgrades without manual steps (install.sh + update.sh).
+#   order_auth_secret / ledger_anchor_key : signing keys distinct from JWT (boot rule)
+#   secrets_master_key                    : dedicated integrations-vault key (audit r28 P2-02);
+#                                           legacy JWT-derived records are migrated at boot
+ensure_release_secrets() {
+  [ -d secrets ] || return 0
+  local gen='python3 -c "import secrets;print(secrets.token_urlsafe(32))"'
+  [ -f secrets/order_auth_secret ] || { eval "${gen}" > secrets/order_auth_secret; echo "   generated order_auth_secret"; }
+  [ -f secrets/ledger_anchor_key ] || { eval "${gen}" > secrets/ledger_anchor_key; echo "   generated ledger_anchor_key"; }
+  [ -s secrets/secrets_master_key ] || {
+    python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/secrets_master_key
+    echo "   generated secrets_master_key (dedicated vault key — sealed integration secrets migrate at boot)"
+  }
+  chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/secrets_master_key
+}
+
+# After a failed `compose up`, an app container that EXITED or is UNHEALTHY is a
+# boot failure of the new build — not a mount leak. Print its log and stop
+# retrying so the cause is visible instead of buried under 6 identical attempts.
+app_boot_failure() {
+  local c state found=1
+  for c in $(docker compose ps -a --format '{{.Name}} {{.State}} {{.Health}}' 2>/dev/null \
+             | awk '$1 ~ /-(backend|worker-[a-z]+|frontend)-[0-9]+$/ && ($2 == "exited" || $3 == "unhealthy") {print $1}'); do
+    found=0
+    state=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' "$c" 2>/dev/null || true)
+    echo "!! ${c}: ${state} — last log lines:"
+    docker logs --tail 60 "$c" 2>&1 | sed 's/^/   | /'
+  done
+  return ${found}
+}
+
 # Resolve the exact 40-hex commit being deployed (release archive BUILD_SHA
 # or git HEAD) and export GIT_SHA for the compose build. Hard-fails without.
 resolve_git_sha() {
@@ -530,6 +562,10 @@ compose_up() {
   [ "$(deploy_mode)" = "registry" ] && flags="${flags} --no-build"
   for attempt in 1 2 3 4 5 6; do
     docker compose up ${flags} "$@" && return 0
+    if app_boot_failure; then
+      echo "ERROR: the new build's container(s) failed to boot (see log above) — this is not a Docker mount problem; fix the cause and re-run"
+      return 1
+    fi
     [ "${attempt}" = 6 ] && break
     echo "-- compose up failed (attempt ${attempt}/6) — reaping containers that died during recreate and retrying"
     reap_zombies || return 1

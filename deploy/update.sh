@@ -66,6 +66,7 @@ echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test
 verify_release_provenance || rollback
 
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
+ensure_release_secrets
 provision_images || rollback
 
 echo "-- restarting stack"

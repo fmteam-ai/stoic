@@ -66,9 +66,18 @@ def test_installer_configures_external_signer_and_prod_hardening():
     for needle in ("RELEASE_SIGNER external", "RELEASE_SIGNER_URL https://signer:9443",
                    "RELEASE_SIGNER_ALLOWED_HOSTS signer", "RELEASE_PUBLIC_KEY_B64 \"${SIGNER_PUB_B64}\"",
                    "RELEASE_SIGNER_DEFERRED false", "ADMIN_MFA_ENFORCED true", "TURNSTILE_EXPECTED_HOSTNAMES",
-                   "secrets/order_auth_secret", "secrets/ledger_anchor_key", "openssl req -x509",
+                   "ensure_release_secrets", "openssl req -x509",
                    "/^ED25519_SIGNING_KEY_B64=/d", "/^STEP_UP_BYPASS_TOKEN=/d"):
         assert needle in inst, needle
+    # upgrade-safe secret generation is shared by install.sh AND update.sh (audit r28 P2-02 boot rule)
+    lib = _read("deploy", "lib.sh")
+    for needle in ("ensure_release_secrets()", "secrets/order_auth_secret", "secrets/ledger_anchor_key",
+                   "secrets/secrets_master_key", "app_boot_failure"):
+        assert needle in lib, needle
+    assert "ensure_release_secrets" in _read("deploy", "update.sh")
+    d = yaml.safe_load(_read("docker-compose.yml"))
+    assert d["services"]["backend"]["environment"]["SECRETS_MASTER_KEY_FILE"] == "/run/secrets/secrets_master_key"
+    assert "secrets_master_key" in d["secrets"]
     for script in ("deploy/install.sh", "deploy/bootstrap.sh"):
         subprocess.run(["bash", "-n", os.path.join(ROOT, script)], check=True)
 

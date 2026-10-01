@@ -178,8 +178,8 @@ fi
 
 # 0b · secrets added by later releases — generated when missing (upgrade-safe).
 # Key separation: ORDER_AUTH / LEDGER_ANCHOR are distinct from JWT (boot rule).
-[ -f secrets/order_auth_secret ] || { gen > secrets/order_auth_secret; echo "   generated order_auth_secret"; }
-[ -f secrets/ledger_anchor_key ] || { gen > secrets/ledger_anchor_key; echo "   generated ledger_anchor_key"; }
+. deploy/lib.sh
+ensure_release_secrets
 # MongoDB single-node replica set (transactions are required in production):
 # cluster keyFile + replicaSet in the app URL — idempotent, upgrade-safe.
 [ -s secrets/mongo_keyfile ] || { openssl rand -base64 756 | tr -d '\n' > secrets/mongo_keyfile; echo "   generated mongo_keyfile (replica set rs0)"; }

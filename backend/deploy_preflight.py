@@ -6,6 +6,8 @@ Each check answers: "would THIS value pass the production guardrail?"
 In preview, values reflect what production will inherit from the codebase
 .env — Secrets-tab overrides take precedence there and cannot be seen here.
 """
+import base64
+import binascii
 import os
 
 from app_env import is_production, removable_secret
@@ -122,6 +124,20 @@ def run_preflight(check_signer_health: bool = False) -> dict:
         "set (distinct from JWT_SECRET)",
         "secrets_vault refuses to run in production without its own master "
         "key (broker credentials / command keys are encrypted with it)."))
+
+    # audit r28 P2-02 — integrations vault key must be dedicated (never HKDF(JWT_SECRET)) in production
+    smk = env.get("SECRETS_MASTER_KEY") or ""
+    smk_ok = False
+    try:
+        smk_ok = bool(smk) and len(base64.b64decode(smk, validate=True)) == 32 and smk != jwt and smk != kvm
+    except (ValueError, binascii.Error):
+        smk_ok = False
+    checks.append(_check(
+        "secrets_master_key", "SECRETS_MASTER_KEY", "pass" if smk_ok else "fail",
+        ("set (" + _mask(smk) + ")" if smk else "(not set)") + ("" if smk_ok or not smk else " — not 32 bytes base64 / not distinct"),
+        "32 random bytes, base64, distinct from JWT_SECRET and KEY_VAULT_MASTER",
+        "deploy/install.sh and deploy/update.sh generate secrets/secrets_master_key automatically "
+        "(compose → SECRETS_MASTER_KEY_FILE); production boot refuses without it."))
 
     # audit round 9 P1-01 — the SAME complete validator the boot guard and signer use
     from release_signing import signer_config_violations, signer_health, _mode as _signer_mode

@@ -9,6 +9,7 @@ API process immediately on update. Every update requires admin re-auth
 """
 import base64
 import hashlib
+import logging
 import os
 from datetime import datetime, timezone
 
@@ -58,6 +59,34 @@ def _master_key() -> bytes:
 
 def master_key_source() -> str:
     return "dedicated" if os.environ.get("SECRETS_MASTER_KEY") else "derived_from_jwt_secret"
+
+
+def _legacy_derived_key() -> bytes | None:
+    """Pre-r28 vault key (HKDF of JWT_SECRET) — read-only, used ONCE to migrate legacy records."""
+    seed = os.environ.get("JWT_SECRET")
+    if not seed:
+        return None
+    return HKDF(algorithm=hashes.SHA256(), length=32, salt=b"stoic-vault", info=_AAD).derive(seed.encode())
+
+
+def _migrate_legacy_record(col, doc: dict) -> str | None:
+    """Record sealed before dedicated keys existed (no key_version): open with the
+    legacy derived key and re-seal under the current dedicated key in place.
+    Compare-and-set on the old ciphertext so a concurrent writer is never clobbered."""
+    if doc.get("key_version") is not None or not os.environ.get("SECRETS_MASTER_KEY"):
+        return None
+    legacy = _legacy_derived_key()
+    if legacy is None:
+        return None
+    try:
+        plain = _unseal_with(legacy, doc)
+    except Exception:  # noqa: BLE001
+        return None
+    new = {**seal(plain), "migrated_from": "jwt_derived",
+           "migrated_at": datetime.now(timezone.utc).isoformat()}
+    col.update_one({"_id": doc["_id"], "ciphertext": doc["ciphertext"]}, {"$set": new})
+    logging.getLogger("secrets").warning("vault: migrated legacy record %s to dedicated master key", doc["_id"])
+    return plain
 
 
 # ── audit r29 P2-04: versioned keys · dual-read / single-write · transactional rewrap ──
@@ -178,8 +207,12 @@ def load_vault_sync(mongo_url: str, db_name: str) -> int:
                 os.environ[doc["_id"]] = unseal(doc)
                 n += 1
             except Exception:  # noqa: BLE001 — wrong master key: keep env value, never crash boot
-                DECRYPT_FAILURES.append(doc["_id"])
-                continue
+                plain = _migrate_legacy_record(col, doc)
+                if plain is None:
+                    DECRYPT_FAILURES.append(doc["_id"])
+                    continue
+                os.environ[doc["_id"]] = plain
+                n += 1
     except Exception:  # noqa: BLE001
         return 0
     return n
