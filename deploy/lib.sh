@@ -18,11 +18,13 @@ set_kv() {
 #                                           legacy JWT-derived records are migrated at boot
 ensure_release_secrets() {
   [ -d secrets ] || return 0
-  local gen='python3 -c "import secrets;print(secrets.token_urlsafe(32))"'
-  [ -f secrets/order_auth_secret ] || { eval "${gen}" > secrets/order_auth_secret; echo "   generated order_auth_secret"; }
-  [ -f secrets/ledger_anchor_key ] || { eval "${gen}" > secrets/ledger_anchor_key; echo "   generated ledger_anchor_key"; }
+  local f
+  # create with mode 0600 from the start (no umask window), regenerate zero-byte leftovers
+  for f in order_auth_secret ledger_anchor_key; do
+    [ -s "secrets/${f}" ] || { (umask 077; python3 -c "import secrets;print(secrets.token_urlsafe(32))" > "secrets/${f}"); echo "   generated ${f}"; }
+  done
   [ -s secrets/secrets_master_key ] || {
-    python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/secrets_master_key
+    (umask 077; python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/secrets_master_key)
     echo "   generated secrets_master_key (dedicated vault key — sealed integration secrets migrate at boot)"
   }
   chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/secrets_master_key
