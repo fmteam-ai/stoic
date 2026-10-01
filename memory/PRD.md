@@ -2993,3 +2993,4 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Runbook for operator items P1-02/P1-03/P1-04/P2-06: `docs/ROUND28_ACCEPTANCE.md`.
 - New tests: `tests/integration/test_r28_audit.py`, `tests/unit/test_r28_chart_provenance.py`, `tests/test_r28_http.py` (http lane, by testing agent). Manifest regenerated, rc_lock refrozen.
 - Backlog: e-mail test-send re-auth (P3), account_limits live-slot caps still heuristic, Docker php-fpm MountFlags host fix, SEC-001 decoy nonce.
+- Bug fix: BLOCKERS dropdown crashed ("e.account_id is undefined") — canonical_decision blockers were merged into readiness reasons with `accounts: ["label"]` strings; now `{account_id,label}` objects + `recovery` text (trading_readiness.py), and TradingReadinessStrip tolerates both shapes.

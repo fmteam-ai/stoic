@@ -126,10 +126,10 @@ export function TradingReadinessStrip() {
                             <div className="text-[#52525B] mt-0.5">→ {r.recovery}</div>
                             {(r.accounts || []).length > 0 && (
                                 <div className="text-[#52525B] mt-0.5" data-testid={`readiness-reason-accounts-${r.code}`}>
-                                    {r.accounts.map(a => (
-                                        <div key={a.account_id} className="flex items-center gap-2 flex-wrap">
+                                    {r.accounts.map((raw, i) => { const a = typeof raw === "string" ? { label: raw } : (raw || {}); return (
+                                        <div key={a.account_id || a.label || i} className="flex items-center gap-2 flex-wrap">
                                             <span>
-                                                affected: <span className="text-[#A1A1AA]">{a.label || a.account_id.slice(-6)}</span>
+                                                affected: <span className="text-[#A1A1AA]">{a.label || (a.account_id ? a.account_id.slice(-6) : "—")}</span>
                                                 {a.reason ? <span> — {a.reason}</span> : null}
                                             </span>
                                             {a.trust_eligible && (
@@ -141,7 +141,7 @@ export function TradingReadinessStrip() {
                                                 </button>
                                             )}
                                         </div>
-                                    ))}
+                                    ); })}
                                 </div>
                             )}
                         </div>

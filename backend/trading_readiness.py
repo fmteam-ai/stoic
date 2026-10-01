@@ -154,7 +154,9 @@ async def readiness(db, user_id: str) -> dict:
     for b in dec["blockers"]:
         if not any(r["code"] == b["code"] for r in reasons):
             reasons.append({"code": b["code"], "level": b["state"], "message": b["reason"],
-                            "accounts": [b["account_label"]] if b.get("account_label") else [],
+                            "accounts": ([{"account_id": str(b.get("account_id") or ""), "label": b["account_label"]}]
+                                         if b.get("account_label") else []),
+                            "recovery": b.get("recovery") or "See Safety Blocks → active platform blockers",
                             "source": "canonical_decision"})
     level = dominant(level, dec["state"]) if level in STATES else dec["state"]
     reasons.sort(key=lambda r: STATES.index(r["level"]) if r["level"] in STATES else 0, reverse=True)
