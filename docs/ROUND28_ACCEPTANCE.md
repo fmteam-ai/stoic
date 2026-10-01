@@ -18,10 +18,14 @@
 2. CI `release.yml` on the **peeled signed tag** must: run gates → build backend/frontend images → record digests → generate SBOMs (`syft`) → sign admission record (signer sidecar) → run `scripts/freeze_rc_lock.py --commit $(git rev-parse <tag>^{}) --backend-digest <sha256> --frontend-digest <sha256> --target production --evidence sbom_backend=<path> --evidence sbom_frontend=<path> --evidence admission=<path>` → commit `release/rc_lock.json` + `release/attestation.<sha>.json`.
 3. `deploy/update.sh` with `ATTESTATION_REQUIRED=true` then pulls the attested GHCR digests; `release_consistency_check.py --strict` must exit 0 (no developer-snapshot notes).
 
-### P1-03 · EA executable chain
-1. On the sanctioned Windows build host: `MetaEditor64.exe /compile:backend\static\EmergentTradingBridge.mq5 /log` — 0 errors, record MetaEditor build number.
-2. `python scripts/verify_ea_release.py --ex5 <path>.ex5 --compile-log <log> --metaeditor-version <ver> --windows-build <build> --mt5-build <build>` (records hash + compiler identity), then re-run with `--sign` (signer sidecar).
-3. Set `EA_RELEASE_SHA256` (or ship `release/ea_release.json`) in the release; `release-readiness.ea_release.ok` becomes true. A locally compiled EX5 may trade **only** on an admin-attested, identity-bound DEMO account (see P1-01).
+### P1-03 · EA executable chain — NOW AUTOMATED (`.github/workflows/ea-release.yml`)
+The sanctioned job is the **only** producer of a trusted EX5 record:
+1. **Trigger**: GitHub → Actions → *ea-release* → *Run workflow* (branch `main`), or automatically on any push touching `backend/static/EmergentTradingBridge.mq5`.
+2. The job (windows-latest) installs MetaTrader 5, compiles the exact MQ5 with `metaeditor64.exe` (0 errors enforced), reads the MetaEditor build **from the compile log**, hashes the EX5, signs the record via the **external signer** (`RELEASE_SIGNER_URL/TOKEN/ALLOWED_HOSTS`, `RELEASE_PUBLIC_KEY_B64`, `RELEASE_SIGNER_KEY_ID` repo secrets — the private key never enters CI), binds it to `GITHUB_SHA` (`source_commit`, `compiled_by=github-actions`) and **commits** `release/ea_release.json` + `docs/RELEASE_HASHES.json` + the rc_lock toolchain mirror back to the branch.
+3. `release.yml` re-compiles on the tag and **blocks the release** unless the freshly compiled EX5 hash equals the committed signed record (reproducibility) and `verify_ea_release.py --check` passes; it exports `EA_RELEASE_SHA256` for the image pin.
+4. Runtime trust (`ea_capabilities.expected_ea_sha256`): only `EA_RELEASE_SHA256` env or a record that is Ed25519-signed, `compiled_by=github-actions`, version == LIVE_MIN, and whose `mq5_sha256` equals the MQ5 the server ships. Unsigned/manual/drifted ⇒ `None` ⇒ live accounts stay blocked. Docker image ships `release/ea_release.json`.
+5. After the bot commit lands: `./deploy/update.sh` → `release-readiness.ea_release.ok=true` → live accounts pass `live_gate` once their terminal reports the matching `ea_binary_sha256` on heartbeat.
+Prerequisite: the external signer must be provisioned (repo secrets above). Manual `verify_ea_release.py` runs now produce `compiled_by=manual` records that the gate **refuses** by design.
 
 ### P1-04 · live trading truth
 Run the signed read-only acceptance pack against the promoted digests: `deploy/doctor.sh --bundle`, `GET /api/ops/release-readiness`, AT-01 drill; attach broker statements. Required evidence: 6 unique accounts, exactly 3 approved LIVE accounts ON with 3 matching bots ON, identical EA expected/connected/stale counts on every surface, fresh reconciliation with matching broker positions, zero UNKNOWN/aged execution intents, Safety Blocks + Bot Health caps dominating, performance matching statements after fees/swaps.

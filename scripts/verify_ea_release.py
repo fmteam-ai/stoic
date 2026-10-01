@@ -30,6 +30,28 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
 HASHES = os.path.join(ROOT, "docs", "RELEASE_HASHES.json")
 MQ5 = os.path.join(ROOT, "backend", "static", "EmergentTradingBridge.mq5")
+EA_RELEASE = os.path.join(ROOT, "release", "ea_release.json")   # compact signed record shipped in the image
+RC_LOCK = os.path.join(ROOT, "release", "rc_lock.json")
+
+
+def mq5_property_version(path=MQ5) -> str | None:
+    m = re.search(r'#property\s+version\s+"([^"]+)"', open(path, encoding="utf-8", errors="ignore").read())
+    return m.group(1) if m else None
+
+
+def _read_log(path) -> str:
+    raw = open(path, "rb").read()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff") or (len(raw) > 1 and raw[1:2] == b"\x00"):
+        return raw.decode("utf-16", errors="ignore")      # MetaEditor writes UTF-16 logs
+    return raw.decode("utf-8", errors="ignore")
+
+
+def toolchain_from_log(path) -> dict:
+    """MetaEditor identity straight from the compile log (never from a CLI claim alone)."""
+    text = _read_log(path)
+    me = re.search(r"MetaEditor\s+([\d.]+)\s+build\s+(\d+)", text)
+    return {"metaeditor_version": f"{me.group(1)} build {me.group(2)}" if me else None,
+            "mt5_build": me.group(2) if me else None}
 
 
 def sha256_file(p):
@@ -43,13 +65,13 @@ def sha256_file(p):
 def _canonical_payload(ea: dict) -> bytes:
     body = {k: ea.get(k) for k in
             ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
-             "windows_build", "mt5_build")}
+             "windows_build", "mt5_build", "source_commit")}
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
 
 
 def _parse_compile_log(path):
     """MetaEditor log → (errors, warnings). Refuses unparseable logs."""
-    text = open(path, encoding="utf-8", errors="ignore").read()
+    text = _read_log(path)
     m = (re.search(r"[Rr]esult:?\s*(\d+)\s*errors?,?\s*(\d+)\s*warnings?", text)
          or re.search(r"(\d+)\s*error\(s\),\s*(\d+)\s*warning\(s\)", text))
     if not m:
@@ -71,15 +93,25 @@ def record(args):
             "FAIL: backend/static/EmergentTradingBridge.mq5 does not match the "
             "recorded RC source hash — you compiled a DIFFERENT MQ5.\n"
             f"  recorded: {ea['mq5_sha256']}\n  on disk:  {mq5_now}")
+    tool = toolchain_from_log(args.compile_log)
+    if args.metaeditor_version and tool["metaeditor_version"] and args.metaeditor_version != tool["metaeditor_version"]:
+        raise SystemExit(f"FAIL: --metaeditor-version '{args.metaeditor_version}' != compile log "
+                         f"'{tool['metaeditor_version']}' — the log is the authority")
+    version = mq5_property_version()
+    if not version:
+        raise SystemExit("FAIL: cannot read #property version from the MQ5")
     ea.update({
+        "version": version,
         "mq5_sha256": mq5_now,
         "ex5_sha256": sha256_file(args.ex5),
         "ex5_note": None,
         "compile_log": {"errors": errors, "warnings": warnings,
                         "log_sha256": sha256_file(args.compile_log)},
-        "metaeditor_version": args.metaeditor_version,
+        "metaeditor_version": tool["metaeditor_version"] or args.metaeditor_version,
         "windows_build": args.windows_build,
-        "mt5_build": args.mt5_build,
+        "mt5_build": tool["mt5_build"] or args.mt5_build,
+        "source_commit": (args.source_commit or os.environ.get("GITHUB_SHA") or "").lower() or None,
+        "compiled_by": args.compiled_by or ("github-actions" if os.environ.get("GITHUB_ACTIONS") else "manual"),
         "verified_at": datetime.now(timezone.utc).isoformat(),
     })
     if args.sign:
@@ -89,8 +121,10 @@ def record(args):
                            "signed_at": datetime.now(timezone.utc).isoformat()}
     doc["ea"] = ea
     json.dump(doc, open(HASHES, "w"), indent=2)
+    os.makedirs(os.path.dirname(EA_RELEASE), exist_ok=True)
+    json.dump(ea, open(EA_RELEASE, "w"), indent=2)      # read by ea_capabilities.expected_ea_sha256()
     # Mirror the attested toolchain into the RC lock (audit item 42).
-    lock_path = os.path.join(ROOT, "release", "rc_lock.json")
+    lock_path = RC_LOCK
     if os.path.exists(lock_path):
         lock = json.load(open(lock_path))
         lock["windows_build_attested"] = {
@@ -118,6 +152,10 @@ def check_entry(ea: dict) -> list:
     log = ea.get("compile_log") or {}
     if ea.get("ex5_sha256") and log.get("errors") not in (0,):
         fails.append("recorded compile log is missing or reported errors")
+    if ea.get("ex5_sha256") and os.path.exists(MQ5) and ea.get("version") != mq5_property_version():
+        fails.append(f"recorded EA version {ea.get('version')} != MQ5 #property version {mq5_property_version()}")
+    if ea.get("ex5_sha256") and ea.get("compiled_by") not in ("github-actions",):
+        fails.append("EX5 was not compiled by the sanctioned CI MetaEditor job (compiled_by != github-actions)")
     sig = ea.get("signature") or {}
     if not sig.get("sig_hex"):
         fails.append("EX5 entry is UNSIGNED")
@@ -156,6 +194,8 @@ def main():
     ap.add_argument("--windows-build")
     ap.add_argument("--mt5-build")
     ap.add_argument("--sign", action="store_true")
+    ap.add_argument("--source-commit", help="release commit the EX5 is bound to (default $GITHUB_SHA)")
+    ap.add_argument("--compiled-by", help="sanctioned job identity (CI sets github-actions)")
     args = ap.parse_args()
     if args.check:
         return check(args)

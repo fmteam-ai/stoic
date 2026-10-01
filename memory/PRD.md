@@ -2998,3 +2998,7 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## 2026-10-01 — Round-29 audit remediation — DONE (unit+integration 947 passed; r29 tests 8/8)
 - See docs/ROUND28_ACCEPTANCE.md (Round 29 section) for the finding→fix table. Key new surfaces: `pricing_snapshot`, `demo_proof` + admin override, `trial_decision`, vault rewrap endpoint + `secrets_rewrap` readiness, typed `ChartProvenance` + CI inventory, `share_allowed` on verified performance.
 - User steps after deploy: re-attest VT Markets (EA evidence OK); Robo needs ATTEST (OVERRIDE) with reason since EA reports RoboForex-ECN.
+
+## 2026-10-01 — P1-03/P1-04 Signed EX5 chain (code side DONE; needs signer secrets + one workflow run)
+- `.github/workflows/ea-release.yml`: compile → record → sign → commit back. `release.yml` ea-compile asserts reproducibility vs committed record. `verify_ea_release.py`: UTF-16 logs, toolchain from log, version from MQ5 property, `source_commit`, `compiled_by`, writes `release/ea_release.json`; check_entry refuses manual/version-mismatch. `ea_capabilities.expected_ea_sha256` trusts only signed + CI + source-matching records (cached). Dockerfile ships the record. Tests: `tests/unit/test_r30_ea_release_chain.py`. rc_lock refrozen.
+- Operator: provision RELEASE_SIGNER_* secrets, run the ea-release workflow once, then update.sh.

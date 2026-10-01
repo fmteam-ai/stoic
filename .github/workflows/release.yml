@@ -255,6 +255,21 @@ jobs:
           if (-not (Test-Path "backend\static\EmergentTradingBridge.ex5")) {
             throw "Compiled .ex5 not produced"
           }
+      - name: Reproducibility — the tagged tree must carry a SIGNED record whose EX5 hash equals this compile
+        shell: pwsh
+        env:
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+        run: |
+          pip install -q cryptography
+          if (-not (Test-Path "release\ea_release.json")) { throw "RELEASE BLOCKED: release/ea_release.json missing — run the ea-release workflow first" }
+          $rec = Get-Content release\ea_release.json -Raw | ConvertFrom-Json
+          $now = (Get-FileHash backend\static\EmergentTradingBridge.ex5 -Algorithm SHA256).Hash.ToLower()
+          if ($rec.ex5_sha256 -ne $now) { throw "RELEASE BLOCKED: recorded EX5 $($rec.ex5_sha256) != freshly compiled $now (non-reproducible or stale record)" }
+          if ($rec.compiled_by -ne "github-actions") { throw "RELEASE BLOCKED: record not produced by the sanctioned job" }
+          python scripts/verify_ea_release.py --check
+          "EA_RELEASE_SHA256=$now" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Host "EX5 reproducible and signed: $now"
       - name: Publish verified .ex5 artifact
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:

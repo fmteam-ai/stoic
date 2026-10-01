@@ -112,20 +112,56 @@ def _demo_unattested(account: dict | None = None) -> dict:
                       "unverified EX5 may trade on it; live accounts always need the signed release proof"}
 
 
+_EXPECTED_CACHE: dict = {}
+
+
 def expected_ea_sha256() -> str | None:
-    """Verified EX5 hash for the CURRENT EA version, from the signed release record
-    (EA_RELEASE_SHA256 env pin for containers) — not account metadata."""
+    """Verified EX5 hash for the CURRENT EA version. Trusted ONLY from:
+      · EA_RELEASE_SHA256 env pin (set by the attested deploy), or
+      · a release record (release/ea_release.json | docs/RELEASE_HASHES.json#ea) that is
+        Ed25519-SIGNED, compiled by the sanctioned CI job, whose recorded MQ5 hash
+        matches the MQ5 this server ships, and whose version == LIVE_MIN_VERSION.
+    Never from account metadata; an unsigned or drifted record yields None (fail closed)."""
+    import hashlib
     import json
     import os
     env = (os.environ.get("EA_RELEASE_SHA256") or "").strip().lower()
     if len(env) == 64:
         return env
-    for f in _EA_RELEASE_FILES:
+    here = os.path.dirname(os.path.abspath(__file__))
+    mq5_path = os.path.join(here, "static", "EmergentTradingBridge.mq5")
+    candidates = list(_EA_RELEASE_FILES) + [os.path.join(here, "..", "docs", "RELEASE_HASHES.json"),
+                                             "/app/docs/RELEASE_HASHES.json"]
+    for f in candidates:
+        try:
+            st = os.stat(f)
+        except OSError:
+            continue
+        key = (f, st.st_mtime_ns, st.st_size)
+        if key in _EXPECTED_CACHE:
+            if _EXPECTED_CACHE[key]:
+                return _EXPECTED_CACHE[key]
+            continue
+        result = None
         try:
             rec = json.load(open(f))
-        except (OSError, ValueError):
-            continue
-        h = str(rec.get("ex5_sha256") or rec.get("sha256") or "").lower()
-        if len(h) == 64 and str(rec.get("version") or "") == version_str(LIVE_MIN_VERSION):
-            return h
+            rec = rec.get("ea") if "ea" in rec and "ex5_sha256" not in rec else rec
+            h = str((rec or {}).get("ex5_sha256") or "").lower()
+            sig = (rec or {}).get("signature") or {}
+            ok = (len(h) == 64 and str(rec.get("version") or "") == version_str(LIVE_MIN_VERSION)
+                  and rec.get("compiled_by") == "github-actions" and sig.get("sig_hex"))
+            if ok and os.path.exists(mq5_path):
+                ok = hashlib.sha256(open(mq5_path, "rb").read()).hexdigest() == str(rec.get("mq5_sha256") or "")
+            if ok:
+                from release_signing import verify_hex
+                body = {k: rec.get(k) for k in ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
+                                                "windows_build", "mt5_build", "source_commit")}
+                payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+                ok = verify_hex(payload, sig["sig_hex"])
+            result = h if ok else None
+        except Exception:  # noqa: BLE001 — unreadable/unverifiable record ⇒ fail closed
+            result = None
+        _EXPECTED_CACHE[key] = result
+        if result:
+            return result
     return None

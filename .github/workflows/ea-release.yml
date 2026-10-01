@@ -1,0 +1,89 @@
+name: ea-release
+
+# Sanctioned MetaEditor compile → hash → sign → bind chain (audit P1-03/P1-04).
+# This is the ONLY job allowed to produce a trusted EX5 record: the private
+# signing key never leaves the external signer, the compiler identity is taken
+# from MetaEditor's own log, and the record is committed back bound to the
+# exact source commit it was compiled from.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "branch to compile and record on (default: main)"
+        default: main
+  push:
+    branches: [main]
+    paths:
+      - backend/static/EmergentTradingBridge.mq5
+      - backend/static/*.mqh
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ea-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  compile-record-sign:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          python-version: "3.11"
+      - name: Install MetaTrader 5 (silent)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri "https://download.mql5.com/cdn/web/metaquotes.software.corp/mt5/mt5setup.exe" -OutFile mt5setup.exe
+          Start-Process -FilePath .\mt5setup.exe -ArgumentList "/auto" -Wait
+          if (-not (Test-Path "C:\Program Files\MetaTrader 5\metaeditor64.exe")) { throw "MetaEditor not found after install" }
+      - name: Compile the exact MQ5 with MetaEditor (0 errors required)
+        shell: pwsh
+        run: |
+          $me  = "C:\Program Files\MetaTrader 5\metaeditor64.exe"
+          $src = (Resolve-Path "backend\static\EmergentTradingBridge.mq5").Path
+          Start-Process -FilePath $me -ArgumentList "/compile:`"$src`"","/log:compile.log" -Wait
+          $log = Get-Content compile.log -Encoding Unicode -Raw
+          Write-Host $log
+          if ($log -notmatch "0 error") { throw "EA compilation reported errors" }
+          if (-not (Test-Path "backend\static\EmergentTradingBridge.ex5")) { throw "Compiled .ex5 not produced" }
+      - name: Record + sign the EX5 (external signer; compiler identity from the log)
+        shell: pwsh
+        env:
+          RELEASE_SIGNER: external
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+        run: |
+          pip install -q cryptography httpx
+          $win = (Get-CimInstance Win32_OperatingSystem).Version
+          python scripts/verify_ea_release.py --ex5 backend/static/EmergentTradingBridge.ex5 `
+            --compile-log compile.log --windows-build $win `
+            --source-commit $env:GITHUB_SHA --compiled-by github-actions --sign
+          python scripts/verify_ea_release.py --check
+      - name: Publish EX5 + record + log
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
+        with:
+          name: ea-release-record
+          path: |
+            backend/static/EmergentTradingBridge.ex5
+            release/ea_release.json
+            docs/RELEASE_HASHES.json
+            compile.log
+      - name: Commit the signed record back to the source branch
+        shell: bash
+        run: |
+          git config user.name "stoic-ea-release[bot]"
+          git config user.email "ea-release@users.noreply.github.com"
+          git add release/ea_release.json docs/RELEASE_HASHES.json release/rc_lock.json
+          if git diff --cached --quiet; then echo "record unchanged"; exit 0; fi
+          git commit -m "ea-release: signed EX5 record for ${GITHUB_SHA} [skip ci]"
+          git push origin HEAD:"${TARGET_REF}"
+        env:
+          TARGET_REF: ${{ github.event.inputs.ref || github.ref_name }}
