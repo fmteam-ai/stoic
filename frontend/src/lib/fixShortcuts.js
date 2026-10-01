@@ -2,6 +2,10 @@
 // readiness code to the exact place in the app where the fix lives.
 
 const TEXT_RULES = [
+    { re: /declared DEMO but not attested|Account Environments/i,
+      label: "OPEN BROKER REGISTRY", to: () => "/admin/brokers" },
+    { re: /EX5 hash|release proof|binary proof|installer/i,
+      label: "OPEN QUICK INSTALL", to: a => (a ? `/accounts?focus=${a}` : "/accounts") },
     { re: /command fencing|ea version unknown|update to the latest|intent journaling/i,
       label: "UPDATE EA", to: a => (a ? `/accounts?focus=${a}` : "/accounts") },
     { re: /never sent a heartbeat|heartbeat is stale|autotrading|attach the .*ea|terminal is running/i,

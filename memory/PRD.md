@@ -2986,3 +2986,4 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Also de-flaked `test_r17_audit.py::test_recovery_reuses_original_bound_targets` (Event instead of sleep). rc_lock refrozen.
 - Operator step for the user: Admin → Broker Registry → Account Environments → ATTEST DEMO on the RoboForex demo account, then start the bot.
 - CI fix: r27 test admin fixture now carries `two_factor_enabled: True` (CI enforces ADMIN_MFA_ENFORCED=true); `litellm` bumped 1.93.0 → 1.93.2 (CVE-2026-84377, pip-audit). rc_lock refrozen.
+- UX follow-up: fixShortcuts rule for EA_DEMO_UNATTESTED → "OPEN BROKER REGISTRY" (/admin/brokers); the generic "lease" rule had hijacked it to Infrastructure. Accounts card badge now shows `DEMO · ATTESTED|UNATTESTED` (`environment_attested` in account serializer; raw attestation doc stripped).

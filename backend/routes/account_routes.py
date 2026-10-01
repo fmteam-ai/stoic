@@ -49,8 +49,10 @@ def _serialize(doc: dict) -> dict:
     doc["id"] = str(doc.pop("_id"))
     # audit v4 P0-2 — server-owned environment classification, separate
     # from connection state and telemetry freshness.
-    from broker_env import broker_environment
+    from broker_env import attested_environment, broker_environment
     doc["environment"] = broker_environment(doc)
+    doc["environment_attested"] = attested_environment(doc) != "LIVE"
+    doc.pop("environment_attestation", None)
     creds = doc.pop("creds", {}) or {}
     doc["has_investor_password"] = bool(creds.get("investor"))
     doc["has_master_password"] = bool(creds.get("master"))

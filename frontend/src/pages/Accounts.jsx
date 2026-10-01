@@ -622,9 +622,9 @@ export default function Accounts() {
                                                 )}
                                                 {a.environment && (
                                                     <span data-testid={`account-environment-${a.account_number}`}
-                                                        title="Server-owned capital environment — separate from connection state and telemetry freshness"
+                                                        title={a.environment === "DEMO" ? (a.environment_attested ? "Admin-attested demo — an unverified local EX5 may trade practice money" : "Declared demo, not yet admin-attested — the live EX5 release proof still applies (Admin → Broker Registry → Account Environments)") : "Server-owned capital environment — separate from connection state and telemetry freshness"}
                                                         className={`px-1.5 py-0.5 border ${a.environment === "LIVE" ? "border-[#FF3B30]/40 text-[#FF3B30]" : a.environment === "DEMO" ? "border-[#FFB000]/40 text-[#FFB000]" : "border-[#00BFFF]/40 text-[#00BFFF]"}`}>
-                                                        ENVIRONMENT · {a.environment}
+                                                        ENVIRONMENT · {a.environment}{a.environment === "DEMO" ? (a.environment_attested ? " · ATTESTED" : " · UNATTESTED") : ""}
                                                     </span>
                                                 )}
                                             </div>
