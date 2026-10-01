@@ -633,7 +633,64 @@ async def admin_integrations_secret(payload: dict, user=Depends(get_current_user
         raise HTTPException(status_code=422, detail={"code": "invalid_value", "message": str(e)})
 
 
-# ── Admin → Integrations → Stripe plans (pricing · duration discounts · currency · free trial) ──
+# ── Admin → Broker Registry → Account Environments (server-authoritative DEMO attestation) ──
+def _env_row(a: dict) -> dict:
+    from broker_env import attested_environment, broker_environment
+    att = a.get("environment_attestation") or {}
+    return {"account_id": str(a["_id"]), "user_id": a.get("user_id"), "label": a.get("label"),
+            "broker": a.get("broker"), "server": a.get("broker_server") or a.get("server"),
+            "account_number": a.get("account_number"), "account_type": a.get("account_type"),
+            "declared": broker_environment(a), "effective": attested_environment(a),
+            "attested_by": att.get("approved_by"), "attested_at": att.get("at"), "reason": att.get("reason")}
+
+
+@router.get("/admin/account-environments")
+async def admin_account_environments(user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    db = get_db()
+    accs = await db.accounts.find({"mode": {"$ne": "paper"}},
+                                  {"user_id": 1, "label": 1, "broker": 1, "broker_server": 1, "server": 1,
+                                   "account_number": 1, "account_type": 1, "broker_environment": 1,
+                                   "mode": 1, "environment_attestation": 1}).sort("_id", -1).to_list(500)
+    rows = [_env_row(a) for a in accs]
+    return {"accounts": [r for r in rows if r["declared"] == "DEMO" or r["attested_by"]]}
+
+
+@router.post("/admin/account-environments/{account_id}")
+async def admin_attest_account_environment(account_id: str, payload: dict, user=Depends(get_current_user)):
+    """Attest (or revoke) DEMO for an account. Re-auth required; the attestation only takes effect
+    when the account's own declared classification is DEMO (broker_env.attested_environment)."""
+    from auth import require_admin
+    from broker_env import broker_environment
+    from audit_chain import append_chained
+    require_admin(user)
+    db = get_db()
+    acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")})
+    if not acc:
+        raise HTTPException(status_code=404, detail="account not found")
+    env = str(payload.get("environment") or "").upper()
+    if env not in ("DEMO", "LIVE"):
+        raise HTTPException(status_code=422, detail={"code": "invalid_value", "message": "environment must be DEMO or LIVE"})
+    reason = str(payload.get("reason") or "").strip()[:300]
+    await _reauth(db, user, str(payload.get("password") or ""), payload.get("otp"))
+    if env == "DEMO" and broker_environment(acc) != "DEMO":
+        raise HTTPException(status_code=409, detail={
+            "code": "declared_not_demo",
+            "message": "the account's declared classification is not DEMO — attestation cannot downgrade it"})
+    now = _now_iso()
+    if env == "DEMO":
+        att = {"environment": "DEMO", "approved_by": user.get("email"), "at": now, "reason": reason}
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"environment_attestation": att}})
+    else:
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"environment_attestation": ""}})
+    await append_chained(db, {"actor_email": user.get("email"), "action": "account_environment_attest",
+                              "target_kind": "account", "target_id": str(acc["_id"]),
+                              "target_label": acc.get("label"), "reason": reason or env,
+                              "meta": {"environment": env, "declared": broker_environment(acc), "reauth": True},
+                              "at": now})
+    acc = await db.accounts.find_one({"_id": acc["_id"]})
+    return _env_row(acc)
 @router.get("/admin/integrations/plans")
 async def admin_plans_get(user=Depends(get_current_user)):
     from auth import require_admin

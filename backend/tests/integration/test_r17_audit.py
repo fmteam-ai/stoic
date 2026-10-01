@@ -77,14 +77,16 @@ def test_recovery_reuses_original_bound_targets(world):
     _id = _run(db.nl_proposals.insert_one({"user_id": uid, "status": "pending", "actions": actions})).inserted_id
     a_doc = _run(nx.claim(db, "nl_proposals", {"_id": _id}, from_status="pending"))
     seen = []
+    stalled = asyncio.Event()
 
     async def _stall(u, act, ctx=None, **kw):
         seen.append(("A", list(ctx["target_ids"])))
+        stalled.set()
         await asyncio.sleep(10)          # never reaches the write
 
     async def _scenario():
         task = asyncio.create_task(nx.run_claimed(db, "nl_proposals", a_doc, uid, actions, authority=READY, execute_one=_stall))
-        await asyncio.sleep(0.05)
+        await asyncio.wait_for(stalled.wait(), timeout=10)   # A has bound its targets before B reclaims
         # membership changes: a NEW extreme bot appears; the original bound set must win
         b2 = (await db.bot_configs.insert_one(_bot(uid, "extreme"))).inserted_id
         await db.nl_proposals.update_one({"_id": _id}, {"$set": {

@@ -337,8 +337,8 @@ async def activate(db, program: dict, actor: str) -> dict:
     if feature_flags()["PAMM_REQUIRE_CERTIFICATION"]:
         acc = await program_account(db, program)
         if acc:
-            from broker_env import broker_environment
-            if broker_environment(acc) == "LIVE":
+            from broker_env import attested_environment
+            if attested_environment(acc) == "LIVE":
                 cert_ok = False
                 if (a.get("certification_status") == "CERTIFIED"
                         and a.get("cert_id")):

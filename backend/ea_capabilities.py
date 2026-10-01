@@ -53,17 +53,23 @@ def live_gate(account: dict) -> dict | None:
     # r20 P1-01: binary proof is REQUIRED for live accounts — the expected hash is
     # pinned from the signed release record (never from editable account metadata)
     # and the terminal must report its EX5 hash on the heartbeat handshake.
-    # P1-03 runbook: a locally compiled EX5 stays DEMO/PAPER-only — broker demo
-    # accounts (practice money) are exempt from the binary proof, never from
-    # the capability floor above.
-    from broker_env import broker_environment
-    if broker_environment(account) == "LIVE":
+    # P1-03 runbook: a locally compiled EX5 stays DEMO/PAPER-only. The
+    # exemption is server-authoritative (broker_env.attested_environment):
+    # a user-declared "demo" never bypasses the proof until an admin attests
+    # it — otherwise a live account could self-label DEMO (security audit).
+    from broker_env import attested_environment, broker_environment
+    if attested_environment(account) == "LIVE":
         expected = expected_ea_sha256()
         reported = (account.get("ea_binary_sha256") or "").lower()
+        declared_demo = broker_environment(account) == "DEMO"
         if not expected:
+            if declared_demo:
+                return _demo_unattested()
             return {"code": "EA_RELEASE_HASH_UNPINNED",
                     "reason": "no verified EX5 hash recorded for this release (scripts/verify_ea_release.py --record)"}
         if not reported:
+            if declared_demo:
+                return _demo_unattested()
             return {"code": "EA_BINARY_PROOF_MISSING",
                     "reason": "terminal has not reported its EX5 hash over a verified installation chain — "
                               "pair the terminal and let the signed binary proof arrive on the heartbeat"}
@@ -91,6 +97,13 @@ def live_gate(account: dict) -> dict | None:
 
 
 _EA_RELEASE_FILES = ("release/ea_release.json", "/app/release/ea_release.json")
+
+
+def _demo_unattested() -> dict:
+    return {"code": "EA_DEMO_UNATTESTED",
+            "reason": "account is declared DEMO but not attested — an admin must confirm the demo "
+                      "environment (Admin → Broker Registry → Account Environments) before an "
+                      "unverified EX5 may trade on it; live accounts always need the signed release proof"}
 
 
 def expected_ea_sha256() -> str | None:

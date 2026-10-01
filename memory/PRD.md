@@ -2978,3 +2978,10 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - `ea_capabilities.live_gate`: EX5 binary-proof section now applies only when `broker_environment(account) == "LIVE"` (was `mode != "paper"`), per P1-03 runbook "local compile stays demo-only". Capability floor (v1.57+) still applies to all. Tests added in `test_r18_audit.py`; r21/r22 fixtures pinned `broker_environment: LIVE`.
 - `pages/Infrastructure.jsx` wrapped in `AppLayout` (was missing sidebar/strips when opened from the activation blocker CTA).
 - Known pre-existing failure (not CI lane): `tests/backend_test.py::TestTradeBridge::test_full_trade_flow` KeyError status.
+
+## 2026-10-01 — Security Audit r27 (post-Integrations UI)
+- Verdict before fix: FAIL — SEC r27-HIGH: user-declared `account_type=demo`/demo server name downgraded a live account to DEMO and bypassed the EX5 binary-proof gate (introduced by the earlier demo-exemption change) + PAMM live certification.
+- Fix: `broker_env.attested_environment()` — DEMO is server-authoritative: requires admin attestation (`environment_attestation.{environment,approved_by,at,reason}`) AND declared DEMO; else LIVE. Used by `ea_capabilities.live_gate` (new code `EA_DEMO_UNATTESTED`) and `pamm/strategy_assignment` certification. Admin endpoints `GET/POST /api/admin/account-environments[/{id}]` (re-auth password+TOTP, audit chain). UI: `components/admin/AccountEnvironmentsPanel.jsx` on Admin → Broker Registry. Tests: `tests/integration/test_r27_account_environment_attestation.py` (critical_controls).
+- Hardening items accepted/backlog: e-mail test-send re-auth (P3), distinct SECRETS_MASTER_KEY required in prod (P3), omit master_key_id (INFO). `account_limits` live-slot caps still use heuristic broker_environment (billing, not safety).
+- Also de-flaked `test_r17_audit.py::test_recovery_reuses_original_bound_targets` (Event instead of sleep). rc_lock refrozen.
+- Operator step for the user: Admin → Broker Registry → Account Environments → ATTEST DEMO on the RoboForex demo account, then start the bot.

@@ -3,6 +3,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { Loader2, Landmark, Pencil, Plus, Trash2, X } from "lucide-react";
+import { AccountEnvironmentsPanel } from "@/components/admin/AccountEnvironmentsPanel";
 
 const EMPTY = {
     broker_id: "", name: "", server_aliases: [], symbol_map: {},
@@ -178,6 +179,7 @@ export default function AdminBrokers() {
             )}
             {editing && <EditModal broker={editing} onClose={() => setEditing(null)}
                 onSaved={() => { setEditing(null); load(); }} />}
+            <div className="px-4 md:px-8 pb-10"><AccountEnvironmentsPanel /></div>
         </AppLayout>
     );
 }
