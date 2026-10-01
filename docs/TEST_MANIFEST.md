@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 634 |
-| integration | real MongoDB service container | CI `backend-integration` | 182 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3774 |
+| unit | pure logic, no external I/O | every CI job | 636 |
+| integration | real MongoDB service container | CI `backend-integration` | 191 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3784 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4601 tests across 472 files.**
+**Total: 4622 tests across 475 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -390,6 +390,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_max_concurrent_race.py` | http-live | 3 |
 | `backend/tests/test_r25_close_commands.py` | http-live | 8 |
 | `backend/tests/test_r25_token_migration.py` | http-live | 4 |
+| `backend/tests/test_r28_http.py` | http-live | 10 |
 | `backend/tests/test_regime_dispatch.py` | http-live | 9 |
 | `backend/tests/test_safety_guardian.py` | http-live | 11 |
 | `backend/tests/test_sec001_brain_bola.py` | http-live | 7 |
@@ -438,6 +439,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_r23_audit.py` | integration | 4 |
 | `backend/tests/integration/test_r26_device_attestation.py` | integration | 15 |
 | `backend/tests/integration/test_r27_account_environment_attestation.py` | integration | 2 |
+| `backend/tests/integration/test_r28_audit.py` | integration | 9 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 5 |
 | `e2e/tests/dashboard.spec.ts` | ui-e2e | 1 |
@@ -482,6 +484,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_r25_ea_binary_proof.py` | unit | 5 |
 | `backend/tests/unit/test_r25_panic_outbox.py` | unit | 5 |
 | `backend/tests/unit/test_r26_release_provenance.py` | unit | 6 |
+| `backend/tests/unit/test_r28_chart_provenance.py` | unit | 2 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 17 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |

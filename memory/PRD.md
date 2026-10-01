@@ -2987,3 +2987,9 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Operator step for the user: Admin → Broker Registry → Account Environments → ATTEST DEMO on the RoboForex demo account, then start the bot.
 - CI fix: r27 test admin fixture now carries `two_factor_enabled: True` (CI enforces ADMIN_MFA_ENFORCED=true); `litellm` bumped 1.93.0 → 1.93.2 (CVE-2026-84377, pip-audit). rc_lock refrozen.
 - UX follow-up: fixShortcuts rule for EA_DEMO_UNATTESTED → "OPEN BROKER REGISTRY" (/admin/brokers); the generic "lease" rule had hijacked it to Infrastructure. Accounts card badge now shows `DEMO · ATTESTED|UNATTESTED` (`environment_attested` in account serializer; raw attestation doc stripped).
+
+## 2026-10-01 — Round-28 audit remediation (Batches A+B+C) — DONE, testing_agent iteration_218 PASS
+- P1-01 identity-bound attestation (`broker_env.attestation_identity`, `attestation_state`, creds_version bump on credential update, `EA_DEMO_ATTESTATION_INVALIDATED`), P2-01 shared `pricing_version` + `ensure_fresh` + fulfilment price-snapshot refusal, P2-02 dedicated SECRETS_MASTER_KEY in prod + `secrets_vault` readiness check (master_key_id removed from API), P2-03 durable `users.trial_grant` at registration, P2-04 `*_minor` fields, P2-05 `chart_provenance.build` + `ChartProvenance.jsx` on 5 charts.
+- Runbook for operator items P1-02/P1-03/P1-04/P2-06: `docs/ROUND28_ACCEPTANCE.md`.
+- New tests: `tests/integration/test_r28_audit.py`, `tests/unit/test_r28_chart_provenance.py`, `tests/test_r28_http.py` (http lane, by testing agent). Manifest regenerated, rc_lock refrozen.
+- Backlog: e-mail test-send re-auth (P3), account_limits live-slot caps still heuristic, Docker php-fpm MountFlags host fix, SEC-001 decoy nonce.
