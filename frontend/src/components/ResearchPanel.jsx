@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { ChartProvenance } from "@/components/ChartProvenance";
 import api from "@/lib/api";
 import { FlaskConical } from "lucide-react";
 import {
@@ -115,6 +116,7 @@ export function ResearchPanel() {
                 {/* walk-forward + regimes */}
                 <div>
                     <Head>WALK-FORWARD STABILITY — weekly out-of-sample</Head>
+                    <ChartProvenance p={d.provenance} testid="research-walkforward-provenance" />
                     <div className="h-40" data-testid="research-walkforward">
                         <ResponsiveContainer width="100%" height="100%">
                             <ComposedChart data={d.walk_forward || []} margin={{ top: 5, right: 5, bottom: 0, left: -20 }}>

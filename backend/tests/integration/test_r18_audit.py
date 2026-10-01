@@ -122,18 +122,20 @@ def test_ea_capability_gate_numeric_versions_and_hash(monkeypatch):
     assert live_gate({"ea_version": "1.57", "mode": "paper"}) is None            # paper: no terminal dependency
     # P1-03: local compile stays demo-only — but ONLY an admin-attested DEMO skips the binary proof
     # (security audit: a live account must not self-label demo). Capability floor applies to all.
-    att = {"environment": "DEMO", "approved_by": "admin@example.com", "at": "2026-01-01T00:00:00+00:00"}
-    assert live_gate({"ea_version": "1.57", "account_type": "demo"})["code"] == "EA_DEMO_UNATTESTED"
+    from broker_env import attestation_identity
+    demo = {"ea_version": "1.57", "account_type": "demo"}
+    att = {"environment": "DEMO", "approved_by": "admin@example.com", "at": "2026-01-01T00:00:00+00:00",
+           "identity_hash": attestation_identity(demo)}       # r28 P1-01: bound to the identity digest
+    assert live_gate(demo)["code"] == "EA_DEMO_UNATTESTED"
     assert live_gate({"ea_version": "1.57", "broker_server": "RoboForex-Demo"})["code"] == "EA_DEMO_UNATTESTED"
     assert live_gate({"ea_version": "1.57", "broker_environment": "DEMO"})["code"] == "EA_DEMO_UNATTESTED"
-    assert live_gate({"ea_version": "1.57", "account_type": "demo", "environment_attestation": att}) is None
-    assert live_gate({"ea_version": "1.56", "account_type": "demo", "environment_attestation": att})["code"] == "EA_CAPABILITY_BELOW_MIN"
-    # attestation never overrides a LIVE declaration, nor works without an approver
+    assert live_gate({**demo, "environment_attestation": att}) is None
+    assert live_gate({**demo, "ea_version": "1.56", "environment_attestation": att})["code"] == "EA_CAPABILITY_BELOW_MIN"
+    # attestation never overrides a LIVE declaration, nor works without an approver / digest
     assert live_gate({"ea_version": "1.57", "environment_attestation": att})["code"] == "EA_BINARY_PROOF_MISSING"
-    assert live_gate({"ea_version": "1.57", "account_type": "demo", "broker_environment": "LIVE",
-                      "environment_attestation": att})["code"] == "EA_BINARY_PROOF_MISSING"
-    assert live_gate({"ea_version": "1.57", "account_type": "demo",
-                      "environment_attestation": {"environment": "DEMO"}})["code"] == "EA_DEMO_UNATTESTED"
+    assert live_gate({**demo, "broker_environment": "LIVE", "environment_attestation": att})["code"] == "EA_BINARY_PROOF_MISSING"
+    assert live_gate({**demo, "environment_attestation": {"environment": "DEMO"}})["code"] == "EA_DEMO_UNATTESTED"
+    assert live_gate({**demo, "broker": "moved", "environment_attestation": att})["code"] == "EA_DEMO_ATTESTATION_INVALIDATED"
     monkeypatch.delenv("EA_RELEASE_SHA256")
     monkeypatch.setattr("ea_capabilities._EA_RELEASE_FILES", ())
     assert live_gate({"ea_version": "1.57", "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested"})["code"] == "EA_RELEASE_HASH_UNPINNED"

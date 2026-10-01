@@ -36,7 +36,7 @@ export const AccountEnvironmentsPanel = () => {
         <div className="mt-8" data-testid="account-environments-panel">
             <div className="mb-3">
                 <h2 className="font-display font-bold text-base md:text-lg">Account Environments</h2>
-                <p className="text-xs text-[#A1A1AA] mt-1">A user-declared DEMO never bypasses the EX5 release proof on its own. Attest it here (password + authenticator) so an unverified local EA may trade practice money. LIVE accounts always need the signed release hash.</p>
+                <p className="text-xs text-[#A1A1AA] mt-1">A user-declared DEMO never bypasses the EX5 release proof on its own. Attest it here (password + authenticator) so an unverified local EA may trade practice money. The attestation is bound to the account's identity (broker, server, number, terminal, credentials) and is voided automatically if any of them change. LIVE accounts always need the signed release hash.</p>
             </div>
             {rows === null ? <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-[#52525B]" /></div> : rows.length === 0 ? (
                 <div className="border border-[#1F1F1F] p-4 font-mono text-[10px] text-[#52525B]" data-testid="account-environments-empty">No DEMO-declared or attested accounts — live accounts always require the signed release proof.</div>
@@ -52,9 +52,17 @@ export const AccountEnvironmentsPanel = () => {
                                     <td className="px-4 py-2.5"><div className="text-white">{r.label || r.account_number}</div><div className="font-mono text-[10px] text-[#52525B]">{r.broker} · {r.server} · {r.account_type}</div></td>
                                     <td className="px-4 py-2.5"><Tag v={r.declared} /></td>
                                     <td className="px-4 py-2.5"><Tag v={r.effective} /></td>
-                                    <td className="px-4 py-2.5 font-mono text-[10px] text-[#A1A1AA]">{r.attested_by ? `${r.attested_by} · ${(r.attested_at || "").slice(0, 10)}` : "—"}</td>
+                                    <td className="px-4 py-2.5 font-mono text-[10px] text-[#A1A1AA]">
+                                        {r.attested_by ? `${r.attested_by} · ${(r.attested_at || "").slice(0, 10)}` : "—"}
+                                        {r.attestation_state === "invalidated" && <span data-testid={`account-env-invalidated-${r.account_id}`} className="block text-[#FFB000]">INVALIDATED — bound identity changed (broker/server/number/terminal/credentials)</span>}
+                                    </td>
                                     <td className="px-4 py-2.5 text-right">
-                                        {r.attested_by ? (
+                                        {r.attestation_state === "invalidated" ? (
+                                            <span className="inline-flex items-center gap-3">
+                                                <button data-testid={`account-env-reattest-${r.account_id}`} onClick={() => setTarget({ ...r, next: "DEMO" })} className="text-[#00FF41] font-mono text-[10px] inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5" /> RE-ATTEST</button>
+                                                <button data-testid={`account-env-revoke-${r.account_id}`} onClick={() => setTarget({ ...r, next: "LIVE" })} className="text-[#FF3B30] font-mono text-[10px] inline-flex items-center gap-1"><ShieldOff className="w-3.5 h-3.5" /> REVOKE</button>
+                                            </span>
+                                        ) : r.attested_by ? (
                                             <button data-testid={`account-env-revoke-${r.account_id}`} onClick={() => setTarget({ ...r, next: "LIVE" })} className="text-[#FF3B30] font-mono text-[10px] inline-flex items-center gap-1"><ShieldOff className="w-3.5 h-3.5" /> REVOKE</button>
                                         ) : r.declared === "DEMO" ? (
                                             <button data-testid={`account-env-attest-${r.account_id}`} onClick={() => setTarget({ ...r, next: "DEMO" })} className="text-[#00FF41] font-mono text-[10px] inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5" /> ATTEST DEMO</button>

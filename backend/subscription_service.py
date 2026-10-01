@@ -9,9 +9,12 @@ whether to auto-execute trades for a user. Admins are grandfathered forever;
 all other pre-existing users get a 30-day grace period from now.
 """
 from datetime import datetime, timezone, timedelta
+import logging
 from typing import Optional
 from dateutil.relativedelta import relativedelta
 from database import get_db
+
+logger = logging.getLogger(__name__)
 from subscription_plans import (
     get_plan, get_tier_features, Features, TIER_RANK, TIER_BASE_CENTS,
     canonical_tier,
@@ -29,22 +32,36 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _trial_grant(created: Optional[datetime]) -> Optional[dict]:
-    """Free trial for NEW sign-ups (Admin → Integrations → Plans). Only users
-    created after the trial was enabled qualify; existing users never get one lazily."""
+def trial_grant_for_signup(created: datetime) -> Optional[dict]:
+    """audit r28 P2-03 — the durable, versioned trial grant written on the user
+    document AT REGISTRATION (immutable tier/start/end + the offer version that
+    produced it). Later offer edits never change an existing grant."""
     from plan_settings import trial_config
     cfg = trial_config()
-    if cfg["days"] <= 0 or not cfg.get("enabled_at") or not isinstance(created, datetime):
+    if cfg["days"] <= 0 or not cfg.get("enabled_at"):
         return None
     enabled_at = datetime.fromisoformat(cfg["enabled_at"].replace("Z", "+00:00"))
     if created < enabled_at:
         return None
     ends = created + timedelta(days=cfg["days"])
+    return {"tier": cfg["tier"], "days": cfg["days"], "started_at": created.isoformat(),
+            "ends_at": ends.isoformat(), "offer_version": cfg.get("offer_version"),
+            "granted_at": _now().isoformat()}
+
+
+def _trial_grant(created: Optional[datetime], user: Optional[dict] = None) -> Optional[dict]:
+    """Entitlement from the user's durable grant (preferred). Users registered
+    before durable grants existed fall back to the lazy evaluation once."""
+    grant = (user or {}).get("trial_grant")
+    if not grant and isinstance(created, datetime):
+        grant = trial_grant_for_signup(created)
+    if not grant:
+        return None
+    ends = datetime.fromisoformat(str(grant["ends_at"]).replace("Z", "+00:00"))
     if ends <= _now():
         return None
-    return {"current_plan_id": f"trial_{cfg['tier']}", "valid_until": ends.isoformat(),
-            "trial": {"tier": cfg["tier"], "days": cfg["days"], "started_at": created.isoformat(),
-                      "ends_at": ends.isoformat()}}
+    return {"current_plan_id": f"trial_{grant['tier']}", "valid_until": ends.isoformat(),
+            "trial": {k: grant.get(k) for k in ("tier", "days", "started_at", "ends_at", "offer_version")}}
 
 
 async def get_user_tier(user_id: str) -> str:
@@ -122,10 +139,13 @@ async def get_subscription(user_id: str) -> dict:
         if pre_rollout else None,
         "created_at": _now().isoformat(),
     }
-    trial = _trial_grant(created) if (user and not is_admin and not pre_rollout) else None
+    trial = _trial_grant(created, user) if (user and not is_admin and not pre_rollout) else None
     if trial:
         stub.update(trial)
-    await db.subscriptions.insert_one({**stub})
+    try:
+        await db.subscriptions.insert_one({**stub})
+    except Exception:  # noqa: BLE001 — concurrent first read lost the unique(user_id) race; the winner's row stands
+        pass
     doc = await db.subscriptions.find_one({"user_id": user_id})
     doc["id"] = str(doc.pop("_id"))
     return doc
@@ -179,6 +199,8 @@ async def is_active(user_id: str) -> dict:
 async def record_transaction(
     *, user_id: str, user_email: str, plan_id: str,
     session_id: str, amount_usd: float, metadata: dict,
+    amount_cents: Optional[int] = None, currency: str = "usd",
+    pricing_version: Optional[int] = None,
 ) -> str:
     db = get_db()
     doc = {
@@ -187,7 +209,10 @@ async def record_transaction(
         "plan_id": plan_id,
         "session_id": session_id,
         "amount_usd": amount_usd,
-        "currency": "usd",
+        # audit r28 P2-01 — signed-at-checkout price snapshot; fulfilment must reproduce it
+        "amount_minor": int(amount_cents if amount_cents is not None else round(amount_usd * 100)),
+        "currency": (currency or "usd").lower(),
+        "pricing_version": pricing_version,
         "metadata": metadata,
         "payment_status": "initiated",
         "created_at": _now().isoformat(),
@@ -200,7 +225,9 @@ _CLAIM_STALE_MINUTES = 5
 
 
 async def apply_successful_payment(session_id: str, *,
-                                   source: str = "unknown") -> Optional[dict]:
+                                   source: str = "unknown",
+                                   paid_amount_minor: Optional[int] = None,
+                                   paid_currency: Optional[str] = None) -> Optional[dict]:
     """Exactly-once payment application (iter-122).
 
     The Stripe webhook and the browser poll can both observe `paid`
@@ -227,6 +254,21 @@ async def apply_successful_payment(session_id: str, *,
     )
     if not txn:
         return None  # unknown session, already applied, or claim held elsewhere
+
+    # audit r28 P2-01 — refuse fulfilment when Stripe's settled amount/currency does not
+    # reproduce the price snapshot recorded at checkout (never grant on a mismatched price).
+    snap_minor, snap_cur = txn.get("amount_minor"), str(txn.get("currency") or "usd").lower()
+    if paid_amount_minor is not None and snap_minor is not None and (
+            int(paid_amount_minor) != int(snap_minor)
+            or (paid_currency and str(paid_currency).lower() != snap_cur)):
+        logger.error("price snapshot mismatch session=%s paid=%s %s snapshot=%s %s",
+                     session_id, paid_amount_minor, paid_currency, snap_minor, snap_cur)
+        await db.payment_transactions.update_one(
+            {"session_id": session_id},
+            {"$set": {"payment_status": "paid", "applied": False, "apply_claimed_at": None,
+                      "skipped_reason": "price_mismatch", "fulfilment_blocked": True,
+                      "paid_amount_minor": int(paid_amount_minor), "paid_currency": paid_currency}})
+        return None
 
     try:
         # Admin grandfather protection — never overwrite admin entitlement

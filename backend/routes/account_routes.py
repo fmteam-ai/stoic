@@ -49,9 +49,10 @@ def _serialize(doc: dict) -> dict:
     doc["id"] = str(doc.pop("_id"))
     # audit v4 P0-2 — server-owned environment classification, separate
     # from connection state and telemetry freshness.
-    from broker_env import attested_environment, broker_environment
+    from broker_env import attestation_state, attested_environment, broker_environment
     doc["environment"] = broker_environment(doc)
     doc["environment_attested"] = attested_environment(doc) != "LIVE"
+    doc["environment_attestation_state"] = attestation_state(doc)
     doc.pop("environment_attestation", None)
     creds = doc.pop("creds", {}) or {}
     doc["has_investor_password"] = bool(creds.get("investor"))
@@ -221,10 +222,14 @@ async def accounts_equity_curve(days: int = 30, user=Depends(get_current_user)):
             point[f"a_{aid}"] = round(running[aid], 2)
         series.append(point)
         day += timedelta(days=1)
+    from chart_provenance import build as provenance
     return {
         "days": days,
         "accounts": [{"id": str(a["_id"]), "label": a.get("label")} for a in accounts],
         "series": series,
+        "provenance": provenance(provider="stoic_trades_ledger", source_kind="derived", points=series,
+                                 time_key="date", expected_interval_s=86400,
+                                 note="daily buckets of closed-trade P&L from the platform ledger"),
     }
 
 
@@ -1045,7 +1050,7 @@ async def update_credentials(account_id: str, payload: AccountCredsUpdate, user=
 
     await db.accounts.update_one(
         {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
-        {"$set": {"creds": creds}},
+        {"$set": {"creds": creds}, "$inc": {"creds_version": 1}},   # voids any DEMO attestation (identity-bound)
     )
     return {
         "has_investor_password": bool(creds.get("investor")),

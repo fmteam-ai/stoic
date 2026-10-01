@@ -58,7 +58,7 @@ export default function VerifiedPerformance() {
                         <IntegrityStamp integrity={d.integrity} />
                         <AttestationSeal attestation={d.attestation} blocked={d.attestation_blocked} />
                         <StatTiles overall={d.overall} maxDrawdown={d.max_drawdown} />
-                        <EquityCurve curve={d.equity_curve} />
+                        <EquityCurve curve={d.equity_curve} provenance={d.provenance} />
                         <AccountsTable accounts={d.accounts} />
 
                         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="share-controls">

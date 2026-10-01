@@ -76,6 +76,7 @@ export default function ManagedStrategy() {
     const [selected, setSelected] = useState(null);
     const [detail, setDetail] = useState(null);
     const [nav, setNav] = useState([]);
+    const [navProvenance, setNavProvenance] = useState(null);
     const [allocations, setAllocations] = useState([]);
     const [riskStatus, setRiskStatus] = useState(null);
     const [limits, setLimits] = useState(null);
@@ -108,7 +109,7 @@ export default function ManagedStrategy() {
                 api.get(`/pamm/programs/${pid}/join-requests`),
                 api.get(`/pamm/programs/${pid}/change-requests`),
             ]);
-            setDetail(d.data); setNav(n.data.nav || []);
+            setDetail(d.data); setNav(n.data.nav || []); setNavProvenance(n.data.provenance || null);
             setAllocations(a.data.allocations || []);
             setRiskStatus(rs.data); setLimits(rl.data.risk_limits);
             setEvents(ev.data.events || []);
@@ -201,7 +202,7 @@ export default function ManagedStrategy() {
                     </div>
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
                         <div className="lg:col-span-2 space-y-4">
-                            <NavChart nav={nav} />
+                            <NavChart nav={nav} provenance={navProvenance} />
                             <VerdictTester programId={selected} />
                             <RiskPanel programId={selected} riskStatus={riskStatus} limits={limits}
                                 breach={p.risk_breach || riskStatus?.risk_breach}

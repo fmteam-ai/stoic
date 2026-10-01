@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { ChartProvenance } from "@/components/ChartProvenance";
 import api from "@/lib/api";
 import { Layers, TrendingUp } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, ReferenceLine } from "recharts";
@@ -98,6 +99,7 @@ export default function MultiAccountOverview({ refreshKey = 0 }) {
                             {showPerAccount ? "◉ PER-ACCOUNT LINES" : "○ PER-ACCOUNT LINES"}
                         </button>
                     </div>
+                    <ChartProvenance p={curve.provenance} testid="combined-equity-provenance" />
                     <div className="h-48">
                         <ResponsiveContainer width="100%" height="100%" minHeight={180} minWidth={200}>
                             <LineChart data={curve.series} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>

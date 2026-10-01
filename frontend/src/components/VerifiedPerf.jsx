@@ -1,3 +1,4 @@
+import { ChartProvenance } from "@/components/ChartProvenance";
 import {
     ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
@@ -48,16 +49,17 @@ export function StatTiles({ overall, maxDrawdown }) {
     );
 }
 
-export function EquityCurve({ curve }) {
+export function EquityCurve({ curve, provenance }) {
     if (!curve?.length) {
         return <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-8 text-center font-mono text-xs text-[#52525B]"
             data-testid="equity-empty">NO BROKER DEALS RECORDED YET</div>;
     }
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="equity-curve">
-            <div className="font-mono text-[9px] tracking-widest text-[#52525B] mb-2">
+            <div className="font-mono text-[9px] tracking-widest text-[#52525B]">
                 CUMULATIVE BROKER-VERIFIED P&L
             </div>
+            <div className="mb-2"><ChartProvenance p={provenance} testid="verified-equity-provenance" /></div>
             <div className="h-56">
                 <ResponsiveContainer width="100%" height="100%">
                     <AreaChart data={curve} margin={{ top: 5, right: 5, bottom: 0, left: -15 }}>

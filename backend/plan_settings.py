@@ -15,7 +15,7 @@ DEFAULT_TRIAL_TIER = "trader"
 DURATION_IDS = [d for d, _m, _x in sp.DURATION_DISCOUNTS]
 
 _state = {"trial_days": DEFAULT_TRIAL_DAYS, "trial_tier": DEFAULT_TRIAL_TIER,
-          "trial_enabled_at": None, "updated_at": None, "updated_by": None}
+          "trial_enabled_at": None, "updated_at": None, "updated_by": None, "pricing_version": 0}
 
 
 def current() -> dict:
@@ -28,12 +28,24 @@ def current() -> dict:
             "tiers": list(sp.TIER_ORDER), "durations": DURATION_IDS,
             "defaults": {"base_cents": dict(sp.DEFAULT_BASE_CENTS), "discounts": dict(sp.DEFAULT_DISCOUNTS),
                          "currency": "usd", "trial_days": DEFAULT_TRIAL_DAYS, "trial_tier": DEFAULT_TRIAL_TIER},
-            "matrix": sp.all_plans_public(),
+            "matrix": sp.all_plans_public(), "pricing_version": _state["pricing_version"],
             "updated_at": _state["updated_at"], "updated_by": _state["updated_by"]}
 
 
 def trial_config() -> dict:
-    return {"days": _state["trial_days"], "tier": _state["trial_tier"], "enabled_at": _state["trial_enabled_at"]}
+    return {"days": _state["trial_days"], "tier": _state["trial_tier"], "enabled_at": _state["trial_enabled_at"],
+            "offer_version": _state["pricing_version"]}
+
+
+async def ensure_fresh(db) -> int:
+    """audit r28 P2-01 — pricing is a SHARED versioned snapshot. Every price-bearing
+    request (plans, checkout, fulfilment, trial grant) calls this first so a save made by
+    another API worker/replica is applied before any amount is quoted or honoured."""
+    doc = await db.platform_state.find_one({"_id": DOC_ID}, {"pricing_version": 1})
+    ver = int((doc or {}).get("pricing_version") or 0)
+    if ver != _state["pricing_version"]:
+        await load(db)
+    return _state["pricing_version"]
 
 
 def validate(payload: dict) -> dict:
@@ -74,8 +86,9 @@ def validate(payload: dict) -> dict:
 
 
 def _apply(doc: dict) -> None:
-    sp.apply_pricing(doc.get("base_cents") or {}, doc.get("discounts") or {}, doc.get("currency") or "usd")
-    _state.update({"trial_days": int(doc.get("trial_days", DEFAULT_TRIAL_DAYS)),
+    ver = int(doc.get("pricing_version") or 0)
+    sp.apply_pricing(doc.get("base_cents") or {}, doc.get("discounts") or {}, doc.get("currency") or "usd", ver)
+    _state.update({"pricing_version": ver, "trial_days": int(doc.get("trial_days", DEFAULT_TRIAL_DAYS)),
                    "trial_tier": doc.get("trial_tier") or DEFAULT_TRIAL_TIER,
                    "trial_enabled_at": doc.get("trial_enabled_at"),
                    "updated_at": doc.get("updated_at"), "updated_by": doc.get("updated_by")})
@@ -85,7 +98,7 @@ async def load(db) -> bool:
     doc = await db.platform_state.find_one({"_id": DOC_ID})
     if not doc:   # first boot: persist defaults so the 15-day trial window has a stable start
         seed = {**validate({}), "trial_enabled_at": datetime.now(timezone.utc).isoformat(),
-                "updated_at": None, "updated_by": "system-default"}
+                "updated_at": None, "updated_by": "system-default", "pricing_version": 1}
         await db.platform_state.update_one({"_id": DOC_ID}, {"$setOnInsert": seed}, upsert=True)
         doc = await db.platform_state.find_one({"_id": DOC_ID})
     try:
@@ -105,13 +118,15 @@ async def update(db, payload: dict, actor: dict) -> dict:
     if clean["trial_days"] == 0:
         enabled_at = None
     doc = {**clean, "trial_enabled_at": enabled_at, "updated_at": now, "updated_by": actor.get("email")}
-    await db.platform_state.update_one({"_id": DOC_ID}, {"$set": doc}, upsert=True)
-    _apply(doc)
+    stored = await db.platform_state.find_one_and_update(
+        {"_id": DOC_ID}, {"$set": doc, "$inc": {"pricing_version": 1}}, upsert=True, return_document=True)
+    _apply(stored)
     from audit_chain import append_chained
     await append_chained(db, {"actor_email": actor.get("email"), "action": "plan_pricing_update",
                               "target_kind": "plan_pricing", "target_id": DOC_ID, "target_label": "Stripe plans",
                               "reason": f"currency={clean['currency']} trial={clean['trial_days']}d/{clean['trial_tier']}",
-                              "meta": {"reauth": True, "before": {"base_cents": prev["base_cents"], "discounts": prev["discounts"],
+                              "meta": {"reauth": True, "pricing_version": _state["pricing_version"],
+                                       "before": {"base_cents": prev["base_cents"], "discounts": prev["discounts"],
                                                                   "currency": prev["currency"], "trial_days": prev["trial_days"],
                                                                   "trial_tier": prev["trial_tier"]},
                                        "after": clean},

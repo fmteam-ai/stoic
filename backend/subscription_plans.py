@@ -201,6 +201,7 @@ DEFAULT_BASE_CENTS = dict(TIER_BASE_CENTS)
 DEFAULT_DISCOUNTS = {d: disc for d, _m, disc in DURATION_DISCOUNTS}
 SUPPORTED_CURRENCIES = {"usd": "$", "eur": "€", "gbp": "£", "chf": "CHF ", "aud": "A$", "cad": "C$"}
 CURRENCY = "usd"   # platform-wide checkout currency — Admin → Integrations → Plans overrides at runtime
+PRICING_VERSION = 0   # monotonically increasing; bumped by every admin pricing update (audit r28 P2-01)
 
 
 def currency_symbol() -> str:
@@ -232,6 +233,7 @@ class Plan:
 
     def to_public(self) -> dict:
         f = self.features
+        savings_cents = TIER_BASE_CENTS[self.tier] * self.duration_months - self.amount_cents
         return {
             "id": self.id,
             "tier": self.tier,
@@ -239,16 +241,20 @@ class Plan:
             "duration_label": self.duration_label,
             "duration_months": self.duration_months,
             "discount_pct": self.discount_pct,
+            # currency-neutral integer minor units (audit r28 P2-04) — authoritative
             "amount_cents": self.amount_cents,
-            "amount_usd": self.amount_usd,
-            "effective_monthly_usd": self.effective_monthly_usd,
-            "savings_usd": (
-                TIER_BASE_CENTS[self.tier] * self.duration_months
-                - self.amount_cents
-            ) / 100.0,
-            "description": self.description,
+            "amount_minor": self.amount_cents,
+            "effective_monthly_minor": int(round(self.amount_cents / self.duration_months)),
+            "savings_minor": savings_cents,
             "currency": CURRENCY,
             "currency_symbol": currency_symbol(),
+            "pricing_version": PRICING_VERSION,
+            # DEPRECATED: USD-named floats kept for compatibility; they carry the
+            # active currency's amount, not necessarily US dollars.
+            "amount_usd": self.amount_usd,
+            "effective_monthly_usd": self.effective_monthly_usd,
+            "savings_usd": savings_cents / 100.0,
+            "description": self.description,
         }
 
 
@@ -279,17 +285,19 @@ def _build_plans() -> dict[str, Plan]:
 PLANS = _build_plans()
 
 
-def apply_pricing(base_cents: dict, discounts: dict, currency: str) -> None:
+def apply_pricing(base_cents: dict, discounts: dict, currency: str, pricing_version: int | None = None) -> None:
     """Runtime override (Admin → Integrations → Plans). Mutates the module
     catalog IN PLACE so every `from subscription_plans import PLANS/TIER_BASE_CENTS`
     binding sees the new prices without a restart."""
-    global CURRENCY
+    global CURRENCY, PRICING_VERSION
     for t in TIER_ORDER:
         TIER_BASE_CENTS[t] = int(base_cents.get(t, DEFAULT_BASE_CENTS[t]))
         TIER_BASE_USD[t] = TIER_BASE_CENTS[t] / 100.0
     for i, (dur_id, months, _disc) in enumerate(DURATION_DISCOUNTS):
         DURATION_DISCOUNTS[i] = (dur_id, months, int(discounts.get(dur_id, DEFAULT_DISCOUNTS[dur_id])))
     CURRENCY = (currency or "usd").lower()
+    if pricing_version is not None:
+        PRICING_VERSION = int(pricing_version)
     rebuilt = _build_plans()
     PLANS.clear()
     PLANS.update(rebuilt)

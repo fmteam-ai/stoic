@@ -116,12 +116,17 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
         "freshest_heartbeat_age_sec": hb_age,
     }
 
+    from chart_provenance import build as provenance
     return {"generated_at": now.isoformat(),
             "overall": _stats(total),
             "max_drawdown": round(max_dd, 2),
             "equity_curve": curve[-365:],
             "accounts": account_rows,
-            "integrity": integrity}
+            "integrity": integrity,
+            "provenance": provenance(provider="broker_deals", source_kind="broker_reconciled", points=curve[-365:],
+                                     time_key="date", expected_interval_s=86400, as_of=now,
+                                     reconciliation_id=f"hb_age_{hb_age}s" if hb_age is not None else None,
+                                     note="broker-confirmed deals only; estimated/unknown outcomes excluded")}
 
 
 ATTESTATION_POLICY_VERSION = "attest-v2"

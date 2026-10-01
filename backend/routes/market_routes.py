@@ -43,7 +43,14 @@ async def history(symbol: str, user=Depends(get_current_user)):
     try:
         hist = await get_history(symbol)
         indicators = compute_indicators(hist)
-        return {"symbol": symbol.upper(), "history": hist, "indicators": indicators}
+        from chart_provenance import build as provenance
+        from market import HISTORY_META, _key
+        meta = HISTORY_META.get(_key(symbol), {"provider": "unknown", "cache_status": "unknown"})
+        return {"symbol": symbol.upper(), "history": hist, "indicators": indicators,
+                "provenance": provenance(provider=meta["provider"], source_kind="indicative", points=hist,
+                                         time_key="date", expected_interval_s=86400,
+                                         cache_status=meta["cache_status"],
+                                         note="public market data — indicative, not a broker fill price")}
     except Exception as e:
         from errors import api_error
         raise api_error(502, "market_data_unavailable", "Market data is temporarily unavailable — try again shortly.", exc=e)

@@ -71,7 +71,9 @@ def test_update_persists_applies_and_audits():
                                               "trial_tier": "professional"}, {"email": "t@test.local"})
         assert out["currency"] == "gbp" and out["base_cents"]["starter"] == 4500
         assert sp.get_plan("starter_monthly").amount_cents == 4500 and sp.CURRENCY == "gbp"
-        assert plan_settings.trial_config() == {"days": 7, "tier": "professional", "enabled_at": out["trial_enabled_at"]}
+        cfg = plan_settings.trial_config()
+        assert {k: cfg[k] for k in ("days", "tier", "enabled_at")} == {"days": 7, "tier": "professional", "enabled_at": out["trial_enabled_at"]}
+        assert cfg["offer_version"] == out["pricing_version"] >= 1
         doc = await db.platform_state.find_one({"_id": plan_settings.DOC_ID})
         assert doc["base_cents"]["starter"] == 4500 and doc["trial_enabled_at"]
         assert await db.admin_audit_log.count_documents({"action": "plan_pricing_update"}) == before + 1

@@ -32,6 +32,11 @@ REGISTRY = {
 PROVIDERS = {
     "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Emergent)"}
 _AAD = b"stoic-secrets-vault-v1"
+DECRYPT_FAILURES: list[str] = []   # keys whose sealed value could not be unsealed at boot (master-key mismatch)
+
+
+def _production() -> bool:
+    return (os.environ.get("APP_ENV") or "").lower() == "production"
 
 
 def _master_key() -> bytes:
@@ -41,10 +46,18 @@ def _master_key() -> bytes:
         if len(k) != 32:
             raise RuntimeError("SECRETS_MASTER_KEY must be 32 bytes base64")
         return k
+    if _production():
+        # audit r28 P2-02 — never couple vault encryption to the JWT signing secret in production
+        raise RuntimeError("APP_ENV=production requires a dedicated SECRETS_MASTER_KEY (32 bytes base64) — "
+                           "the vault must not derive from JWT_SECRET")
     seed = os.environ.get("JWT_SECRET")
     if not seed:
         raise RuntimeError("no SECRETS_MASTER_KEY / JWT_SECRET — vault unavailable")
     return HKDF(algorithm=hashes.SHA256(), length=32, salt=b"stoic-vault", info=_AAD).derive(seed.encode())
+
+
+def master_key_source() -> str:
+    return "dedicated" if os.environ.get("SECRETS_MASTER_KEY") else "derived_from_jwt_secret"
 
 
 def master_key_id() -> str:
@@ -69,9 +82,11 @@ def tail(value: str) -> str:
 
 
 def load_vault_sync(mongo_url: str, db_name: str) -> int:
-    """Process start (API + every worker): overlay sealed values onto os.environ."""
+    """Process start (API + every worker): overlay sealed values onto os.environ.
+    Records (never hides) sealed values the current master key cannot open."""
     from pymongo import MongoClient
     n = 0
+    DECRYPT_FAILURES.clear()
     try:
         col = MongoClient(mongo_url, serverSelectionTimeoutMS=3000)[db_name].secrets_vault
         for doc in col.find({"_id": {"$in": list(REGISTRY)}}):
@@ -79,10 +94,21 @@ def load_vault_sync(mongo_url: str, db_name: str) -> int:
                 os.environ[doc["_id"]] = unseal(doc)
                 n += 1
             except Exception:  # noqa: BLE001 — wrong master key: keep env value, never crash boot
+                DECRYPT_FAILURES.append(doc["_id"])
                 continue
     except Exception:  # noqa: BLE001
         return 0
     return n
+
+
+def readiness_check() -> dict:
+    """Release-readiness: sealed secrets must be openable and production must use a dedicated key."""
+    problems = list(DECRYPT_FAILURES)
+    src = master_key_source()
+    if _production() and src != "dedicated":
+        problems.append("SECRETS_MASTER_KEY missing — vault derived from JWT_SECRET")
+    return {"ok": not problems, "master_key_source": src, "undecryptable_keys": list(DECRYPT_FAILURES),
+            "detail": "; ".join(problems) or "all sealed secrets opened with the current master key"}
 
 
 async def status(db) -> dict:
@@ -90,14 +116,16 @@ async def status(db) -> dict:
     keys = {}
     for k, (prov, secret, desc) in REGISTRY.items():
         v = os.environ.get(k) or ""
-        src = "vault" if k in vault else ("env" if v else "unset")
-        keys[k] = {"provider": prov, "secret": secret, "description": desc, "configured": bool(v),
+        src = ("vault_undecryptable" if k in DECRYPT_FAILURES
+               else "vault" if k in vault else ("env" if v else "unset"))
+        keys[k] = {"provider": prov, "secret": secret, "description": desc, "configured": bool(v) and k not in DECRYPT_FAILURES,
                    "source": src, "display": tail(v) if secret else v,
                    "updated_at": vault.get(k, {}).get("updated_at"), "updated_by": vault.get(k, {}).get("updated_by")}
     last_webhook = await db.stripe_webhook_events.find_one({}, sort=[("at", -1)])
     last_email = await db.email_log.find_one({}, sort=[("at", -1)])
     ts_state = await db.platform_state.find_one({"_id": "turnstile"})
-    return {"keys": keys, "providers": PROVIDERS, "master_key_id": master_key_id(),
+    return {"keys": keys, "providers": PROVIDERS, "master_key_source": master_key_source(),
+            "vault_readiness": readiness_check(),
             "signals": {"stripe_last_webhook": (last_webhook or {}).get("at"),
                         "stripe_last_webhook_type": (last_webhook or {}).get("type"),
                         "email_last_sent": (last_email or {}).get("at"),

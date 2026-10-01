@@ -99,8 +99,9 @@ export default function AdminIntegrations() {
                 <>
                     <div data-testid="integrations-vault-note" className="mb-5 text-[11px] font-mono text-[#71717A] border border-[#1F1F1F] px-3 py-2 flex items-start gap-2">
                         <ShieldCheck className="w-3.5 h-3.5 mt-0.5 text-[#00FF41]" />
-                        <span>Values set here are sealed with AES-256-GCM (master key id {data.master_key_id}), require your password{" "}
-                            + authenticator code, and are written to the admin audit chain. {data.restart_hint}</span>
+                        <span>Values set here are sealed with AES-256-GCM (master key: {data.master_key_source === "dedicated" ? "dedicated SECRETS_MASTER_KEY" : "derived from JWT_SECRET — set SECRETS_MASTER_KEY before production"}), require your password{" "}
+                            + authenticator code, and are written to the admin audit chain. {data.restart_hint}
+                            {data.vault_readiness && !data.vault_readiness.ok && <span data-testid="vault-readiness-warning" className="block mt-1 text-[#FF3B30]">Vault blocker: {data.vault_readiness.detail}</span>}</span>
                     </div>
                     <div className="grid gap-4 md:grid-cols-2">
                         {ORDER.map(id => (

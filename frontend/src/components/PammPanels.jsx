@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { ChartProvenance } from "@/components/ChartProvenance";
 import { toast } from "sonner";
 import api, { formatApiError } from "@/lib/api";
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -18,11 +19,12 @@ export function KpiTile({ title, value, sub, tone = "text-white", testid }) {
     );
 }
 
-export function NavChart({ nav }) {
+export function NavChart({ nav, provenance }) {
     const data = [...(nav || [])].reverse().map(n => ({ at: (n.at || "").slice(5, 16).replace("T", " "), nav: n.nav }));
     return (
         <div className={`${box} p-4`} data-testid="pamm-nav-chart">
-            <div className={`${label} mb-2`}>NAV — BROKER AUTHORITATIVE</div>
+            <div className={`${label}`}>NAV — BROKER AUTHORITATIVE</div>
+            <div className="mb-2"><ChartProvenance p={provenance} testid="pamm-nav-provenance" /></div>
             {data.length < 2 ? (
                 <div className="text-xs font-mono text-[#52525B] py-8 text-center">Not enough NAV snapshots yet — run a reconcile to pull broker NAV.</div>
             ) : (

@@ -482,11 +482,20 @@ async def _history_load_from_mongo(sym: str) -> list | None:
         return None
 
 
+HISTORY_META: dict = {}   # sym → {provider, cache_status} for the chart provenance contract (r28 P2-05)
+
+
+def _hist_meta(sym: str, provider: str, cache_status: str) -> None:
+    HISTORY_META[sym] = {"provider": provider, "cache_status": cache_status}
+
+
 async def get_history(symbol: str) -> list:
     sym = _key(symbol)
     cache_key = f"history:{sym}"
     cached = _cache_get(cache_key)
     if cached:
+        if sym in HISTORY_META:
+            HISTORY_META[sym] = {**HISTORY_META[sym], "cache_status": "memory_cache"}
         return cached
 
     async with _lock_for(cache_key):
@@ -499,20 +508,26 @@ async def get_history(symbol: str) -> list:
             raise RuntimeError(f"Symbol {sym} not supported")
 
         hist: list = []
+        provider = "unknown"
         upstream_error: Exception | None = None
         try:
             if meta["asset"] == "crypto":
                 try:
+                    provider = "coinbase"
                     hist = await _coinbase_history(sym)
                     if len(hist) < 100:
                         raise RuntimeError("Insufficient Coinbase candles")
                 except Exception:
+                    provider = "coingecko"
                     hist = await _cg_history(meta["cg_id"])
             elif meta["asset"] == "commodity":
+                provider = "gold_api"
                 hist = await _gold_history()
             elif meta["asset"] == "index":
+                provider = "yahoo_chart"
                 hist = await _yahoo_chart_history(meta["yh"], sym)
             elif meta["asset"] == "forex":
+                provider = "fx_api"
                 hist = await _fx_history(meta["base"], meta["quote"])
         except (httpx.HTTPError, RuntimeError) as e:
             upstream_error = e
@@ -520,6 +535,7 @@ async def get_history(symbol: str) -> list:
         if len(hist) >= 100:
             _cache_set(cache_key, hist, 900)  # 15min — daily bar must track intraday moves
             await _history_save_to_mongo(sym, hist)
+            _hist_meta(sym, provider, "upstream")
             return hist
 
         # Upstream failed or returned too few bars — fall back to Mongo
@@ -527,6 +543,7 @@ async def get_history(symbol: str) -> list:
         if fallback:
             # Cache for a short period (15 min) so we keep retrying upstream periodically
             _cache_set(cache_key, fallback, 900)
+            _hist_meta(sym, f"{provider}:mongo_fallback", "mongo_fallback")
             return fallback
 
         raise RuntimeError(

@@ -203,7 +203,12 @@ async def nav_ep(program_id: str, user=Depends(get_current_user)):
     program = await _program_or_404(db, program_id)
     await require_program_access(db, user, program)
     from modules.pamm.services import nav_history
-    return {"nav": await nav_history(db, program_id)}
+    from chart_provenance import build as provenance
+    nav = await nav_history(db, program_id)
+    return {"nav": nav,
+            "provenance": provenance(provider="broker_gateway_nav", source_kind="broker_reconciled", points=nav,
+                                     time_key="at", expected_interval_s=3600, reconciliation_id=program_id,
+                                     note="broker-authoritative NAV snapshots pulled by reconcile")}
 
 
 @router.get("/programs/{program_id}/master")

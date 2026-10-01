@@ -184,7 +184,11 @@ async def research(days: int = 90, user=Depends(get_current_user)):
                  "cost_drag_pct": (round(abs(comm + swap) / abs(gross) * 100, 1)
                                    if gross else None)}
 
+    from chart_provenance import build as provenance
     return {"generated_at": now.isoformat(), "window_days": int(days),
+            "provenance": provenance(provider="stoic_research", source_kind="simulated", points=walk,
+                                     time_key="week", expected_interval_s=7 * 86400, as_of=now,
+                                     note="weekly out-of-sample backtest — simulated, not broker fills"),
             "trades": len(trades), "calibration": cal, "symbols": symbols,
             "walk_forward": walk, "walk_forward_stability": stability,
             "regimes": regimes, "decay": decay, "execution": execution}

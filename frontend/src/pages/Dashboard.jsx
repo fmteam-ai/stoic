@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { ChartProvenance } from "@/components/ChartProvenance";
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid } from "recharts";
 import api, { formatApiError } from "@/lib/api";
 import { TradingSafetyBanner } from "@/components/TradingSafetyBanner";
@@ -311,6 +312,7 @@ export default function Dashboard() {
     const [quotes, setQuotes] = useState({});
     const [selected, setSelected] = useState("XAUUSD");
     const [history, setHistory] = useState([]);
+    const [historyProvenance, setHistoryProvenance] = useState(null);
     const [chartRange, setChartRange] = useState("1Y");  // 14D | 1M | 6M | 1Y
     const [indicators, setIndicators] = useState({});
     const [sentiment, setSentiment] = useState({});
@@ -368,6 +370,7 @@ export default function Dashboard() {
         try {
             const { data } = await api.get(`/market/history/${sym}`);
             setHistory((data.history || []).map(h => ({ date: h.date, close: h.close })));
+            setHistoryProvenance(data.provenance || null);
             setIndicators(data.indicators || {});
         } catch (e) { setErr(formatApiError(e)); }
         finally { setHistoryLoading(false); }
@@ -650,6 +653,7 @@ export default function Dashboard() {
                             })()}
                         </div>
                     </div>
+                    <div className="px-4"><ChartProvenance p={historyProvenance} testid="price-chart-provenance" /></div>
                     <div className="h-64 md:h-80 p-2" data-testid="price-chart">
                         {historyLoading ? (
                             <div className="h-full flex items-center justify-center font-mono text-xs text-[#52525B] tracking-widest">LOADING DATA...</div>

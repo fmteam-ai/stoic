@@ -47,8 +47,15 @@ def _stripe_client(host_url: str) -> StripeCheckout:
     )
 
 
+def _sp_version() -> int:
+    import subscription_plans as _sp
+    return _sp.PRICING_VERSION
+
+
 @sub_router.get("/plans")
 async def list_plans():
+    import plan_settings
+    await plan_settings.ensure_fresh(get_db())
     return all_plans_public()
 
 
@@ -167,6 +174,8 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
     if not origin or origin.rstrip("/") not in allowed:
         raise HTTPException(status_code=400,
                             detail="origin not in the approved domain list")
+    import plan_settings
+    await plan_settings.ensure_fresh(get_db())          # audit r28 P2-01 — quote from the shared snapshot
     plan = get_plan(plan_id)
     if not plan:
         raise HTTPException(status_code=400, detail=f"unknown plan: {plan_id}")
@@ -181,6 +190,8 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
         "user_email": user.get("email", ""),
         "plan_id": plan.id,
         "duration_months": str(plan.duration_months),
+        "amount_minor": str(plan.amount_cents),
+        "pricing_version": str(_sp_version()),
     }
 
     import subscription_plans as _sp
@@ -207,6 +218,9 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
         session_id=session.session_id,
         amount_usd=plan.amount_usd,
         metadata=metadata,
+        amount_cents=plan.amount_cents,
+        currency=_sp.CURRENCY,
+        pricing_version=_sp_version(),
     )
     return {
         "checkout_url": session.url,
@@ -241,7 +255,9 @@ async def poll_session(session_id: str, request: Request, user=Depends(get_curre
         ) from e
 
     if status.payment_status == "paid":
-        sub = (await apply_successful_payment(session_id, source="poll")
+        sub = (await apply_successful_payment(session_id, source="poll",
+                                              paid_amount_minor=getattr(status, "amount_total", None),
+                                              paid_currency=getattr(status, "currency", None))
                or await get_subscription(user["id"]))
         return {"payment_status": "paid", "subscription": sub,
                 "status": status.status, "amount_total": status.amount_total}
@@ -321,7 +337,9 @@ async def stripe_webhook(request: Request):
                 status_code=502,
                 detail="Could not verify payment with Stripe.") from e
         if status.payment_status == "paid":
-            await apply_successful_payment(event.session_id, source="webhook")
+            await apply_successful_payment(event.session_id, source="webhook",
+                                           paid_amount_minor=getattr(status, "amount_total", None),
+                                           paid_currency=getattr(status, "currency", None))
         else:
             logger.warning("Webhook 'paid' for session=%s rejected — Stripe "
                            "reports payment_status=%s (possible forgery)",

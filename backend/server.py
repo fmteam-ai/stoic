@@ -750,6 +750,9 @@ async def on_startup():
             raise RuntimeError(
                 "APP_ENV=production forbids ADMIN_MFA_ENFORCED=false — "
                 "admin accounts must enroll TOTP 2FA.")
+        # audit r28 P2-02 — the secrets vault must use a dedicated master key in production
+        from integrations_settings import _master_key as _vault_master_key
+        _vault_master_key()
         # review P1-9 — local signing must FAIL at boot in production, not
         # at first runtime signature. Audit anchors / release manifests /
         # public certificates must never hit a post-boot signing failure.

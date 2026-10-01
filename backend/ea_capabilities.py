@@ -64,12 +64,12 @@ def live_gate(account: dict) -> dict | None:
         declared_demo = broker_environment(account) == "DEMO"
         if not expected:
             if declared_demo:
-                return _demo_unattested()
+                return _demo_unattested(account)
             return {"code": "EA_RELEASE_HASH_UNPINNED",
                     "reason": "no verified EX5 hash recorded for this release (scripts/verify_ea_release.py --record)"}
         if not reported:
             if declared_demo:
-                return _demo_unattested()
+                return _demo_unattested(account)
             return {"code": "EA_BINARY_PROOF_MISSING",
                     "reason": "terminal has not reported its EX5 hash over a verified installation chain — "
                               "pair the terminal and let the signed binary proof arrive on the heartbeat"}
@@ -99,7 +99,13 @@ def live_gate(account: dict) -> dict | None:
 _EA_RELEASE_FILES = ("release/ea_release.json", "/app/release/ea_release.json")
 
 
-def _demo_unattested() -> dict:
+def _demo_unattested(account: dict | None = None) -> dict:
+    from broker_env import attestation_state
+    if account is not None and attestation_state(account) == "invalidated":
+        return {"code": "EA_DEMO_ATTESTATION_INVALIDATED",
+                "reason": "the DEMO attestation was voided because the account's bound identity changed "
+                          "(broker/server/number/terminal/credentials) — an admin must re-attest it "
+                          "(Admin → Broker Registry → Account Environments)"}
     return {"code": "EA_DEMO_UNATTESTED",
             "reason": "account is declared DEMO but not attested — an admin must confirm the demo "
                       "environment (Admin → Broker Registry → Account Environments) before an "
