@@ -128,9 +128,19 @@ def queue_ops_alert_email(db, kind: str, severity: str, message: str,
 async def _send_ops_alert(db, kind: str, severity: str, message: str,
                           dedup_key: str) -> None:
     try:
+        import os
+        import socket
         subject = f"[STOIC {severity.upper()}] {kind}"
+        try:
+            from modules.pamm.strategy_guard import GIT_COMMIT as _build
+        except Exception:  # noqa: BLE001
+            _build = "unknown"
+        origin = (os.environ.get("PUBLIC_BASE_URL") or os.environ.get("FRONTEND_URL")
+                  or (os.environ.get("CORS_ORIGINS") or "").split(",")[0].strip() or "-")
         rows = [("Kind", kind), ("Severity", severity),
-                ("Detail", message), ("At", _now_dt().isoformat())]
+                ("Detail", message), ("At", _now_dt().isoformat()),
+                ("Origin", f"{origin} · {os.environ.get('APP_ENV') or 'dev'} · host {socket.gethostname()}"),
+                ("Build", str(_build)[:12])]
         await email_admins(db, subject,
                            _wrap("Operational alert", rows),
                            f"ops_email:{dedup_key}")
