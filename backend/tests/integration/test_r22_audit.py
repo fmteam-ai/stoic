@@ -85,7 +85,7 @@ def test_user_trust_binary_hash_is_labelled_unattested(monkeypatch):
     from routes.bridge_routes import heartbeat
     db = get_db()
     uid, token = str(ObjectId()), f"r22-{uuid.uuid4().hex}"
-    acc_id = _run(db.accounts.insert_one({"user_id": uid, "status": "active", "trading_enabled": True, "mode": "live",
+    acc_id = _run(db.accounts.insert_one({"user_id": uid, "status": "active", "trading_enabled": True, "mode": "live", "broker_environment": "LIVE",
                                           "bridge_token": token, "account_number": "555002",
                                           "broker_server": "Demo-Server"})).inserted_id
     inst = f"trust-{uuid.uuid4().hex[:12]}"

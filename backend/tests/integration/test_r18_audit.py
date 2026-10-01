@@ -120,6 +120,12 @@ def test_ea_capability_gate_numeric_versions_and_hash(monkeypatch):
     # r20 P1-01: proof is REQUIRED for live — missing report or unpinned release both block
     assert live_gate({"ea_version": "1.57"})["code"] == "EA_BINARY_PROOF_MISSING"
     assert live_gate({"ea_version": "1.57", "mode": "paper"}) is None            # paper: no terminal dependency
+    # P1-03: local compile stays demo-only — broker DEMO accounts skip the binary proof, never the capability floor
+    assert live_gate({"ea_version": "1.57", "account_type": "demo"}) is None
+    assert live_gate({"ea_version": "1.57", "broker_server": "RoboForex-Demo"}) is None
+    assert live_gate({"ea_version": "1.57", "broker_environment": "DEMO"}) is None
+    assert live_gate({"ea_version": "1.56", "account_type": "demo"})["code"] == "EA_CAPABILITY_BELOW_MIN"
+    assert live_gate({"ea_version": "1.57", "account_type": "demo", "broker_environment": "LIVE"})["code"] == "EA_BINARY_PROOF_MISSING"
     monkeypatch.delenv("EA_RELEASE_SHA256")
     monkeypatch.setattr("ea_capabilities._EA_RELEASE_FILES", ())
     assert live_gate({"ea_version": "1.57", "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested"})["code"] == "EA_RELEASE_HASH_UNPINNED"

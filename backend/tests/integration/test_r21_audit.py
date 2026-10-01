@@ -30,7 +30,7 @@ def world(request):
     uid = str(ObjectId())
     token = f"r21-{uuid.uuid4().hex}"
     acc_id = _run(db.accounts.insert_one({
-        "user_id": uid, "status": "active", "trading_enabled": True, "mode": "live",
+        "user_id": uid, "status": "active", "trading_enabled": True, "mode": "live", "broker_environment": "LIVE",
         "bridge_token": token, "account_number": "555001", "broker_server": "Demo-Server",
         "name": "r21"})).inserted_id
 

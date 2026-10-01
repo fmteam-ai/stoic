@@ -2973,3 +2973,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - `tests/integration/test_r15_fenced_execution.py`: replaced fixed `asyncio.sleep(0.05)` handoffs with explicit `asyncio.Event` synchronisation (A signals `applying`/`stalled` before B reclaims). Root cause of CI failure `test_stale_worker_mid_write_is_recorded_uncertain_and_never_replayed` was a slow runner where A had not reached `applying` before B reclaimed. `rc_lock.json` refrozen.
 - Server update to `da5705b` confirmed complete by user. Docker overlay2 leaked-mount issue still needs 3 compose retries (root cause on host pending).
 - Next: user to choose SEC-001 / P1-03 / P2-05 / Docker mount RCA.
+
+## 2026-10-01 — Demo activation + Infrastructure layout
+- `ea_capabilities.live_gate`: EX5 binary-proof section now applies only when `broker_environment(account) == "LIVE"` (was `mode != "paper"`), per P1-03 runbook "local compile stays demo-only". Capability floor (v1.57+) still applies to all. Tests added in `test_r18_audit.py`; r21/r22 fixtures pinned `broker_environment: LIVE`.
+- `pages/Infrastructure.jsx` wrapped in `AppLayout` (was missing sidebar/strips when opened from the activation blocker CTA).
+- Known pre-existing failure (not CI lane): `tests/backend_test.py::TestTradeBridge::test_full_trade_flow` KeyError status.

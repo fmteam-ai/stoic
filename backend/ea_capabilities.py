@@ -53,7 +53,11 @@ def live_gate(account: dict) -> dict | None:
     # r20 P1-01: binary proof is REQUIRED for live accounts — the expected hash is
     # pinned from the signed release record (never from editable account metadata)
     # and the terminal must report its EX5 hash on the heartbeat handshake.
-    if str(account.get("mode") or "live").lower() != "paper":
+    # P1-03 runbook: a locally compiled EX5 stays DEMO/PAPER-only — broker demo
+    # accounts (practice money) are exempt from the binary proof, never from
+    # the capability floor above.
+    from broker_env import broker_environment
+    if broker_environment(account) == "LIVE":
         expected = expected_ea_sha256()
         reported = (account.get("ea_binary_sha256") or "").lower()
         if not expected:

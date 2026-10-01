@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "@/lib/api";
+import { AppLayout } from "@/components/AppLayout";
 import { AddVpsWizard } from "../components/InfraWizard";
 import { AgentHealthCard, DiscoveredTerminals, EaDeploymentsCard, FailureMatrixCard, PathBStatusLadder } from "../components/PathBPanels";
 
@@ -23,7 +24,8 @@ export default function Infrastructure() {
     useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
 
     return (
-        <div className="space-y-6" data-testid="infrastructure-page">
+        <AppLayout>
+        <div className="space-y-6 px-4 md:px-8 py-6" data-testid="infrastructure-page">
             <div className="flex items-center justify-between flex-wrap gap-2">
                 <div>
                     <h1 className="font-mono text-xl text-white tracking-widest">INFRASTRUCTURE</h1>
@@ -128,5 +130,6 @@ export default function Infrastructure() {
 
             <EaDeploymentsCard />
         </div>
+        </AppLayout>
     );
 }
