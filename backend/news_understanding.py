@@ -7,6 +7,7 @@ scale. Per-headline scores are recency-weighted (12h half-life) into one net
 score. `news_gate` vetoes trades against strongly-opposing news (|net| ≥ 2).
 Cached 45 min per asset; every failure returns None (fail-open)."""
 import json
+import math
 import logging
 import os
 import re
@@ -14,6 +15,7 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+from llm_models import provider_model, untrusted_block, send_with_timeout, UNTRUSTED_PREAMBLE
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +168,9 @@ def _recency_weight(published_at: str, now: datetime) -> float:
     return 0.5 ** (age_h / RECENCY_HALF_LIFE_H)
 
 
+MIN_CORROBORATING_SOURCES = 2
+
+
 def _label(net: float) -> str:
     if net >= 2.0:
         return "strongly_bullish"
@@ -192,6 +197,13 @@ def aggregate_scores(items: list, now: datetime | None = None) -> dict | None:
         wsum += w
         ssum += w * s
     net = round(max(-3.0, min(3.0, ssum / wsum)), 2) if wsum > 0 else 0.0
+    # Corroboration: a directional read must come from >= 2 independent
+    # sources. One feed (or one injected headline) can at most register as
+    # neutral, so it can neither veto entries nor lift confidence.
+    sources = {str(it.get("source") or "").strip().lower()
+               for it in scored if abs(float(it["score"])) >= 0.5}
+    if len(sources) < MIN_CORROBORATING_SOURCES:
+        net = round(max(-0.7, min(0.7, net)), 2)
     drivers = sorted(scored, key=lambda x: abs(x["score"]), reverse=True)[:3]
     return {"net": net, "label": _label(net), "headlines": len(scored),
             "drivers": [{"title": d["title"][:120], "source": d.get("source", ""),
@@ -211,8 +223,8 @@ def _parse_array(text: str) -> list:
 
 async def _score_headlines(base: str, heads: list) -> list:
     ctx = ASSET_CONTEXT.get(base, base)
-    numbered = "\n".join(f"{i}. [{h['source']}] {h['title']}"
-                         for i, h in enumerate(heads))
+    numbered = untrusted_block(f"{i}. [{h['source']}] {h['title']}"
+                               for i, h in enumerate(heads))
     prompt = (
         f"For EACH numbered headline below, answer: how bullish is this "
         f"specifically for {ctx}?\n"
@@ -227,14 +239,24 @@ async def _score_headlines(base: str, heads: list) -> list:
         system_message=("You are a senior macro strategist at a bullion desk. "
                         "You read central-bank statements, FOMC minutes, CPI and "
                         "NFP prints for their asset-specific price impact. "
-                        "Respond only with JSON."),
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-    raw = await chat.send_message(UserMessage(text=prompt))
+                        "Respond only with JSON.\n\n" + UNTRUSTED_PREAMBLE),
+    ).with_model(*provider_model("news_understanding"))
+    raw = await send_with_timeout(chat, UserMessage(text=prompt))
     out = []
+    seen: set[int] = set()
     for row in _parse_array(str(raw)):
         try:
-            h = heads[int(row["i"])]
-            out.append({**h, "score": float(row["score"]),
+            i = int(row["i"])
+            # Reject negative / out-of-range / repeated indices — otherwise a
+            # single headline can be counted many times (heads[-1] is valid
+            # Python) and dominate the recency-weighted net.
+            if i < 0 or i >= len(heads) or i in seen:
+                continue
+            score = float(row["score"])
+            if not math.isfinite(score):
+                continue
+            seen.add(i)
+            out.append({**heads[i], "score": score,
                         "why": str(row.get("why") or "")[:80]})
         except (KeyError, TypeError, ValueError, IndexError):
             continue

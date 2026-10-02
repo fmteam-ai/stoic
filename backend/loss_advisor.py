@@ -29,6 +29,8 @@ from bson import ObjectId
 from pip_utils import base_symbol
 from regime_adapter import velocity_veto
 from ws_manager import manager as ws_manager
+from llm_models import (provider_model, finite_float, send_with_timeout,
+                        SWEEP_TIMEOUT_S)
 
 logger = logging.getLogger("loss-advisor")
 
@@ -173,6 +175,72 @@ def _aggregates(ds: dict) -> dict:
     }
 
 
+# ------------------------------------------------------------- sanitising
+_MEASURE_TYPES = {"min_confidence", "velocity_veto", "session_block",
+                  "symbol_pause", "friday_flat", "other"}
+_SESSIONS = {"asia", "london", "ny", "off"}
+# An auto-applied guard may not block more than this share of the shadow
+# window's trades — a "guard" that blocks almost everything is a shutdown.
+AUTO_APPLY_MAX_BLOCK_SHARE = 0.4
+
+
+def _clean_symbol(v):
+    if v is None:
+        return None
+    v = str(v).strip().upper()
+    return v if 0 < len(v) <= 20 and v.replace(".", "").replace("-", "").replace("_", "").isalnum() else None
+
+
+def _sanitize_measure(m) -> dict | None:
+    """Validate + clamp one LLM-proposed measure. None = drop it.
+
+    The LLM's output can be auto-applied as a live guard, so every param is
+    coerced into the documented range; nothing out of range is trusted.
+    """
+    if not isinstance(m, dict):
+        return None
+    mtype = m.get("type")
+    if mtype not in _MEASURE_TYPES:
+        return None
+    p = m.get("params") if isinstance(m.get("params"), dict) else {}
+    clean: dict = {}
+    if mtype == "min_confidence":
+        clean["value"] = finite_float(p.get("value"), 50.0, 95.0, float("nan"))
+        if clean["value"] != clean["value"]:   # NaN → unusable
+            return None
+        clean["symbol"] = _clean_symbol(p.get("symbol"))
+    elif mtype == "velocity_veto":
+        regime = str(p.get("regime") or "LOW_VOL_TREND").upper()
+        if not regime.replace("_", "").isalpha() or len(regime) > 40:
+            return None
+        clean["regime"] = regime
+        for k in ("velocity_counter_max", "velocity_veto_threshold"):
+            v = finite_float(p.get(k), 0.0, 1e6, float("nan"))
+            if v != v or v <= 0:
+                return None
+            clean[k] = v
+    elif mtype == "session_block":
+        sess = str(p.get("session") or "").lower()
+        if sess not in _SESSIONS:
+            return None
+        clean["session"] = sess
+        clean["symbol"] = _clean_symbol(p.get("symbol"))
+        act = p.get("action")
+        clean["action"] = act if act in ("BUY", "SELL") else None
+    elif mtype == "symbol_pause":
+        clean["symbol"] = _clean_symbol(p.get("symbol"))
+        if not clean["symbol"]:
+            return None
+    elif mtype == "friday_flat":
+        mode = p.get("mode")
+        clean["mode"] = mode if mode in ("close", "tighten") else "tighten"
+        clean["minutes_before"] = int(finite_float(p.get("minutes_before"), 5, 240, 60))
+    out = {k: v for k, v in m.items() if k not in ("params", "evidence")}
+    out["type"] = mtype
+    out["params"] = clean
+    return out
+
+
 # ------------------------------------------------------------- shadow tests
 def _predicate(measure: dict):
     """Build predicate(trade, signal) → bool for testable measure types."""
@@ -245,6 +313,7 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
         "testable": True,
         "shadow_days": SHADOW_DAYS,
         "trades_blocked": blocked,
+        "trades_total": len(ds["trades"]),
         "losses_avoided": round(losses_avoided, 2),
         "wins_missed": round(wins_missed, 2),
         "net_effect": round(losses_avoided - wins_missed, 2),
@@ -259,13 +328,17 @@ async def _claude_measures(payload: dict) -> dict:
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"loss-review-{uuid.uuid4().hex[:8]}",
             system_message=_ADVISOR_SYSTEM,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        raw = str(await chat.send_message(UserMessage(text=json.dumps(payload, default=str)))).strip()
+        ).with_model(*provider_model("loss_advisor"))
+        raw = str(await send_with_timeout(
+            chat, UserMessage(text=json.dumps(payload, default=str)),
+            SWEEP_TIMEOUT_S)).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw.lower().startswith("json"):
                 raw = raw[4:].strip()
         out = json.loads(raw)
+        if not isinstance(out, dict):
+            raise ValueError("loss-review response is not a JSON object")
         out.setdefault("measures", [])
         return out
     except Exception as e:  # noqa: BLE001
@@ -283,6 +356,9 @@ def _qualifies(m: dict) -> bool:
     net = float(ev.get("net_effect") or 0)
     saved = float(ev.get("losses_avoided") or 0)
     missed = float(ev.get("wins_missed") or 0)
+    total = ev.get("trades_total")
+    if total and float(ev.get("trades_blocked") or 0) > AUTO_APPLY_MAX_BLOCK_SHARE * float(total):
+        return False
     return net >= AUTO_APPLY_MIN_NET and saved >= AUTO_APPLY_RATIO * missed
 
 
@@ -490,8 +566,13 @@ async def run_loss_review(db, user_id: str, trigger: str = "auto") -> dict | Non
     })
 
     measures = []
-    for m in (verdict.get("measures") or [])[:5]:
-        m = dict(m)
+    raw_measures = verdict.get("measures")
+    if not isinstance(raw_measures, list):
+        raw_measures = []
+    for m in raw_measures[:5]:
+        m = _sanitize_measure(m)
+        if m is None:
+            continue
         m["evidence"] = _shadow_test(m, ds)
         measures.append(m)
     # Evidence-backed ranking: best net effect first, untestable last.

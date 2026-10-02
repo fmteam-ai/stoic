@@ -11,6 +11,7 @@ import json
 from datetime import datetime, timezone
 
 from database import get_db
+from llm_models import provider_model
 
 
 SYSTEM_PROMPT = """You are the user's personal Trading Co-Pilot for an AI trading
@@ -154,7 +155,7 @@ async def chat(user_id: str, message: str, session_id: str | None = None) -> dic
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=session["session_id"],
         system_message=grounded_system,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    ).with_model(*provider_model("copilot"))
 
     # Replay last 6 turns of history (3 user + 3 assistant) for continuity.
     # NOTE: emergentintegrations LlmChat persists by session_id across processes,

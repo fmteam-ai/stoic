@@ -22,6 +22,7 @@ from auth import get_current_user
 from database import get_db
 from route_utils import parse_object_id
 from security import rate_limit
+from llm_models import provider_model, model_for, estimate_cost_usd
 
 logger = logging.getLogger("journal")
 
@@ -141,7 +142,7 @@ async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"journal-{trade.get('symbol', '?')}-{uuid.uuid4().hex[:8]}",
             system_message=_SYSTEM,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model(*provider_model("journal_card"))
         raw = str(await chat.send_message(UserMessage(text=payload))).strip()
         # LLM cost tracking — approximate tokens from character volume
         # (chars/4) at Claude Sonnet public pricing ($3/M in, $15/M out)
@@ -152,11 +153,11 @@ async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
                 "feature": "journal_card",
                 "user_id": trade.get("user_id"),
                 "trade_id": str(trade.get("_id")),
-                "model": "claude-sonnet-4-5-20250929",
+                "model": model_for("journal_card"),
                 "input_tokens_est": in_tok,
                 "output_tokens_est": out_tok,
-                "estimated_cost_usd": round(
-                    in_tok / 1e6 * 3.0 + out_tok / 1e6 * 15.0, 6),
+                "estimated_cost_usd": estimate_cost_usd(
+                    model_for("journal_card"), in_tok, out_tok),
                 "at": datetime.now(timezone.utc)})
         except Exception:  # noqa: BLE001
             logger.warning("llm_usage tracking write failed", exc_info=True)

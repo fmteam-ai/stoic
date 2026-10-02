@@ -14,6 +14,7 @@ from bson import ObjectId
 from auth import get_current_user
 from database import get_db
 from email_sender import send_email, is_configured as email_is_configured
+from llm_models import provider_model
 
 logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
@@ -45,7 +46,7 @@ async def _generate_ai_reflection(digest_payload: dict) -> Optional[str]:
             api_key=key,
             session_id=f"weekly-digest-{uuid.uuid4().hex[:8]}",
             system_message=_REFLECTION_SYSTEM_PROMPT,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model(*provider_model("weekly_insights"))
         # Pass a slim payload — Claude doesn't need the raw trade list.
         slim = {
             "stats": digest_payload.get("stats"),

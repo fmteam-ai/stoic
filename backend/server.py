@@ -104,6 +104,11 @@ from routes.optimizer_routes import router as optimizer_router
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("trading-bot")
+# httpx logs every request URL at INFO — Telegram puts the bot token in the
+# URL path (api.telegram.org/bot<TOKEN>/...), which would defeat the vault
+# encryption of telegram_bot_token. Keep transport libraries at WARNING.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 # iter-158 — correlation ids on every log record (API + workers)
 from correlation import install as _install_correlation, set_correlation_id

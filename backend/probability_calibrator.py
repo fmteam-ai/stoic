@@ -100,27 +100,55 @@ def fit_platt(scores: np.ndarray, labels: np.ndarray,
     targets = np.where(labels == 1, t_pos, t_neg)
 
     z = _logit(scores)
-    A = 1.0
+    # p = sigmoid(-(A*z + B)) — Platt's original sign convention, so the
+    # IDENTITY mapping is A = -1, B = 0. Starting at A = +1 (the old
+    # initialisation) is the map p -> 1-p, which first-order descent could
+    # not escape within its iteration budget and produced calibrated
+    # probabilities anti-correlated with the raw model.
+    #
+    # Two-parameter convex NLL -> damped Newton-Raphson converges in a
+    # handful of iterations; no learning rate to tune. `lr` is kept in the
+    # signature for backwards compatibility and unused.
+    del lr
+    A = -1.0
     B = 0.0
-    prev_loss = float("inf")
+
+    def _nll(a: float, b: float) -> float:
+        pp = _sigmoid(-(a * z + b))
+        return float(-np.mean(targets * np.log(pp + _EPS) +
+                              (1 - targets) * np.log(1 - pp + _EPS)))
+
+    loss = _nll(A, B)
     for it in range(max_iter):
-        # p = sigmoid(-(A*z + B)) — Platt's parameterisation matches the
-        # classic +A,+B sign convention from the original paper.
-        lin = A * z + B
-        p = _sigmoid(-lin)
-        # NLL = -[t*log(p) + (1-t)*log(1-p)]
-        loss = -np.mean(targets * np.log(p + _EPS) +
-                        (1 - targets) * np.log(1 - p + _EPS))
-        # ∂loss/∂A and ∂B  (derived from chain rule of sigmoid(-(A z + B)))
-        grad_A = np.mean((p - targets) * (-z))
-        grad_B = np.mean(p - targets) * (-1.0)
-        A -= lr * grad_A
-        B -= lr * grad_B
-        if abs(prev_loss - loss) < 1e-7:
+        p = _sigmoid(-(A * z + B))
+        # d loss / d lin = (t - p) with lin = A*z + B
+        r = targets - p
+        g = np.array([np.mean(r * z), np.mean(r)])
+        w = p * (1.0 - p)
+        H = np.array([[np.mean(w * z * z), np.mean(w * z)],
+                      [np.mean(w * z), np.mean(w)]]) + 1e-9 * np.eye(2)
+        try:
+            step = np.linalg.solve(H, g)
+        except np.linalg.LinAlgError:
+            break
+        # Backtracking line search keeps every step a descent step.
+        t = 1.0
+        while t > 1e-6:
+            a_new, b_new = A - t * step[0], B - t * step[1]
+            new_loss = _nll(a_new, b_new)
+            if new_loss <= loss:
+                break
+            t *= 0.5
+        else:
             return {"A": float(A), "B": float(B), "n": int(n),
                     "converged": True, "skipped": False, "iters": it + 1,
                     "final_nll": float(loss)}
-        prev_loss = loss
+        improved = loss - new_loss
+        A, B, loss = float(a_new), float(b_new), new_loss
+        if improved < 1e-10:
+            return {"A": float(A), "B": float(B), "n": int(n),
+                    "converged": True, "skipped": False, "iters": it + 1,
+                    "final_nll": float(loss)}
     return {"A": float(A), "B": float(B), "n": int(n),
             "converged": False, "skipped": False, "iters": max_iter,
             "final_nll": float(loss)}
@@ -130,7 +158,7 @@ def apply_platt(raw_p: float, calib: dict | None) -> float:
     """Map a raw probability through the persisted (A, B). No-op if missing."""
     if not calib or calib.get("skipped"):
         return float(raw_p)
-    A = float(calib.get("A", 1.0))
+    A = float(calib.get("A", -1.0))   # -1 == identity (see fit_platt)
     B = float(calib.get("B", 0.0))
     z = _logit(np.asarray(raw_p, dtype=float))
     p_cal = _sigmoid(-(A * z + B))

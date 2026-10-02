@@ -48,6 +48,25 @@ def _atr_series(bars, period=14):
     return out
 
 
+def _vol_scaled_pip(bars, fallback: float, window: int = 8,
+                    shock_mult: float = 3.0) -> float:
+    """Pip unit for scalp.regime.classify scaled to THIS series' volatility.
+
+    classify()'s thresholds (60-pip 8-bar shock range, 2-pip EMA drift) were
+    tuned on EURUSD pips; with a fixed instrument pip they mean wildly
+    different things on gold. Pick the pip so the shock threshold equals
+    `shock_mult` × the median 8-bar close range (the statistic classify
+    tests) — on EURUSD that is ≈ the original 60-pip calibration."""
+    from scalp.regime import SHOCK_RANGE_PIPS
+    closes = [float(b["c"]) for b in bars]
+    rngs = sorted(max(closes[i - window:i]) - min(closes[i - window:i])
+                  for i in range(window, len(closes) + 1))
+    if len(rngs) < 10:
+        return fallback
+    med = rngs[len(rngs) // 2]
+    return shock_mult * med / SHOCK_RANGE_PIPS if med > 0 else fallback
+
+
 def volatility_axis(bars) -> dict:
     atrs = _atr_series(bars)
     if len(atrs) < 20:
@@ -187,7 +206,8 @@ async def detect(db, user_id: str, force: bool = False) -> dict:
     if primary_sym:
         bars = docs[primary_sym]
         from scalp.regime import classify
-        cls = classify(bars[-24:], pip_size(primary_sym))
+        cls = classify(bars[-24:],
+                       _vol_scaled_pip(bars, pip_size(primary_sym)))
         mapping = {"TREND_UP": "trending_up", "TREND_DOWN": "trending_down",
                    "RANGE": "ranging", "VOLATILITY_SHOCK": "ranging"}
         trend = mapping.get(cls.get("regime"), "ranging")

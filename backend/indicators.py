@@ -25,17 +25,22 @@ def ema(closes: list, period: int) -> Optional[float]:
 
 
 def rsi(closes: list, period: int = 14) -> Optional[float]:
-    """Relative Strength Index over the last `period` closes."""
+    """Wilder's Relative Strength Index.
+
+    Seeded with the simple average of the first `period` gains/losses, then
+    Wilder-smoothed (avg = (prev*(period-1) + x) / period) over the rest of
+    the series. Flat series (no gains and no losses) → 50.0 (neutral);
+    only gains → 100.0."""
     if len(closes) < period + 1:
         return None
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        d = closes[-(period + 1) + i] - closes[-(period + 1) + i - 1]
-        (gains if d > 0 else losses).append(abs(d))
-    avg_g = sum(gains) / period if gains else 0
-    avg_l = sum(losses) / period if losses else 0
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    avg_g = sum(d for d in deltas[:period] if d > 0) / period
+    avg_l = sum(-d for d in deltas[:period] if d < 0) / period
+    for d in deltas[period:]:
+        avg_g = (avg_g * (period - 1) + (d if d > 0 else 0.0)) / period
+        avg_l = (avg_l * (period - 1) + (-d if d < 0 else 0.0)) / period
     if avg_l == 0:
-        return 100.0
+        return 50.0 if avg_g == 0 else 100.0
     rs = avg_g / avg_l
     return 100 - (100 / (1 + rs))
 

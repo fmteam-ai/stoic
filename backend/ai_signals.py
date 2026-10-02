@@ -13,6 +13,7 @@ import uuid
 import re
 import logging
 from datetime import datetime, timezone, timedelta
+from llm_models import provider_model, send_with_timeout
 
 logger = logging.getLogger("ai_signals")
 
@@ -138,7 +139,10 @@ async def _intraday_entropy_override(symbol: str, daily: dict) -> dict:
 async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
                          strategy: str | None = None,
-                         engine_params: dict | None = None) -> dict:
+                         engine_params: dict | None = None,
+                         user_id: str | None = None) -> dict:
+    # user_id scopes intraday candle reads to the user's OWN broker feed
+    # (brokers differ in price, server-time offset and CFD vs futures).
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
@@ -171,7 +175,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # iter-120 · Intraday M15 feature pack — live EA-stream vision so the
     # strategy engine can trade clean intraday days the daily tiers can't see.
     from intraday_features import fetch_intraday_pack
-    intraday_pack = await fetch_intraday_pack(symbol)
+    intraday_pack = await fetch_intraday_pack(symbol, user_id=user_id)
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
 
@@ -328,7 +332,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
     market_closure = is_market_closed(symbol)
     mtf_conf = None
     if mtf_mode and not market_closure:
-        mtf_conf = await fetch_mtf_confluence(symbol, current_price, mode=mtf_mode)
+        mtf_conf = await fetch_mtf_confluence(symbol, current_price, mode=mtf_mode,
+                                              user_id=user_id)
 
     def _hold(reason: str, closure: dict | None = None) -> dict:
         return {
@@ -439,16 +444,21 @@ async def analyze_symbol(symbol: str, risk_level: str,
                 api_key=os.environ["EMERGENT_LLM_KEY"],
                 session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
                 system_message=NARRATOR_PROMPT,
-            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-            narration = await chat.send_message(UserMessage(text=json.dumps({
+            ).with_model(*provider_model("signal_narration"))
+            # Narration is cosmetic — never let it delay a confirmed entry
+            # by more than the hot-path budget.
+            narration = await send_with_timeout(chat, UserMessage(text=json.dumps({
                 "confirmed_setup": {"direction": action, "cascade": mtf_conf},
                 "market_context": json.loads(user_text),
             }, separators=(",", ":"))))
             parsed = _parse_ai_json(str(narration))
-            if parsed.get("reasoning"):
-                reasoning = f"{reasoning}\n\n{parsed['reasoning']}"
-            if parsed.get("key_factors"):
-                key_factors = parsed["key_factors"]
+            if not isinstance(parsed, dict):
+                parsed = {}
+            if isinstance(parsed.get("reasoning"), str) and parsed["reasoning"]:
+                reasoning = f"{reasoning}\n\n{parsed['reasoning'][:2000]}"
+            kf = parsed.get("key_factors")
+            if isinstance(kf, list) and kf:
+                key_factors = [str(x)[:200] for x in kf[:8]]
         except Exception as e:  # noqa: BLE001
             logger.warning("Narration pass failed for %s: %s", symbol, e)
 

@@ -22,6 +22,9 @@ from database import get_db  # noqa: E402
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Transport libs log full URLs at INFO (Telegram bot tokens live in the path).
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger("worker")
 
 LEASE_TTL_SEC = 45
@@ -101,6 +104,11 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                         loop_stats=None):
     db = get_db()
     total = len(loop_tasks)
+    # Split-brain guard: if renewals keep FAILING (Mongo election, network
+    # partition) the lease expires server-side and a standby may take it.
+    # Stop our loops before that can happen instead of trading on blind.
+    last_ok = asyncio.get_running_loop().time()
+    give_up_after = max(LEASE_RENEW_SEC, LEASE_TTL_SEC - LEASE_RENEW_SEC)
     while True:
         await asyncio.sleep(LEASE_RENEW_SEC)
         try:
@@ -109,6 +117,7 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                 logger.error("worker %s lost its lease — stopping loops", name)
                 lost.set()
                 return
+            last_ok = asyncio.get_running_loop().time()
             # loop-execution monitoring: leases prove the PROCESS is alive,
             # loops_running + per-loop supervisor stats prove every loop is
             # executing, and record_progress() telemetry proves it is making
@@ -126,6 +135,12 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                              name, running, total)
         except Exception as e:
             logger.warning("lease renew error for %s: %s", name, e)
+            if asyncio.get_running_loop().time() - last_ok >= give_up_after:
+                logger.error("worker %s could not renew its lease for %.0fs — "
+                             "assuming it is lost, stopping loops",
+                             name, give_up_after)
+                lost.set()
+                return
 
 
 def _supervise(name: str, loop_name: str, factory, stats: dict):

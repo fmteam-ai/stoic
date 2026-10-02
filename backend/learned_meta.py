@@ -418,19 +418,10 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
             cal_source = "in_sample_fallback"
             oos_auc = None
 
-    # Calibrate threshold: lowest p_win below which precision_of_rejection >= 0.6
-    threshold = 0.45
-    for cand in np.arange(0.30, 0.50, 0.01):
-        rejected = p_eval < cand
-        if rejected.sum() == 0:
-            continue
-        if (y_eval[rejected] == 0).mean() >= 0.6:
-            threshold = float(cand)
-            break
-
     # iter-52 · Platt scaling for calibrated probabilities (H5: fit on OOS).
     brier_raw = brier_score(p_eval, y_eval)
     platt = fit_platt(p_eval, y_eval)
+    p_thr = p_eval
     if not platt.get("skipped"):
         p_cal = np.array([apply_platt(float(pi), platt) for pi in p_eval])
         brier_cal = brier_score(p_cal, y_eval)
@@ -438,6 +429,24 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
         platt["brier_calibrated"] = round(brier_cal, 4)
         platt["ece_raw"] = expected_calibration_error(p_eval, y_eval)
         platt["ece_calibrated"] = expected_calibration_error(p_cal, y_eval)
+        if brier_cal > brier_raw:
+            # Only ship a calibrator that measurably helps on the eval set.
+            platt["skipped"] = True
+            platt["reason"] = "calibration did not improve Brier on eval set"
+        else:
+            p_thr = p_cal
+
+    # Calibrate threshold: lowest p_win below which precision_of_rejection
+    # >= 0.6. Fitted in the SAME units the runtime compares against
+    # (calibrated p when a calibrator ships, raw p otherwise) — see predict().
+    threshold = 0.45
+    for cand in np.arange(0.30, 0.50, 0.01):
+        rejected = p_thr < cand
+        if rejected.sum() == 0:
+            continue
+        if (y_eval[rejected] == 0).mean() >= 0.6:
+            threshold = float(cand)
+            break
 
     return {
         "key": key,

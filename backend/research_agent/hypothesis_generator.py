@@ -31,6 +31,7 @@ import uuid
 import logging
 
 from emergentintegrations.llm.chat import LlmChat, UserMessage
+from llm_models import provider_model
 
 logger = logging.getLogger("research.hypothesis-generator")
 
@@ -146,7 +147,7 @@ async def generate(
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"self-improve-{uuid.uuid4().hex[:8]}",
         system_message=SYSTEM_PROMPT,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    ).with_model(*provider_model("hypothesis_generator"))
 
     user_msg = (
         "WEAKNESS REPORT (last 30d):\n"

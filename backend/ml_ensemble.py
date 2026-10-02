@@ -118,7 +118,13 @@ def train_sync(X: list, y: list, uid: str, *, window: dict | None = None) -> dic
     X, y = np.asarray(X, dtype=float), np.asarray(y, dtype=int)
     dataset_sha256 = hashlib.sha256(X.tobytes() + b"|" + y.tobytes()).hexdigest()
     fold_aucs = {name: [] for name in _gbm_zoo()}
-    for tr, va in TimeSeriesSplit(n_splits=3).split(X):
+    # Embargo: trades are sorted by close time and their holding windows
+    # overlap neighbours, so the last train samples can share price path
+    # with the first validation samples. Trade open/close times aren't
+    # passed here, so purge by count: skip k samples between train and
+    # validation (cf. scalp/model._purge, which purges by timestamp).
+    embargo = max(1, int(0.02 * len(X)))
+    for tr, va in TimeSeriesSplit(n_splits=3, gap=embargo).split(X):
         if len(set(y[tr])) < 2 or len(set(y[va])) < 2:
             continue
         for name, mdl in _gbm_zoo().items():
@@ -217,7 +223,12 @@ async def train_ensemble(db, user_id: str) -> dict:
             continue
         sig = sigs.get(str(t.get("signal_id") or "")) or {}
         sig = {**sig, "entry_price": t.get("entry_price") or sig.get("entry_price"),
-               "stop_loss": t.get("stop_loss") or sig.get("stop_loss")}
+               # Entry-time SL only: trades.stop_loss is overwritten by every
+               # trailing/breakeven modify, so winners would show a tiny
+               # sl_pips / huge rr (target leakage). original_stop_loss is
+               # written once at execution (execution.py).
+               "stop_loss": (sig.get("stop_loss") or t.get("original_stop_loss")
+                             or t.get("stop_loss"))}
         when = None
         try:
             when = datetime.fromisoformat(

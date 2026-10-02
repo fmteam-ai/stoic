@@ -11,7 +11,12 @@ import time
 import uuid
 import asyncio
 import httpx
+import logging
 from datetime import datetime, timezone, timedelta
+from llm_models import (provider_model, finite_float, untrusted_block,
+                        send_with_timeout, UNTRUSTED_PREAMBLE)
+
+logger = logging.getLogger("news")
 
 NEWSAPI_URL = "https://newsapi.org/v2/everything"
 
@@ -154,23 +159,31 @@ async def score_sentiment(symbol: str) -> dict:
         compact = "\n".join(
             f"- [{h['source']}] {h['title']}" for h in headlines
         )
-        user_text = f"Market: {sym}\nHeadlines (last 24h):\n{compact}"
+        user_text = (f"Market: {sym}\nHeadlines (last 24h):\n"
+                     f"{untrusted_block(compact.splitlines())}")
 
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"sent-{sym}-{uuid.uuid4().hex[:6]}",
-            system_message=SENTIMENT_PROMPT,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-
+        # Everything that can raise (missing key, wrapper import, timeout,
+        # malformed / non-dict JSON) degrades to NEUTRAL. A raise here used to
+        # propagate into analyze_symbol and fail signal generation for every
+        # user, uncached, so every tick retried the LLM.
         try:
-            resp = await chat.send_message(UserMessage(text=user_text))
+            from emergentintegrations.llm.chat import LlmChat, UserMessage
+            chat = LlmChat(
+                api_key=os.environ["EMERGENT_LLM_KEY"],
+                session_id=f"sent-{sym}-{uuid.uuid4().hex[:6]}",
+                system_message=SENTIMENT_PROMPT + "\n\n" + UNTRUSTED_PREAMBLE,
+            ).with_model(*provider_model("news_sentiment"))
+            resp = await send_with_timeout(chat, UserMessage(text=user_text))
             parsed = _parse_json(str(resp))
-        except Exception:
+            if not isinstance(parsed, dict):
+                raise ValueError("sentiment response is not a JSON object")
+            failed = False
+        except Exception as e:  # noqa: BLE001
+            logger.warning("news sentiment LLM failed for %s: %s", sym, e)
             parsed = {"score": 0.0, "label": "neutral", "summary": "Sentiment model failed.", "key_drivers": []}
+            failed = True
 
-        score = float(parsed.get("score") or 0)
-        score = max(-1.0, min(1.0, score))
+        score = finite_float(parsed.get("score"), -1.0, 1.0, 0.0)
         label = parsed.get("label") or "neutral"
 
         payload = {
@@ -182,7 +195,9 @@ async def score_sentiment(symbol: str) -> dict:
             "article_count": len(headlines),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
-        _set_cache(ck, payload, 3600)  # 1h
+        # Failures are cached briefly so an outage doesn't re-call the LLM on
+        # every tick for every user.
+        _set_cache(ck, payload, 300 if failed else 3600)
         return {**payload, "cached": False}
 
 

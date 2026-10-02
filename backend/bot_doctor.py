@@ -37,6 +37,7 @@ from typing import Optional
 
 
 from database import get_db
+from llm_models import provider_model
 
 logger = logging.getLogger("bot_doctor")
 
@@ -259,7 +260,7 @@ async def _ask_llm(telemetry: dict) -> dict:
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"bot-doctor-{uuid.uuid4().hex[:8]}",
             system_message=_DOCTOR_SYSTEM,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model(*provider_model("bot_doctor"))
         resp = await chat.send_message(UserMessage(text=user_text))
         raw = str(resp).strip()
         if raw.startswith("```"):

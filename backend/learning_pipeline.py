@@ -96,7 +96,12 @@ async def _build_xy(db, user_id: str, trades: list):
         sig = sigs.get(str(t.get("signal_id") or "")) or {}
         sig = {**sig,
                "entry_price": t.get("entry_price") or sig.get("entry_price"),
-               "stop_loss": t.get("stop_loss") or sig.get("stop_loss")}
+               # Entry-time SL only: trades.stop_loss is overwritten by every
+               # trailing/breakeven modify, so winners would show a tiny
+               # sl_pips / huge rr (target leakage). original_stop_loss is
+               # written once at execution (execution.py).
+               "stop_loss": (sig.get("stop_loss") or t.get("original_stop_loss")
+                             or t.get("stop_loss"))}
         when = None
         try:
             when = datetime.fromisoformat(

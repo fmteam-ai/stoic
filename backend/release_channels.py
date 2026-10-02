@@ -114,9 +114,13 @@ async def manifest_for_agent(db, agent_id: str | None = None) -> dict:
     body = json.dumps({k: m[k] for k in ("artifacts", "update_policy")},
                       sort_keys=True, separators=(",", ":"),
                       default=str).encode()
+    import asyncio
+    # Off the event loop: sign_hex may make a blocking HTTP call to the
+    # external signer, and agents poll this endpoint.
+    sig = await asyncio.to_thread(release_signing.sign_hex, body)
     m["signature"] = {"alg": "Ed25519", "key_id": release_signing.KEY_ID,
                       "public_key_b64": release_signing.public_key_b64(),
-                      "value": release_signing.sign_hex(body)}
+                      "value": sig}
     return m
 
 

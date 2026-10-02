@@ -7,6 +7,8 @@ import os
 import time
 
 import httpx
+from llm_models import (provider_model, finite_float, untrusted_block,
+                        send_with_timeout, UNTRUSTED_PREAMBLE)
 
 logger = logging.getLogger(__name__)
 
@@ -50,21 +52,27 @@ async def get_fed_tone() -> dict | None:
         "from -1.0 (extremely dovish: cuts, easing, stimulus) to +1.0 (extremely "
         "hawkish: hikes, tightening, higher-for-longer). Respond ONLY with JSON: "
         '{"score": <float>, "label": "hawkish|dovish|neutral", "summary": "<one sentence>"}\n\n'
-        + "\n".join(f"- {h['title']} ({h['source']})" for h in heads[:8])
+        + untrusted_block(f"- {h['title']} ({h['source']})" for h in heads[:8])
     )
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         chat = LlmChat(
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"fed-tone-{int(now)}",
-            system_message="You are a monetary policy analyst. Respond only with JSON.",
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        raw = await chat.send_message(UserMessage(text=prompt))
+            system_message=("You are a monetary policy analyst. Respond only "
+                            "with JSON.\n\n" + UNTRUSTED_PREAMBLE),
+        ).with_model(*provider_model("fed_tone"))
+        raw = await send_with_timeout(chat, UserMessage(text=prompt))
         txt = str(raw).strip()
         if txt.startswith("```"):
-            txt = txt.strip("`").replace("json", "", 1).strip()
+            # strip only a leading ```json fence, never a "json" in content
+            txt = txt.strip("`").strip()
+            if txt[:4].lower() == "json":
+                txt = txt[4:].strip()
         parsed = json.loads(txt)
-        payload = {"score": max(-1.0, min(1.0, float(parsed.get("score") or 0))),
+        if not isinstance(parsed, dict):
+            raise ValueError("fed_tone response is not a JSON object")
+        payload = {"score": finite_float(parsed.get("score"), -1.0, 1.0, 0.0),
                    "label": str(parsed.get("label") or "neutral"),
                    "summary": str(parsed.get("summary") or ""),
                    "headlines": len(heads)}

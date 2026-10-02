@@ -287,6 +287,18 @@ async def ensure_indexes():
         partialFilterExpression={"decision_id": {"$type": "string"}})
     await db.scalp_decisions.create_index([("account_id", 1), ("symbol", 1),
                                            ("ts_ms", -1)])
+    # Review: scalp model training / model_tasks scan these without an index
+    # (collection scan + in-memory sort that fails past Mongo's sort limit).
+    await db.scalp_decisions.create_index([("symbol", 1), ("outcome.result", 1),
+                                           ("ts_ms", 1)])
+    await db.scalp_decisions.create_index([("model_key", 1),
+                                           ("outcome.resolved", 1)])
+    # Review: per-tenant candle reads (signal features must come from the
+    # user's own broker feed) and base-symbol risk queries.
+    await db.intraday_candles.create_index([("user_id", 1), ("symbol", 1),
+                                            ("updated_at", -1)])
+    await db.trades.create_index([("user_id", 1), ("base_symbol", 1),
+                                  ("status", 1)])
     # bot_configs is now keyed by (user_id, account_id). account_id=None marks
     # the user's default profile; other docs are per-account overrides.
     # Drop the old unique(user_id) index if it exists, then create the composite.
