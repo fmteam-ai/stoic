@@ -102,7 +102,15 @@ _EA_RELEASE_FILES = ("release/ea_release.json", "/app/release/ea_release.json")
 
 
 def _demo_unattested(account: dict | None = None) -> dict:
-    from broker_env import attestation_state
+    from broker_env import attestation_state, demo_lease_lapse_reason
+    if account is not None and attestation_state(account) == "lapsed":
+        why = demo_lease_lapse_reason(account)
+        return {"code": "EA_DEMO_LEASE_LAPSED",
+                "reason": ("the DEMO attestation is not currently proven — "
+                           + ("the terminal heartbeat is stale; it re-applies automatically once the "
+                              "EA reports again" if why == "heartbeat_stale" else
+                              "the approval has expired; an admin must re-attest it "
+                              "(Admin → Broker Registry → Account Environments)"))}
     if account is not None and attestation_state(account) == "invalidated":
         return {"code": "EA_DEMO_ATTESTATION_INVALIDATED",
                 "reason": "the DEMO attestation was voided because the account's bound identity changed "
