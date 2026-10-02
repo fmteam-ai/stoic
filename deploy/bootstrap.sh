@@ -323,17 +323,26 @@ else echo "ERROR: unsupported package manager (need dnf or apt)"; exit 1; fi
 if [ "${FAMILY}" = rhel ]; then
   dnf -y -q install ca-certificates curl git openssl tar gzip policycoreutils psmisc >/dev/null
   # RHEL/Alma 8 ships python3 = 3.6; the deploy scripts need 3.9+. Install a
-  # modern interpreter and make it the `python3` used by the deploy scripts
-  # (dnf itself uses /usr/libexec/platform-python and is unaffected).
-  PYMAJ=$(python3 -c 'import sys;print(sys.version_info[1])' 2>/dev/null || echo 0)
-  if [ "${PYMAJ}" -lt 9 ]; then
-    dnf -y -q install python3.11 >/dev/null 2>&1 || dnf -y -q install python3.9 >/dev/null
-    NEWPY=$(command -v python3.11 || command -v python3.9)
-    alternatives --install /usr/bin/python3 python3 "${NEWPY}" 20 >/dev/null 2>&1 || true
-    alternatives --set python3 "${NEWPY}" >/dev/null 2>&1 || ln -sf "${NEWPY}" /usr/local/bin/python3
-    hash -r
+  # modern interpreter into a PRIVATE dir that deploy/lib.sh prepends to PATH.
+  # NEVER repoint /usr/bin/python3: cPanel's packman (#!/usr/bin/python3) needs the
+  # stock interpreter's dnf module — repointing it to 3.11 via alternatives broke WHM
+  # (ModuleNotFoundError: No module named 'dnf'). deploy/host-python-fix.sh repairs it.
+  STOIC_BIN=/usr/local/lib/stoic/bin; mkdir -p "${STOIC_BIN}"
+  if ! /usr/bin/python3 -c 'import dnf' >/dev/null 2>&1 && alternatives --display python3 >/dev/null 2>&1; then
+    echo "-- restoring stock /usr/bin/python3 (an earlier bootstrap repointed it; cPanel packman needs its dnf module)"
+    alternatives --auto python3 >/dev/null 2>&1 || true
   fi
-  echo "-- python3: $(python3 --version 2>&1)"
+  [ -L /usr/local/bin/python3 ] && case "$(readlink /usr/local/bin/python3)" in *python3.1[0-9]|*python3.9) rm -f /usr/local/bin/python3 ;; esac
+  PYMAJ=$(/usr/bin/python3 -c 'import sys;print(sys.version_info[1])' 2>/dev/null || echo 0)
+  if [ "${PYMAJ}" -lt 9 ]; then
+    command -v python3.11 >/dev/null 2>&1 || dnf -y -q install python3.11 >/dev/null 2>&1 || dnf -y -q install python3.9 >/dev/null
+    NEWPY=$(command -v python3.11 || command -v python3.9)
+    ln -sfn "${NEWPY}" "${STOIC_BIN}/python3"
+  else
+    ln -sfn /usr/bin/python3 "${STOIC_BIN}/python3"
+  fi
+  export PATH="${STOIC_BIN}:${PATH}"; hash -r
+  echo "-- python3: $(python3 --version 2>&1) for deploy scripts (${STOIC_BIN}) · system /usr/bin/python3: $(/usr/bin/python3 --version 2>&1) untouched"
   if is_podman_shim || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
     echo "-- installing Docker Engine + Compose v2 (docker-ce repo)"
     if is_podman_shim || command -v podman >/dev/null; then
@@ -362,6 +371,7 @@ else
   export DEBIAN_FRONTEND=noninteractive
   apt-get update -qq
   apt-get install -y -qq ca-certificates curl git python3 openssl gnupg lsb-release psmisc >/dev/null
+  mkdir -p /usr/local/lib/stoic/bin && ln -sfn "$(command -v python3)" /usr/local/lib/stoic/bin/python3   # same private path as RHEL
   if is_podman_shim || ! command -v docker >/dev/null || ! docker compose version >/dev/null 2>&1; then
     echo "-- installing Docker Engine + Compose v2"
     if is_podman_shim; then echo "-- removing podman-docker shim"; apt-get remove -y -qq podman-docker >/dev/null 2>&1 || true; hash -r; fi

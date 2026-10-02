@@ -2,6 +2,10 @@
 # Shared helpers for deploy/install.sh · update.sh · rollback.sh
 # Source from the repo root:  . deploy/lib.sh
 
+# Deploy scripts need python >= 3.9. bootstrap.sh links one into this PRIVATE dir —
+# never into /usr/bin/python3 (cPanel packman needs the stock interpreter's dnf module).
+case ":${PATH}:" in *":/usr/local/lib/stoic/bin:"*) ;; *) export PATH="/usr/local/lib/stoic/bin:${PATH}" ;; esac
+
 # Set-or-append KEY=VALUE in a dotenv file (idempotent).
 set_kv() {
   if grep -q "^$2=" "$1" 2>/dev/null; then

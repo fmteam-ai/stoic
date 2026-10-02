@@ -3018,3 +3018,13 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - r31b: `strict_prebuild_gate` (lib.sh) refuses production updates BEFORE build when ea_release record / inventory / canonical_decision already fail on the running stack (gate_refused, no restart). First strict update on prod correctly rolled back to 68f4fbc (gates: ea_release, release_attestation, rc_lock, canonical_decision, inventory). Host has ATTESTATION_REQUIRED=false in ./.env (warned bypass).
 - 2026-06 r32: Admin "Inventory & Go-Live Gate" panel (InventoryGoLivePanel.jsx on /admin/brokers): counts/violations, orphan bot delete (DELETE /api/authority/inventory/orphan-bots/{id}, step-up, 409 if bound), propose/approve expectation + propose/confirm hash (4-eyes, 2nd admin), GET /api/authority/inventory/pending. CLI ops/promote_admin.py <email> for second approver. Testing agent iteration_220: all pass; low items fixed (dup key, inline expectation_invalid + bots==enabled precheck). Manifest+rc_lock refrozen (new test file test_iter_golive_inventory_http.py).
 - 2026-06 r33: deploy/host-mount-fix.sh (detect foreign-namespace holders of docker overlay copies → systemd drop-in MountFlags=slave per unit, --apply/--restart, dry-run default; lists non-systemd LVE/CageFS processes); doctor.sh warn points to it; DEPLOYMENT.md section. Operator must run it on the cPanel host.
+
+## Host python / cPanel packman fix (June 2026 — DONE, user verification pending)
+- Root cause: bootstrap.sh ran `alternatives --set python3 /usr/bin/python3.11` → cPanel packman
+  (`#!/usr/bin/python3`, imports dnf) crashed (`No module named 'dnf'`); WHM MultiPHP then showed
+  PHP-FPM "Unavailable" because it could not list packages.
+- Fix: `deploy/host-python-fix.sh` (dry run / `--apply`) restores the stock /usr/bin/python3 via
+  `alternatives --auto`, links python3.11 into private `/usr/local/lib/stoic/bin`; lib.sh + doctor/backup/
+  healthwatch/install_report prepend that dir to PATH. bootstrap.sh never touches /usr/bin/python3 anymore
+  and self-repairs old damage. doctor.sh fails when system python lacks dnf. Docs: DEPLOYMENT.md.
+- User must run on host: `sudo bash deploy/host-python-fix.sh --apply`, then re-check WHM MultiPHP.

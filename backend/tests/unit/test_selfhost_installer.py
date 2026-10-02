@@ -109,7 +109,7 @@ def test_bootstrap_supports_rhel_and_debian_with_rollback_and_diagnostics():
     assert b.index("0/5 system check") < b.index("1/5 prerequisites") < b.index("deploy/install.sh \"${MODE}\"")
     for needle in ("dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo",
                    "dnf -y -q remove podman", "firewall-cmd -q --permanent --add-service=https", "getenforce",
-                   "dnf -y -q install python3.11", "alternatives --set python3",
+                   "dnf -y -q install python3.11", "/usr/local/lib/stoic/bin", "alternatives --auto python3",
                    "apt-get install -y -qq docker-ce", "ufw allow 443/tcp",
                    "git clone", "deploy/install.sh", "--production", "--dev", "--repo", "--skip-attestation",
                    "trap rollback ERR", "snapshot()", "rollback()", "stoic-rollback:", "secrets.tgz",
@@ -377,3 +377,24 @@ def test_host_mount_fix_script_wires_mountflags_slave():
     assert "host-mount-fix.sh" in _read("docs", "DEPLOYMENT.md")
     assert os.stat(os.path.join(ROOT, "deploy", "host-mount-fix.sh")).st_mode & stat.S_IXUSR
     assert subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", "host-mount-fix.sh")]).returncode == 0
+
+
+def test_bootstrap_never_repoints_system_python_and_ships_repair_script():
+    """cPanel packman (#!/usr/bin/python3 → import dnf) broke after `alternatives --set python3 3.11`.
+    The modern interpreter lives in a private dir on PATH; host-python-fix.sh restores the stock one."""
+    import stat
+    b = _read("deploy", "bootstrap.sh")
+    assert "alternatives --set python3" not in b and "alternatives --install /usr/bin/python3" not in b
+    assert 'ln -sfn "${NEWPY}" "${STOIC_BIN}/python3"' in b
+    assert b.index("alternatives --auto python3") < b.index("PYMAJ=")          # repair old damage before deciding
+    fix = _read("deploy", "host-python-fix.sh")
+    for needle in ("--apply", "import dnf", "alternatives --auto python3", "alternatives --remove python3",
+                   "/usr/local/lib/stoic/bin", "packman_get_list_json", "dry run"):
+        assert needle in fix, needle
+    assert os.stat(os.path.join(ROOT, "deploy", "host-python-fix.sh")).st_mode & stat.S_IXUSR
+    assert subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", "host-python-fix.sh")]).returncode == 0
+    path_line = 'export PATH="/usr/local/lib/stoic/bin:${PATH}"'
+    for script in ("lib.sh", "doctor.sh", "backup.sh", "healthwatch.sh", "install_report.sh"):
+        assert path_line in _read("deploy", script), script
+    assert "alternatives --set python3" not in _read("deploy", "doctor.sh")
+    assert "host-python-fix.sh" in _read("deploy", "doctor.sh") and "host-python-fix.sh" in _read("docs", "DEPLOYMENT.md")

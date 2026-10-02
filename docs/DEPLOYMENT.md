@@ -290,3 +290,23 @@ fix it for good:
    processes such as a `next-server`) are listed and must be restarted by their owner.
 
 `deploy/doctor.sh` (section *docker mount propagation*) reports both layers.
+
+## cPanel/WHM: `ModuleNotFoundError: No module named 'dnf'` (packman)
+
+cPanel's package manager (`/usr/local/cpanel/bin/packman*`, shebang `#!/usr/bin/python3`)
+needs the stock system interpreter, which carries the `dnf`/`yum` modules. Bootstrap
+releases before June 2026 ran `alternatives --set python3 /usr/bin/python3.11` so the deploy
+scripts had Python ≥ 3.9 — that repointed `/usr/bin/python3` and WHM reported
+*“/usr/bin/python3” reported error code “1” … No module named 'dnf'*.
+
+Fix on an affected host (dry run first, then apply):
+
+```bash
+sudo bash deploy/host-python-fix.sh            # shows what /usr/bin/python3 points at + the plan
+sudo bash deploy/host-python-fix.sh --apply    # alternatives --auto python3, link private python, verify packman
+```
+
+Current bootstrap never touches `/usr/bin/python3`: the modern interpreter is linked into
+`/usr/local/lib/stoic/bin/python3`, which `deploy/lib.sh` and the standalone scripts
+(`doctor.sh`, `backup.sh`, `healthwatch.sh`, `install_report.sh`) prepend to `PATH`.
+`deploy/doctor.sh` fails when the system python lacks the `dnf` module.

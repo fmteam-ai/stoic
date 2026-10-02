@@ -10,6 +10,7 @@
 # e-mailed via Resend (RESEND_API_KEY) to --email / INSTALL_REPORT_EMAIL /
 # ADMIN_EMAIL and posted to Telegram when HEALTHWATCH_TELEGRAM_* are set.
 set -uo pipefail
+case ":${PATH}:" in *":/usr/local/lib/stoic/bin:"*) ;; *) export PATH="/usr/local/lib/stoic/bin:${PATH}" ;; esac   # private python >= 3.9 (bootstrap.sh)
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 TO=""

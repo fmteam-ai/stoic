@@ -14,6 +14,7 @@
 #                                 throw-away mongo:7 and compare every collection count —
 #                                 prints the verified file, exit 1 on any mismatch
 set -uo pipefail
+case ":${PATH}:" in *":/usr/local/lib/stoic/bin:"*) ;; *) export PATH="/usr/local/lib/stoic/bin:${PATH}" ;; esac   # private python >= 3.9 (bootstrap.sh)
 cd "$(dirname "$0")/.."
 QUIET=0; BUNDLE=0; DBONLY=0; BACKUP_NOW=0
 for a in "$@"; do case "$a" in --quiet) QUIET=1 ;; --bundle) BUNDLE=1 ;; --db) DBONLY=1 ;; --backup-now) DBONLY=1; BACKUP_NOW=1 ;; esac; done
@@ -113,7 +114,11 @@ docker compose version >/dev/null 2>&1 && ok "compose $(docker compose version -
 docker info >/dev/null 2>&1 && ok "docker daemon running" || fail "docker daemon not running (systemctl start docker)"
 openssl genpkey -algorithm ed25519 -out /dev/null 2>/dev/null && ok "openssl ed25519 capable" || fail "openssl lacks Ed25519 (need >= 1.1.1)"
 PYV=$(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null || echo none)
-python3 -c 'import sys;sys.exit(0 if sys.version_info>=(3,9) else 1)' 2>/dev/null && ok "python3 ${PYV}" || fail "python3 ${PYV} — deploy scripts need >= 3.9 (RHEL 8: dnf install python3.11; alternatives --set python3 /usr/bin/python3.11)"
+python3 -c 'import sys;sys.exit(0 if sys.version_info>=(3,9) else 1)' 2>/dev/null && ok "python3 ${PYV} ($(command -v python3))" || fail "python3 ${PYV} — deploy scripts need >= 3.9 (RHEL 8: dnf install python3.11 && deploy/host-python-fix.sh --apply — never repoint /usr/bin/python3 via alternatives, it breaks cPanel)"
+if command -v dnf >/dev/null && [ -x /usr/bin/python3 ]; then
+  /usr/bin/python3 -c 'import dnf' >/dev/null 2>&1 && ok "system /usr/bin/python3 $(/usr/bin/python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])') has the dnf module (cPanel packman OK)" \
+    || fail "system /usr/bin/python3 lacks the dnf module — cPanel/WHM packman breaks (ModuleNotFoundError: dnf); fix: deploy/host-python-fix.sh --apply"
+fi
 
 hdr "configuration"
 if [ -f .stoic-installed ]; then ok "installer: LOCKED since $(grep '^installed_at=' .stoic-installed | cut -d= -f2-) ($(grep '^mode=' .stoic-installed | cut -d= -f2-)$(lsattr .stoic-installed 2>/dev/null | grep -q '^....i' && echo ', immutable'))"
