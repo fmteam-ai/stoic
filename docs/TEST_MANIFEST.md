@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 932 |
+| unit | pure logic, no external I/O | every CI job | 950 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3806 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4949 tests across 497 files.**
+**Total: 4967 tests across 499 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -476,6 +476,8 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
 | `backend/tests/unit/test_admin_integrations.py` | unit | 6 |
 | `backend/tests/unit/test_audit_v2_demo_lease.py` | unit | 6 |
+| `backend/tests/unit/test_audit_v2_ops_perf_freshness.py` | unit | 10 |
+| `backend/tests/unit/test_audit_v2_ops_vault_ack.py` | unit | 8 |
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
