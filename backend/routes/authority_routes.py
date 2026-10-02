@@ -197,9 +197,10 @@ async def inventory_pending_ep(user=Depends(get_current_user)):
                         "symbol": b.get("symbol"), "name": b.get("name"),
                         "created_at": b["created_at"].isoformat() if hasattr(b.get("created_at"), "isoformat") else b.get("created_at")})
     admins = await db.users.count_documents({"role": "admin"})
+    from inventory_projection import approval_mode
     return {"expectation": exp, "expectation_pending": exp_pending, "hash_pending": pend,
             "orphan_bots": orphans, "orphan_total": await db.bot_configs.count_documents(orphan_q),
-            "admin_count": admins, "me": user.get("email", "")}
+            "admin_count": admins, "me": user.get("email", ""), "approval_mode": approval_mode()}
 
 
 @router.delete("/inventory/orphan-bots/{bot_id}")

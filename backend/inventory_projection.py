@@ -22,6 +22,12 @@ def production_mode() -> bool:
     return is_production()
 
 
+def approval_mode() -> str:
+    """four_eyes (default: proposer ≠ approver) | single_admin (explicit operator choice:
+    one admin may approve their own proposal after a fresh step-up; every event is stamped)."""
+    return "single_admin" if os.environ.get("INVENTORY_APPROVAL_MODE", "").strip().lower() == "single_admin" else "four_eyes"
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -140,7 +146,8 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
             "inventory_hash": h, "approved_hash": (approved or {}).get("inventory_hash"),
             "approved_at": (approved or {}).get("at"), "unapproved_change": unapproved_change,
             "structural_defects": structural,
-            "violations": violations,
+            "violations": violations, "approval_mode": approval_mode(),
+            "approved_mode": (approved or {}).get("approval_mode"),
             "blocking": bool(structural) or (bool(violations) and (prod or bool(exp or approved))),
             "note": "Canonical inventory projection — counts are never collapsed."}
 
@@ -191,7 +198,7 @@ async def confirm_current(db, approver_email: str) -> dict:
     pending = await pending_hash_approval(db)
     if not pending:
         raise HTTPException(status_code=404, detail={"code": "no_pending_inventory_approval"})
-    if pending["proposed_by"] == approver_email.lower():
+    if approval_mode() == "four_eyes" and pending["proposed_by"] == approver_email.lower():
         raise HTTPException(status_code=403, detail={"code": "second_admin_required",
                                                      "message": "the proposing admin cannot confirm their own proposal"})
     proj = await projection(db, pending.get("scope_user_id"))
@@ -203,13 +210,14 @@ async def confirm_current(db, approver_email: str) -> dict:
                                                      "violations": real, "proposal_invalidated": True})
     ev = {"inventory_hash": proj["inventory_hash"], "approved": True, "actor": pending["proposed_by"],
           "approved_by": approver_email.lower(), "note": pending["note"], "at": _now(), "counts": proj["counts"],
-          "account_ids": ids}
+          "account_ids": ids, "approval_mode": approval_mode()}
     await db.inventory_config_events.insert_one(dict(ev))
     await db.platform_state.delete_one({"_id": HASH_PENDING_ID})
     await append_chained(db, {"actor_email": approver_email, "action": "inventory_config_approved",
                               "target_kind": "platform", "target_id": "inventory", "reason": ev["note"],
                               "at": ev["at"], "meta": {"inventory_hash": ev["inventory_hash"], "counts": ev["counts"],
-                                                       "proposed_by": pending["proposed_by"], "account_ids": ids}})
+                                                       "proposed_by": pending["proposed_by"], "account_ids": ids,
+                                                       "approval_mode": ev["approval_mode"]}})
     from canonical_decision import bump_authority_version
     await bump_authority_version(db, "inventory_approved")
     return await projection(db, pending.get("scope_user_id"))
@@ -355,7 +363,7 @@ async def approve_expectation(db, approver_email: str) -> dict:
     pending = await db.platform_state.find_one({"_id": "inventory_expectation_pending"})
     if not pending:
         raise HTTPException(status_code=404, detail={"code": "no_pending_expectation"})
-    if pending.get("proposed_by", "").lower() == approver_email.lower():
+    if approval_mode() == "four_eyes" and pending.get("proposed_by", "").lower() == approver_email.lower():
         raise HTTPException(status_code=403, detail={"code": "second_admin_required",
                                                      "message": "the proposing admin cannot approve their own expectation"})
     v = validate_expectation(pending, require_policy=production_mode(),
@@ -363,13 +371,14 @@ async def approve_expectation(db, approver_email: str) -> dict:
     if pending.get("policy_migration") and v["policy_version"] != await current_policy_version(db):
         await consume_migration_nonce(db, pending["policy_migration"])                  # single use, atomic
     doc = {k: pending.get(k) for k in ("accounts", "enabled", "bots", "account_ids", "scope_user_id", "proposed_by", "proposed_at")}
-    doc.update(_id="inventory_expectation", approved_by=approver_email, set_at=_now(), policy_version=v["policy_version"])
+    doc.update(_id="inventory_expectation", approved_by=approver_email, set_at=_now(), policy_version=v["policy_version"],
+               approval_mode=approval_mode())
     await db.platform_state.replace_one({"_id": "inventory_expectation"}, doc, upsert=True)
     await db.platform_state.delete_one({"_id": "inventory_expectation_pending"})
     await append_chained(db, {"actor_email": approver_email, "action": "inventory_expectation_approved",
                               "target_kind": "platform", "target_id": "inventory_expectation",
                               "reason": f"proposed by {pending['proposed_by']}", "at": doc["set_at"],
-                              "meta": {k: doc[k] for k in ("accounts", "enabled", "bots", "account_ids", "policy_version")}})
+                              "meta": {k: doc[k] for k in ("accounts", "enabled", "bots", "account_ids", "policy_version", "approval_mode")}})
     from canonical_decision import bump_authority_version
     await bump_authority_version(db, "inventory_expectation")
     return doc

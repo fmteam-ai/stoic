@@ -272,7 +272,10 @@ async def release_readiness(request: Request):
         exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
         inv = await inv_projection(db, exp.get("scope_user_id"))
         checks["inventory"] = {"ok": not inv["blocking"], "counts": inv["counts"], "violations": inv["violations"],
-                               "inventory_hash": inv["inventory_hash"], "approved_hash": inv["approved_hash"]}
+                               "inventory_hash": inv["inventory_hash"], "approved_hash": inv["approved_hash"],
+                               "approval_mode": inv["approval_mode"], "approved_mode": inv.get("approved_mode")}
+        if inv["approval_mode"] == "single_admin":
+            checks["inventory"]["note"] = "INVENTORY_APPROVAL_MODE=single_admin — operator chose single-operator approvals (no 4-eyes); every approval is stamped in the audit chain"
     except Exception as e:  # noqa: BLE001
         checks["canonical_decision"] = {"ok": False, "detail": f"decision unavailable: {e}"}
     # round-9 P1-04/P1-05 — Turnstile: no break-glass active/unreviewed; policy-enabled ⇒ keys complete
