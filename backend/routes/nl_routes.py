@@ -8,7 +8,7 @@ Plus a polling sweeper that reads `db.conditional_triggers` on each bot_runner
 tick and fires `then` actions when the condition is met.
 """
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from bson import ObjectId
 
 from auth import get_current_user
@@ -125,73 +125,31 @@ async def nl_strategy_targets(symbols: str = "", user=Depends(get_current_user))
 
 
 
-_STRATEGY_RISK_LEVELS = ("low", "medium", "high", "extreme")   # models.RiskLevel
-_MAX_STRATEGY_SYMBOLS = 20
-_STRATEGY_SESSIONS = ("london", "ny", "tokyo", "any")                 # nl_commander schema
-_STRATEGY_STYLES = ("trend_following", "mean_reversion", "scalping", "swing")
-
-
-def _validate_compiled_strategy(compiled: dict) -> dict:
-    """Review-sec fix: the compiled strategy is client-supplied JSON — validate
-    it before it reaches bot_configs. Raises HTTPException(400)."""
-    from nl_actions import SYMBOL_RE
-    risk = compiled.get("risk_level", "medium")
-    if not isinstance(risk, str) or risk.strip().lower() not in _STRATEGY_RISK_LEVELS:
-        raise HTTPException(status_code=400, detail="invalid risk_level")
-    risk = risk.strip().lower()
-    raw_syms = compiled.get("symbols")
-    if raw_syms is None:
-        raw_syms = ["XAUUSD", "BTCUSD"]
-    if not isinstance(raw_syms, list) or not raw_syms or len(raw_syms) > _MAX_STRATEGY_SYMBOLS:
-        raise HTTPException(status_code=400,
-                            detail=f"symbols must be a list of 1..{_MAX_STRATEGY_SYMBOLS} strings")
-    symbols = []
-    for sym in raw_syms:
-        norm = sym.strip().upper().replace("/", "") if isinstance(sym, str) else ""
-        if not SYMBOL_RE.match(norm):
-            raise HTTPException(status_code=400, detail=f"invalid symbol {str(sym)[:20]!r}")
-        if norm not in symbols:
-            symbols.append(norm)
-    mct = compiled.get("max_concurrent_trades", 2)
-    if isinstance(mct, bool):
-        raise HTTPException(status_code=400, detail="max_concurrent_trades must be an integer")
-    try:
-        mct = int(mct)
-    except (TypeError, ValueError, OverflowError):
-        raise HTTPException(status_code=400, detail="max_concurrent_trades must be an integer")
-    mct = max(1, min(10, mct))
-    sess = str(compiled.get("session_preference") or "any").strip().lower()
-    style = str(compiled.get("strategy_style") or "trend_following").strip().lower()
-    return {
-        "risk_level": risk,
-        "symbols": symbols,
-        "max_concurrent_trades": mct,
-        # absent / non-boolean → False: auto-execution is never opted into silently
-        "auto_execute": compiled.get("auto_execute") is True,
-        "session_preference": sess if sess in _STRATEGY_SESSIONS else "any",
-        "strategy_style": style if style in _STRATEGY_STYLES else "trend_following",
-        "source": "nl_strategy_builder",
-    }
-
-
 @router.post("/strategy/apply")
-async def nl_strategy_apply(payload: dict, request: Request,
-                            user=Depends(get_current_user)):
+async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
     """Persist a compiled strategy into the user's bot_config(s).
 
     Body: {compiled: dict, target: str (default 'matching')}
       target ∈ "matching" | "all" | "default" | "<account_id>"
     """
     compiled = payload.get("compiled") or {}
-    target = str(payload.get("target") or "matching").strip()
-    if not isinstance(compiled, dict) or not compiled or compiled.get("clarification_needed"):
+    target = (payload.get("target") or "matching").strip()
+    if not compiled or compiled.get("clarification_needed"):
         raise HTTPException(status_code=400, detail="No usable compiled strategy")
 
     db = get_db()
     from research_agent.proposal_targeting import (
         resolve_target_configs, apply_to_bot_configs,
     )
-    update_fields = _validate_compiled_strategy(compiled)
+    update_fields = {
+        "risk_level": compiled.get("risk_level", "medium"),
+        "symbols": [s.upper() for s in (compiled.get("symbols") or ["XAUUSD", "BTCUSD"])],
+        "max_concurrent_trades": int(compiled.get("max_concurrent_trades", 2)),
+        "auto_execute": bool(compiled.get("auto_execute", True)),
+        "session_preference": compiled.get("session_preference", "any"),
+        "strategy_style": compiled.get("strategy_style", "trend_following"),
+        "source": "nl_strategy_builder",
+    }
     configs, resolved_mode = await resolve_target_configs(
         db, user["id"], update_fields["symbols"], target,
     )
@@ -201,19 +159,6 @@ async def nl_strategy_apply(payload: dict, request: Request,
             detail=f"No matching bot configs for target='{target}'. "
                    "Try target='all' or pick a specific bot.",
         )
-    # Review-sec fix: same step-up gate as PUT /bot/config when this raises
-    # risk on any live-context target config.
-    from routes.bot_routes import _is_risk_raise
-    raising = [c for c in configs
-               if _is_risk_raise(update_fields, c)
-               or (update_fields["auto_execute"] and c.get("auto_execute") is False)]
-    if raising and await _any_live_config(db, user["id"], raising):
-        from step_up import audit_event, require_step_up
-        await require_step_up(db, user, request, "risk_raise")
-        await audit_event(db, user["id"], "risk_raise",
-                          {"via": "nl_strategy_apply", "target": target,
-                           "fields": sorted(update_fields.keys())},
-                          request, step_up=True)
     audit = await apply_to_bot_configs(
         db, configs,
         update_fields=update_fields,
@@ -243,61 +188,8 @@ KNOWN_NL_ACTIONS = {"DISABLE_BOTS", "ENABLE_BOTS", "MOVE_STOPS_BREAKEVEN",
                     "SET_CONDITIONAL_TRIGGER"}
 
 
-_RISK_RANK = {"low": 0, "medium": 1, "high": 2, "extreme": 3}
-
-
-async def _any_live_config(db, user_id: str, configs: list) -> bool:
-    """True when any of these bot_config docs can touch live capital
-    (bot_routes._live_context per config; fail closed)."""
-    from routes.bot_routes import _live_context
-    for c in configs:
-        try:
-            if await _live_context(db, user_id, c.get("account_id")):
-                return True
-        except Exception:
-            return True
-    return False
-
-
-async def _nl_risk_increasing_live(db, user_id: str, actions: list) -> bool:
-    """Review-sec fix: does confirming these actions raise live risk?
-    ENABLE_BOTS on an inactive bot or SET_RISK_LEVEL above a bot's current
-    level, on a bot whose context is live (bot_routes._live_context). Arming
-    a trigger whose `then` contains either counts whenever the user has any
-    live context (it fires later, with no human present)."""
-    from nl_preview import bot_query
-    from routes.bot_routes import _live_context
-    for a in actions or []:
-        t = str(a.get("type") or "").upper()
-        if t == "SET_CONDITIONAL_TRIGGER":
-            nested = {str((n or {}).get("type") or "").upper()
-                      for n in (a.get("params") or {}).get("then") or []}
-            if nested & {"ENABLE_BOTS", "SET_RISK_LEVEL"} and \
-                    await _live_context(db, user_id, None):
-                return True
-            continue
-        if t not in ("ENABLE_BOTS", "SET_RISK_LEVEL"):
-            continue
-        try:
-            q = bot_query(user_id, a.get("target") or "all")
-        except ValueError:
-            continue        # the executor refuses invalid targets anyway
-        cfgs = await db.bot_configs.find(
-            q, {"_id": 1, "account_id": 1, "active": 1, "risk_level": 1}).to_list(length=200)
-        if t == "ENABLE_BOTS":
-            raising = [c for c in cfgs if not c.get("active")]
-        else:
-            want = _RISK_RANK.get(str((a.get("params") or {}).get("risk_level") or "low").lower(), 0)
-            raising = [c for c in cfgs
-                       if want > _RISK_RANK.get(str(c.get("risk_level") or "low").lower(), 0)]
-        if raising and await _any_live_config(db, user_id, raising):
-            return True
-    return False
-
-
 @router.post("/command/confirm")
-async def nl_command_confirm(payload: dict, request: Request,
-                             user=Depends(get_current_user)):
+async def nl_command_confirm(payload: dict, user=Depends(get_current_user)):
     """Execute a stored proposal EXACTLY ONCE after the operator approved the
     exact preview they were shown (audit r14 P0-01): atomic pending→executing
     claim, per-action idempotency keys + durable receipts, revalidation inside
@@ -315,18 +207,6 @@ async def nl_command_confirm(payload: dict, request: Request,
     doc = await db.nl_proposals.find_one({"_id": oid, "user_id": user["id"]})
     if not doc:
         raise HTTPException(status_code=404, detail="Proposal not found")
-    # Review-sec fix: risk-increasing actions on a live context need the
-    # same fresh step-up as PUT /bot/config — checked BEFORE the claim so a
-    # 403 (and the client's step-up retry) leaves the proposal pending.
-    if doc.get("status") in ("pending", "executing") and \
-            await _nl_risk_increasing_live(db, user["id"], doc.get("actions") or []):
-        from step_up import audit_event, require_step_up
-        await require_step_up(db, user, request, "risk_raise")
-        await audit_event(db, user["id"], "risk_raise",
-                          {"via": "nl_command_confirm", "proposal_id": pid,
-                           "types": sorted({str(a.get("type")).upper()
-                                            for a in doc.get("actions") or []})},
-                          request, step_up=True)
     claimed = None
     if doc.get("status") == "executing":
         claimed = await nx.reclaim_expired(db, "nl_proposals", doc)

@@ -32,7 +32,7 @@ def _db():
 def _demo_acc(uid):
     return {"user_id": uid, "label": "r28", "mode": "live", "account_type": "demo", "broker": "VT Markets",
             "server": "VTMarkets-Demo", "broker_server": "VTMarkets-Demo", "account_number": "1289887",
-            "bridge_token": f"r28-{uid}", "ea_version": "1.58", "creds_version": 0,
+            "bridge_token": f"r28-{uid}", "ea_version": "1.57", "creds_version": 0,
             "broker_account_id_reported": "1289887", "last_heartbeat": datetime.now(timezone.utc).isoformat(),
             "ea_identity": {"installation_id": "inst-A", "authoritative": True, "broker_server": "VTMarkets-Demo"}}
 
@@ -41,9 +41,7 @@ def test_attestation_is_void_when_any_bound_identity_field_changes():
     from broker_env import attestation_identity, attestation_state, attested_environment
     from ea_capabilities import live_gate
     acc = {**_demo_acc("u"), "_id": ObjectId()}
-    # approval time is "now": the DEMO lease also expires (audit v2 P1-04)
-    att = {"environment": "DEMO", "approved_by": "adm@example.com",
-           "at": datetime.now(timezone.utc).isoformat(),
+    att = {"environment": "DEMO", "approved_by": "adm@example.com", "at": "2026-01-01T00:00:00+00:00",
            "identity_hash": attestation_identity(acc), "proof": {"verifier": "ea_heartbeat", "proof_id": "p"}}
     bound = {**acc, "environment_attestation": att}
     assert attested_environment(bound) == "DEMO" and attestation_state(bound) == "valid" and live_gate(bound) is None

@@ -14,13 +14,6 @@
 #   DEPLOY_SSH_KEY      private key (ed25519) whose public key is in
 #                       ~DEPLOY_USER/.ssh/authorized_keys on the server
 #   DEPLOY_PATH         absolute path of the checkout, e.g. /opt/stoic
-#   DEPLOY_KNOWN_HOSTS  the server's pinned SSH host key line(s), captured OUT OF
-#                       BAND and verified against the server console, e.g.
-#                       `ssh-keyscan -p 22 -t ed25519 <host>` run from a trusted
-#                       network, then compare the fingerprint with
-#                       `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the
-#                       server. TOFU keyscan in CI is NOT used (MITM-able); the
-#                       workflow FAILS when this secret is missing.
 # Optional:
 #   DEPLOY_PORT         SSH port (default 22)
 name: deploy-production
@@ -33,10 +26,6 @@ on:
       ref:
         description: "release tag (vX.Y.Z) or the SHA of a tagged release"
         required: true
-
-# least privilege: the job only reads the repository (deploy goes over SSH)
-permissions:
-  contents: read
 
 concurrency:
   group: deploy-production
@@ -69,39 +58,22 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "deploying ${TAG} @ ${SHA}"
 
-      - name: Prepare SSH (pinned host key — no keyscan)
-        env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+      - name: Prepare SSH
         run: |
-          set -euo pipefail
-          [ -n "${DEPLOY_KNOWN_HOSTS}" ] || { echo "::error::DEPLOY_KNOWN_HOSTS secret is required (pinned server host key — see header)"; exit 1; }
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "${DEPLOY_SSH_KEY}" > ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          printf '%s\n' "${DEPLOY_KNOWN_HOSTS}" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/known_hosts
+          ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Publish on server (deploy/update.sh)
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || 22 }}
-          SHA: ${{ steps.ref.outputs.sha }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
-              -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              "cd '${DEPLOY_PATH}' && git fetch --all --tags --prune && deploy/update.sh ${SHA}"
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
+              "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+              "cd '${{ secrets.DEPLOY_PATH }}' && git fetch --all --tags --prune && deploy/update.sh ${{ steps.ref.outputs.sha }}"
 
       - name: Report
         if: always()
-        env:
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
-          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT || 22 }}
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -o UserKnownHostsFile=~/.ssh/known_hosts \
-              -p "${DEPLOY_PORT}" "${DEPLOY_USER}@${DEPLOY_HOST}" \
-              "cd '${DEPLOY_PATH}' && tail -3 deploy/releases.log && docker compose ps --format '{{.Name}}\t{{.Status}}'" || true
+          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
+              "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
+              "cd '${{ secrets.DEPLOY_PATH }}' && tail -3 deploy/releases.log && docker compose ps --format '{{.Name}}\t{{.Status}}'" || true

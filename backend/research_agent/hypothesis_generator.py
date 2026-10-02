@@ -24,14 +24,13 @@ Strict JSON output:
     ]
   }
 """
+import os
 import json
 import re
+import uuid
 import logging
-from typing import Optional
 
-from pydantic import BaseModel, Field
-
-import llm_client
+from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 logger = logging.getLogger("research.hypothesis-generator")
 
@@ -79,27 +78,6 @@ Allowed strategy_style:    trend_following | mean_reversion | scalping | swing
 _ALLOWED_SESSION = {"london", "ny", "tokyo", "any"}
 _ALLOWED_RISK    = {"low", "medium", "high", "extreme"}
 _ALLOWED_STYLE   = {"trend_following", "mean_reversion", "scalping", "swing"}
-
-
-class _CompiledOut(BaseModel):
-    symbols: list[str] = Field(default_factory=list)
-    session_preference: Optional[str] = None
-    risk_level: Optional[str] = None
-    strategy_style: Optional[str] = None
-    max_concurrent_trades: Optional[int] = None
-    auto_execute: Optional[bool] = None
-
-
-class _HypothesisOut(BaseModel):
-    name: str = ""
-    rationale: str = ""
-    compiled: _CompiledOut = Field(default_factory=_CompiledOut)
-
-
-class HypothesesOut(BaseModel):
-    """Structured-output schema; ``_validate`` still filters symbols, maps
-    enums to safe defaults, clamps and forces auto_execute=False."""
-    hypotheses: list[_HypothesisOut] = Field(default_factory=list)
 
 
 def _parse_json(text: str) -> dict:
@@ -164,6 +142,12 @@ async def generate(
         return {"hypotheses": [],
                 "notes": ["No symbols configured — nothing to propose."]}
 
+    chat = LlmChat(
+        api_key=os.environ["EMERGENT_LLM_KEY"],
+        session_id=f"self-improve-{uuid.uuid4().hex[:8]}",
+        system_message=SYSTEM_PROMPT,
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
     user_msg = (
         "WEAKNESS REPORT (last 30d):\n"
         f"{json.dumps(weaknesses, indent=2, default=str)}\n\n"
@@ -171,13 +155,13 @@ async def generate(
         f"USER'S TRADED SYMBOLS: {user_symbols}\n\n"
         f"Generate up to {max_hypotheses} focused improvement hypotheses per the system schema."
     )
-    res = await llm_client.complete(
-        feature="hypothesis_generator", system=SYSTEM_PROMPT, user=user_msg,
-        schema=HypothesesOut, max_tokens=4000)
-    if not res.ok:
-        logger.warning("Hypothesis generation failed: %s", res.error)
+    response = await chat.send_message(UserMessage(text=user_msg))
+    try:
+        parsed = _parse_json(str(response))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Hypothesis JSON parse failed: %s", e)
         return {"hypotheses": [],
-                "notes": [f"LLM returned no usable hypotheses: {res.error}"]}
+                "notes": [f"LLM returned non-JSON: {e}"]}
 
-    valid, warns = _validate(res.data.model_dump(exclude_none=True), user_symbols)
+    valid, warns = _validate(parsed, user_symbols)
     return {"hypotheses": valid[:max_hypotheses], "notes": warns}

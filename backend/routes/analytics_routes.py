@@ -1,6 +1,6 @@
 """Analytics routes — performance attribution endpoints."""
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user
 from analytics import compute_attribution, compute_sessions
@@ -331,8 +331,7 @@ async def suggest_session_action(user=Depends(get_current_user)):
 
 
 @router.post("/sessions/apply-action")
-async def apply_session_action(payload: dict, request: Request,
-                               user=Depends(get_current_user)):
+async def apply_session_action(payload: dict, user=Depends(get_current_user)):
     """Apply the suggested config tweak returned by `suggest-action`. Body:
         {field: "min_confidence_override", to: 70}
     Only writes the default bot_config (account_id=None). Per-account
@@ -342,25 +341,12 @@ async def apply_session_action(payload: dict, request: Request,
     field = payload.get("field")
     if field != "min_confidence_override":
         raise HTTPException(status_code=400, detail="Only min_confidence_override is supported")
-    to = payload.get("to")
-    if isinstance(to, bool) or not isinstance(to, int):
+    try:
+        new_val = int(payload.get("to"))
+    except Exception:
         raise HTTPException(status_code=400, detail="`to` must be an integer")
-    new_val = max(50, min(95, to))   # clamp (suggest-action may propose <50)
+    new_val = max(50, min(95, new_val))
     db = get_db()
-    # Review-sec fix: LOWERING the confidence floor loosens the bot — on a
-    # live context that is a risk raise and needs the same step-up as
-    # PUT /bot/config.
-    cur = await db.bot_configs.find_one({"user_id": user["id"], "account_id": None})
-    cur_min = int((cur or {}).get("min_confidence_override") or 0)
-    if cur_min and new_val < cur_min:
-        from routes.bot_routes import _live_context
-        if await _live_context(db, user["id"], None):
-            from step_up import audit_event, require_step_up
-            await require_step_up(db, user, request, "risk_raise")
-            await audit_event(db, user["id"], "risk_raise",
-                              {"account_id": None, "via": "session_apply_action",
-                               "fields": ["min_confidence_override"]},
-                              request, step_up=True)
     res = await db.bot_configs.update_one(
         {"user_id": user["id"], "account_id": None},
         {"$set": {"min_confidence_override": new_val,
@@ -417,23 +403,18 @@ async def refresh_auto_tune(user=Depends(get_current_user)):
 
 
 @router.post("/learned-meta/retrain")
-async def retrain_learned_meta(account_id: str | None = None,
-                               user=Depends(get_current_user)):
-    """Retrain the local logistic-regression classifier on the CALLER's
-    latest closed trades (optionally one broker `account_id`). Artifacts are
-    scoped to that user/account — one user can no longer retrain (or read
-    from) the global model on everyone's data. Returns the new artifact
-    summary (or a reason if training was skipped due to insufficient data)."""
-    res = await learned_retrain(user["id"], account_id or None)
+async def retrain_learned_meta(user=Depends(get_current_user)):
+    """Retrain the local logistic-regression classifier on the latest closed
+    trades. Returns the new artifact summary (or a reason if training was
+    skipped due to insufficient data)."""
+    res = await learned_retrain()
     return res
 
 
 @router.get("/learned-meta")
-async def get_learned_meta(account_id: str | None = None,
-                           user=Depends(get_current_user)):
-    """Inspect the currently-active learned classifier (scoped artifact
-    first — account → user → legacy global)."""
-    art = await learned_artifact(None, user["id"], account_id or None)
+async def get_learned_meta(user=Depends(get_current_user)):
+    """Inspect the currently-active learned classifier."""
+    art = await learned_artifact()
     if not art:
         return {"trained": False}
     # Don't expose mu/sd vectors — keep the response compact
@@ -468,13 +449,10 @@ async def get_drift_status(user=Depends(get_current_user)):
 
 
 @router.post("/learned-meta/drift/check-now")
-async def check_drift_now(account_id: str | None = None,
-                          user=Depends(get_current_user)):
-    """Force a drift check over the CALLER's residuals (respects the
-    per-owner cooldown). A drift retrains the caller's scoped model only."""
+async def check_drift_now(user=Depends(get_current_user)):
+    """Force a drift check (respects cooldown). Returns whether a retrain fired."""
     from drift_detector import maybe_trigger_retrain
     from database import get_db
     from entitlements import enforce_feature
     await enforce_feature(user, "drift_auto_retrain")
-    return await maybe_trigger_retrain(get_db(), user_id=user["id"],
-                                       account_id=account_id or None)
+    return await maybe_trigger_retrain(get_db())

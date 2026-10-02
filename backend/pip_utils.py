@@ -7,7 +7,7 @@ Pip conventions used (matches MT5 standard for common brokers):
   ETHUSD          1 pip = 0.10 USD
   US30/NAS100     1 pip = 1.00
   Major FX pairs  1 pip = 0.0001    → 150 pips = 15 cents on EURUSD
-  JPY pairs       1 pip = 0.01      → any *JPY pair (USDJPY, CHFJPY, ...)
+  JPY pairs       1 pip = 0.01      → USDJPY etc.
 """
 from typing import Optional
 
@@ -102,34 +102,11 @@ def base_symbol(symbol: Optional[str]) -> str:
     return s
 
 
-_FX_CCY = {"USD", "EUR", "GBP", "JPY", "CHF", "AUD", "NZD", "CAD", "SGD",
-           "SEK", "NOK", "ZAR", "MXN", "PLN", "TRY", "HKD", "CNH", "DKK"}
-
-
-def _fx_pair(symbol: Optional[str]) -> Optional[str]:
-    """The 6-letter FX pair a (possibly broker-suffixed) ticker starts with,
-    e.g. CHFJPY-ECN → CHFJPY; None for non-FX symbols."""
-    s = (symbol or "").upper()
-    p = s[:6]
-    if len(p) == 6 and p[:3] in _FX_CCY and p[3:] in _FX_CCY and p[:3] != p[3:]:
-        return p
-    return None
-
-
 def pip_size(symbol: Optional[str]) -> float:
-    """Return the pip size for a symbol (broker-suffix aware).
-
-    Any *JPY FX pair uses 0.01 (CHFJPY/CADJPY/NZDJPY were falling back to
-    the 0.0001 default — a 100× pip-count error)."""
+    """Return the pip size for a symbol (broker-suffix aware)."""
     if not symbol:
         return DEFAULT_PIP
-    base = base_symbol(symbol)
-    if base in PIP_SIZE:
-        return PIP_SIZE[base]
-    fx = _fx_pair(base)
-    if fx and fx.endswith("JPY"):
-        return 0.01
-    return DEFAULT_PIP
+    return PIP_SIZE.get(base_symbol(symbol), DEFAULT_PIP)
 
 
 def pips_to_price(symbol: Optional[str], pips: float) -> float:
@@ -160,31 +137,16 @@ def pip_value_usd_per_lot_strict(symbol: Optional[str]) -> Optional[float]:
     return None
 
 
-def pip_value_usd_per_lot(symbol: Optional[str], account_type: Optional[str] = None,
-                          price: Optional[float] = None) -> float:
+def pip_value_usd_per_lot(symbol: Optional[str], account_type: Optional[str] = None) -> float:
     """USD value of 1 pip per 1.00 lot in the given account's lot convention.
 
     Standard / demo accounts use the broker's full contract size. Cent and
     microcent accounts use 1/100 and 1/1000 respectively, so the per-lot
     pip value is scaled down accordingly. Used by risk sizing to translate
     a USD risk budget into an MT5 lot quantity.
-
-    `price` (optional): the pair's current rate. For USD-BASE FX pairs
-    (USDJPY/USDCHF/USDCAD) the exact standard-lot pip value is
-    100,000 × pip_size / price (e.g. USDCHF @0.80 → $12.50, not $10).
-    Without a price the static table / $10 default is used. Non-USD
-    crosses still use the static approximation (no conversion rate here).
     """
     sym = (symbol or "").upper()
-    b = base_symbol(sym)
-    base = PIP_VALUE_USD_PER_STANDARD_LOT.get(b, DEFAULT_PIP_VALUE_USD)
-    fx = _fx_pair(b)
-    try:
-        px = float(price or 0)
-    except (TypeError, ValueError):
-        px = 0.0
-    if fx and fx.startswith("USD") and px > 0:
-        base = 100_000.0 * pip_size(fx) / px
+    base = PIP_VALUE_USD_PER_STANDARD_LOT.get(base_symbol(sym), DEFAULT_PIP_VALUE_USD)
     atype = (account_type or "standard").lower()
     mult = ACCOUNT_TYPE_LOT_MULTIPLIER.get(atype, 1.0)
     return base * mult

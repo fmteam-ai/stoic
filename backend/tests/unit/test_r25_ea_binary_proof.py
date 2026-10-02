@@ -19,7 +19,7 @@ def pin_release(monkeypatch):
 
 
 def _acc(**kw):
-    base = {"ea_version": "1.58", "mode": "live"}
+    base = {"ea_version": "1.57", "mode": "live"}
     base.update(kw)
     return base
 

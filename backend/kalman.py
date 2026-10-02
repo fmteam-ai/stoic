@@ -78,10 +78,9 @@ def kalman_smooth(
         x = x + k_x * y
         v = v + k_v * y
         # P = (I - K H) P
-        # All three use the PRIOR (predicted) covariance terms.
-        p_xx, p_xv, p_vv = ((1 - k_x) * p_xx,
-                            (1 - k_x) * p_xv,
-                            p_vv - k_v * p_xv)
+        p_xx = (1 - k_x) * p_xx
+        p_xv = (1 - k_x) * p_xv
+        p_vv = p_vv - k_v * p_xv  # tiny — order matters
         out.append({"price": z, "k_price": x, "k_velocity": v})
 
     return out

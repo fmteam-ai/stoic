@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnostic", tags=["diagnostic"])
 
-LATEST_EA = "1.58"
+LATEST_EA = "1.57"
 from state_contract import HEARTBEAT_FRESH_S as HEARTBEAT_FRESH_SEC  # P0-2: single connection threshold
 
 # Retcode → human explanation
@@ -353,14 +353,13 @@ async def _check_ea_config(db, user_id: str) -> dict:
                           f"{active_count}/{len(cfgs)} config(s) active"))
 
     # API keys
-    from llm_client import backend as _llm_backend, is_configured as _llm_configured
-    if _llm_configured():
-        checks.append(_mk("Claude LLM", "pass",
-                          f"Configured ({_llm_backend()} backend)"))
+    has_claude = bool(os.environ.get("EMERGENT_LLM_KEY"))
+    if has_claude:
+        checks.append(_mk("Claude (Emergent LLM key)", "pass", "Configured"))
     else:
-        checks.append(_mk("Claude LLM", "fail",
-                          "No LLM credentials — AI signals disabled.",
-                          fix_label="Add ANTHROPIC_API_KEY (or EMERGENT_LLM_KEY) in backend/.env"))
+        checks.append(_mk("Claude (Emergent LLM key)", "fail",
+                          "Missing EMERGENT_LLM_KEY — AI signals disabled.",
+                          fix_label="Add EMERGENT_LLM_KEY in backend/.env"))
 
     # Per-user Telegram (notifications collection)
     tg = await db.notifications.find_one({"user_id": user_id, "kind": "telegram"})

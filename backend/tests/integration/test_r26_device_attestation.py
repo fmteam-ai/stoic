@@ -310,7 +310,7 @@ def test_heartbeat_classification_denies_missing_malformed_expired_keys():
 def test_heartbeat_denial_reaches_the_live_gate(monkeypatch):
     monkeypatch.setenv("EA_RELEASE_SHA256", PINNED)
     from ea_capabilities import live_gate
-    acc = {"mode": "live", "ea_version": "1.58", "ea_binary_sha256": PINNED}
+    acc = {"mode": "live", "ea_version": "1.57", "ea_binary_sha256": PINNED}
     for method in ("device_not_enrolled", "device_key_invalid", "device_key_expired", "device_key_revoked",
                    "installer_unattested", "installer_attestation_stale"):
         assert live_gate({**acc, "ea_binary_sha256_method": method})["code"] == "EA_BINARY_PROOF_UNATTESTED", method

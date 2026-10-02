@@ -22,9 +22,6 @@ from database import get_db  # noqa: E402
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-# Transport libs log full URLs at INFO (Telegram bot tokens live in the path).
-for _noisy in ("httpx", "httpcore"):
-    logging.getLogger(_noisy).setLevel(logging.WARNING)
 logger = logging.getLogger("worker")
 
 LEASE_TTL_SEC = 45
@@ -69,10 +66,7 @@ def _vault_key_id() -> str | None:
     try:
         from integrations_settings import master_key_id
         return master_key_id()
-    except Exception as e:  # noqa: BLE001
-        # None is recorded as an UNACKNOWLEDGED lease — rewrap_readiness fails
-        # closed on it, so a worker that cannot derive its key id blocks readiness.
-        logger.warning("worker cannot derive vault key id (lease left unacknowledged): %s", e)
+    except Exception:  # noqa: BLE001
         return None
 
 
@@ -97,9 +91,7 @@ async def _try_acquire(db, name: str) -> bool:
         await db.worker_leases.insert_one(
             {"_id": name, "holder": HOLDER,
              "expires_at": now + timedelta(seconds=LEASE_TTL_SEC),
-             "renewed_at": now,
-             # audit v2: first-time acquire must acknowledge the vault key too
-             "vault_key_id": _vault_key_id()})
+             "renewed_at": now})
         return True
     except Exception:
         return False
@@ -109,11 +101,6 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                         loop_stats=None):
     db = get_db()
     total = len(loop_tasks)
-    # Split-brain guard: if renewals keep FAILING (Mongo election, network
-    # partition) the lease expires server-side and a standby may take it.
-    # Stop our loops before that can happen instead of trading on blind.
-    last_ok = asyncio.get_running_loop().time()
-    give_up_after = max(LEASE_RENEW_SEC, LEASE_TTL_SEC - LEASE_RENEW_SEC)
     while True:
         await asyncio.sleep(LEASE_RENEW_SEC)
         try:
@@ -122,7 +109,6 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                 logger.error("worker %s lost its lease — stopping loops", name)
                 lost.set()
                 return
-            last_ok = asyncio.get_running_loop().time()
             # loop-execution monitoring: leases prove the PROCESS is alive,
             # loops_running + per-loop supervisor stats prove every loop is
             # executing, and record_progress() telemetry proves it is making
@@ -140,12 +126,6 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                              name, running, total)
         except Exception as e:
             logger.warning("lease renew error for %s: %s", name, e)
-            if asyncio.get_running_loop().time() - last_ok >= give_up_after:
-                logger.error("worker %s could not renew its lease for %.0fs — "
-                             "assuming it is lost, stopping loops",
-                             name, give_up_after)
-                lost.set()
-                return
 
 
 def _supervise(name: str, loop_name: str, factory, stats: dict):
@@ -182,16 +162,13 @@ def _supervise(name: str, loop_name: str, factory, stats: dict):
     return run
 
 
-async def run_worker(name: str, loop_factories: list, *,
-                     set_role: bool = True) -> None:
+async def run_worker(name: str, loop_factories: list) -> None:
     """Acquire the leader lease for `name`, then run all loops until the
     lease is lost or the process is terminated. loop_factories: list of
-    zero-arg callables returning coroutines. set_role=False when embedded in
-    the API process (in-process mode) — the process stays role "api"."""
+    zero-arg callables returning coroutines."""
     db = get_db()
     logger.info("worker %s starting (holder=%s)", name, HOLDER)
-    if set_role:
-        os.environ.setdefault("STOIC_PROCESS_ROLE", f"worker-{name}")
+    os.environ.setdefault("STOIC_PROCESS_ROLE", f"worker-{name}")
     while not await _try_acquire(db, name):
         logger.info("worker %s standing by — another holder owns the lease",
                     name)
@@ -219,24 +196,10 @@ async def run_worker(name: str, loop_factories: list, *,
             if d is not lost_waiter and d.exception():
                 logger.error("worker %s loop crashed: %s", name, d.exception())
     finally:
-        lost_waiter.cancel()
         for t in tasks:
             t.cancel()
-        await asyncio.gather(*tasks, lost_waiter, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("worker %s stopped", name)
-
-
-async def run_worker_forever(name: str, loop_factories: list) -> None:
-    """In-process mode (BACKGROUND_WORKERS_IN_PROCESS=true): the API replica
-    runs the same leased worker groups as the dedicated workers. Only the
-    lease holder runs the loops; after a lease loss it returns to standby
-    and keeps contending — so >1 API replica (or an API + a dedicated
-    worker) can never double-run trading loops."""
-    while True:
-        await run_worker(name, loop_factories, set_role=False)
-        logger.warning("in-process worker %s lost its lease — back to standby",
-                       name)
-        await asyncio.sleep(LEASE_RENEW_SEC)
 
 
 def main(name: str, loop_factories: list) -> None:

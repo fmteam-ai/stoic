@@ -20,25 +20,6 @@ from rate_limiter import reset as reset_rate_limiter
 router = APIRouter(tags=["panic"])
 
 
-async def _release_cancelled(db, tag: str, *, session=None) -> int:
-    """impr-wiring — release the exposure reservation of every trade THIS
-    panic cancelled (tagged). Idempotent, never raises; a miss (e.g. an
-    aborted transaction) is healed by the next rebuild_reservations tick."""
-    n = 0
-    try:
-        from execution_authority import release_reservation
-        rows = await db.trades.find(
-            {"_cancel_tag": tag},
-            {"_id": 1, "account_id": 1, "user_id": 1, "exposure_reservation": 1},
-            session=session).to_list(length=None)
-        for row in rows or []:
-            n += 1 if await release_reservation(db, row) else 0
-    except Exception as e:  # noqa: BLE001 — advisory
-        import logging
-        logging.getLogger(__name__).warning("panic exposure release failed: %s", e)
-    return n
-
-
 async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str = None,
                                              stamp: dict | None = None, session=None) -> dict:
     """`stamp` = nl_execution.effect_stamp(ctx) when invoked from the fenced NL executor."""
@@ -54,15 +35,12 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
         }}, session=session,
     )
     # Mark all pending trades cancelled
-    panic_tag = f"panic:{uuid.uuid4().hex[:12]}"
     trade_cancel = await db.trades.update_many(
         {**query, "status": "pending"},
         {"$set": {"status": "cancelled", "error": "panic_lock",
-                  "close_reason": "panic", "_cancel_tag": panic_tag,
+                  "close_reason": "panic",
                   "closed_at": now_iso, **stamp}}, session=session,
     )
-    if getattr(trade_cancel, "modified_count", 0):
-        await _release_cancelled(db, panic_tag, session=session)
     # Request close on all open trades through the unified close protocol (r20 P2-01)
     from close_commands import request_close
     nl = stamp.get("nl_effect") or {}

@@ -43,16 +43,14 @@ async def copilot_chat_endpoint(payload: dict, user=Depends(get_current_user)):
             detail="Slow down — too many Co-Pilot messages. Try again shortly.",
         )
 
-    from llm_client import is_configured as _llm_configured
-    if not _llm_configured():
+    if not os.environ.get("EMERGENT_LLM_KEY"):
         raise HTTPException(
             status_code=503,
             detail={"code": "llm_key_missing",
-                    "message": "AI Co-Pilot is not configured on this server. An admin can paste an "
-                               "Anthropic API key (or the Emergent Universal Key) under "
-                               "Admin → Integrations → AI — it applies instantly. Alternatively "
-                               "set ANTHROPIC_API_KEY (or EMERGENT_LLM_KEY) in backend/.env and run "
-                               "deploy/restart.sh."},
+                    "message": "AI Co-Pilot is not configured on this server. An admin can paste the "
+                               "Emergent Universal Key (Emergent → Profile → Universal Key) under "
+                               "Admin → Integrations → AI (Emergent) — it applies instantly. Alternatively "
+                               "set EMERGENT_LLM_KEY in backend/.env and run deploy/restart.sh."},
         )
 
     session_id = payload.get("session_id")

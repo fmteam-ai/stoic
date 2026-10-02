@@ -8,16 +8,10 @@ import os
 import json
 import re
 import time
+import uuid
 import asyncio
 import httpx
-import logging
 from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel, Field
-
-import llm_client
-from llm_models import finite_float
-
-logger = logging.getLogger("news")
 
 NEWSAPI_URL = "https://newsapi.org/v2/everything"
 
@@ -111,15 +105,6 @@ key_drivers: 2-4 short bullets (max 8 words each), citing actual headlines.
 """
 
 
-class SentimentOut(BaseModel):
-    """Structured-output schema. Ranges are enforced after the call
-    (finite_float clamp), not by the schema, so a near-miss still parses."""
-    score: float
-    label: str
-    summary: str = ""
-    key_drivers: list[str] = Field(default_factory=list)
-
-
 def _parse_json(text: str) -> dict:
     text = (text or "").strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -165,27 +150,27 @@ async def score_sentiment(symbol: str) -> dict:
             _set_cache(ck, payload, 3600)
             return {**payload, "cached": False}
 
-        # Everything that can fail (missing key, timeout, refusal, malformed
-        # output) comes back as ok=False and degrades to NEUTRAL. A raise here
-        # used to propagate into analyze_symbol and fail signal generation for
-        # every user, uncached, so every tick retried the LLM.
-        res = await llm_client.complete(
-            feature="news_sentiment",
-            system=SENTIMENT_PROMPT,
-            user=f"Market: {sym}\nHeadlines (last 24h):",
-            untrusted=[f"- [{h['source']}] {h['title']}" for h in headlines],
-            schema=SentimentOut,
-            max_tokens=600,
+        # Build prompt
+        compact = "\n".join(
+            f"- [{h['source']}] {h['title']}" for h in headlines
         )
-        if res.ok:
-            parsed = res.data.model_dump()
-            failed = False
-        else:
-            logger.warning("news sentiment LLM failed for %s: %s", sym, res.error)
-            parsed = {"score": 0.0, "label": "neutral", "summary": "Sentiment model failed.", "key_drivers": []}
-            failed = True
+        user_text = f"Market: {sym}\nHeadlines (last 24h):\n{compact}"
 
-        score = finite_float(parsed.get("score"), -1.0, 1.0, 0.0)
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(
+            api_key=os.environ["EMERGENT_LLM_KEY"],
+            session_id=f"sent-{sym}-{uuid.uuid4().hex[:6]}",
+            system_message=SENTIMENT_PROMPT,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+
+        try:
+            resp = await chat.send_message(UserMessage(text=user_text))
+            parsed = _parse_json(str(resp))
+        except Exception:
+            parsed = {"score": 0.0, "label": "neutral", "summary": "Sentiment model failed.", "key_drivers": []}
+
+        score = float(parsed.get("score") or 0)
+        score = max(-1.0, min(1.0, score))
         label = parsed.get("label") or "neutral"
 
         payload = {
@@ -197,9 +182,7 @@ async def score_sentiment(symbol: str) -> dict:
             "article_count": len(headlines),
             "fetched_at": datetime.now(timezone.utc).isoformat(),
         }
-        # Failures are cached briefly so an outage doesn't re-call the LLM on
-        # every tick for every user.
-        _set_cache(ck, payload, 300 if failed else 3600)
+        _set_cache(ck, payload, 3600)  # 1h
         return {**payload, "cached": False}
 
 

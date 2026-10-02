@@ -81,7 +81,7 @@ def test_admin_attest_flow(admin_session):
     demo_doc = {"user_id": uid, "label": "r28-http-demo", "mode": "live", "account_type": "demo",
                 "broker": "VT Markets", "server": "VTMarkets-Demo", "broker_server": "VTMarkets-Demo",
                 "account_number": f"demo-{uid[-6:]}", "bridge_token": f"r28http-demo-{uid}",
-                "ea_version": "1.58", "creds_version": 0,
+                "ea_version": "1.57", "creds_version": 0,
                 # r29 P1-02: attestation needs fresh authoritative EA evidence
                 "broker_account_id_reported": f"demo-{uid[-6:]}",
                 "last_heartbeat": datetime.now(timezone.utc).isoformat(),
@@ -216,5 +216,5 @@ def test_accounts_serializer_fields(admin_session):
     for a in accts[:5]:
         assert "environment" in a
         assert "environment_attested" in a and isinstance(a["environment_attested"], bool)
-        assert a.get("environment_attestation_state") in ("none", "valid", "invalidated", "lapsed")
+        assert a.get("environment_attestation_state") in ("none", "valid", "invalidated")
         assert "environment_attestation" not in a

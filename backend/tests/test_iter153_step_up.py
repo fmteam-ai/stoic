@@ -95,11 +95,11 @@ def _fresh_code(secret):
 
 
 def _enroll_2fa(s):
-    r = s.post(f"{BASE}/api/auth/2fa/enroll", json={"current_password": PASSWORD}, timeout=15)
+    r = s.post(f"{BASE}/api/auth/2fa/enroll", json={}, timeout=15)
     assert r.status_code == 200, r.text
     secret = r.json()["secret"]
     code = _fresh_code(secret)
-    r = s.post(f"{BASE}/api/auth/2fa/verify-enroll", json={"code": code, "current_password": PASSWORD},
+    r = s.post(f"{BASE}/api/auth/2fa/verify-enroll", json={"code": code},
                timeout=15)
     assert r.status_code == 200, r.text
     return secret

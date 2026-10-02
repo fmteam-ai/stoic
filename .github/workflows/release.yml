@@ -146,7 +146,7 @@ jobs:
           python-version: "3.11"
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6
         with:
-          node-version: "22"
+          node-version: "20"
       - name: Run the hermetic verification command
         env:
           LEDGER_ANCHOR_KEY: ${{ secrets.RELEASE_EVIDENCE_KEY }}

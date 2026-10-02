@@ -6,12 +6,9 @@ Members:
   Live agents (evidence-weighted):
     · Transformer (Chronos forecast band) · RL agent · Bayesian model
 
-Averaging is EARNED, not equal: GBM weights come from cross-validated
+Averaging is EARNED, not equal: GBM weights come from walk-forward
 out-of-sample AUC (weight = AUC − 0.5, zero if no proven skill), scaled by
-sample size. CV is PURGED k-fold on trade open/close times when available
-(validation.purged_kfold), else an embargoed expanding-window split; every
-validation fold must hold ≥ MIN_VAL_FOLD samples, otherwise the GBMs get
-zero weight and the run reports `insufficient_validation_data`; RL/Bayes weights scale with their observed-trade evidence; the
+sample size; RL/Bayes weights scale with their observed-trade evidence; the
 Transformer gets a fixed modest weight. Final p_win = Σ wᵢpᵢ / Σ wᵢ."""
 import hashlib
 import logging
@@ -25,8 +22,6 @@ from model_manifest import MODEL_DIR, PRODUCTION_NAME, CANDIDATE_NAME, FEATURE_S
 logger = logging.getLogger(__name__)
 
 MIN_TRADES = 40
-MIN_VAL_FOLD = 25           # min samples per validation fold for a usable AUC
-MAX_CV_SPLITS = 5
 MODEL_TTL_HOURS = 12
 LOOKBACK_DAYS = 120
 GBM_BLOCK_WEIGHT = 0.7      # max share of the vote the 4 GBMs can earn
@@ -108,48 +103,24 @@ def _gbm_zoo():
     }
 
 
-def _cv_splits(n: int, t_open=None, t_close=None, embargo: float | None = None):
-    """(method, list[(train_idx, val_idx)]) with ≥ MIN_VAL_FOLD per val fold,
-    or (method, []) when the sample is too small for that."""
-    import numpy as np
-    if t_open is not None and t_close is not None \
-            and len(t_open) == n and len(t_close) == n \
-            and all(v is not None for v in t_open) \
-            and all(v is not None for v in t_close):
-        from validation import purged_kfold
-        k = min(MAX_CV_SPLITS, n // MIN_VAL_FOLD)
-        if k < 2:
-            return "purged_kfold", []
-        to = np.asarray(t_open, float)
-        tc = np.maximum(np.asarray(t_close, float), to)
-        if embargo is None:   # one median holding period
-            embargo = float(np.median(tc - to)) if n else 0.0
-        return "purged_kfold", [(tr, va) for tr, va in
-                                purged_kfold(to, tc, k, embargo) if len(tr)]
-    from sklearn.model_selection import TimeSeriesSplit
-    # No times: expanding window with a count embargo (cf. scalp/model._purge)
-    k = min(3, n // MIN_VAL_FOLD - 1)
-    if k < 2:
-        return "time_series_split", []
-    gap = max(1, int(0.02 * n))
-    return "time_series_split", list(TimeSeriesSplit(n_splits=k, gap=gap).split(
-        np.zeros(n)))
-
-
-def cv_skill_weights(X, y, t_open=None, t_close=None,
-                     embargo: float | None = None) -> dict:
-    """Cross-validated per-GBM AUC → skill weights (the DEPLOYED weighting:
-    w = (AUC − 0.5)+, normalised). Folds below MIN_VAL_FOLD → all weights 0."""
+def train_sync(X: list, y: list, uid: str, *, window: dict | None = None) -> dict:
+    """Walk-forward CV per GBM → out-of-sample AUC → skill weights, then
+    refit on everything and persist a CANDIDATE (never production).
+    Runs in a worker thread."""
+    import joblib
+    import json
     import numpy as np
     from sklearn.metrics import roc_auc_score
+    from sklearn.model_selection import TimeSeriesSplit
+    from model_manifest import (sha256_file, sidecar_path, feature_code_digest,
+                                running_build_sha)
+
     X, y = np.asarray(X, dtype=float), np.asarray(y, dtype=int)
-    method, splits = _cv_splits(len(y), t_open, t_close, embargo)
+    dataset_sha256 = hashlib.sha256(X.tobytes() + b"|" + y.tobytes()).hexdigest()
     fold_aucs = {name: [] for name in _gbm_zoo()}
-    used = 0
-    for tr, va in splits:
-        if len(va) < MIN_VAL_FOLD or len(set(y[tr])) < 2 or len(set(y[va])) < 2:
+    for tr, va in TimeSeriesSplit(n_splits=3).split(X):
+        if len(set(y[tr])) < 2 or len(set(y[va])) < 2:
             continue
-        used += 1
         for name, mdl in _gbm_zoo().items():
             try:
                 mdl.fit(X[tr], y[tr])
@@ -157,40 +128,12 @@ def cv_skill_weights(X, y, t_open=None, t_close=None,
                     float(roc_auc_score(y[va], mdl.predict_proba(X[va])[:, 1])))
             except Exception as e:
                 logger.debug("ensemble CV %s failed: %s", name, e)
-    status = "ok" if used >= 2 else "insufficient_validation_data"
-    if status == "ok":
-        aucs = {k: round(sum(v) / len(v), 3) if v else 0.5
-                for k, v in fold_aucs.items()}
-    else:
-        aucs = {k: 0.5 for k in fold_aucs}   # no proven skill → zero weight
+    aucs = {k: round(sum(v) / len(v), 3) if v else 0.5
+            for k, v in fold_aucs.items()}
     skills = {k: max(0.0, a - 0.5) for k, a in aucs.items()}
     total = sum(skills.values())
     weights = {k: round(skills[k] / total, 3) if total > 0 else 0.0
                for k in skills}
-    return {"aucs": aucs, "weights": weights,
-            "cv": {"method": method, "folds_used": used,
-                   "folds_planned": len(splits), "status": status,
-                   "min_val_fold": MIN_VAL_FOLD, "n_samples": int(len(y))}}
-
-
-def train_sync(X: list, y: list, uid: str, *, window: dict | None = None,
-               t_open: list | None = None, t_close: list | None = None,
-               embargo: float | None = None) -> dict:
-    """Purged CV per GBM → out-of-sample AUC → skill weights, then
-    refit on everything and persist a CANDIDATE (never production).
-    `t_open`/`t_close` (epoch seconds per sample) enable purged k-fold;
-    without them an embargoed expanding-window split is used.
-    Runs in a worker thread."""
-    import joblib
-    import json
-    import numpy as np
-    from model_manifest import (sha256_file, sidecar_path, feature_code_digest,
-                                running_build_sha)
-
-    X, y = np.asarray(X, dtype=float), np.asarray(y, dtype=int)
-    dataset_sha256 = hashlib.sha256(X.tobytes() + b"|" + y.tobytes()).hexdigest()
-    cvres = cv_skill_weights(X, y, t_open, t_close, embargo)
-    aucs, weights, cv = cvres["aucs"], cvres["weights"], cvres["cv"]
     final = {}
     for name, mdl in _gbm_zoo().items():
         try:
@@ -207,46 +150,18 @@ def train_sync(X: list, y: list, uid: str, *, window: dict | None = None,
     joblib.dump(final, cand)
     digest = sha256_file(cand)
     now = datetime.now(timezone.utc).isoformat()
-    # NB: this is the mean CROSS-VALIDATION AUC, not a separate holdout. The
-    # `holdout_auc` key is kept because model_manifest requires it; the
-    # honest name is `cv_mean_auc` (+ `cv` method/fold diagnostics).
     holdout = round(sum(aucs.values()) / len(aucs), 3) if aucs else None
     prov = {"sha256": digest, "bytes": cand.stat().st_size, "trained_at": now,
             "feature_schema": FEATURE_SCHEMA_VERSION, "feature_code_digest": feature_code_digest(),
             "training_window": window or {"from": now, "until": now},
             "dataset_sha256": dataset_sha256, "n_samples": int(len(y)),
-            "metrics": {"aucs": aucs, "weights": weights, "holdout_auc": holdout,
-                        "cv_mean_auc": holdout, "holdout_auc_is_cv_mean": True,
-                        "cv": cv},
+            "metrics": {"aucs": aucs, "weights": weights, "holdout_auc": holdout},
             "code_commit": running_build_sha()}
     sidecar_path(uid, "candidate").write_text(json.dumps(prov, indent=2, sort_keys=True))
     return {"aucs": aucs, "weights": weights, "models_saved": len(final),
-            "cv": cv,
             "candidate_digest": digest, "candidate_path": str(cand),
             "dataset_sha256": dataset_sha256, "training_window": prov["training_window"],
             "status": "candidate_ready_for_review"}
-
-
-def trade_epoch(v) -> float | None:
-    """ISO string / datetime → epoch seconds (UTC if naive); None if unparsable."""
-    if v is None:
-        return None
-    try:
-        d = v if isinstance(v, datetime) else datetime.fromisoformat(
-            str(v).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    if d.tzinfo is None:
-        d = d.replace(tzinfo=timezone.utc)
-    return d.timestamp()
-
-
-def _accepts(fn, kw: str) -> bool:
-    import inspect
-    try:
-        return kw in inspect.signature(fn).parameters
-    except (TypeError, ValueError):
-        return False
 
 
 def _training_meta(user_id: str, n: int) -> dict:
@@ -296,18 +211,13 @@ async def train_ensemble(db, user_id: str) -> dict:
                 {"session": 1, "regime": 1, "mtf_tiers": 1, "stop_loss": 1,
                  "confidence": 1, "entry_price": 1, "tp1": 1, "take_profit": 1}):
             sigs[str(s["_id"])] = s
-    X, y, t_open, t_close = [], [], [], []
+    X, y = [], []
     for t in trades:
         if not t.get("pnl"):
             continue
         sig = sigs.get(str(t.get("signal_id") or "")) or {}
         sig = {**sig, "entry_price": t.get("entry_price") or sig.get("entry_price"),
-               # Entry-time SL only: trades.stop_loss is overwritten by every
-               # trailing/breakeven modify, so winners would show a tiny
-               # sl_pips / huge rr (target leakage). original_stop_loss is
-               # written once at execution (execution.py).
-               "stop_loss": (sig.get("stop_loss") or t.get("original_stop_loss")
-                             or t.get("stop_loss"))}
+               "stop_loss": t.get("stop_loss") or sig.get("stop_loss")}
         when = None
         try:
             when = datetime.fromisoformat(
@@ -316,13 +226,8 @@ async def train_ensemble(db, user_id: str) -> dict:
             pass
         X.append(featurize(t.get("action"), t.get("symbol"), sig, when))
         y.append(1 if t["pnl"] > 0 else 0)
-        t_open.append(trade_epoch(t.get("opened_at") or t.get("created_at")))
-        t_close.append(trade_epoch(t.get("closed_at")))
     window = {"from": str(trades[0].get("closed_at")), "until": str(trades[-1].get("closed_at"))}
-    kw = {"window": window}
-    if _accepts(train_sync, "t_open"):   # purged CV needs label windows
-        kw.update(t_open=t_open, t_close=t_close)
-    result = await asyncio.to_thread(train_sync, X, y, user_id, **kw)
+    result = await asyncio.to_thread(train_sync, X, y, user_id, window=window)
     import model_store
     from model_manifest import read_sidecar
     from pathlib import Path as _P
@@ -332,7 +237,6 @@ async def train_ensemble(db, user_id: str) -> dict:
                  "aucs": result["aucs"], "weights": result["weights"], "n_trades": len(trades),
                  "trained_at": meta["last_training_at"], "training_window": window,
                  "dataset_sha256": result["dataset_sha256"], "models_saved": result["models_saved"],
-                 "cv": result.get("cv"),
                  "feature_schema": FEATURE_SCHEMA_VERSION, "approvals": []}
     return public_state(await _persist_training(db, user_id, meta, candidate))
 
@@ -350,7 +254,7 @@ def public_state(doc: dict) -> dict:
                                                      "activated_at", "activated_by", "approvals", "manifest_sha256",
                                                      "training_window")} if prod else None),
             "candidate": ({k: cand.get(k) for k in ("status", "digest", "aucs", "weights", "n_trades", "trained_at",
-                                                    "training_window", "approvals", "cv")} if cand else None),
+                                                    "training_window", "approvals")} if cand else None),
             "promotion": ("candidate_ready_for_review" if cand and cand.get("status") == "awaiting_approval"
                           else "none_pending"),
             "min_trades_required": MIN_TRADES}

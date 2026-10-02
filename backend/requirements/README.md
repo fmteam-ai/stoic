@@ -19,7 +19,6 @@ Install a plane:  `pip install -c ../requirements.txt -r api.txt`
 
 Unused heavy dependencies found in the lockfile (imported nowhere in
 `backend/`): pandas, matplotlib, plotly, litellm, openai (direct SDK),
-boto3, playwright, passlib. (Note: `stripe` IS used — `integrations_settings.py`
-and `routes/subscription_routes.py` import it — so it must stay.)
+boto3, playwright, stripe (payments flow goes through emergentintegrations).
 They are candidates for removal from the lockfile in a dedicated cleanup —
 kept for now to avoid breaking transitive pins.

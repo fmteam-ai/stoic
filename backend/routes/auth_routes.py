@@ -4,9 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
-from fastapi.responses import JSONResponse
 from bson import ObjectId
-from pydantic import BaseModel
 
 from auth import (
     hash_password, verify_password,
@@ -44,12 +42,6 @@ from security import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
-
-# Review-sec fix: login runs bcrypt even for unknown emails / passwordless
-# accounts so response timing does not reveal whether an account exists.
-# Random throwaway password — no input can ever verify against it.
-import secrets as _secrets  # noqa: E402
-_DUMMY_BCRYPT_HASH = hash_password(_secrets.token_urlsafe(24))
 
 
 @router.get("/turnstile-config")
@@ -222,9 +214,7 @@ async def login(payload: LoginRequest, request: Request, response: Response):
                               "Too many failed login attempts. "
                               "Try again in a few minutes.")
     user = await db.users.find_one({"email": email})
-    stored_hash = (user or {}).get("password_hash") or _DUMMY_BCRYPT_HASH
-    password_ok = verify_password(payload.password, stored_hash)   # always pays bcrypt cost
-    if not user or not (user or {}).get("password_hash") or not password_ok:
+    if not user or not verify_password(payload.password, user["password_hash"]):
         await record_failure(db, "login", f"{ip}:{email}", 600)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -585,11 +575,11 @@ async def refresh_token(request: Request, response: Response):
         if not user:
             raise HTTPException(status_code=401, detail="User missing")
         # Rotation + reuse detection; a replayed (already-consumed) token
-        # revokes its whole family. impr-auth — legacy tokens without a jti
-        # are rejected outright (consume_and_rotate raises 401).
-        if not payload.get("jti"):
-            raise HTTPException(status_code=401, detail="Legacy refresh token")
+        # revokes its whole family. Legacy tokens without a jti migrate
+        # into a tracked session on their first refresh.
         claims = await consume_and_rotate(db, payload, token, request)
+        if claims is None:
+            claims = await create_session(db, uid, request)
         access = create_access_token(uid, user["email"])
         new_refresh = create_refresh_token(uid, claims)
         await stamp_session_token(db, claims["jti"], new_refresh)
@@ -598,15 +588,6 @@ async def refresh_token(request: Request, response: Response):
     except HTTPException as e:
         if e.status_code == 429:
             raise
-        if e.status_code == 409:
-            # Audit v2 P1-01 — benign concurrent refresh: the token was
-            # already rotated by a parallel request whose response set the
-            # successor cookie. No mint, no revoke, NO Set-Cookie here.
-            return JSONResponse(status_code=409, content={
-                "code": "refresh_superseded",
-                "detail": {"code": "refresh_superseded",
-                           "message": "Refresh already completed by a "
-                                      "concurrent request — retry."}})
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid refresh token")
@@ -644,14 +625,8 @@ async def list_sessions(request: Request, user=Depends(get_current_user)):
 
 
 @router.post("/sessions/revoke-all")
-async def revoke_all(request: Request, response: Response,
-                     user=Depends(get_current_user)):
-    """Logout-all: every refresh session AND every live access token dies
-    (tokens_valid_after watermark). The caller gets a fresh session so this
-    device stays signed in."""
-    db = get_db()
-    n = await revoke_all_user_sessions(db, user["id"], "user_requested")
-    await _issue_session_cookies(db, user["id"], user["email"], response, request)
+async def revoke_all(user=Depends(get_current_user)):
+    n = await revoke_all_user_sessions(get_db(), user["id"], "user_requested")
     return {"ok": True, "revoked": n}
 
 
@@ -671,20 +646,11 @@ async def update_profile(payload: ProfileUpdateRequest, user=Depends(get_current
 
 # ---------- Password ----------
 @router.post("/change-password")
-async def change_password(payload: ChangePasswordRequest, request: Request,
-                          response: Response, user=Depends(get_current_user)):
+async def change_password(payload: ChangePasswordRequest, user=Depends(get_current_user)):
     db = get_db()
     full = await db.users.find_one({"_id": ObjectId(user["id"])})
-    # impr-auth — failure lockout (a hijacked session must not be able to
-    # brute-force the current password through this endpoint).
-    await check_failure_limit(db, "pwchange", user["id"], 5, 600,
-                              "Too many failed attempts. "
-                              "Try again in a few minutes.")
-    if not full or not full.get("password_hash") \
-            or not verify_password(payload.current_password, full["password_hash"]):
-        await record_failure(db, "pwchange", user["id"], 600)
+    if not full or not verify_password(payload.current_password, full["password_hash"]):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
-    await clear_failures(db, "pwchange", user["id"])
     if payload.current_password == payload.new_password:
         raise HTTPException(status_code=400, detail="New password must differ from current")
     # HIBP breached-password screen (fail-open on outage).
@@ -695,10 +661,8 @@ async def change_password(payload: ChangePasswordRequest, request: Request,
         {"$set": {"password_hash": hash_password(payload.new_password),
                   "must_change_password": False}},
     )
-    # Password change kills every existing session AND live access token
-    # (stolen-cookie defense); this device gets a fresh session.
+    # Password change kills every existing session (stolen-cookie defense).
     await revoke_all_user_sessions(db, user["id"], "password_change")
-    await _issue_session_cookies(db, user["id"], full["email"], response, request)
     return {"ok": True}
 
 
@@ -713,49 +677,17 @@ async def two_fa_status(user=Depends(get_current_user)):
     }
 
 
-class TwoFAEnrollRequest(BaseModel):
-    current_password: str | None = None
-
-
-class TwoFAVerifyEnrollRequest(TOTPVerifyRequest):
-    current_password: str | None = None
-
-
-async def _require_reauth_password(db, full: dict, password: str | None,
-                                   scope: str = "2fa_enroll") -> None:
-    """impr-auth — re-authentication for MFA enrolment: users WITH a password
-    must re-enter it (a hijacked session alone must not be able to bind an
-    attacker-controlled authenticator). Failure lockout: 5 / 10 min.
-    Passwordless (OAuth-only) accounts have nothing stronger to check."""
-    if not full.get("password_hash"):
-        return
-    uid = str(full["_id"])
-    await check_failure_limit(db, scope, uid, 5, 600,
-                              "Too many failed attempts. "
-                              "Try again in a few minutes.")
-    if not password or not verify_password(password, full["password_hash"]):
-        await record_failure(db, scope, uid, 600)
-        raise HTTPException(status_code=401, detail={
-            "code": "password_required",
-            "message": "Current password is required to set up 2FA."
-                       if not password else "Current password is incorrect"})
-    await clear_failures(db, scope, uid)
-
-
 @router.post("/2fa/enroll")
-async def two_fa_enroll(payload: TwoFAEnrollRequest | None = None,
-                        user=Depends(get_current_user)):
+async def two_fa_enroll(user=Depends(get_current_user)):
     """Issue a NEW secret (overwrites pending) and return QR + URI.
 
     The secret is stored on the user but `two_factor_enabled` stays false
-    until verify-enroll succeeds. Requires `current_password` for accounts
-    that have one.
+    until verify-enroll succeeds.
     """
     db = get_db()
     full = await db.users.find_one({"_id": ObjectId(user["id"])})
     if full.get("two_factor_enabled"):
         raise HTTPException(status_code=400, detail="2FA already enabled — disable it first to re-enroll")
-    await _require_reauth_password(db, full, (payload.current_password if payload else None))
     secret = new_secret()
     uri = provisioning_uri(secret, full["email"])
     qr = qr_png_data_url(uri)
@@ -767,7 +699,7 @@ async def two_fa_enroll(payload: TwoFAEnrollRequest | None = None,
 
 
 @router.post("/2fa/verify-enroll")
-async def two_fa_verify_enroll(payload: TwoFAVerifyEnrollRequest, user=Depends(get_current_user)):
+async def two_fa_verify_enroll(payload: TOTPVerifyRequest, user=Depends(get_current_user)):
     db = get_db()
     full = await db.users.find_one({"_id": ObjectId(user["id"])})
     if full.get("two_factor_enabled"):
@@ -775,7 +707,6 @@ async def two_fa_verify_enroll(payload: TwoFAVerifyEnrollRequest, user=Depends(g
     pending = full.get("totp_secret_pending")
     if not pending:
         raise HTTPException(status_code=400, detail="No pending 2FA enrollment — call /2fa/enroll first")
-    await _require_reauth_password(db, full, payload.current_password)
     if not verify_code(pending, payload.code):
         raise HTTPException(status_code=401, detail="Invalid 2FA code")
     recovery_plain = generate_recovery_codes()
@@ -796,29 +727,18 @@ async def two_fa_verify_enroll(payload: TwoFAVerifyEnrollRequest, user=Depends(g
 
 
 @router.post("/2fa/disable")
-async def two_fa_disable(payload: TOTPDisableRequest, request: Request,
-                         response: Response, user=Depends(get_current_user)):
+async def two_fa_disable(payload: TOTPDisableRequest, user=Depends(get_current_user)):
     db = get_db()
     full = await db.users.find_one({"_id": ObjectId(user["id"])})
     if not full.get("two_factor_enabled"):
         raise HTTPException(status_code=400, detail="2FA is not enabled")
-    # Review-sec fix: same failed-attempt lockout as /step-up — otherwise a
-    # hijacked session could brute-force password+code to strip 2FA.
-    await check_failure_limit(db, "2fa_disable", user["id"], 5, 600,
-                              "Too many failed attempts. "
-                              "Try again in a few minutes.")
-    if not verify_password(payload.current_password,
-                           full.get("password_hash") or _DUMMY_BCRYPT_HASH) \
-            or not full.get("password_hash"):
-        await record_failure(db, "2fa_disable", user["id"], 600)
+    if not verify_password(payload.current_password, full["password_hash"]):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     if not await verify_code_once(db, user["id"], full.get("totp_secret") or "", payload.code):
         # Allow recovery-code fallback for disable
         consumed, _ = consume_recovery_code(full.get("recovery_codes") or [], payload.code)
         if not consumed:
-            await record_failure(db, "2fa_disable", user["id"], 600)
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
-    await clear_failures(db, "2fa_disable", user["id"])
     await db.users.update_one(
         {"_id": ObjectId(user["id"])},
         {
@@ -826,10 +746,8 @@ async def two_fa_disable(payload: TOTPDisableRequest, request: Request,
             "$unset": {"totp_secret": "", "totp_secret_pending": "", "recovery_codes": ""},
         },
     )
-    # 2FA reset is a security-posture change → revoke all other sessions
-    # and every live access token; this device gets a fresh session.
+    # 2FA reset is a security-posture change → revoke all other sessions.
     await revoke_all_user_sessions(db, user["id"], "2fa_reset")
-    await _issue_session_cookies(db, user["id"], full["email"], response, request)
     return {"ok": True}
 
 
@@ -862,8 +780,7 @@ async def step_up_verify(payload: StepUpRequest, request: Request,
                           {"action": payload.action}, request)
         raise HTTPException(status_code=401, detail="Invalid 2FA code")
     await clear_failures(db, "stepup", user["id"])
-    result = await issue_step_up_token(db, user["id"], payload.action,
-                                       method="totp")
+    result = await issue_step_up_token(db, user["id"], payload.action)
     await audit_event(db, user["id"], "step_up_verified",
                       {"action": payload.action}, request, step_up=True)
     return result

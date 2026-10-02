@@ -6,7 +6,6 @@
 
 An explicit `broker_environment` field on the account always wins;
 otherwise PAPER mode and demo-server naming are detected."""
-import os
 
 ENVIRONMENTS = ("LIVE", "DEMO", "PAPER")
 _DEMO_TOKENS = ("demo", "trial", "practice", "contest")
@@ -73,48 +72,6 @@ def demo_proof(account: dict, *, max_heartbeat_age_s: int = 600, now=None) -> di
             "checks": checks, "heartbeat_age_s": age, "reported_server": reported_server, "proof_id": proof_id}
 
 
-# DEMO is a LEASE, not a permanent label (audit v2 P1-04): it holds only while
-# the terminal keeps proving it (fresh heartbeat) and the admin approval is
-# recent. A lapsed lease collapses to LIVE for every money-sensitive gate.
-DEMO_LEASE_MAX_HEARTBEAT_AGE_S = int(os.environ.get("DEMO_LEASE_MAX_HEARTBEAT_AGE_S", "600"))
-DEMO_ATTESTATION_MAX_AGE_DAYS = int(os.environ.get("DEMO_ATTESTATION_MAX_AGE_DAYS", "30"))
-
-
-def _age_seconds(stamp) -> float | None:
-    from datetime import datetime, timezone
-    if not stamp:
-        return None
-    try:
-        dt = stamp if isinstance(stamp, datetime) else datetime.fromisoformat(
-            str(stamp).replace("Z", "+00:00"))
-    except (TypeError, ValueError):
-        return None
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - dt).total_seconds()
-
-
-def demo_lease_lapse_reason(account: dict) -> str | None:
-    """Why an otherwise identity-valid DEMO attestation no longer holds, or None."""
-    hb_age = _age_seconds(account.get("last_heartbeat"))
-    if hb_age is None or hb_age > DEMO_LEASE_MAX_HEARTBEAT_AGE_S:
-        return "heartbeat_stale"
-    att = account.get("environment_attestation") or {}
-    if DEMO_ATTESTATION_MAX_AGE_DAYS > 0:
-        att_age = _age_seconds(att.get("at"))
-        if att_age is None or att_age > DEMO_ATTESTATION_MAX_AGE_DAYS * 86400:
-            return "attestation_expired"
-    return None
-
-
-def _identity_attested_demo(account: dict) -> bool:
-    att = account.get("environment_attestation") or {}
-    return bool(str(att.get("environment") or "").upper() == "DEMO" and att.get("approved_by")
-                and att.get("identity_hash") == attestation_identity(account)
-                and (att.get("proof") or {}).get("verifier") in ("ea_heartbeat", "admin_override")
-                and broker_environment(account) == "DEMO")
-
-
 def attested_environment(account: dict) -> str:
     """Server-authoritative classification for money-sensitive gates (EX5
     binary proof, PAMM live certification). Only PAPER mode (no broker at
@@ -124,21 +81,21 @@ def attested_environment(account: dict) -> str:
     never do on their own."""
     if account.get("mode") == "paper":
         return "PAPER"
-    if _identity_attested_demo(account) and demo_lease_lapse_reason(account) is None:
+    att = account.get("environment_attestation") or {}
+    if (str(att.get("environment") or "").upper() == "DEMO" and att.get("approved_by")
+            and att.get("identity_hash") == attestation_identity(account)
+            and (att.get("proof") or {}).get("verifier") in ("ea_heartbeat", "admin_override")
+            and broker_environment(account) == "DEMO"):
         return "DEMO"
     return "LIVE"
 
 
 def attestation_state(account: dict) -> str:
-    """none | valid | invalidated (bound identity changed since approval) |
-    lapsed (identity still matches, but the DEMO lease is not currently
-    proven: stale heartbeat or expired approval)."""
+    """none | valid | invalidated (bound identity changed since approval)."""
     att = account.get("environment_attestation") or {}
     if not att.get("approved_by"):
         return "none"
-    if not _identity_attested_demo(account):
-        return "invalidated"
-    return "lapsed" if demo_lease_lapse_reason(account) else "valid"
+    return "valid" if attested_environment(account) == "DEMO" else "invalidated"
 
 
 def broker_environment(account: dict) -> str:

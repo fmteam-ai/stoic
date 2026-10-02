@@ -47,7 +47,7 @@ async def _readiness_scenario():
         await db.accounts.insert_one(
             {"_id": acc, "user_id": uid, "label": "main",
              "trading_enabled": True, "open_positions": 0,
-             "verified_identity": True, "ea_version": "1.58",   # r18/r20: capable EA + binary proof
+             "verified_identity": True, "ea_version": "1.57",   # r18/r20: capable EA + binary proof
              "ea_binary_sha256": "c" * 64,
              "ea_binary_sha256_method": "installer_attested",   # r25 P1-01: installer-measured proof
              "last_heartbeat": (now - timedelta(seconds=5)).isoformat()})

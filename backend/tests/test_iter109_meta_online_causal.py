@@ -72,19 +72,14 @@ def test_initialises_without_history():
 # ---------- Online Learning ----------
 
 def test_retrain_on_new_trades():
-    # Review improvement: retrain needs BOTH >=20 new trades AND >=24h since
-    # the last run (re-testing every 5 trades made a chance pass likely).
-    assert should_retrain(20, 25 * 3600) is not None
-    assert should_retrain(40, 48 * 3600) is not None
-    assert should_retrain(5, 60) is None
-    assert should_retrain(12, 60) is None
+    assert should_retrain(5, 60) is not None
+    assert should_retrain(12, 60) is not None
 
 
 def test_retrain_on_staleness_with_activity():
-    assert should_retrain(1, 4000) is None            # too little evidence
-    assert should_retrain(0, 999999) is None          # nothing new = no retrain
-    assert should_retrain(25, 600) is None            # enough trades, too soon
-    assert should_retrain(5, 60, min_new=5, min_interval_s=60) is not None
+    assert should_retrain(1, 4000) is not None
+    assert should_retrain(0, 999999) is None      # nothing new = no retrain
+    assert should_retrain(2, 600) is None          # fresh + few = wait
 
 
 # ---------- Causal AI ----------

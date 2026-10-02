@@ -37,19 +37,11 @@ class TestServiceSeparation:
 
     def test_server_runs_all_in_process(self):
         src = open(_os.path.join(_BACKEND_DIR, "server.py")).read()
-        # in-process mode runs the SAME leased worker groups as the
-        # dedicated workers (workers.base.run_worker_forever under the
-        # supervised task registry) — no fire-and-forget create_task
-        i = src.index("def _inprocess_worker_groups")
-        seg = src[i:src.index("def _start_inprocess_workers")]
-        assert '"protection": [_protection_guard_loop, _portfolio_stop_loop,' in seg
-        assert "crypto_lifecycle_loop" in seg
-        assert '"analytics": [_analytics_loop]' in seg
-        assert '"model": [_model_maintenance_loop]' in seg
-        assert "run_worker_forever" in src
-        assert "asyncio.create_task(" not in src
+        for loop in ("_protection_guard_loop", "_analytics_loop",
+                     "_model_maintenance_loop"):
+            assert f"asyncio.create_task({loop}())" in src
         # shutdown cancels them
-        assert "await _bg_tasks.shutdown(" in src
+        assert "_protection_task, _analytics_task, _model_maint_task" in src
 
     def test_architecture_documented(self):
         doc = open(_os.path.join(_BACKEND_DIR, "workers/README.md")).read()

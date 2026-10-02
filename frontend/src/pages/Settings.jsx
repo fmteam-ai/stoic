@@ -25,9 +25,6 @@ export default function Settings() {
     const [twoFa, setTwoFa] = useState({ enabled: false, recovery_codes_remaining: 0 });
     const [enrollment, setEnrollment] = useState(null); // { qr_png_data_url, secret, otpauth_uri }
     const [enrollCode, setEnrollCode] = useState("");
-    // Re-auth for 2FA enrolment: password is sent to /2fa/enroll AND /2fa/verify-enroll.
-    const [enrollPwOpen, setEnrollPwOpen] = useState(false);
-    const [enrollPassword, setEnrollPassword] = useState("");
     const [recoveryCodes, setRecoveryCodes] = useState(null);
     const [twoFaErr, setTwoFaErr] = useState("");
     const [twoFaMsg, setTwoFaMsg] = useState("");
@@ -74,29 +71,22 @@ export default function Settings() {
         finally { setPwSaving(false); }
     };
 
-    const startEnroll = async (e) => {
-        e.preventDefault();
+    const startEnroll = async () => {
         setTwoFaErr(""); setTwoFaMsg(""); setRecoveryCodes(null);
         try {
-            const { data } = await api.post("/auth/2fa/enroll", { current_password: enrollPassword });
+            const { data } = await api.post("/auth/2fa/enroll");
             setEnrollment(data);
-            setEnrollPwOpen(false);
-        } catch (e2) { setTwoFaErr(formatApiError(e2)); }
-    };
-
-    const cancelEnroll = () => {
-        setEnrollPwOpen(false); setEnrollPassword(""); setEnrollment(null); setEnrollCode("");
+        } catch (e) { setTwoFaErr(formatApiError(e)); }
     };
 
     const verifyEnroll = async (e) => {
         e.preventDefault();
         setTwoFaErr(""); setTwoFaMsg("");
         try {
-            const { data } = await api.post("/auth/2fa/verify-enroll", { code: enrollCode, current_password: enrollPassword });
+            const { data } = await api.post("/auth/2fa/verify-enroll", { code: enrollCode });
             setRecoveryCodes(data.recovery_codes || []);
             setEnrollment(null);
             setEnrollCode("");
-            setEnrollPassword("");
             setTwoFaMsg("2FA enabled. Save your recovery codes — they are shown only once.");
             await loadStatus();
             await refresh();
@@ -232,41 +222,18 @@ export default function Settings() {
                         {twoFaMsg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-3 py-2 text-xs text-[#00FF41] font-mono" data-testid="twofa-success">{twoFaMsg}</div>}
 
                         {/* DISABLED state — invite to enroll */}
-                        {!twoFa.enabled && !enrollment && !recoveryCodes && !enrollPwOpen && (
+                        {!twoFa.enabled && !enrollment && !recoveryCodes && (
                             <>
                                 <p className="text-xs text-[#A1A1AA] leading-relaxed">
                                     Add an extra layer of security by requiring a 6-digit code from your
                                     authenticator app (Google Authenticator, Authy, 1Password) every time you sign in.
                                 </p>
-                                <button onClick={() => { setTwoFaErr(""); setTwoFaMsg(""); setEnrollPwOpen(true); }}
+                                <button onClick={startEnroll}
                                     data-testid="enable-2fa-button"
                                     className="bg-[#00FF41] hover:bg-[#00E53A] text-black font-medium px-5 py-2 text-xs tracking-widest flex items-center gap-2 transition-colors">
                                     <QrCode className="w-3.5 h-3.5" /> ENABLE 2FA
                                 </button>
                             </>
-                        )}
-
-                        {/* RE-AUTH — confirm password before a secret is issued */}
-                        {!twoFa.enabled && !enrollment && enrollPwOpen && (
-                            <form onSubmit={startEnroll} className="space-y-3" data-testid="twofa-enroll-password-form">
-                                <p className="text-xs text-[#A1A1AA] leading-relaxed">
-                                    Confirm your current password to set up two-factor authentication.
-                                </p>
-                                <PwInput label="CURRENT PASSWORD" value={enrollPassword}
-                                    onChange={setEnrollPassword} testid="twofa-enroll-password" />
-                                <div className="flex gap-2">
-                                    <button type="submit" disabled={!enrollPassword}
-                                        data-testid="twofa-enroll-continue-button"
-                                        className="bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium px-5 py-2 text-xs tracking-widest flex items-center gap-2 transition-colors">
-                                        <QrCode className="w-3.5 h-3.5" /> CONTINUE
-                                    </button>
-                                    <button type="button" onClick={cancelEnroll}
-                                        data-testid="twofa-enroll-cancel-button"
-                                        className="bg-[#0A0A0A] hover:bg-[#121212] border border-[#1F1F1F] text-[#A1A1AA] px-5 py-2 text-xs tracking-widest">
-                                        CANCEL
-                                    </button>
-                                </div>
-                            </form>
                         )}
 
                         {/* ENROLLMENT — show QR + ask for first code */}

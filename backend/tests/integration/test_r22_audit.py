@@ -95,7 +95,7 @@ def test_user_trust_binary_hash_is_labelled_unattested(monkeypatch):
     _run(db.execution_leases.insert_one({"account_id": str(acc_id), "installation_id": inst, "revoked": False}))
     try:
         _run(heartbeat(BridgeHeartbeat(bridge_token=token, balance=1.0, equity=1.0, account_login=555002,
-                                       broker_server="Demo-Server", ea_version="1.58", client_version="1.58",
+                                       broker_server="Demo-Server", ea_version="1.57", client_version="1.57",
                                        ea_binary_sha256=PINNED)))
         acc = _run(db.accounts.find_one({"_id": acc_id}))
         assert acc["ea_identity"]["authoritative"] is True

@@ -2,19 +2,10 @@
 # Runs beside the stack, talks to the host docker socket, drives the target
 # host over SSH. Only the API container can reach it (compose network, no
 # host port). Enable with `make migrator-on`, disable with `make migrator-off`.
-#
-# docker.sock: REQUIRED — the migrator's whole job is `docker compose stop/up`
-# of this stack (freeze, cut-over, rollback). A `:ro` bind of the socket would
-# NOT restrict the Docker API (it only blocks unlinking the socket file), so
-# the real containment is: opt-in overlay only while a migration runs
-# (`make migrator-off` removes it), no host port, dedicated 24h-expiring
-# migrator_token, read-only checkout mount. Treat this container as
-# root-equivalent on the host.
-# Base image tag-pinned; scripts/pin_image_digests.sh rewrites to tag@sha256.
 FROM docker:27-cli
 RUN apk add --no-cache python3 bash openssh-client rsync curl coreutils
 WORKDIR /stoic
 COPY deploy/migrator/migrator.py /usr/local/bin/stoic-migrator.py
-ENV MIGRATOR_PORT=8790 MIGRATOR_TOKEN_FILE=/run/secrets/migrator_token
+ENV MIGRATOR_PORT=8790 MIGRATOR_TOKEN_FILE=/run/secrets/metrics_token
 EXPOSE 8790
 ENTRYPOINT ["python3", "/usr/local/bin/stoic-migrator.py"]

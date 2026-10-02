@@ -141,24 +141,6 @@ async def authenticate_api_key(request: Request,
     if not doc or not hmac.compare_digest(_hash_key(x_api_key), doc["key_hash"]):
         raise HTTPException(status_code=401, detail="Invalid API key")
 
-    # Review-sec fix: a suspended/terminated (or deleted) owner's keys stop
-    # working immediately — same status values as auth.get_current_user and
-    # bot_runner's moderation gate (Terms §8). Unlike interactive sessions,
-    # no admin exemption: there is no lockout risk on a programmatic key.
-    from bson import ObjectId
-    try:
-        owner = await db.users.find_one({"_id": ObjectId(str(doc["user_id"]))},
-                                        {"status": 1})
-    except Exception:
-        owner = None
-    if not owner:
-        raise HTTPException(status_code=401, detail="Invalid API key")
-    owner_status = owner.get("status") or "active"
-    if owner_status in ("suspended", "terminated"):
-        raise HTTPException(status_code=403, detail={
-            "code": f"account_{owner_status}",
-            "message": f"Account {owner_status}."})
-
     # iter-122 Phase 2 — re-verify the OWNER's plan still includes API access
     # at request time (a downgrade revokes programmatic access immediately).
     from subscription_service import get_user_tier

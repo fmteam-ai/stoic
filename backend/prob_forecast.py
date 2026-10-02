@@ -76,14 +76,6 @@ def trade_eval(symbol: str, action: str, entry, sl, tp1, fc: dict) -> dict | Non
     if action not in ("BUY", "SELL") or not fc or not fc.get("quantile_values"):
         return None
     levels, values = fc["quantile_levels"], fc["quantile_values"]
-    # Conformalised deciles (conformal.py · ACI) when this user+symbol's
-    # coverage state is mature — realised coverage of the outer band then
-    # tracks its nominal level. Otherwise the raw deciles, as before.
-    conf = fc.get("conformal") or {}
-    conformal_used = bool(conf.get("active") and conf.get("quantile_values")
-                          and len(conf["quantile_values"]) == len(values))
-    if conformal_used:
-        levels, values = conf["quantile_levels"], conf["quantile_values"]
     last = fc["last"]
     try:
         entry, sl, tp1 = float(entry), float(sl), float(tp1)
@@ -95,13 +87,12 @@ def trade_eval(symbol: str, action: str, entry, sl, tp1, fc: dict) -> dict | Non
         p_tp = 1.0 - cdf_at(tp1, levels, values)   # P(end beyond TP1)
         p_sl = cdf_at(sl, levels, values)          # P(end beyond SL)
         suggested_sl = values[0]                   # q10 — only 10% of paths below
-        # must stay a real stop: tighter than the current SL AND below entry
-        tighter = sl < suggested_sl < entry
+        tighter = suggested_sl > sl
     else:
         p_tp = cdf_at(tp1, levels, values)
         p_sl = 1.0 - cdf_at(sl, levels, values)
         suggested_sl = values[-1]                  # q90
-        tighter = entry < suggested_sl < sl
+        tighter = suggested_sl < sl
     tp_pips = abs(price_to_pips(symbol, tp1 - entry))
     sl_pips = abs(price_to_pips(symbol, sl - entry))
     prob_expectancy = p_tp * tp_pips - p_sl * sl_pips
@@ -118,5 +109,4 @@ def trade_eval(symbol: str, action: str, entry, sl, tp1, fc: dict) -> dict | Non
         "suggested_sl": round(suggested_sl, 5) if tighter else None,
         "lot_multiplier": lot_multiplier,
         "negative_ev": bool(ev_pips <= 0 and prob_expectancy <= 0),
-        "conformal": conformal_used,
     }

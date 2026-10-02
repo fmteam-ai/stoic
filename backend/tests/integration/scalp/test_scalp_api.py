@@ -112,12 +112,12 @@ class TestScalpApi:
     def test_metrics_and_retrain(self, ctx):
         r = ctx["s"].get(f"{ctx['api']}/scalp/metrics?symbol=EURUSD", timeout=10)
         assert r.status_code == 200
-        # Retraining redeploys a SHARED broker/symbol model and runs heavy
-        # numpy work, so it is admin-only (MFA) — a normal user is refused.
         r = ctx["s"].post(
             f"{ctx['api']}/scalp/retrain?symbol=EURUSD&account_id={ctx['acc']['id']}",
             timeout=30)
-        assert r.status_code == 403
+        assert r.status_code == 200
+        body = r.json()
+        assert "model_key" in body and body["model_key"].startswith("Exness|")
 
     def test_e2e_decision_recorded_via_bridge(self, ctx):
         """Impulse-pullback ticks → decision doc with fail-closed permission

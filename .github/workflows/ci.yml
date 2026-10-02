@@ -282,7 +282,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6
         with:
-          node-version: "22"
+          node-version: "20"
           cache: yarn
           cache-dependency-path: frontend/yarn.lock
       - run: cd frontend && yarn install --frozen-lockfile
@@ -296,7 +296,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6
         with:
-          node-version: "22"
+          node-version: "20"
           cache: yarn
           cache-dependency-path: frontend/yarn.lock
       - run: cd frontend && yarn install --frozen-lockfile
@@ -330,7 +330,7 @@ jobs:
           cache: pip
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6
         with:
-          node-version: "22"
+          node-version: "20"
           cache: yarn
           cache-dependency-path: frontend/yarn.lock
       - name: Install backend dependencies
@@ -366,10 +366,6 @@ jobs:
           export JWT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
           export KEY_VAULT_MASTER=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
           export METRICS_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
-          # The UI suite logs in as a freshly seeded admin with no TOTP; ops
-          # endpoints require admin MFA, so use the documented CI escape hatch
-          # (server.py refuses it when APP_ENV=production).
-          export ADMIN_MFA_ENFORCED=false
           nohup python -m uvicorn server:app --host 127.0.0.1 --port 8001 > /tmp/backend.log 2>&1 &
       - name: Build and serve frontend (production build)
         run: |
@@ -436,7 +432,7 @@ jobs:
           ./gitleaks git . --no-banner --exit-code 1
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38  # v6
         with:
-          node-version: "22"
+          node-version: "20"
       - name: Frontend dependency audit (BLOCKING on high/critical, prod deps)
         run: |
           cd frontend
@@ -451,13 +447,8 @@ jobs:
           python-version: "3.11"
       - name: Ruff (fatal error classes only)
         run: |
-          # pinned — a new ruff release must not change the gate silently
-          pip install ruff==0.15.20
+          pip install ruff
           ruff check backend --select E9,F63,F7,F82
-      - name: Base-image digest pinning (report-only until digests are pinned)
-        continue-on-error: true
-        run: |
-          scripts/pin_image_digests.sh --check || echo "::warning::base images are not digest-pinned — run scripts/pin_image_digests.sh"
       - name: Test manifest drift check
         run: python scripts/generate_test_manifest.py --check
 

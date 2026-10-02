@@ -10,13 +10,6 @@ Promotion is gated by the PROMOTION_CRITERIA.md P3 shadow gate — a
 challenger only becomes live `engine_params` after passing every check AND
 explicit human approval via the promote endpoint. Fill reconciliation
 measures how honest the replay simulator is against actual broker fills.
-
-Costs: both challenger and baseline replays book NET R — every trade is
-charged its round-trip cost in R (validation.resolve_costs: the cost model
-locked on the shadow doc at registration, else the symbol default), so the
-P2 "profit factor after costs" check really is after costs. Shadow docs
-registered before this change carry no `cost_model`; their earlier
-increments were frictionless, new increments are charged the default.
 """
 import hashlib
 import json
@@ -26,7 +19,6 @@ from datetime import datetime, timezone
 from ablation import replay_outcome
 from bayes_opt import WARMUP, new_replay_state, precompute_features, replay
 from strategy_engines import DEFAULT_PARAMS, PARAM_BOUNDS
-from validation import resolve_costs
 
 logger = logging.getLogger("model-shadow")
 
@@ -53,7 +45,7 @@ def _clamp_params(engine: str, params: dict) -> dict:
 
 async def register_model(db, user_id: str, engine: str, symbol: str,
                          params: dict, source: str = "manual",
-                         note: str = "", costs: dict | None = None) -> dict:
+                         note: str = "") -> dict:
     if engine not in PARAM_BOUNDS:
         raise ValueError(f"engine '{engine}' is not shadow-testable "
                          f"(supported: {sorted(PARAM_BOUNDS)})")
@@ -73,7 +65,6 @@ async def register_model(db, user_id: str, engine: str, symbol: str,
         "baseline_params": baseline,
         "baseline_version": params_version(engine, baseline),
         "source": source, "note": note,
-        "cost_model": resolve_costs(base, costs),
         "status": "testing",
         "registered_at": now.isoformat(),
         "evaluated_until_t": int(now.timestamp()),
@@ -115,13 +106,11 @@ async def evaluate_user_models(db, user_id: str) -> list:
         start = next((i for i, b in enumerate(bars)
                       if int(b.get("t") or 0) > until), None)
         if bars and start is not None:
-            costs = m.get("cost_model") or resolve_costs(sym)
             ch = replay(m["engine"], bars, feats_cache[sym], m["params"],
-                        start=start, state=m.get("challenger_state"),
-                        costs=costs)
+                        start=start, state=m.get("challenger_state"))
             bl = replay(m["engine"], bars, feats_cache[sym],
                         m["baseline_params"], start=start,
-                        state=m.get("baseline_state"), costs=costs)
+                        state=m.get("baseline_state"))
             m["challenger_state"] = ch
             m["baseline_state"] = bl
             m["evaluated_until_t"] = int(bars[-1]["t"])
@@ -155,8 +144,6 @@ def promotion_status(model: dict) -> dict:
                 - datetime.fromisoformat(model["registered_at"])).days
     except (KeyError, ValueError):
         days = 0
-    # gross_win_r / gross_loss_r are accumulated from NET-of-cost trade R
-    # (bayes_opt.replay with costs), so this is profit factor after costs.
     pf = (ch["gross_win_r"] / ch["gross_loss_r"]
           if ch.get("gross_loss_r", 0) > 0 else (999.0 if ch.get("gross_win_r", 0) > 0 else 0.0))
     checks = [
@@ -164,7 +151,7 @@ def promotion_status(model: dict) -> dict:
          "passed": days >= PROMOTE_MIN_DAYS},
         {"name": f"≥ {PROMOTE_MIN_TRADES} shadow trades",
          "value": ch["trades"], "passed": ch["trades"] >= PROMOTE_MIN_TRADES},
-        {"name": f"profit factor ≥ {PROMOTE_MIN_PF} (after costs)",
+        {"name": f"profit factor ≥ {PROMOTE_MIN_PF}",
          "value": round(pf, 2), "passed": pf >= PROMOTE_MIN_PF},
         {"name": "beats production baseline (net R)",
          "value": f"{ch['total_r']:.1f}R vs {bl['total_r']:.1f}R",
@@ -174,9 +161,7 @@ def promotion_status(model: dict) -> dict:
          "passed": ch.get("max_dd", 0) <= PROMOTE_MAX_DD_R},
     ]
     return {"checks": checks, "ready": all(c["passed"] for c in checks),
-            "days_in_test": days, "profit_factor": round(pf, 2),
-            "costs_charged_r": round(float(ch.get("cost_r") or 0.0), 2),
-            "cost_model": model.get("cost_model")}
+            "days_in_test": days, "profit_factor": round(pf, 2)}
 
 
 async def promote_model(db, user_id: str, model_id) -> dict:

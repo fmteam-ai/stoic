@@ -109,44 +109,37 @@ def test_ea_capability_gate_numeric_versions_and_hash(monkeypatch):
     assert version_tuple("") is None and version_tuple("beta") is None
     # r25 P1-01: a hash only counts when it is installer-attested for the installation
     blocked = {v: live_gate({"ea_version": v, "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested"})
-               for v in (None, "unknown", "1.50", "1.56", "1.57", "1.57.1", "1.58", "1.58.1", "1.60")}
+               for v in (None, "unknown", "1.50", "1.56", "1.57", "1.57.1", "1.60")}
     assert blocked[None]["code"] == "EA_VERSION_UNKNOWN" and blocked["unknown"]["code"] == "EA_VERSION_UNKNOWN"
     assert blocked["1.50"]["code"] == "EA_CAPABILITY_BELOW_MIN" and "nl_close_fence_v1" in blocked["1.50"]["reason"]
     assert blocked["1.56"]["code"] == "EA_CAPABILITY_BELOW_MIN"
-    # v1.57 carries the NL close fence but not the v1.58 execution contract → blocked for live
-    for v in ("1.57", "1.57.1"):
-        assert blocked[v]["code"] == "EA_CAPABILITY_BELOW_MIN" and "exec_contract_v1" in blocked[v]["reason"]
-        assert "nl_close_fence_v1" not in blocked[v]["reason"]
-    assert blocked["1.58"] is None and blocked["1.58.1"] is None and blocked["1.60"] is None
+    assert blocked["1.57"] is None and blocked["1.57.1"] is None and blocked["1.60"] is None
     assert "nl_close_fence_v1" in capabilities_for("1.57") and "nl_close_fence_v1" not in capabilities_for("1.56")
-    assert "exec_contract_v1" not in capabilities_for("1.57") and "exec_contract_v1" in capabilities_for("1.58")
-    forged = live_gate({"ea_version": "1.58", "ea_binary_sha256": "b" * 64, "ea_binary_sha256_method": "installer_attested"})
+    forged = live_gate({"ea_version": "1.57", "ea_binary_sha256": "b" * 64, "ea_binary_sha256_method": "installer_attested"})
     assert forged["code"] == "EA_BINARY_HASH_MISMATCH"
     # r20 P1-01: proof is REQUIRED for live — missing report or unpinned release both block
-    assert live_gate({"ea_version": "1.58"})["code"] == "EA_BINARY_PROOF_MISSING"
-    assert live_gate({"ea_version": "1.58", "mode": "paper"}) is None            # paper: no terminal dependency
+    assert live_gate({"ea_version": "1.57"})["code"] == "EA_BINARY_PROOF_MISSING"
+    assert live_gate({"ea_version": "1.57", "mode": "paper"}) is None            # paper: no terminal dependency
     # P1-03: local compile stays demo-only — but ONLY an admin-attested DEMO skips the binary proof
     # (security audit: a live account must not self-label demo). Capability floor applies to all.
     from broker_env import attestation_identity
-    # audit v2 P1-04: DEMO is a lease — fresh heartbeat + recent approval
-    _now = datetime.now(timezone.utc).isoformat()
-    demo = {"ea_version": "1.58", "account_type": "demo", "last_heartbeat": _now}
-    att = {"environment": "DEMO", "approved_by": "admin@example.com", "at": _now,
+    demo = {"ea_version": "1.57", "account_type": "demo"}
+    att = {"environment": "DEMO", "approved_by": "admin@example.com", "at": "2026-01-01T00:00:00+00:00",
            "identity_hash": attestation_identity(demo),       # r28 P1-01: bound to the identity digest
            "proof": {"verifier": "ea_heartbeat", "proof_id": "p"}}   # r29 P1-02: independent demo evidence
     assert live_gate(demo)["code"] == "EA_DEMO_UNATTESTED"
-    assert live_gate({"ea_version": "1.58", "broker_server": "RoboForex-Demo"})["code"] == "EA_DEMO_UNATTESTED"
-    assert live_gate({"ea_version": "1.58", "broker_environment": "DEMO"})["code"] == "EA_DEMO_UNATTESTED"
+    assert live_gate({"ea_version": "1.57", "broker_server": "RoboForex-Demo"})["code"] == "EA_DEMO_UNATTESTED"
+    assert live_gate({"ea_version": "1.57", "broker_environment": "DEMO"})["code"] == "EA_DEMO_UNATTESTED"
     assert live_gate({**demo, "environment_attestation": att}) is None
     assert live_gate({**demo, "ea_version": "1.56", "environment_attestation": att})["code"] == "EA_CAPABILITY_BELOW_MIN"
     # attestation never overrides a LIVE declaration, nor works without an approver / digest
-    assert live_gate({"ea_version": "1.58", "environment_attestation": att})["code"] == "EA_BINARY_PROOF_MISSING"
+    assert live_gate({"ea_version": "1.57", "environment_attestation": att})["code"] == "EA_BINARY_PROOF_MISSING"
     assert live_gate({**demo, "broker_environment": "LIVE", "environment_attestation": att})["code"] == "EA_BINARY_PROOF_MISSING"
     assert live_gate({**demo, "environment_attestation": {"environment": "DEMO"}})["code"] == "EA_DEMO_UNATTESTED"
     assert live_gate({**demo, "broker": "moved", "environment_attestation": att})["code"] == "EA_DEMO_ATTESTATION_INVALIDATED"
     monkeypatch.delenv("EA_RELEASE_SHA256")
     monkeypatch.setattr("ea_capabilities._EA_RELEASE_FILES", ())
-    assert live_gate({"ea_version": "1.58", "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested"})["code"] == "EA_RELEASE_HASH_UNPINNED"
+    assert live_gate({"ea_version": "1.57", "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested"})["code"] == "EA_RELEASE_HASH_UNPINNED"
 
 
 def test_incompatible_ea_blocks_activation_and_canonical_authority(world, monkeypatch):
@@ -154,7 +147,7 @@ def test_incompatible_ea_blocks_activation_and_canonical_authority(world, monkey
     monkeypatch.setenv("EA_RELEASE_SHA256", "c" * 64)
     from trading_authority import infrastructure_domain
     from canonical_decision import reason_code
-    assert FENCING_MIN_EA == "1.58"
+    assert FENCING_MIN_EA == "1.57"
     hb = datetime.now(timezone.utc).isoformat()
     acc = {"user_id": world["id"], "mode": "live", "trading_enabled": True, "ea_version": "1.56",
            "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested",
@@ -163,11 +156,9 @@ def test_incompatible_ea_blocks_activation_and_canonical_authority(world, monkey
     assert any("nl_close_fence_v1" in p for p in problems)
     dom = _run(infrastructure_domain(world["db"], acc))
     assert dom["level"] == "CLOSE_ONLY" and reason_code("infrastructure", dom) == "EA_CAPABILITY_BELOW_MIN"
-    below = _run(infrastructure_domain(world["db"], {**acc, "ea_version": "1.57"}))   # lacks exec_contract_v1
-    assert below["level"] == "CLOSE_ONLY" and reason_code("infrastructure", below) == "EA_CAPABILITY_BELOW_MIN"
-    ok = _run(infrastructure_domain(world["db"], {**acc, "ea_version": "1.58"}))
+    ok = _run(infrastructure_domain(world["db"], {**acc, "ea_version": "1.57"}))
     assert ok["level"] == "FULL"
-    unproved = _run(infrastructure_domain(world["db"], {**acc, "ea_version": "1.58", "ea_binary_sha256": None}))
+    unproved = _run(infrastructure_domain(world["db"], {**acc, "ea_version": "1.57", "ea_binary_sha256": None}))
     assert unproved["level"] == "CLOSE_ONLY" and unproved["code"] == "EA_BINARY_PROOF_MISSING"
     paper = _run(infrastructure_domain(world["db"], {**acc, "mode": "paper", "ea_version": "1.20"}))
     assert paper["level"] == "FULL"                                      # paper: no terminal dependency

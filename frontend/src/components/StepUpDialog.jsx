@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { registerStepUpHandler } from "@/lib/stepUp";
-import { useAuth } from "@/context/AuthContext";
 import { getPasskeyAssertion, webauthnSupported } from "@/lib/webauthnClient";
 import { Fingerprint, ShieldCheck, KeyRound } from "lucide-react";
 
@@ -16,13 +15,7 @@ const ACTION_LABELS = {
     agent_config_push: "Push config to a host agent",
     canary_set: "Set canary rollout agents",
     release_trust: "Designate a release-trusted agent",
-    passkey_enroll: "Add a passkey",
-    bridge_token_rotate: "Rotate an EA bridge token",
 };
-
-// Actions the server only accepts from an authenticator (TOTP) code when the
-// user has TOTP enrolled — a passkey cannot authorise them.
-const TOTP_ONLY_ACTIONS = new Set(["passkey_enroll"]);
 
 export function StepUpDialog() {
     const [pending, setPending] = useState(null);
@@ -31,7 +24,6 @@ export function StepUpDialog() {
     const [busy, setBusy] = useState(false);
     const [hasPasskey, setHasPasskey] = useState(false);
     const navigate = useNavigate();
-    const { user } = useAuth() || {};
 
     useEffect(() => {
         registerStepUpHandler((detail) => new Promise((resolve, reject) => {
@@ -53,7 +45,6 @@ export function StepUpDialog() {
     const { detail } = pending;
     const needsEnroll = detail?.code === "mfa_enrollment_required";
     const label = ACTION_LABELS[detail?.action] || "This sensitive action";
-    const passkeyAllowed = !(TOTP_ONLY_ACTIONS.has(detail?.action) && user?.two_factor_enabled);
 
     const cancel = () => {
         pending.reject(new Error("step_up_cancelled"));
@@ -161,7 +152,7 @@ export function StepUpDialog() {
                         <p className="text-[10px] text-[#555] font-mono">
                             Token is single-use and expires in 5 minutes.
                         </p>
-                        {hasPasskey && passkeyAllowed && webauthnSupported() && (
+                        {hasPasskey && webauthnSupported() && (
                             <button type="button" onClick={usePasskey} disabled={busy}
                                 data-testid="step-up-passkey-button"
                                 className="w-full py-2 border border-[#00FF41]/40 text-[#00FF41] font-display font-bold text-xs tracking-widest hover:bg-[#00FF41]/10 disabled:opacity-40 flex items-center justify-center gap-2 transition-colors">

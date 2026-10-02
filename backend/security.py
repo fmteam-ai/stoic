@@ -223,41 +223,18 @@ async def stamp_session_token(db, jti: str, refresh_token: str) -> None:
         {"jti": jti}, {"$set": {"token_hash": hash_token(refresh_token)}})
 
 
-# Audit v2 P1-01 — default lowered 60 → 10 s (env-configurable, 0 disables).
-# Inside the window a consumed token is NEVER rotated/minted again; it only
-# earns a 409 refresh_superseded. Negative values are clamped to 0.
-REFRESH_REUSE_GRACE_SECONDS = max(0, int(os.environ.get("REFRESH_REUSE_GRACE_SECONDS", "10")))
-
-
-def _superseded() -> HTTPException:
-    """409 for a benign concurrent refresh: another request (second tab /
-    parallel 401) already rotated this token and its response carried the
-    successor cookie. Nothing is minted, revoked or set — the client just
-    retries its original request with the cookie jar it already has."""
-    return HTTPException(status_code=409, detail={
-        "code": "refresh_superseded",
-        "message": "Refresh token already rotated by a concurrent request."})
-
-
 async def consume_and_rotate(db, payload: dict, presented_token: str,
-                             request: Request | None = None) -> dict | None:
+                             request: Request | None = None,
+                             _trusted: bool = False) -> dict | None:
     """Validates + rotates a session-tracked refresh token.
 
-    Returns new claims on success and raises 401 on legacy (no jti),
-    revoked or reused tokens. REUSE of an already-consumed token revokes the
-    ENTIRE family (stolen-token replay defense).
-
-    Audit v2 P1-01 — possession of a CONSUMED token never mints a session.
-    A consumed token re-presented inside the short grace window with a
-    matching hash and a live chain head raises 409 ``refresh_superseded``
-    (no mint, no revoke); anything else is reuse → family revoked + 401."""
+    Returns new claims on success, None on legacy tokens (no jti — accepted
+    once for migration), and raises 401 on revoked/reused tokens. REUSE of
+    an already-consumed token revokes the ENTIRE family (stolen-token
+    replay defense)."""
     jti = payload.get("jti")
     if not jti:
-        # impr-auth — legacy pre-rotation refresh tokens are no longer
-        # migrated into a session: they are untracked/unrevocable, so a
-        # stolen copy would outlive every revocation. Force a re-login.
-        raise HTTPException(status_code=401, detail="Legacy refresh token — "
-                                                    "please sign in again")
+        return None                        # legacy pre-rotation token
     sess = await db.auth_sessions.find_one({"jti": jti})
     if sess is None or sess.get("revoked"):
         raise HTTPException(status_code=401, detail="Session revoked")
@@ -284,19 +261,19 @@ async def consume_and_rotate(db, payload: dict, presented_token: str,
         except (ValueError, TypeError):
             pass
     if sess.get("consumed"):
-        # Concurrent refresh (second tab / parallel 401s) re-presents the
-        # token the first refresh consumed moments ago. With a matching hash,
-        # inside the grace window and with a live chain head this is benign:
-        # refuse with 409 WITHOUT minting (the winner's response already set
-        # the successor cookie). A genuine replay (hash mismatch, outside
-        # grace, successor missing/revoked) revokes the whole family.
-        if await _grace_successor(db, sess, presented_token) is not None:
-            raise _superseded()
-        await revoke_family(db, sess["family"], reason="refresh_token_reuse")
-        raise HTTPException(status_code=401,
-                            detail="Refresh token reuse detected — all "
-                                   "sessions in this chain were revoked")
-    if sess.get("token_hash") and sess["token_hash"] != hash_token(presented_token):
+        # Concurrent refresh (second tab / parallel 401s) re-presents the token the
+        # first refresh consumed moments ago. With a matching hash and inside a short
+        # grace window this is benign: continue the chain from its newest successor.
+        # A genuine replay (hash mismatch, outside grace, successor missing/revoked)
+        # still revokes the whole family.
+        head = await _grace_successor(db, sess, presented_token, _trusted)
+        if head is None:
+            await revoke_family(db, sess["family"], reason="refresh_token_reuse")
+            raise HTTPException(status_code=401,
+                                detail="Refresh token reuse detected — all "
+                                       "sessions in this chain were revoked")
+        sess, jti = head, head["jti"]
+    elif not _trusted and sess.get("token_hash") and sess["token_hash"] != hash_token(presented_token):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     # Consume FIRST and atomically — a parallel refresh of the same jti loses the
     # race here instead of minting a second live successor.
@@ -307,26 +284,26 @@ async def consume_and_rotate(db, payload: dict, presented_token: str,
         {"$set": {"consumed": True, "consumed_at": now_iso, "last_used_at": now_iso,
                   "replaced_by_jti": next_jti}})
     if won is None:
-        # Lost the race to a parallel refresh of the SAME (hash-verified)
-        # token. Never continue the chain on its behalf: 409 if the racer
-        # consumed it, 401 if the session was revoked meanwhile.
-        cur = await db.auth_sessions.find_one({"jti": jti}) or {}
-        if cur.get("consumed") and not cur.get("revoked"):
-            raise _superseded()
-        raise HTTPException(status_code=401, detail="Invalid refresh token")
+        sess = await db.auth_sessions.find_one({"jti": jti}) or sess
+        head = await _grace_successor(db, sess, presented_token, True)
+        if head is None:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+        return await consume_and_rotate(db, {**payload, "jti": head["jti"]}, presented_token, request, _trusted=True)
     return await create_session(db, sess["user_id"], request, family=sess["family"],
                                 session_id=sess["session_id"], jti=next_jti)
 
 
-async def _grace_successor(db, sess: dict, presented_token: str) -> dict | None:
-    """For a consumed session re-presented within the grace window with the
-    SAME token hash, returns the live (unconsumed, unrevoked) head of its
-    chain — used only to decide 409-vs-reuse, never to rotate."""
-    grace = REFRESH_REUSE_GRACE_SECONDS
-    if grace <= 0:
+REFRESH_REUSE_GRACE_SECONDS = int(os.environ.get("REFRESH_REUSE_GRACE_SECONDS", "60"))
+
+
+async def _grace_successor(db, sess: dict, presented_token: str,
+                           trusted: bool = False) -> dict | None:
+    """For a consumed session re-presented within the grace window (same token
+    hash, unless the caller already proved possession), returns the newest
+    unconsumed, unrevoked successor in its chain."""
+    if REFRESH_REUSE_GRACE_SECONDS <= 0:
         return None
-    if not sess.get("token_hash") or not secrets.compare_digest(
-            sess["token_hash"], hash_token(presented_token)):
+    if not trusted and (not sess.get("token_hash") or sess["token_hash"] != hash_token(presented_token)):
         return None
     stamp = sess.get("consumed_at") or sess.get("last_used_at")
     try:
@@ -335,7 +312,7 @@ async def _grace_successor(db, sess: dict, presented_token: str) -> dict | None:
             consumed_dt = consumed_dt.replace(tzinfo=timezone.utc)
     except (ValueError, TypeError):
         return None
-    if (datetime.now(timezone.utc) - consumed_dt).total_seconds() > grace:
+    if (datetime.now(timezone.utc) - consumed_dt).total_seconds() > REFRESH_REUSE_GRACE_SECONDS:
         return None
     cur, hops = sess, 0
     while cur.get("consumed") and cur.get("replaced_by_jti") and hops < 10:
@@ -361,18 +338,12 @@ async def revoke_family(db, family: str, reason: str) -> int:
     return res.modified_count
 
 
-async def revoke_all_user_sessions(db, user_id: str, reason: str,
-                                   revoke_access: bool = True) -> int:
-    """Password change / reset / 2FA reset / suspension → every session dies.
-    impr-auth — also stamps users.tokens_valid_after so already-issued
-    ACCESS tokens die immediately instead of living out their 30 min."""
+async def revoke_all_user_sessions(db, user_id: str, reason: str) -> int:
+    """Password change / reset / 2FA reset / suspension → every session dies."""
     res = await db.auth_sessions.update_many(
         {"user_id": user_id, "revoked": False},
         {"$set": {"revoked": True, "revoked_reason": reason,
                   "revoked_at": datetime.now(timezone.utc).isoformat()}})
-    if revoke_access:
-        from auth import revoke_user_access_tokens
-        await revoke_user_access_tokens(db, user_id)
     return res.modified_count
 
 

@@ -1,11 +1,5 @@
 """Release-readiness probe — verifies the complete trading topology before a
-deployment is accepted (used by deploy/update.sh).
-
-Auth split (code review O8): METRICS_TOKEN (Prometheus scrape credential)
-authorises READ-ONLY ops endpoints only; mutating machine calls require
-OPS_DEPLOY_TOKEN. Humans need a verified admin session (role + TOTP MFA)."""
-import hmac
-import logging
+deployment is accepted (used by deploy/update.sh). METRICS_TOKEN gated."""
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -22,103 +16,39 @@ EXPECTED_WORKERS = ("trading", "protection", "reconciliation",
                     "analytics", "model", "tuning")
 
 
-_READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
-_log = logging.getLogger("ops_auth")
-
-
-def _metrics_token_ok(request: Request) -> bool:
-    """METRICS_TOKEN — the Prometheus scrape credential (read-only)."""
+async def _ops_actor(request: Request):
+    """(allowed, actor) — METRICS_TOKEN scraper or an admin session."""
     try:
-        return bool(_authorized(request))
+        if _authorized(request):
+            return True, "metrics-token"
     except Exception:
-        return False
-
-
-def _deploy_token_ok(request: Request) -> bool:
-    """OPS_DEPLOY_TOKEN — the machine credential for MUTATING ops paths
-    (deploy scripts / CI). Sent as `X-Ops-Deploy-Token: <t>` or
-    `Authorization: Bearer <t>`. Disabled when unset or when it equals
-    METRICS_TOKEN (key separation: the scraper credential must never
-    double as deploy authority)."""
-    expected = os.environ.get("OPS_DEPLOY_TOKEN") or ""
-    if not expected:
-        return False
-    if hmac.compare_digest(expected, os.environ.get("METRICS_TOKEN") or ""):
-        _log.error("OPS_DEPLOY_TOKEN == METRICS_TOKEN — deploy token path disabled")
-        return False
-    got = request.headers.get("X-Ops-Deploy-Token") or ""
-    auth = request.headers.get("Authorization", "")
-    if not got and auth.startswith("Bearer "):
-        got = auth[7:]
-    return bool(got) and hmac.compare_digest(str(got), expected)
-
-
-def _metrics_token_may_deploy() -> bool:
-    """Transitional escape hatch (default OFF): lets METRICS_TOKEN keep its
-    pre-split mutating rights while deploy tooling migrates to
-    OPS_DEPLOY_TOKEN. Remove once every caller sends the deploy token."""
-    return (os.environ.get("OPS_ALLOW_METRICS_TOKEN_FOR_DEPLOY") or "").strip().lower() == "true"
-
-
-def _machine_actor(request: Request, mutating: bool):
-    """Machine credential → actor label, or None."""
-    if _deploy_token_ok(request):
-        return "ops-deploy-token"
-    if _metrics_token_ok(request):
-        if not mutating:
-            return "metrics-token"
-        if _metrics_token_may_deploy():
-            _log.warning("METRICS_TOKEN used for mutating ops %s %s "
-                         "(OPS_ALLOW_METRICS_TOKEN_FOR_DEPLOY=true — migrate "
-                         "the caller to OPS_DEPLOY_TOKEN)",
-                         request.method, request.url.path)
-            return "metrics-token"
-    return None
-
-
-async def _admin_user(request: Request):
-    """Verified admin session (role + mandatory TOTP MFA via
-    auth.require_admin) or None. A role-admin WITHOUT MFA gets the explicit
-    403 admin_mfa_required (so the UI can prompt enrollment)."""
+        pass
     try:
         from auth import get_current_user
         u = await get_current_user(request)
+        if u.get("role") == "admin":
+            return True, u.get("email") or "admin"
     except Exception:
-        return None
-    if (u or {}).get("role") != "admin":
-        return None
-    from auth import require_admin
-    require_admin(u)          # raises 403 admin_mfa_required
-    return u
-
-
-async def _ops_actor(request: Request, *, mutating: bool | None = None):
-    """(allowed, actor) — machine token or a verified admin session.
-    Read-only requests (GET/HEAD) accept METRICS_TOKEN or OPS_DEPLOY_TOKEN;
-    mutating requests (POST/PUT/PATCH/DELETE — inferred from the method
-    unless `mutating` is given) require OPS_DEPLOY_TOKEN."""
-    if mutating is None:
-        mutating = request.method.upper() not in _READ_METHODS
-    actor = _machine_actor(request, mutating)
-    if actor:
-        return True, actor
-    u = await _admin_user(request)
-    if u is None:
-        return False, None
-    return True, u.get("email") or "admin"
+        pass
+    return False, None
 
 
 async def _ops_admin_step_up(request: Request, action: str):
     """iter-163 — like _ops_actor but human admin sessions must also carry a
-    fresh step-up (TOTP) token for `action`. Machine callers must present
-    OPS_DEPLOY_TOKEN (METRICS_TOKEN only when the transitional
-    OPS_ALLOW_METRICS_TOKEN_FOR_DEPLOY=true). Raises 403 step_up_required /
-    mfa_enrollment_required for admins without a fresh token."""
-    actor = _machine_actor(request, mutating=True)
-    if actor:
-        return True, actor
-    u = await _admin_user(request)
-    if u is None:
+    fresh step-up (TOTP) token for `action`. METRICS_TOKEN (deploy scripts)
+    keeps its machine path. Raises 403 step_up_required / mfa_enrollment_
+    required for admins without a fresh token."""
+    try:
+        if _authorized(request):
+            return True, "metrics-token"
+    except Exception:
+        pass
+    try:
+        from auth import get_current_user
+        u = await get_current_user(request)
+    except Exception:
+        return False, None
+    if (u or {}).get("role") != "admin":
         return False, None
     from step_up import audit_event, require_step_up
     db = get_db()
@@ -146,9 +76,20 @@ def _iso(v):
 
 @router.get("/ops/release-readiness")
 async def release_readiness(request: Request):
-    # Two auth paths: metrics/deploy token (deploy scripts / Prometheus) OR a
-    # verified admin session (Bot Health dashboard card). Read-only probe.
-    allowed, _actor = await _ops_actor(request, mutating=False)
+    # Two auth paths: metrics token (deploy scripts / Prometheus) OR an
+    # authenticated admin session (Bot Health dashboard card).
+    allowed = False
+    try:
+        allowed = _authorized(request)
+    except Exception:
+        pass
+    if not allowed:
+        try:
+            from auth import get_current_user
+            u = await get_current_user(request)
+            allowed = u.get("role") == "admin"
+        except Exception:
+            pass
     if not allowed:
         return JSONResponse(status_code=403,
                             content={"detail": "bad metrics token"})
@@ -354,13 +295,6 @@ async def release_readiness(request: Request):
         checks["secrets_rewrap"] = await rewrap_readiness(db)
     except Exception as e:  # noqa: BLE001
         checks["secrets_vault"] = {"ok": False, "detail": f"vault state unavailable: {e}"}
-    # audit v2 P2-02 — BLOCKER while any account still stores a plaintext bridge token
-    try:
-        from auth import bridge_plaintext_readiness
-        checks["bridge_token_plaintext"] = await bridge_plaintext_readiness(db)
-    except Exception as e:  # noqa: BLE001
-        checks["bridge_token_plaintext"] = {"ok": False, "severity": "blocker",
-                                            "detail": f"bridge token state unavailable: {e}"}
     # AT-15 rollback drill hook — can ONLY force a failure (fail-closed), never a pass.
     if os.environ.get("STOIC_DRILL_FORCE_READINESS_FAIL") == "1":
         checks["drill_forced_failure"] = {"ok": False,
@@ -709,10 +643,7 @@ async def runtime_stats(request: Request):
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     from runtime_watchdog import full_stats
-    out = await full_stats(get_db())
-    from workers.registry import REGISTRY
-    out["background_tasks"] = REGISTRY.stats()
-    return out
+    return await full_stats(get_db())
 
 
 @router.get("/ops/deploy-preflight")
@@ -806,7 +737,7 @@ async def turnstile_diag(request: Request):
         return JSONResponse(status_code=403, content={"detail": (
             "Admin session required — sign in as an admin and use the "
             "'Run diagnostics' button on Admin → Users (Turnstile card), "
-            "or send a valid METRICS_TOKEN / OPS_DEPLOY_TOKEN bearer.")})
+            "or send a valid METRICS_TOKEN bearer.")})
     import turnstile_gate
     return await turnstile_gate.diagnose(get_db())
 
@@ -912,11 +843,8 @@ async def trade_timeline_ep(trade_id: str, request: Request):
     tl = await assemble_timeline(db, trade_id)
     if not tl:
         return JSONResponse(status_code=404, content={"detail": "trade not found"})
-    if tl["user_id"] != user["id"]:
-        from auth import require_admin
-        if user.get("role") != "admin":
-            return JSONResponse(status_code=403, content={"detail": "forbidden"})
-        require_admin(user)    # cross-tenant read needs the MFA-verified admin
+    if tl["user_id"] != user["id"] and user.get("role") != "admin":
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
     return tl
 
 

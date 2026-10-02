@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from bson import ObjectId
 
-from auth import get_current_user, generate_bridge_token, bridge_token_fields
+from auth import get_current_user, generate_bridge_token
 from database import get_db
 from secrets_vault import encrypt as vault_encrypt, mask as vault_mask
 from crypto_bridge.ccxt_engine import (
@@ -164,7 +164,7 @@ async def create_crypto_account(payload: BinanceAccountCreate, user=Depends(get_
         "equity": float(payload.initial_balance),
         "free_margin": float(payload.initial_balance),
         "creds": {"api_key": enc_key, "api_secret": enc_sec, "api_passphrase": enc_pass},
-        **bridge_token_fields(generate_bridge_token()),  # generic account secret (hash only)
+        "bridge_token": generate_bridge_token(),  # reused as a generic account-secret
         "status": "connected",
         "last_heartbeat": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),

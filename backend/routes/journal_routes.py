@@ -12,6 +12,7 @@ import logging
 import os
 import re
 import secrets
+import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -21,7 +22,6 @@ from auth import get_current_user
 from database import get_db
 from route_utils import parse_object_id
 from security import rate_limit
-import llm_client
 
 logger = logging.getLogger("journal")
 
@@ -118,6 +118,7 @@ minified JSON, no code fences, exactly these keys:
 
 
 async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
+    import os
     data = {
         "symbol": trade.get("symbol"), "action": trade.get("action"),
         "entry_price": trade.get("entry_price"),
@@ -134,30 +135,54 @@ async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
     if include_reasoning:
         data["ai_reasoning_at_entry"] = (trade.get("reasoning") or "")[:400]
     payload = json.dumps(data, default=str)
-    # Real token usage + cost is recorded to db.llm_usage by llm_client.
-    res = await llm_client.complete(
-        feature="journal_card", system=_SYSTEM, user=payload,
-        schema=JournalCardModel, max_tokens=800,
-        usage_meta={"user_id": trade.get("user_id"), "trade_id": str(trade.get("_id"))})
-    if res.ok:
-        card = res.data.model_dump()
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        chat = LlmChat(
+            api_key=os.environ["EMERGENT_LLM_KEY"],
+            session_id=f"journal-{trade.get('symbol', '?')}-{uuid.uuid4().hex[:8]}",
+            system_message=_SYSTEM,
+        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        raw = str(await chat.send_message(UserMessage(text=payload))).strip()
+        # LLM cost tracking — approximate tokens from character volume
+        # (chars/4) at Claude Sonnet public pricing ($3/M in, $15/M out)
+        try:
+            in_tok = int((len(_SYSTEM) + len(payload)) / 4)
+            out_tok = int(len(raw) / 4)
+            await get_db().llm_usage.insert_one({
+                "feature": "journal_card",
+                "user_id": trade.get("user_id"),
+                "trade_id": str(trade.get("_id")),
+                "model": "claude-sonnet-4-5-20250929",
+                "input_tokens_est": in_tok,
+                "output_tokens_est": out_tok,
+                "estimated_cost_usd": round(
+                    in_tok / 1e6 * 3.0 + out_tok / 1e6 * 15.0, 6),
+                "at": datetime.now(timezone.utc)})
+        except Exception:  # noqa: BLE001
+            logger.warning("llm_usage tracking write failed", exc_info=True)
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
+        card = JournalCardModel(**json.loads(raw)).model_dump()
         card["_llm_failed"] = False
         return card
-    logger.warning("journal LLM failed: %s", res.error)
-    pnl = float(trade.get("pnl") or 0)
-    verdict = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "SCRATCH"
-    return {
-        "title": f"{trade.get('symbol')} {str(trade.get('action', '')).upper()} — {verdict.lower()}",
-        "verdict": verdict,
-        "summary": (f"Closed {trade.get('symbol')} at "
-                    f"{trade.get('exit_price')} for ${pnl:.2f} "
-                    f"({trade.get('close_reason') or 'manual close'})."),
-        "what_went_right": "", "what_went_wrong": "",
-        "lesson": "AI narrative unavailable — numbers speak for themselves.",
-        "grade": "B" if pnl > 0 else "D",
-        "hashtags": ["stoic", "trading", str(trade.get("symbol", "")).lower()],
-        "_llm_failed": True,
-    }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("journal LLM failed: %s", e)
+        pnl = float(trade.get("pnl") or 0)
+        verdict = "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "SCRATCH"
+        return {
+            "title": f"{trade.get('symbol')} {str(trade.get('action', '')).upper()} — {verdict.lower()}",
+            "verdict": verdict,
+            "summary": (f"Closed {trade.get('symbol')} at "
+                        f"{trade.get('exit_price')} for ${pnl:.2f} "
+                        f"({trade.get('close_reason') or 'manual close'})."),
+            "what_went_right": "", "what_went_wrong": "",
+            "lesson": "AI narrative unavailable — numbers speak for themselves.",
+            "grade": "B" if pnl > 0 else "D",
+            "hashtags": ["stoic", "trading", str(trade.get("symbol", "")).lower()],
+            "_llm_failed": True,
+        }
 
 
 def _trade_snapshot(trade: dict) -> dict:

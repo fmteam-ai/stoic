@@ -2,15 +2,7 @@
 
 Trains on the closed-trades dataset joined against the signal snapshot
 that triggered each trade. Lightweight gradient-descent implementation —
-no sklearn dependency (isotonic calibration uses sklearn only behind the
-heavy-ML gate, with a NumPy fallback).
-
-Uncertainty upgrade: dataset scoped by user/broker account (retrain(user_id,
-account_id)) and sorted by closed_at; samples weighted by label uniqueness
-(× profit weight); calibration = Platt or isotonic chosen by held-out Brier;
-XGBoost trained without scale_pos_weight (outputs are probabilities). For
-triple-barrier meta-labels over ALL primary signals (incl. vetoed ones) see
-meta_labeling.py.
+no sklearn dependency.
 
 Features used per trade (8-dim + bias):
   0. confidence_norm         signal.confidence / 100
@@ -51,8 +43,7 @@ def _xgb():
         return None
 
 from database import get_db
-from probability_calibrator import (fit_platt, apply_platt, brier_score,  # noqa: F401
-                                    apply_calibration, select_calibrator,
+from probability_calibrator import (fit_platt, apply_platt, brier_score,
                                     expected_calibration_error,
                                     holdout_tail_indices)
 
@@ -153,65 +144,12 @@ def _features_from_signal(signal: dict, current_price_fallback: float = 0.0) -> 
     ]
 
 
-DATASET_LIMIT = 5000
-
-
-def _dataset_query(user_id: Optional[str] = None,
-                   account_id: Optional[str] = None) -> dict:
-    """Closed-trade query, scoped to one user and/or broker account when
-    given (unscoped = legacy global model across all users)."""
-    q = {"status": "closed", "signal_id": {"$ne": None}}
-    if user_id:
-        q["user_id"] = user_id
-    if account_id:
-        q["account_id"] = account_id
-    return q
-
-
-def _epoch(v) -> Optional[float]:
-    if v is None:
-        return None
-    if isinstance(v, (int, float)):
-        return float(v)
-    if isinstance(v, datetime):
-        return (v if v.tzinfo else v.replace(tzinfo=timezone.utc)).timestamp()
-    try:
-        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
-        return (d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp()
-    except (TypeError, ValueError):
-        return None
-
-
-def uniqueness_weights(entered: list, closed: list) -> np.ndarray:
-    """Average-uniqueness weight per trade from its [entered, closed]
-    lifetime (meta_labeling.average_uniqueness_times) — overlapping trades
-    share one market outcome, so each gets proportionally less weight.
-    Trades without usable timestamps get weight 1."""
-    from meta_labeling import average_uniqueness_times
-    st = [_epoch(a) for a in entered]
-    en = [_epoch(b) for b in closed]
-    ok = [i for i in range(len(st)) if st[i] is not None and en[i] is not None]
-    w = np.ones(len(st))
-    if ok:
-        u = average_uniqueness_times([st[i] for i in ok],
-                                     [max(en[i], st[i]) for i in ok])
-        w[ok] = u
-    return w
-
-
-async def _build_dataset(user_id: Optional[str] = None,
-                         account_id: Optional[str] = None
-                         ) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Pull closed trades + their signals; return (X, y, sessions, w, quality).
-
-    Scoped by user/broker account when given; always the MOST RECENT
-    DATASET_LIMIT trades by closed_at (the old unsorted to_list(5000) took
-    an arbitrary 5000 once the collection grew)."""
+async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
+    """Pull closed trades + their signals; return (X, y, sessions)."""
     db = get_db()
     trades = await db.trades.find(
-        _dataset_query(user_id, account_id)
-    ).sort("closed_at", -1).to_list(length=DATASET_LIMIT)
-    trades.reverse()                       # chronological
+        {"status": "closed", "signal_id": {"$ne": None}}
+    ).to_list(length=5000)
 
     sig_ids = []
     for t in trades:
@@ -225,7 +163,7 @@ async def _build_dataset(user_id: Optional[str] = None,
     async for s in db.signals.find({"_id": {"$in": sig_ids}}):
         sig_map[str(s["_id"])] = s
 
-    X, y, sessions, pnls, entered, closed = [], [], [], [], [], []
+    X, y, sessions, pnls, entered = [], [], [], [], []
     quality = {"total_closed": len(trades), "accepted": 0,
                "alpha_clean_accepted": 0, "unattributed_included": 0,
                "excluded_noise": 0, "excluded_by_category": {}}
@@ -249,7 +187,6 @@ async def _build_dataset(user_id: Optional[str] = None,
         entered_at = t.get("entered_at") or t.get("opened_at") or sig.get("created_at")
         sessions.append(session_bucket(entered_at))
         entered.append(str(entered_at or ""))
-        closed.append(t.get("closed_at"))
         X.append(feats)
         y.append(1 if float(t.get("pnl") or 0) > 0 else 0)
         pnls.append(abs(float(t.get("pnl") or 0)))
@@ -266,8 +203,6 @@ async def _build_dataset(user_id: Optional[str] = None,
         y = [y[i] for i in order]
         sessions = [sessions[i] for i in order]
         pnls = [pnls[i] for i in order]
-        closed = [closed[i] for i in order]
-        entered = [entered[i] for i in order]
 
     # iter-42 · Profit-weighted samples — win rate and profit tied. Each
     # trade's training weight scales with |pnl| (normalised to the median),
@@ -278,14 +213,6 @@ async def _build_dataset(user_id: Optional[str] = None,
         nonzero = arr[arr > 0]
         med = float(np.median(nonzero)) if nonzero.size else 1.0
         sample_w = np.clip(arr / max(med, 1e-9), 0.25, 4.0)
-        # uncertainty upgrade · × average label uniqueness (AFML ch.4):
-        # concurrent trades are not independent samples
-        try:
-            uw = uniqueness_weights(entered, closed)
-            sample_w = sample_w * uw
-            quality["mean_uniqueness"] = round(float(uw.mean()), 4)
-        except Exception as e:  # noqa: BLE001 — weights are an refinement
-            logger.debug("uniqueness weights skipped: %s", e)
     else:
         sample_w = np.array([])
     return (np.array(X, dtype=float), np.array(y, dtype=float), sessions,
@@ -342,9 +269,10 @@ def _train_xgb(X: np.ndarray, y: np.ndarray,
     avoid overfitting.
     """
     n = len(y)
-    # No scale_pos_weight: re-weighting classes distorts the base rate, and
-    # these outputs are consumed as PROBABILITIES (Platt/isotonic calibrated,
-    # compared with p-thresholds). Imbalance is handled by calibration.
+    pos = float((y == 1).sum())
+    neg = float((y == 0).sum())
+    spw = (neg / pos) if pos > 0 else 1.0
+
     xgb = _xgb()
     if xgb is None:
         raise RuntimeError("xgboost unavailable (heavy ML disabled)")
@@ -359,6 +287,7 @@ def _train_xgb(X: np.ndarray, y: np.ndarray,
         "subsample": 0.85,
         "colsample_bytree": 0.85,
         "reg_lambda": 1.0,
+        "scale_pos_weight": spw,
         "tree_method": "hist",
         "eval_metric": "logloss",
         "verbosity": 0,
@@ -489,38 +418,26 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
             cal_source = "in_sample_fallback"
             oos_auc = None
 
-    # iter-52 · Platt scaling for calibrated probabilities (H5: fit on OOS).
-    # Uncertainty upgrade · with ≥ ISOTONIC_MIN_N eval points, isotonic is
-    # fit on a dedicated calibration block and shipped only if it beats
-    # Platt (and raw) on Brier on a held-out selection block.
-    brier_raw = brier_score(p_eval, y_eval)
-    platt = select_calibrator(p_eval, y_eval)
-    p_thr = p_eval
-    if not platt.get("skipped"):
-        p_cal = np.array([apply_calibration(float(pi), platt) for pi in p_eval])
-        brier_cal = brier_score(p_cal, y_eval)
-        platt["brier_raw"] = round(brier_raw, 4)
-        platt["brier_calibrated"] = round(brier_cal, 4)
-        platt["ece_raw"] = expected_calibration_error(p_eval, y_eval)
-        platt["ece_calibrated"] = expected_calibration_error(p_cal, y_eval)
-        if brier_cal > brier_raw:
-            # Only ship a calibrator that measurably helps on the eval set.
-            platt["skipped"] = True
-            platt["reason"] = "calibration did not improve Brier on eval set"
-        else:
-            p_thr = p_cal
-
-    # Calibrate threshold: lowest p_win below which precision_of_rejection
-    # >= 0.6. Fitted in the SAME units the runtime compares against
-    # (calibrated p when a calibrator ships, raw p otherwise) — see predict().
+    # Calibrate threshold: lowest p_win below which precision_of_rejection >= 0.6
     threshold = 0.45
     for cand in np.arange(0.30, 0.50, 0.01):
-        rejected = p_thr < cand
+        rejected = p_eval < cand
         if rejected.sum() == 0:
             continue
         if (y_eval[rejected] == 0).mean() >= 0.6:
             threshold = float(cand)
             break
+
+    # iter-52 · Platt scaling for calibrated probabilities (H5: fit on OOS).
+    brier_raw = brier_score(p_eval, y_eval)
+    platt = fit_platt(p_eval, y_eval)
+    if not platt.get("skipped"):
+        p_cal = np.array([apply_platt(float(pi), platt) for pi in p_eval])
+        brier_cal = brier_score(p_cal, y_eval)
+        platt["brier_raw"] = round(brier_raw, 4)
+        platt["brier_calibrated"] = round(brier_cal, 4)
+        platt["ece_raw"] = expected_calibration_error(p_eval, y_eval)
+        platt["ece_calibrated"] = expected_calibration_error(p_cal, y_eval)
 
     return {
         "key": key,
@@ -568,22 +485,9 @@ async def _record_calibration_history(db, doc: dict) -> None:
          "oos_auc": doc.get("oos_auc")})
 
 
-def _scope_suffix(user_id: Optional[str], account_id: Optional[str]) -> str:
-    """Artifact-key suffix for a scoped model ('' = legacy global)."""
-    if not user_id and not account_id:
-        return ""
-    return f":{user_id or '*'}:{account_id or '*'}"
-
-
-async def retrain(user_id: Optional[str] = None,
-                  account_id: Optional[str] = None) -> dict:
-    """Pull closed-trade dataset, train global + per-session models. Persist artifacts.
-
-    With `user_id` (and optionally broker `account_id`) the dataset AND the
-    artifacts are scoped to that user/account (keys suffixed
-    ':<user>:<account>'); without, the legacy global model is trained."""
+async def retrain() -> dict:
+    """Pull closed-trade dataset, train global + per-session models. Persist artifacts."""
     db = get_db()
-    sfx = _scope_suffix(user_id, account_id)
     # attribute any straggler closed trades first so the alpha-clean gate
     # sees an attribution verdict for (nearly) every candidate sample
     try:
@@ -591,12 +495,11 @@ async def retrain(user_id: Optional[str] = None,
         await attribute_missing(db, limit=500)
     except Exception as e:
         logger.warning("pre-train attribution backfill failed: %s", e)
-    X, y, sessions, sample_w, quality = await _build_dataset(user_id,
-                                                              account_id)
+    X, y, sessions, sample_w, quality = await _build_dataset()
     n = len(y)
     await db.learning_quality.replace_one(
-        {"_id": f"last{sfx}"},
-        {"_id": f"last{sfx}", "at": datetime.now(timezone.utc).isoformat(),
+        {"_id": "last"},
+        {"_id": "last", "at": datetime.now(timezone.utc).isoformat(),
          **quality, "n_samples": n, "trained": n >= MIN_SAMPLES},
         upsert=True)
     if n < MIN_SAMPLES:
@@ -608,9 +511,9 @@ async def retrain(user_id: Optional[str] = None,
         }
 
     # 1. Global fallback artifact — always trained when there's enough data
-    global_doc = _fit_artifact(X, y, ARTIFACT_KEY + sfx, "GLOBAL", sample_w)
+    global_doc = _fit_artifact(X, y, ARTIFACT_KEY, "GLOBAL", sample_w)
     await db.learned_meta_artifacts.update_one(
-        {"key": ARTIFACT_KEY + sfx}, {"$set": global_doc}, upsert=True
+        {"key": ARTIFACT_KEY}, {"$set": global_doc}, upsert=True
     )
     await _record_calibration_history(db, global_doc)
 
@@ -623,7 +526,7 @@ async def retrain(user_id: Optional[str] = None,
         wins_s = int(y[mask].sum()) if n_s else 0
         # Need both classes (≥1 win and ≥1 loss) — pure 0/1 sets degenerate LR
         if n_s >= MIN_SAMPLES_PER_SESSION and 0 < wins_s < n_s:
-            key = f"{SESSION_ARTIFACT_PREFIX}{label}{sfx}"
+            key = f"{SESSION_ARTIFACT_PREFIX}{label}"
             doc = _fit_artifact(X[mask], y[mask], key, label, sample_w[mask])
             await db.learned_meta_artifacts.update_one(
                 {"key": key}, {"$set": doc}, upsert=True
@@ -636,7 +539,7 @@ async def retrain(user_id: Optional[str] = None,
         else:
             # Wipe stale per-session artifact so we don't predict on outdated weights
             await db.learned_meta_artifacts.delete_one(
-                {"key": f"{SESSION_ARTIFACT_PREFIX}{label}{sfx}"}
+                {"key": f"{SESSION_ARTIFACT_PREFIX}{label}"}
             )
             per_session[label] = {
                 "trained": False, "n_samples": n_s, "n_wins": wins_s,
@@ -653,38 +556,23 @@ async def retrain(user_id: Optional[str] = None,
     }
 
 
-async def get_artifact(session_label: Optional[str] = None,
-                       user_id: Optional[str] = None,
-                       account_id: Optional[str] = None) -> Optional[dict]:
-    """Return the per-session artifact for `session_label`, else the global one.
-
-    With user/account, scoped artifacts are preferred (account → user →
-    legacy global), session-specific before global at each scope."""
+async def get_artifact(session_label: Optional[str] = None) -> Optional[dict]:
+    """Return the per-session artifact for `session_label`, else the global one."""
     db = get_db()
-    scopes = []
-    if user_id and account_id:
-        scopes.append(_scope_suffix(user_id, account_id))
-    if user_id:
-        scopes.append(_scope_suffix(user_id, None))
-    scopes.append("")
-    for sfx in scopes:
-        if session_label and session_label in ("ASIA", "LONDON", "NY"):
-            doc = await db.learned_meta_artifacts.find_one(
-                {"key": f"{SESSION_ARTIFACT_PREFIX}{session_label}{sfx}"}
-            )
-            if doc:
-                doc.pop("_id", None)
-                return doc
+    if session_label and session_label in ("ASIA", "LONDON", "NY"):
         doc = await db.learned_meta_artifacts.find_one(
-            {"key": ARTIFACT_KEY + sfx})
+            {"key": f"{SESSION_ARTIFACT_PREFIX}{session_label}"}
+        )
         if doc:
             doc.pop("_id", None)
             return doc
-    return None
+    doc = await db.learned_meta_artifacts.find_one({"key": ARTIFACT_KEY})
+    if doc:
+        doc.pop("_id", None)
+    return doc
 
 
-async def predict_p_win(signal: dict, user_id: Optional[str] = None,
-                        account_id: Optional[str] = None) -> Optional[dict]:
+async def predict_p_win(signal: dict) -> Optional[dict]:
     """Return {p_win, threshold, verdict, model_used} or None if no model.
 
     Picks the session-specific model for the CURRENT session if available;
@@ -692,10 +580,7 @@ async def predict_p_win(signal: dict, user_id: Optional[str] = None,
     `backend="xgboost"` and `backend="logreg"` artifacts.
     """
     current_session_label = session_bucket(datetime.now(timezone.utc))
-    art = await (get_artifact(session_label=current_session_label,
-                              user_id=user_id, account_id=account_id)
-                 if (user_id or account_id) else
-                 get_artifact(session_label=current_session_label))
+    art = await get_artifact(session_label=current_session_label)
     if not art:
         return None
     feats = _features_from_signal(signal)
@@ -720,8 +605,7 @@ async def predict_p_win(signal: dict, user_id: Optional[str] = None,
 
         threshold = float(art["threshold"])
         calib = art.get("calibration") or {}
-        p_cal = (apply_calibration(p, calib)
-                 if calib and not calib.get("skipped") else p)
+        p_cal = apply_platt(p, calib) if calib and not calib.get("skipped") else p
         return {
             "p_win": round(p_cal, 4),
             "p_win_raw": round(p, 4),
