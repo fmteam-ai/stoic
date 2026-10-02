@@ -320,6 +320,8 @@ async def ensure_indexes():
     await db.trades.create_index([("broker_kind", 1), ("status", 1)])
     await db.trades.create_index("client_order_id", sparse=True)
     await db.crypto_protection_audit.create_index([("trade_id", 1), ("at", -1)])
+    # Exposure reservations: release looks up trades by their hold id.
+    await db.trades.create_index("exposure_reservation.id", sparse=True)
     # bot_configs is now keyed by (user_id, account_id). account_id=None marks
     # the user's default profile; other docs are per-account overrides.
     # Drop the old unique(user_id) index if it exists, then create the composite.

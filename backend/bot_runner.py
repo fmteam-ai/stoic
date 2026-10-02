@@ -31,6 +31,7 @@ from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
 from risk import get_profile, compute_lot_for_account, floor_lot, scale_lot
+from fail_closed import block_on_error, fail_closed, fail_open_advisory
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
@@ -213,6 +214,95 @@ async def _record_pulse(
                 cfg=cfg, signal=_sig)
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to persist pulse cfg=%s: %s", cfg.get("_id"), e)
+
+
+# ── Pre-trade overlay semantics (fail_closed.py) ─────────────────────────
+# Capital-protecting overlays are @fail_closed: an evaluation error is a
+# BLOCK verdict ({"blocked": ..., "fail_closed": True, "error": ...}).
+# Advisory overlays are @fail_open_advisory: an error means "no advice".
+
+@fail_closed("std_risk_clamp", block_reason="std_risk_clamp_error")
+def _std_risk_clamp(account: dict, symbol: str, entry, stop, lot: float,
+                    cap_pct: float) -> dict:
+    """iter-127b FINAL hard risk clamp — worst-case USD at the stop must
+    fit the trade's risk budget assuming the STANDARD contract (most
+    conservative vs mislabeled account_type). With an EA-reported spec the
+    LARGER of the static standard and broker pip values is used (never
+    looser) and the result floors to the broker volume step/min.
+
+    Returns {"lot": new_lot, "clamped": bool} or {"skip": True, ...}."""
+    if not (stop and entry):
+        return {"lot": lot, "clamped": False}
+    from pip_utils import price_to_pips as _p2p, \
+        pip_value_usd_per_lot as _pvpl
+    from instrument_specs import spec_from_account, pip_value_usd
+    _pips = _p2p(symbol, abs(float(entry) - float(stop)))
+    _pip_std = _pvpl(symbol, "standard", price=float(entry))
+    spec = spec_from_account(account, symbol)
+    if spec.from_broker:
+        _pip_std = max(_pip_std, pip_value_usd(spec, 1.0, float(entry)))
+    vfb = (spec.extra or {}).get("volume_from_broker")
+    vstep = float(spec.volume_step) if vfb else 0.01
+    vmin = float(spec.volume_min) if vfb else 0.01
+    _eq = float(account.get("equity") or account.get("balance") or 0)
+    out = {"lot": lot, "clamped": False, "pips": _pips, "equity": _eq,
+           "cap_pct": cap_pct}
+    if _eq > 0 and _pips > 0 and _pip_std > 0:
+        _max_risk_lot = (_eq * cap_pct / 100.0) / (_pips * _pip_std)
+        out["max_risk_lot"] = _max_risk_lot
+        if lot > _max_risk_lot:
+            # FAIL CLOSED (audit E6): floor to the broker step; if even the
+            # minimum lot exceeds the risk budget, skip the trade instead
+            # of rounding UP into oversize.
+            _floored = (int(_max_risk_lot * 100) / 100.0 if vstep == 0.01
+                        else floor_lot(_max_risk_lot, vstep))
+            if _floored < vmin - 1e-9:
+                return {**out, "skip": True, "volume_min": vmin}
+            return {**out, "lot": _floored, "clamped": True}
+    return out
+
+
+@fail_open_advisory("execution_alpha", default=None)
+async def _execution_alpha_advice(db, user_id, account, signal, lot):
+    """Advisory (v60): HOW to execute. Errors → no advice (hard gates
+    still apply downstream)."""
+    from execution_alpha import decide as _ea_decide
+    plan = await _ea_decide(db, user_id, account, signal, lot)
+    signal["execution_alpha"] = {
+        k: plan.get(k) for k in
+        ("mode", "risk_multiplier", "reasons", "advisory")}
+    try:
+        from decision_context import record_stage as _dcs
+        await _dcs(db, signal.get("decision_id"), "execution_alpha",
+                   signal["execution_alpha"])
+    except Exception:  # noqa: BLE001
+        pass
+    return plan
+
+
+@fail_open_advisory("execution_timing", default=None)
+async def _execution_timing_advice(db, account, symbol):
+    """Advisory (Phase 2): brief pre-send delay on spread spikes; never
+    vetoes."""
+    from execution_timing import consider_delay
+    return await consider_delay(db, account, symbol)
+
+
+@fail_open_advisory("exposure_rebuild", default=None)
+async def _rebuild_exposure(db, user_id, cfg_account_id, accounts):
+    """Self-heal the atomic exposure reservations at the start of each
+    tick (missed releases on close/cancel paths cannot leak capacity)."""
+    from execution_authority import rebuild_reservations
+    if cfg_account_id:
+        acct = next((a for a in accounts
+                     if str(a.get("_id")) == str(cfg_account_id)), None)
+        return [await rebuild_reservations(db, cfg_account_id,
+                                           account=acct)]
+    out = [await rebuild_reservations(db, user_id=user_id)]
+    for a in accounts:
+        out.append(await rebuild_reservations(db, str(a["_id"]),
+                                              account=a))
+    return out
 
 
 async def _connected_accounts(db, user_id: str) -> list:
@@ -583,6 +673,10 @@ async def _process_user_account_locked(db, cfg: dict):
                                    user_id, cfg_account_id or "default", anti_tilt_n)
             except Exception:
                 pass
+
+    # Atomic exposure reservations: self-healing recompute (advisory — the
+    # reservation itself fails closed at submit time).
+    await _rebuild_exposure(db, user_id, cfg_account_id, all_accounts)
 
     # Count current open + pending BOT trades to respect max_concurrent
     # (per-account when scoped). origin=auto only — manual trades must NEVER
@@ -2004,11 +2098,15 @@ async def _process_user_account_locked(db, cfg: dict):
                 if cfg_account_id:
                     open_q["account_id"] = cfg_account_id
                 open_book = await db.trades.find(open_q).to_list(length=50)
-                # Notional = lot × entry × (100 if XAU else 1) — matches var.py
-                hypothetical_notional = (
-                    effective_lot * float(signal["entry_price"])
-                    * (100 if sym == "XAUUSD" else 1)
-                )
+                # Notional via the instrument spec service (EA contract
+                # size when reported, else the canonical registry) — the
+                # SAME convention correlation_kelly uses for open positions
+                # (the old `× (100 if XAU else 1)` understated FX 100,000×).
+                from instrument_specs import (spec_from_account as _sfa,
+                                              notional_usd as _nusd)
+                hypothetical_notional = _nusd(
+                    _sfa(target_account, sym), effective_lot,
+                    float(signal["entry_price"]))
                 ck = await compute_correlation_aware_scale(
                     new_symbol=sym,
                     new_action=signal["action"],
@@ -2092,9 +2190,9 @@ async def _process_user_account_locked(db, cfg: dict):
             except Exception as e:  # noqa: BLE001
                 # FAIL CLOSED: the risk engine is the final pre-trade
                 # authority — an evaluation error must not let the trade
-                # through unchecked.
-                logger.warning("risk engine failed (fail-closed, skipping %s): %s",
-                               sym, e)
+                # through unchecked. (Inline form of @fail_closed — the
+                # block is a loop `continue`; logging + metrics shared.)
+                block_on_error("risk_engine", e, "risk_engine_error")
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="warn",
                     reason=f"Risk engine error — trade skipped (fail-closed): {e}")
@@ -2202,56 +2300,43 @@ async def _process_user_account_locked(db, cfg: dict):
         # (most conservative). Protects against mislabeled account_type
         # metadata (e.g. a standard account stored as 'microcent' made pip
         # value 1000× too small and inflated lots). Worst-case USD at the
-        # stop must stay within the trade's risk budget.
-        try:
-            _slp = signal.get("stop_loss")
-            _ep = signal.get("entry_price")
-            if _slp and _ep:
-                from pip_utils import price_to_pips as _p2p, \
-                    pip_value_usd_per_lot as _pvpl
-                _pips = _p2p(sym, abs(float(_ep) - float(_slp)))
-                _pip_std = _pvpl(sym, "standard", price=float(_ep))
-                _eq = float(target_account.get("equity")
-                            or target_account.get("balance") or 0)
-                _cap_pct = float(signal.get("risk_pct_cap")
-                                 or profile.get("risk_pct") or 1.0)
-                if _eq > 0 and _pips > 0 and _pip_std > 0:
-                    _max_risk_lot = (_eq * _cap_pct / 100.0) / (_pips * _pip_std)
-                    if effective_lot > _max_risk_lot:
-                        # FAIL CLOSED (audit E6): floor to the broker step; if
-                        # even the minimum 0.01 lot exceeds the risk budget,
-                        # skip the trade instead of rounding UP into oversize.
-                        _floored = int(_max_risk_lot * 100) / 100.0
-                        if _floored < 0.01:
-                            logger.warning(
-                                "Trade skipped acct=%s sym=%s: broker minimum "
-                                "0.01 lot exceeds risk budget (%.2f%% of $%.0f "
-                                "at SL %.1f pips → max %.4f lots)",
-                                cfg_account_id or "default", sym, _cap_pct,
-                                _eq, _pips, _max_risk_lot)
-                            await _record_pulse(db, cfg, symbol=sym,
-                                action="SKIP", level="warn",
-                                reason=(f"Risk clamp: minimum 0.01 lot exceeds "
-                                        f"{_cap_pct:.2f}% risk budget for {sym}."))
-                            # `continue` (not `return`): only this symbol is
-                            # unaffordable — the rest of the tick still runs.
-                            continue
-                        logger.info(
-                            "Std-contract risk clamp acct=%s sym=%s: %.2f → %.2f "
-                            "lots (budget %.2f%% of $%.0f, SL %.1f pips)",
-                            cfg_account_id or "default", sym, effective_lot,
-                            _floored, _cap_pct, _eq, _pips)
-                        effective_lot = _floored
-                        sizing_method = sizing_method + "+std_risk_clamp"
-        except Exception as e:  # noqa: BLE001
-            # FAIL CLOSED: if the hard risk clamp cannot be computed we
-            # cannot prove the lot fits the risk budget.
-            logger.warning("std risk clamp failed (fail-closed, skipping %s): %s",
-                           sym, e)
+        # stop must stay within the trade's risk budget. @fail_closed: if
+        # the clamp cannot be computed we cannot prove the lot fits.
+        _cap_pct = float(signal.get("risk_pct_cap")
+                         or profile.get("risk_pct") or 1.0)
+        _clamp = _std_risk_clamp(target_account, sym,
+                                 signal.get("entry_price"),
+                                 signal.get("stop_loss"), effective_lot,
+                                 _cap_pct)
+        if _clamp.get("fail_closed"):
             await _record_pulse(db, cfg, symbol=sym,
                 action="SKIP", level="warn",
-                reason=f"Risk clamp error — trade skipped (fail-closed): {e}")
+                reason=("Risk clamp error — trade skipped (fail-closed): "
+                        f"{_clamp.get('error')}"))
             continue
+        if _clamp.get("skip"):
+            _vmin = _clamp.get("volume_min", 0.01)
+            logger.warning(
+                "Trade skipped acct=%s sym=%s: broker minimum "
+                "%g lot exceeds risk budget (%.2f%% of $%.0f "
+                "at SL %.1f pips → max %.4f lots)",
+                cfg_account_id or "default", sym, _vmin, _cap_pct,
+                _clamp["equity"], _clamp["pips"], _clamp["max_risk_lot"])
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="warn",
+                reason=(f"Risk clamp: minimum {_vmin:g} lot exceeds "
+                        f"{_cap_pct:.2f}% risk budget for {sym}."))
+            # `continue` (not `return`): only this symbol is
+            # unaffordable — the rest of the tick still runs.
+            continue
+        if _clamp.get("clamped"):
+            logger.info(
+                "Std-contract risk clamp acct=%s sym=%s: %.2f → %.2f "
+                "lots (budget %.2f%% of $%.0f, SL %.1f pips)",
+                cfg_account_id or "default", sym, effective_lot,
+                _clamp["lot"], _cap_pct, _clamp["equity"], _clamp["pips"])
+            effective_lot = _clamp["lot"]
+            sizing_method = sizing_method + "+std_risk_clamp"
 
         # Phase-1 · VALUE-DRIVEN GATE: every autonomous trade carries a $
         # Expected Value (calibrated p_win × geometry − costs) and a 0-100
@@ -2399,49 +2484,40 @@ async def _process_user_account_locked(db, cfg: dict):
         # REDUCE / SKIP (LIMIT & SPLIT recorded as advisory). WAIT is
         # honored by the spread-timing block below.
         if cfg.get("execution_alpha_enabled", True):
-            try:
-                from execution_alpha import decide as _ea_decide
-                _plan = await _ea_decide(db, user_id, target_account,
-                                         signal, effective_lot)
-                signal["execution_alpha"] = {
-                    k: _plan.get(k) for k in
-                    ("mode", "risk_multiplier", "reasons", "advisory")}
+            # ADVISORY (@fail_open_advisory): an error means no advice.
+            _plan = await _execution_alpha_advice(
+                db, user_id, target_account, signal, effective_lot)
+            if _plan and _plan.get("mode") == "SKIP":
+                _msg = ("Execution Alpha SKIP: "
+                        + "; ".join(_plan.get("reasons") or []))
+                await _record_pulse(db, cfg, symbol=sym,
+                                    action="SKIP", level="warn",
+                                    reason=_msg, signal=signal)
+                continue
+            if _plan:
                 try:
-                    from decision_context import record_stage as _dcs
-                    await _dcs(db, signal.get("decision_id"),
-                               "execution_alpha",
-                               signal["execution_alpha"])
-                except Exception:  # noqa: BLE001
-                    pass
-                if _plan["mode"] == "SKIP":
-                    _msg = ("Execution Alpha SKIP: "
-                            + "; ".join(_plan.get("reasons") or []))
-                    await _record_pulse(db, cfg, symbol=sym,
-                                        action="SKIP", level="warn",
-                                        reason=_msg, signal=signal)
-                    continue
-                _pm = float(_plan.get("risk_multiplier") or 1.0)
+                    _pm = float(_plan.get("risk_multiplier") or 1.0)
+                except (TypeError, ValueError):
+                    _pm = 1.0
                 if 0 < _pm < 1.0:
                     effective_lot = scale_lot(effective_lot, _pm)
-            except Exception as e:  # noqa: BLE001
-                logger.warning("execution alpha failed (fail-open): %s",
-                               e)
         signal.setdefault("latency_trace", {})["t5_ms"] = int(
             datetime.now(timezone.utc).timestamp() * 1000)
         # Phase 2 · Execution timing — brief pre-send delay when the live
         # spread is spiking vs its 10-min median (never vetoes).
         if (cfg.get("execution_timing_enabled", True)
                 and (target_account.get("connection_type") or "mt5") != "binance"):
-            try:
-                from execution_timing import consider_delay
-                timing = await consider_delay(db, target_account, sym)
-                if timing.get("waited_ms"):
-                    signal["execution_timing"] = timing
+            # ADVISORY (@fail_open_advisory): never vetoes.
+            timing = await _execution_timing_advice(db, target_account, sym)
+            if timing and timing.get("waited_ms"):
+                signal["execution_timing"] = timing
+                try:
                     await db.signals.update_one(
                         {"_id": result.inserted_id},
                         {"$set": {"execution_timing": timing}})
-            except Exception as e:  # noqa: BLE001
-                logger.warning("execution timing failed (fail-open): %s", e)
+                except Exception as e:  # noqa: BLE001 — audit detail only
+                    logger.warning("execution timing persist failed "
+                                   "(fail-open): %s", e)
         # Floor-based downscales return 0.0 when a trim leaves less than the
         # broker minimum — never round back UP into unapproved risk.
         if effective_lot < 0.01 - 1e-9:

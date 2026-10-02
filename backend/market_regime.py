@@ -13,8 +13,9 @@ along four axes from the user's own candle/calendar streams:
 Snapshots are stamped on every signal AND trade (`market_regime`), so an
 edge ledger accumulates: per strategy class × regime bucket. The gate then
 only lets a strategy trade when its historical edge fits the live regime —
-a strategy with ≥8 stamped trades and a PROVEN negative expectancy in this
-exact regime is skipped until conditions change. Unknown = allowed
+a strategy with ≥8 stamped trades whose SHRUNK expectancy in this regime
+(empirical-Bayes partial pooling toward the strategy's all-regime mean)
+has an upper confidence bound below zero is skipped until conditions change. Unknown = allowed
 (fail-open: evidence first, prohibition second).
 """
 import logging
@@ -29,8 +30,22 @@ logger = logging.getLogger("market-regime")
 
 CACHE_TTL_SEC = 300
 EDGE_MIN_TRADES = 8
-EDGE_T_BLOCK = -1.0
+EDGE_T_BLOCK = -1.0          # legacy hard rule (kept for reference/reports)
 EDGE_WINDOW_DAYS = 90
+# Hierarchical (empirical-Bayes) shrinkage of the per-(class × regime) edge:
+# each cell's mean is shrunk toward its strategy's all-regime mean with
+# weight n/(n+k); a cell is blocked only when the UPPER bound of the shrunk
+# posterior mean is still < 0. k is estimated from the between-cell spread
+# (method of moments) when ≥ EDGE_EB_MIN_CELLS cells exist, else EDGE_SHRINK_K.
+# All overridable per user via bot config keys regime_edge_shrink_k,
+# regime_edge_z, regime_edge_min_trades.
+EDGE_SHRINK_K = 10.0
+EDGE_SHRINK_K_BOUNDS = (2.0, 100.0)
+EDGE_EB_MIN_CELLS = 3
+EDGE_UB_Z = 1.2816           # one-sided 90% upper bound
+# Regime HMM (regime_hmm.py) — used by regime_probabilities() when enough bars
+HMM_ENABLED = True
+HMM_STATES = 2
 SENT_THRESHOLD = 0.6
 
 _CACHE: dict[str, tuple] = {}
@@ -135,12 +150,32 @@ REGIME_CLASSES = ("strong_trend", "weak_trend", "range", "breakout",
                   "news_driven", "abnormal")
 
 
+def _hmm_block(bars):
+    """Filtered Gaussian-HMM state probabilities, or None (→ heuristic)."""
+    if not HMM_ENABLED or not bars:
+        return None
+    try:
+        from regime_hmm import HMM_MIN_BARS, regime_hmm_probabilities
+        if len(bars) < HMM_MIN_BARS:
+            return None
+        return regime_hmm_probabilities(bars, n_states=HMM_STATES)
+    except Exception as e:  # noqa: BLE001 — heuristic fallback
+        logger.debug("regime HMM skipped: %s", e)
+        return None
+
+
 def regime_probabilities(bars, trend: str, trend_conf: float, vol: dict,
                          news_driven: bool) -> dict:
     """Soft-evidence probability distribution over regime classes instead of
     one absolute label. Returns classes, top, top_p and a normalized-entropy
-    uncertainty (0 = certain, 1 = maximally uncertain)."""
+    uncertainty (0 = certain, 1 = maximally uncertain).
+
+    With ≥ regime_hmm.HMM_MIN_BARS bars the volatility evidence comes from
+    a 2-state Gaussian HMM on ATR-normalised returns (FILTERED P(state),
+    no look-ahead) instead of the ATR-ratio thresholds; the HMM output is
+    attached as `hmm` and `source` says which path was used."""
     scores = {c: 0.05 for c in REGIME_CLASSES}
+    hmm = _hmm_block(bars)
     trending = trend in ("trending_up", "trending_down")
     conf = max(0.0, min(1.0, float(trend_conf or 0)))
     if trending:
@@ -150,7 +185,18 @@ def regime_probabilities(bars, trend: str, trend_conf: float, vol: dict,
         scores["range"] += 0.8
 
     ratio = float(vol.get("ratio") or 1.0)
-    if ratio >= 1.25:
+    if hmm:
+        probs_h = hmm["probs"]
+        p_turb = float(probs_h.get("turbulent", 0.0))
+        # only a materially more volatile state counts as "expansion"
+        sep = min(1.0, max(0.0, (hmm.get("vol_ratio", 1.0) - 1.2) / 1.0))
+        scores["volatility_expansion"] += p_turb * sep
+        p_calm = float(probs_h.get("calm", 0.0))
+        if hmm["n_states"] >= 3:
+            scores["volatility_contraction"] += p_calm * sep
+        elif ratio <= 0.8:   # 2-state "calm" is normal vol; keep ATR evidence
+            scores["volatility_contraction"] += min(1.0, (1.0 - ratio) * 2)
+    elif ratio >= 1.25:
         scores["volatility_expansion"] += min(1.0, ratio - 1.0)
     elif ratio <= 0.8:
         scores["volatility_contraction"] += min(1.0, (1.0 - ratio) * 2)
@@ -176,10 +222,14 @@ def regime_probabilities(bars, trend: str, trend_conf: float, vol: dict,
     entropy = -sum(p * math.log(p) for p in probs.values() if p > 0)
     uncertainty = entropy / math.log(len(REGIME_CLASSES))
     top = max(probs, key=probs.get)
-    return {"classes": {c: round(p, 3) for c, p in
-                        sorted(probs.items(), key=lambda kv: -kv[1])},
-            "top": top, "top_p": round(probs[top], 3),
-            "uncertainty": round(uncertainty, 3)}
+    out = {"classes": {c: round(p, 3) for c, p in
+                       sorted(probs.items(), key=lambda kv: -kv[1])},
+           "top": top, "top_p": round(probs[top], 3),
+           "uncertainty": round(uncertainty, 3),
+           "source": "hmm" if hmm else "heuristic"}
+    if hmm:
+        out["hmm"] = {k: v for k, v in hmm.items() if k != "params"}
+    return out
 
 
 async def detect(db, user_id: str, force: bool = False) -> dict:
@@ -251,37 +301,112 @@ async def detect(db, user_id: str, force: bool = False) -> dict:
     return snapshot
 
 
-async def strategy_edge(db, user_id: str, regime_key: str) -> dict:
-    """Historical edge per strategy class in THIS regime bucket."""
+def _mean_var(xs):
+    n = len(xs)
+    if n == 0:
+        return 0.0, 0.0
+    m = sum(xs) / n
+    v = sum((x - m) ** 2 for x in xs) / (n - 1) if n > 1 else 0.0
+    return m, v
+
+
+def estimate_shrink_k(cells: dict, default_k: float = EDGE_SHRINK_K,
+                      bounds=EDGE_SHRINK_K_BOUNDS,
+                      min_cells: int = EDGE_EB_MIN_CELLS) -> float:
+    """Empirical-Bayes k = σ²_within / τ²_between (method of moments).
+    cells: {cell_key: [values]}. Falls back to `default_k`."""
+    stats = [(len(v), *_mean_var(v)) for v in cells.values() if len(v) >= 2]
+    if len(stats) < min_cells:
+        return float(default_k)
+    tot = sum(n for n, _, _ in stats)
+    s2_within = sum((n - 1) * v for n, _, v in stats) / max(
+        tot - len(stats), 1)
+    means = [m for _, m, _ in stats]
+    grand = sum(n * m for n, m, _ in stats) / tot
+    var_means = sum((m - grand) ** 2 for m in means) / (len(means) - 1)
+    tau2 = var_means - sum(s2_within / n for n, _, _ in stats) / len(stats)
+    if tau2 <= 0 or s2_within <= 0:
+        return float(bounds[1])          # no between-cell signal → shrink hard
+    return float(min(max(s2_within / tau2, bounds[0]), bounds[1]))
+
+
+def shrunk_edge(cell: list, strategy: list, k: float = EDGE_SHRINK_K,
+                z: float = EDGE_UB_Z) -> dict:
+    """Partial pooling of one cell toward its strategy mean.
+
+    shrunk = w·x̄_cell + (1−w)·m_strategy,   w = n/(n+k)
+    posterior var ≈ s²/(n+k) + (1−w)²·s²_strat/N_strat
+    Returns the shrunk mean, its one-sided upper bound and the weights."""
+    n = len(cell)
+    m_s, v_s = _mean_var(strategy) if strategy else (0.0, 0.0)
+    if n == 0:
+        return {"n": 0, "shrunk_mean": m_s, "upper": float("inf"),
+                "weight": 0.0, "strategy_mean": m_s}
+    m_c, v_c = _mean_var(cell)
+    w = n / (n + k)
+    shrunk = w * m_c + (1 - w) * m_s
+    # pooled within-cell variance: the cell's own when n>1, else the strategy's
+    s2 = v_c if n > 2 else (v_s if v_s > 0 else v_c)
+    n_s = max(len(strategy), 1)
+    post_var = s2 / (n + k) + (1 - w) ** 2 * (v_s / n_s)
+    upper = shrunk + z * math.sqrt(max(post_var, 0.0))
+    return {"n": n, "cell_mean": m_c, "shrunk_mean": shrunk, "upper": upper,
+            "weight": w, "strategy_mean": m_s, "post_sd": math.sqrt(post_var)}
+
+
+async def strategy_edge(db, user_id: str, regime_key: str,
+                        shrink_k: float | None = None,
+                        z: float | None = None,
+                        min_trades: int | None = None) -> dict:
+    """Historical edge per strategy class in THIS regime bucket, with
+    hierarchical shrinkage toward the strategy's all-regime mean."""
     since = (datetime.now(timezone.utc)
              - timedelta(days=EDGE_WINDOW_DAYS)).isoformat()
+    z = EDGE_UB_Z if z is None else float(z)
+    min_n = EDGE_MIN_TRADES if min_trades is None else int(min_trades)
     out = {}
     for cls in DEFAULT_ALLOCATIONS:
-        pnls = []
+        cells: dict = {}
         async for t in db.trades.find(
                 {"user_id": user_id, "origin": "auto", "status": "closed",
                  "pnl": {"$ne": None}, "closed_at": {"$gte": since},
-                 "strategy_class": cls, "market_regime.key": regime_key},
-                {"pnl": 1}).limit(1000):
-            pnls.append(float(t["pnl"]))
+                 "strategy_class": cls},
+                {"pnl": 1, "market_regime.key": 1}).limit(5000):
+            rk = ((t.get("market_regime") or {}).get("key")) or "unknown"
+            cells.setdefault(rk, []).append(float(t["pnl"]))
+        pnls = cells.get(regime_key, [])
         n = len(pnls)
         if n == 0:
             out[cls] = {"n": 0, "expectancy": None, "allowed": True,
                         "reason": "no history in this regime yet — allowed"}
             continue
-        mean = sum(pnls) / n
+        strategy_all = [p for v in cells.values() for p in v]
+        k = (float(shrink_k) if shrink_k is not None
+             else estimate_shrink_k(cells))
+        sh = shrunk_edge(pnls, strategy_all, k=k, z=z)
+        mean = sh["cell_mean"]
         sd = math.sqrt(sum((p - mean) ** 2 for p in pnls) / (n - 1)) if n > 1 else 0.0
         t_stat = mean / (sd / math.sqrt(n)) if sd > 0 else (1.0 if mean > 0 else -1.0)
         wins = sum(1 for p in pnls if p > 0)
-        blocked = n >= EDGE_MIN_TRADES and mean < 0 and t_stat <= EDGE_T_BLOCK
+        blocked = n >= min_n and sh["upper"] < 0
         out[cls] = {
             "n": n, "expectancy": round(mean, 2),
             "win_rate": round(wins / n, 2), "t_stat": round(t_stat, 2),
+            "shrunk_expectancy": round(sh["shrunk_mean"], 2),
+            "upper_bound": round(sh["upper"], 2),
+            "shrink_weight": round(sh["weight"], 3),
+            "shrink_k": round(k, 2),
+            "strategy_expectancy": round(sh["strategy_mean"], 2),
+            "method": "hierarchical_shrinkage",
             "allowed": not blocked,
             "reason": (f"proven negative edge in this regime "
-                       f"(${mean:.2f}/trade over {n} trades, t={t_stat:.1f})"
+                       f"(${mean:.2f}/trade over {n} trades; shrunk "
+                       f"${sh['shrunk_mean']:.2f}, upper bound "
+                       f"${sh['upper']:.2f} < 0)"
                        if blocked else
-                       f"${mean:.2f}/trade over {n} trades — edge fits"),
+                       f"${mean:.2f}/trade over {n} trades (shrunk "
+                       f"${sh['shrunk_mean']:.2f}, upper "
+                       f"${sh['upper']:.2f}) — edge fits"),
         }
     return out
 
@@ -293,7 +418,12 @@ async def regime_gate(db, user_id: str, cfg: dict,
     if not (cfg or {}).get("regime_gating_enabled", True):
         return {"allowed": True, "regime": regime,
                 "reason": "regime gating disabled in bot config"}
-    edge = await strategy_edge(db, user_id, regime["key"])
+    c = cfg or {}
+    edge = await strategy_edge(
+        db, user_id, regime["key"],
+        shrink_k=c.get("regime_edge_shrink_k"),
+        z=c.get("regime_edge_z"),
+        min_trades=c.get("regime_edge_min_trades"))
     row = edge.get(strategy_class) or {"allowed": True,
                                        "reason": "unbudgeted strategy"}
     return {"allowed": row["allowed"], "regime": regime,

@@ -133,7 +133,8 @@ def derive_sl_tp(action: str, entry: float, atr: float, profile: dict) -> tuple:
 def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                             stop_loss: float, confidence_pct: float,
                             profile: dict, locked_profit: float = 0.0,
-                            kelly_enabled: bool = False) -> dict:
+                            kelly_enabled: bool = False, *,
+                            spec=None, fx: float | None = None) -> dict:
     """Account-aware position sizing — the ONE authoritative stage, run at
     execute time (quant review C1/C2).
 
@@ -156,6 +157,13 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
     `locked_profit` (iter-65): subtracted from equity BEFORE sizing so that
     the daily-profit-target lock prevents that $ from being risked on later
     trades today. Defaults to 0 — no behaviour change when feature is off.
+
+    `spec` / `fx` (instrument spec service): when the account carries an
+    EA-reported contract spec for the symbol (accounts.symbol_specs, EA
+    v1.54+) — or a caller passes an `InstrumentSpec` — the broker's pip
+    value (tick_value × pip/tick_size, USD deposit or with `fx`) and the
+    broker's volume min/step/max are used. Without a broker spec the
+    legacy static tables apply unchanged.
     """
     equity = float(
         account.get("equity")
@@ -180,8 +188,19 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                 "method": "rejected_zero_sl",
                 "reject_reason": "stop distance is zero — risk undefined"}
 
-    pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"),
-                                    price=entry_price)
+    if spec is None:
+        try:
+            from instrument_specs import spec_from_account
+            spec = spec_from_account(account, symbol)
+        except Exception:  # noqa: BLE001 — malformed specs → legacy tables
+            spec = None
+    broker_pip = None
+    if spec is not None:
+        from instrument_specs import sizing_pip_value_usd
+        broker_pip = sizing_pip_value_usd(account, spec, price=entry_price,
+                                          fx=fx)
+    pip_usd = broker_pip or pip_value_usd_per_lot(
+        symbol, account.get("account_type"), price=entry_price)
     if pip_usd <= 0:
         return {"lot_size": 0.0, "sizing_valid": False,
                 "method": "rejected_zero_pip_value",
@@ -206,8 +225,16 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
     # FLOOR to the broker volume step (never round-to-nearest, which could
     # exceed the budget), and REJECT when the budget buys less than the
     # broker minimum instead of rounding up to it.
-    vstep = float(account.get("volume_step") or DEFAULT_VOLUME_STEP)
-    vmin = float(account.get("volume_min") or vstep)
+    vmax = None
+    if spec is not None and (spec.extra or {}).get("volume_from_broker"):
+        vstep = float(spec.volume_step or DEFAULT_VOLUME_STEP)
+        vmin = float(spec.volume_min or vstep)
+        vmax = float(spec.volume_max or 0) or None
+    else:
+        vstep = float(account.get("volume_step") or DEFAULT_VOLUME_STEP)
+        vmin = float(account.get("volume_min") or vstep)
+    if vmax is not None and lots > vmax:
+        lots = vmax  # broker maximum: never send a volume it will reject
     lot_size = floor_lot(lots, vstep)
     min_risk_usd = vmin * sl_pips * pip_usd
     if lot_size < vmin - 1e-9 and min_risk_usd <= risk_amount_usd * RISK_OVERSHOOT_TOLERANCE:
@@ -238,5 +265,7 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         "sl_pips": round(sl_pips, 1),
         "pip_usd_per_lot": round(pip_usd, 4),
         "equity": round(equity, 2),
+        "spec_source": ("ea" if broker_pip else "static"),
+        "volume_step": vstep, "volume_min": vmin,
     }
 

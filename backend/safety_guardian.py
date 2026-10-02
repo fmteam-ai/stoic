@@ -18,6 +18,7 @@ import os
 
 from pip_utils import price_to_pips, pip_value_usd_per_lot
 from macro_gate import evaluate as macro_gate_evaluate
+from fail_closed import fail_closed
 
 logger = logging.getLogger("safety-guardian")
 
@@ -50,6 +51,18 @@ def _fail(name: str, reason: str, value: float | str | None = None) -> dict:
     return {"name": name, "ok": False, "reason": reason, "value": value}
 
 
+def _guardian_error_block(name: str, exc: BaseException) -> dict:
+    """fail_closed block in the guardian's own verdict contract."""
+    return {"ok": False, "blocked_by": "guardian_error",
+            "audit": [_fail("guardian_evaluation",
+                            f"Safety Guardian evaluation failed — refusing "
+                            f"trade (fail-closed): {type(exc).__name__}: "
+                            f"{str(exc)[:200]}")],
+            "evaluated_at": datetime.now(timezone.utc).isoformat(),
+            "context": {"error": f"{type(exc).__name__}: {str(exc)[:200]}"}}
+
+
+@fail_closed("safety_guardian", block_factory=_guardian_error_block)
 async def audit_pre_trade(*, db, account: dict, signal: dict,
                           user_id: str, cfg_account_id: str | None) -> dict:
     """Run all live-account safety checks. Return:

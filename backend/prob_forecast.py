@@ -76,6 +76,14 @@ def trade_eval(symbol: str, action: str, entry, sl, tp1, fc: dict) -> dict | Non
     if action not in ("BUY", "SELL") or not fc or not fc.get("quantile_values"):
         return None
     levels, values = fc["quantile_levels"], fc["quantile_values"]
+    # Conformalised deciles (conformal.py · ACI) when this user+symbol's
+    # coverage state is mature — realised coverage of the outer band then
+    # tracks its nominal level. Otherwise the raw deciles, as before.
+    conf = fc.get("conformal") or {}
+    conformal_used = bool(conf.get("active") and conf.get("quantile_values")
+                          and len(conf["quantile_values"]) == len(values))
+    if conformal_used:
+        levels, values = conf["quantile_levels"], conf["quantile_values"]
     last = fc["last"]
     try:
         entry, sl, tp1 = float(entry), float(sl), float(tp1)
@@ -110,4 +118,5 @@ def trade_eval(symbol: str, action: str, entry, sl, tp1, fc: dict) -> dict | Non
         "suggested_sl": round(suggested_sl, 5) if tighter else None,
         "lot_multiplier": lot_multiplier,
         "negative_ev": bool(ev_pips <= 0 and prob_expectancy <= 0),
+        "conformal": conformal_used,
     }
