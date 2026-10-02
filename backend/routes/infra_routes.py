@@ -11,6 +11,20 @@ from database import get_db
 router = APIRouter(prefix="/infra", tags=["infrastructure"])
 
 
+def _is_verified_admin(user: dict) -> bool:
+    """True only for a REAL admin (role + mandatory TOTP MFA, auth.require_admin).
+    A role-only admin without MFA is treated as a regular owner (owner-scoped
+    queries) instead of getting cross-tenant reach."""
+    if (user or {}).get("role") != "admin":
+        return False
+    from auth import require_admin
+    try:
+        require_admin(user)
+    except HTTPException:
+        return False
+    return True
+
+
 def _aware(dt):
     if dt and dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
@@ -364,7 +378,7 @@ async def revoke_agent_mtls(agent_id: str, payload: dict = None,
     from agent_mtls import revoke_agent_cert
     db = get_db()
     q = {"agent_id": agent_id}
-    if user.get("role") != "admin":
+    if not _is_verified_admin(user):
         q["user_id"] = user["id"]
     if not await db.vps_agents.find_one(q):
         raise HTTPException(status_code=404, detail="agent not found")
@@ -665,18 +679,29 @@ async def queue_agent_command(agent_id: str, payload: dict,
 
 
 @router.post("/agents/{agent_id}/rotate-credentials")
-async def rotate_agent_credentials(agent_id: str,
+async def rotate_agent_credentials(agent_id: str, request: Request,
                                    user=Depends(get_current_user)):
     """iter-122 Phase 3 — rotate the agent's installation-scoped credentials
     (agent_token + command_key). Old credentials die instantly; the VPS
-    operator re-runs the enrollment step with the new values."""
+    operator re-runs the enrollment step with the new values.
+    Rotating ANOTHER user's agent is an admin fleet action: verified admin
+    (MFA) + fresh step-up for `agent_config_push`, audited."""
     from entitlements import enforce_feature
     await enforce_feature(user, "vps_quick_connect")
     import secrets as _secrets
     db = get_db()
     q = {"agent_id": agent_id, "revoked": {"$ne": True}}
-    if user.get("role") != "admin":
+    if not _is_verified_admin(user):
         q["user_id"] = user["id"]
+    else:
+        target = await db.vps_agents.find_one(q, {"user_id": 1})
+        if target and str(target.get("user_id")) != str(user["id"]):
+            from step_up import audit_event, require_step_up
+            await require_step_up(db, user, request, "agent_config_push")
+            await audit_event(db, user["id"], "agent_config_push",
+                              {"op": "rotate_credentials", "agent_id": agent_id,
+                               "owner_id": str(target.get("user_id"))},
+                              request, step_up=True)
     new_token = f"agt_tok_{_secrets.token_urlsafe(32)}"
     new_key = _secrets.token_hex(32)
     from vps_agent import encrypt_command_key, hash_agent_token
@@ -704,7 +729,7 @@ async def revoke_installation(installation_id: str,
     db = get_db()
     now = datetime.now(timezone.utc)
     q = {"installation_id": installation_id, "revoked": {"$ne": True}}
-    if user.get("role") != "admin":
+    if not _is_verified_admin(user):
         q["user_id"] = user["id"]
     inst = await db.installations.find_one_and_update(
         q, {"$set": {"revoked": True, "revoked_at": now,
@@ -906,7 +931,7 @@ async def revoke_device_key(installation_id: str, user=Depends(get_current_user)
     heartbeat method for the installation degrades to `device_key_revoked`."""
     db = get_db()
     q = {"installation_id": installation_id, "device_key": {"$exists": True}}
-    if user.get("role") != "admin":
+    if not _is_verified_admin(user):
         q["user_id"] = user["id"]
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.installations.update_one(q, {"$set": {"device_key.revoked": True, "device_key.revoked_at": now_iso,

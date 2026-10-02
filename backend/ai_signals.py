@@ -9,7 +9,6 @@ Plus dynamic Regime Swapping — SL/TP/Kelly mutate based on live regime.
 """
 import os
 import json
-import uuid
 import re
 import logging
 from datetime import datetime, timezone, timedelta
@@ -138,20 +137,34 @@ async def _intraday_entropy_override(symbol: str, daily: dict) -> dict:
 async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
                          strategy: str | None = None,
-                         engine_params: dict | None = None) -> dict:
+                         engine_params: dict | None = None,
+                         user_id: str | None = None) -> dict:
+    # user_id scopes intraday candle reads to the user's OWN broker feed
+    # (brokers differ in price, server-time offset and CFD vs futures).
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
-    history = await get_history(symbol)
+    history = await get_history(symbol, user_id=user_id)
     # iter-117 · Live-price patch — refresh the in-flight daily bar with the
     # live quote so intraday indicators track the real market instead of the
     # history cache (bot missed a 60-pt gold drop analyzing a stale close).
+    # Only the CURRENT day's bar is patched; when the last bar is yesterday's
+    # (daily sources publish after the close) today is appended instead of
+    # silently rewriting yesterday's OHLC.
     live_px = float(quote.get("price") or 0)
     if history and live_px > 0:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         lb = dict(history[-1])
-        lb["close"] = live_px
-        lb["high"] = max(float(lb.get("high") or live_px), live_px)
-        lb["low"] = min(float(lb.get("low") or live_px), live_px)
-        history = history[:-1] + [lb]
+        if str(lb.get("date") or "")[:10] >= today:
+            lb["close"] = live_px
+            lb["high"] = max(float(lb.get("high") or live_px), live_px)
+            lb["low"] = min(float(lb.get("low") or live_px), live_px)
+            history = history[:-1] + [lb]
+        else:
+            pc = float(lb.get("close") or live_px)
+            history = history + [{"date": today, "open": pc,
+                                  "high": max(pc, live_px),
+                                  "low": min(pc, live_px),
+                                  "close": live_px, "volume": 0}]
     indicators = compute_indicators(history) or {}
     sentiment = await score_sentiment(symbol)
     session = current_session()
@@ -171,7 +184,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # iter-120 · Intraday M15 feature pack — live EA-stream vision so the
     # strategy engine can trade clean intraday days the daily tiers can't see.
     from intraday_features import fetch_intraday_pack
-    intraday_pack = await fetch_intraday_pack(symbol)
+    intraday_pack = await fetch_intraday_pack(symbol, user_id=user_id)
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
 
@@ -328,7 +341,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
     market_closure = is_market_closed(symbol)
     mtf_conf = None
     if mtf_mode and not market_closure:
-        mtf_conf = await fetch_mtf_confluence(symbol, current_price, mode=mtf_mode)
+        mtf_conf = await fetch_mtf_confluence(symbol, current_price, mode=mtf_mode,
+                                              user_id=user_id)
 
     def _hold(reason: str, closure: dict | None = None) -> dict:
         return {
@@ -434,21 +448,30 @@ async def analyze_symbol(symbol: str, risk_level: str,
             f"Live break of {mtf_conf.get('swing_level')}",
         ]
         try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
-                system_message=NARRATOR_PROMPT,
-            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-            narration = await chat.send_message(UserMessage(text=json.dumps({
-                "confirmed_setup": {"direction": action, "cascade": mtf_conf},
-                "market_context": json.loads(user_text),
-            }, separators=(",", ":"))))
-            parsed = _parse_ai_json(str(narration))
-            if parsed.get("reasoning"):
-                reasoning = f"{reasoning}\n\n{parsed['reasoning']}"
-            if parsed.get("key_factors"):
-                key_factors = parsed["key_factors"]
+            import llm_client
+            from pydantic import BaseModel as _BM, Field as _F
+
+            class _Narration(_BM):
+                reasoning: str = ""
+                key_factors: list[str] = _F(default_factory=list)
+
+            # Narration is cosmetic — never let it delay a confirmed entry
+            # by more than the hot-path budget (fast tier → hot-path timeout).
+            _res = await llm_client.complete(
+                feature="signal_narration", system=NARRATOR_PROMPT,
+                user=json.dumps({
+                    "confirmed_setup": {"direction": action, "cascade": mtf_conf},
+                    "market_context": json.loads(user_text),
+                }, separators=(",", ":")),
+                schema=_Narration, max_tokens=800)
+            if not _res.ok:
+                raise RuntimeError(_res.error)
+            parsed = _res.data.model_dump()
+            if isinstance(parsed.get("reasoning"), str) and parsed["reasoning"]:
+                reasoning = f"{reasoning}\n\n{parsed['reasoning'][:2000]}"
+            kf = parsed.get("key_factors")
+            if isinstance(kf, list) and kf:
+                key_factors = [str(x)[:200] for x in kf[:8]]
         except Exception as e:  # noqa: BLE001
             logger.warning("Narration pass failed for %s: %s", symbol, e)
 

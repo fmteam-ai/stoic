@@ -16,6 +16,16 @@ historical trade outcomes stored in MongoDB once enough samples accumulate.
 
 Threshold defaults to 0.55 — anything below blocks execution even if confidence
 is high, because high confidence + structural disagreement = classic fake-out.
+
+DEPRECATED (uncertainty upgrade): the hand-weighted logistic below was never
+fitted to outcomes and is not called by the trading loop. The learned
+replacement is ``meta_labeling`` (triple-barrier labels over executed AND
+vetoed signals, uniqueness weights, purged walk-forward, Platt/isotonic
+calibration). ``predict_true_signal_probability`` is kept for importers
+(tests/backend_test.py); new code should call
+``predict_true_signal_probability_learned`` (async), which uses the learned
+meta-model when one is trained for the user and falls back to the legacy
+hand weights otherwise.
 """
 from __future__ import annotations
 import math
@@ -166,4 +176,38 @@ def predict_true_signal_probability(
         "threshold": threshold,
         "logit": round(z, 4),
         "features": {k: round(v, 4) for k, v in features.items()},
+        "source": "hand_weighted_deprecated",
     }
+
+
+async def predict_true_signal_probability_learned(
+        db, user_id: str, signal: dict, bars: list,
+        account_id: str | None = None, threshold: float = 0.55,
+        **legacy_kwargs) -> Dict:
+    """Learned meta-label P(true signal) via meta_labeling.predict; falls
+    back to the deprecated hand-weighted model (needs the legacy keyword
+    arguments) when no meta-model is trained. Never raises."""
+    action = (signal or {}).get("action")
+    if action in ("BUY", "SELL"):
+        try:
+            import meta_labeling
+            res = await meta_labeling.predict(db, user_id, signal, bars or [],
+                                              account_id=account_id)
+        except Exception:  # noqa: BLE001 — fail-open
+            res = None
+        if res:
+            p = float(res["p_success"])
+            return {"p_true": round(p, 4),
+                    "verdict": "TRUE_SIGNAL" if p >= threshold else "FAKE_OUT",
+                    "threshold": threshold, "source": "meta_labeling",
+                    "calibration": res.get("calibration"),
+                    "n_train": res.get("n_train")}
+    if legacy_kwargs:
+        kw = {"action": action or "HOLD",
+              "confidence": float((signal or {}).get("confidence") or 50.0),
+              "sentiment": {}, "regime": {}, "entropy": {}, "session": {},
+              "indicators": {}, "upcoming_macro": []}
+        kw.update(legacy_kwargs)
+        return predict_true_signal_probability(**kw)
+    return {"p_true": None, "verdict": "UNKNOWN", "threshold": threshold,
+            "source": "none"}

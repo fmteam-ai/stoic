@@ -28,10 +28,11 @@ REGISTRY = {
     "RESEND_API_KEY": ("email", True, "Resend API key (re_…)"),
     "SENDER_EMAIL": ("email", False, "From address on a verified Resend domain"),
     "SENDER_NAME": ("email", False, "Display name on outgoing e-mail"),
-    "EMERGENT_LLM_KEY": ("ai", True, "Emergent Universal Key (Co-Pilot, Risk Commander, AI agents)"),
+    "ANTHROPIC_API_KEY": ("ai", True, "Anthropic API key — official SDK backend (Co-Pilot, Risk Commander, AI agents)"),
+    "EMERGENT_LLM_KEY": ("ai", True, "Emergent Universal Key — legacy LLM backend fallback"),
 }
 PROVIDERS = {
-    "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Emergent)"}
+    "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Claude)"}
 _AAD = b"stoic-secrets-vault-v1"
 DECRYPT_FAILURES: list[str] = []   # keys whose sealed value could not be unsealed at boot (master-key mismatch)
 
@@ -321,7 +322,8 @@ async def test_provider(db, provider: str, actor: dict) -> dict:
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "detail": f"Cloudflare unreachable: {type(e).__name__}"}
     if provider == "ai":
-        if not os.environ.get("EMERGENT_LLM_KEY"):
-            return {"ok": False, "detail": "EMERGENT_LLM_KEY not configured"}
-        return {"ok": True, "detail": "key present — ask the Co-Pilot a question to exercise it"}
+        from llm_client import backend as _llm_backend, is_configured as _llm_configured
+        if not _llm_configured():
+            return {"ok": False, "detail": "no LLM key configured (ANTHROPIC_API_KEY or EMERGENT_LLM_KEY)"}
+        return {"ok": True, "detail": f"{_llm_backend()} backend configured — ask the Co-Pilot a question to exercise it"}
     raise ValueError("unknown provider")

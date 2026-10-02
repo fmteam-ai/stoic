@@ -50,6 +50,13 @@ class ScalpState:
         # the kill-switch flag an unusable broker clock even when samples
         # are rejected and the median never forms.
         self.last_batch_residual_ms: float | None = None
+        # True while the EA reports sent_gmt_ms (its own UTC send time):
+        # drift samples then EXCLUDE transport (sent_gmt − sent_at instead
+        # of recv − sent_at), so steady transport lag is no longer absorbed
+        # into the offset and shows up in broker_adjusted_age_ms.
+        self.gmt_clock: bool = False
+        self.last_transport_ms: float | None = None
+        self.last_ea_tick_age_ms: float | None = None
 
     def update(self, t: TickEvent, trusted: bool = True) -> None:
         mid = (t.bid + t.ask) / 2.0
@@ -73,6 +80,15 @@ class ScalpState:
             self._offsets.append(off)
             s = sorted(self._offsets)
             self.clock_drift_ms = float(s[len(s) // 2])
+
+    def set_clock_mode(self, gmt_clock: bool) -> None:
+        """Switching between legacy (recv − sent_at) and EA-UTC
+        (sent_gmt − sent_at) samples changes what the offset means — never
+        mix the two populations in one median."""
+        if bool(gmt_clock) != self.gmt_clock:
+            self._offsets.clear()
+            self.clock_drift_ms = 0.0
+            self.gmt_clock = bool(gmt_clock)
 
     # -------- execution feedback --------
     def record_fill(self, slippage_pips: float) -> None:

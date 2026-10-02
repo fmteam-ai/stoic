@@ -1,7 +1,35 @@
 """Risk management profiles + Kelly-modified dynamic position sizing."""
+import math
 from typing import Literal
 
 from pip_utils import price_to_pips, pip_value_usd_per_lot
+
+DEFAULT_VOLUME_STEP = 0.01
+DEFAULT_VOLUME_MIN = 0.01
+
+
+def floor_lot(lots: float, step: float = DEFAULT_VOLUME_STEP) -> float:
+    """Floor a lot quantity DOWN to the broker volume step (never nearest).
+
+    A tiny epsilon absorbs float noise (0.29999999 → 0.30) without ever
+    rounding a genuinely smaller value up."""
+    step = float(step or DEFAULT_VOLUME_STEP)
+    if lots is None or lots <= 0 or step <= 0:
+        return 0.0
+    n = math.floor(float(lots) / step + 1e-9)
+    # round() only strips float artefacts of n*step (0.07000000000000001)
+    return round(n * step, 8)
+
+
+def scale_lot(lot: float, scale: float, step: float = DEFAULT_VOLUME_STEP,
+              min_lot: float = DEFAULT_VOLUME_MIN) -> float:
+    """Downscale a lot by `scale`, floored to the volume step.
+
+    Returns 0.0 when the scaled size falls below the broker minimum — a
+    scale-down must never round UP above the scaled value (callers treat
+    0.0 as "too small to trade")."""
+    out = floor_lot(float(lot or 0) * float(scale), step)
+    return out if out >= float(min_lot) - 1e-9 else 0.0
 
 RiskLevel = Literal["low", "medium", "high", "extreme"]
 
@@ -105,7 +133,8 @@ def derive_sl_tp(action: str, entry: float, atr: float, profile: dict) -> tuple:
 def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                             stop_loss: float, confidence_pct: float,
                             profile: dict, locked_profit: float = 0.0,
-                            kelly_enabled: bool = False) -> dict:
+                            kelly_enabled: bool = False, *,
+                            spec=None, fx: float | None = None) -> dict:
     """Account-aware position sizing — the ONE authoritative stage, run at
     execute time (quant review C1/C2).
 
@@ -128,6 +157,13 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
     `locked_profit` (iter-65): subtracted from equity BEFORE sizing so that
     the daily-profit-target lock prevents that $ from being risked on later
     trades today. Defaults to 0 — no behaviour change when feature is off.
+
+    `spec` / `fx` (instrument spec service): when the account carries an
+    EA-reported contract spec for the symbol (accounts.symbol_specs, EA
+    v1.54+) — or a caller passes an `InstrumentSpec` — the broker's pip
+    value (tick_value × pip/tick_size, USD deposit or with `fx`) and the
+    broker's volume min/step/max are used. Without a broker spec the
+    legacy static tables apply unchanged.
     """
     equity = float(
         account.get("equity")
@@ -152,7 +188,19 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                 "method": "rejected_zero_sl",
                 "reject_reason": "stop distance is zero — risk undefined"}
 
-    pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"))
+    if spec is None:
+        try:
+            from instrument_specs import spec_from_account
+            spec = spec_from_account(account, symbol)
+        except Exception:  # noqa: BLE001 — malformed specs → legacy tables
+            spec = None
+    broker_pip = None
+    if spec is not None:
+        from instrument_specs import sizing_pip_value_usd
+        broker_pip = sizing_pip_value_usd(account, spec, price=entry_price,
+                                          fx=fx)
+    pip_usd = broker_pip or pip_value_usd_per_lot(
+        symbol, account.get("account_type"), price=entry_price)
     if pip_usd <= 0:
         return {"lot_size": 0.0, "sizing_valid": False,
                 "method": "rejected_zero_pip_value",
@@ -174,22 +222,36 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         method = "fixed_fraction"
     risk_amount_usd = equity * (effective_risk_pct / 100.0)
     lots = risk_amount_usd / (sl_pips * pip_usd)
-    lot_size = max(round(lots, 2), 0.01)
-    # iter-144 C5 · verify the ACTUAL risk after broker-step rounding and the
-    # 0.01 minimum. If the broker minimum forces materially more risk than
-    # the budget (e.g. tiny equity, wide stop), REJECT instead of trading a
-    # position whose risk was never approved.
+    # FLOOR to the broker volume step (never round-to-nearest, which could
+    # exceed the budget), and REJECT when the budget buys less than the
+    # broker minimum instead of rounding up to it.
+    vmax = None
+    if spec is not None and (spec.extra or {}).get("volume_from_broker"):
+        vstep = float(spec.volume_step or DEFAULT_VOLUME_STEP)
+        vmin = float(spec.volume_min or vstep)
+        vmax = float(spec.volume_max or 0) or None
+    else:
+        vstep = float(account.get("volume_step") or DEFAULT_VOLUME_STEP)
+        vmin = float(account.get("volume_min") or vstep)
+    if vmax is not None and lots > vmax:
+        lots = vmax  # broker maximum: never send a volume it will reject
+    lot_size = floor_lot(lots, vstep)
+    min_risk_usd = vmin * sl_pips * pip_usd
+    if lot_size < vmin - 1e-9 and min_risk_usd <= risk_amount_usd * RISK_OVERSHOOT_TOLERANCE:
+        # C5: the broker minimum may overshoot the budget by the documented
+        # tolerance (small accounts), never more.
+        lot_size = vmin
     actual_risk_usd = lot_size * sl_pips * pip_usd
-    if actual_risk_usd > risk_amount_usd * RISK_OVERSHOOT_TOLERANCE:
+    if lot_size < vmin - 1e-9 or actual_risk_usd > risk_amount_usd * RISK_OVERSHOOT_TOLERANCE:
         return {
             "lot_size": 0.0, "sizing_valid": False,
             "method": "rejected_min_lot_risk",
             "reject_reason": (
-                f"broker-minimum 0.01 lot risks ${actual_risk_usd:.2f} vs the "
+                f"broker-minimum {vmin:g} lot risks ${min_risk_usd:.2f} vs the "
                 f"${risk_amount_usd:.2f} budget ({effective_risk_pct:.2f}% of "
                 f"equity) — stop too wide for this account"),
             "risk_amount_usd": round(risk_amount_usd, 2),
-            "actual_risk_usd": round(actual_risk_usd, 2),
+            "actual_risk_usd": round(max(actual_risk_usd, min_risk_usd), 2),
             "sl_pips": round(sl_pips, 1), "equity": round(equity, 2),
         }
     return {
@@ -203,5 +265,7 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         "sl_pips": round(sl_pips, 1),
         "pip_usd_per_lot": round(pip_usd, 4),
         "equity": round(equity, 2),
+        "spec_source": ("ea" if broker_pip else "static"),
+        "volume_step": vstep, "volume_min": vmin,
     }
 

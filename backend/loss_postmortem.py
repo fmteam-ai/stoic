@@ -21,14 +21,14 @@ Stored in:
   • `guardrail_adjustments`    — audit trail of auto-tightens
   • `users.postmortem_settings = {auto_tighten_enabled: bool}` — opt-in
 """
-import os
 import json
 import logging
-import uuid
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 
-from database import get_db
+from pydantic import BaseModel, Field
+
+import llm_client
 
 logger = logging.getLogger("loss-postmortem")
 
@@ -47,6 +47,16 @@ JSON with this shape:
 }
 
 Be terse. Do NOT use markdown. Do NOT prefix the JSON. Only output the JSON object."""
+
+
+class PostmortemOut(BaseModel):
+    summary: str
+    why_it_looked_good: str = ""
+    what_actually_happened: str = ""
+    what_changed: str = ""
+    lessons: list[str] = Field(default_factory=list)
+    suggested_guardrail: str = ""
+    pattern_key: str = ""   # always overwritten with the derived key
 
 
 def _pattern_key(trade: dict, signal: dict) -> str:
@@ -147,33 +157,23 @@ async def _claude_narrative(trade: dict, signal: dict, diff: dict) -> dict:
         "quantitative_diff": diff,
     }, default=str)
 
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"postmortem-{trade.get('symbol','?')}-{uuid.uuid4().hex[:8]}",
-            system_message=_POSTMORTEM_SYSTEM,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        response = await chat.send_message(UserMessage(text=user_text))
-        # Strip code fences / prefix garbage just in case
-        raw = str(response).strip()
-        if raw.startswith("```"):
-            raw = raw.strip("`")
-            if raw.lower().startswith("json"):
-                raw = raw[4:].strip()
-        return json.loads(raw)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("postmortem LLM failed: %s", e)
-        return {
-            "summary": f"Loss on {trade.get('symbol')} {trade.get('action')} ({trade.get('close_reason')})",
-            "why_it_looked_good": (signal.get("reasoning") or "")[:200] or "n/a",
-            "what_actually_happened": f"Stopped at {trade.get('exit_price')} for ${trade.get('pnl')}",
-            "what_changed": "LLM analysis unavailable — review the quantitative diff manually.",
-            "lessons": [],
-            "suggested_guardrail": "",
-            "pattern_key": _pattern_key(trade, signal),
-            "_llm_failed": True,
-        }
+    res = await llm_client.complete(
+        feature="loss_postmortem", system=_POSTMORTEM_SYSTEM, user=user_text,
+        schema=PostmortemOut, max_tokens=1500,
+        usage_meta={"user_id": trade.get("user_id"), "trade_id": str(trade.get("_id"))})
+    if res.ok:
+        return res.data.model_dump()
+    logger.warning("postmortem LLM failed: %s", res.error)
+    return {
+        "summary": f"Loss on {trade.get('symbol')} {trade.get('action')} ({trade.get('close_reason')})",
+        "why_it_looked_good": (signal.get("reasoning") or "")[:200] or "n/a",
+        "what_actually_happened": f"Stopped at {trade.get('exit_price')} for ${trade.get('pnl')}",
+        "what_changed": "LLM analysis unavailable — review the quantitative diff manually.",
+        "lessons": [],
+        "suggested_guardrail": "",
+        "pattern_key": _pattern_key(trade, signal),
+        "_llm_failed": True,
+    }
 
 
 async def _user_doc(db, user_id: str) -> dict | None:

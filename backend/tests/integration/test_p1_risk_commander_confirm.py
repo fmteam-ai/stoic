@@ -1,5 +1,6 @@
 """Risk Commander explicit confirmations (P1 backlog) — deterministic
 preview, stored proposals, fingerprint drift refusal, expiry, reject."""
+from unittest.mock import MagicMock
 import os
 import sys
 from datetime import datetime, timedelta, timezone
@@ -19,6 +20,11 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(
 def _run(coro):
     from conftest import run_async
     return run_async(coro)
+
+
+# Route handlers take the Request for step-up; these tests never reach
+# a live context, so a bare stub is enough.
+_REQ = MagicMock()
 
 
 @pytest.fixture
@@ -77,14 +83,14 @@ def test_confirm_executes_only_matching_preview(world):
     # portfolio drifts before confirm → refused with fresh preview
     _run(db.trades.update_one({"user_id": uid, "symbol": "BTCUSD"}, {"$set": {"status": "closed"}}))
     with pytest.raises(HTTPException) as ei:
-        _run(nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+        _run(nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert ei.value.status_code == 409
     assert ei.value.detail["code"] == "preview_stale"
     assert ei.value.detail["preview"]["actions"][0]["count"] == 1
     assert _run(db.trades.count_documents({"user_id": uid, "close_requested": True})) == 0
 
     # confirm the refreshed preview → executes
-    res = _run(nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+    res = _run(nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert res["confirmed"] is True
     assert _run(db.trades.count_documents({"user_id": uid, "close_requested": True})) == 1
     stored = _run(db.nl_proposals.find_one({"_id": ObjectId(doc["id"])}))
@@ -92,7 +98,7 @@ def test_confirm_executes_only_matching_preview(world):
 
     # replay is refused
     with pytest.raises(HTTPException) as ei2:
-        _run(nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+        _run(nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert ei2.value.detail["code"] == "proposal_not_pending"
 
 
@@ -106,18 +112,18 @@ def test_confirm_refuses_expired_foreign_and_raw(world):
     _run(db.nl_proposals.update_one({"_id": ObjectId(doc["id"])}, {"$set": {
         "expires_at": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}}))
     with pytest.raises(HTTPException) as ei:
-        _run(nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+        _run(nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert ei.value.detail["code"] == "proposal_expired"
     assert _run(db.bot_configs.count_documents({"user_id": uid, "active": True})) == 2
 
     other = {"id": str(ObjectId()), "email": "x@test.local"}
     doc2 = _run(store_proposal(db, uid, "disable", actions, _run(build_preview(db, uid, actions))))
     with pytest.raises(HTTPException) as ei2:
-        _run(nl_command_confirm({"proposal_id": doc2["id"]}, user=other))
+        _run(nl_command_confirm({"proposal_id": doc2["id"]}, request=_REQ, user=other))
     assert ei2.value.status_code == 404
 
     with pytest.raises(HTTPException) as ei3:
-        _run(nl_command_confirm({"actions": actions}, user=user))
+        _run(nl_command_confirm({"actions": actions}, request=_REQ, user=user))
     assert ei3.value.detail["code"] == "proposal_id_required"
 
 
@@ -130,7 +136,7 @@ def test_reject_marks_proposal(world):
     doc = _run(store_proposal(db, uid, "panic", actions, _run(build_preview(db, uid, actions))))
     assert _run(nl_command_reject(doc["id"], user=user))["status"] == "rejected"
     with pytest.raises(HTTPException) as ei:
-        _run(nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+        _run(nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert ei.value.detail["code"] == "proposal_not_pending"
     with pytest.raises(HTTPException):
         _run(nl_command_reject(doc["id"], user=user))

@@ -788,6 +788,40 @@ class ShadowSim:
         }
 
 
+MAX_TRANSPORT_REPORT_MS = 600_000     # bound for reported transport age
+
+
+def clock_freshness(recv_ms: int, sent_at_ms, sent_gmt_ms) -> dict:
+    """Quote-freshness inputs for one tick batch (pure — unit tested).
+
+    mode "gmt"    (EA v1.58+, sent_gmt_ms present): transport =
+                  server_now − sent_gmt_ms (bounded); newest-tick age is
+                  measured on the EA's OWN clock: sent_gmt_ms − tick time
+                  converted to UTC (broker timezone snapped to 30 min).
+    mode "legacy" (sent_at_ms only): recv − sent_at, as before — steady
+                  transport lag is absorbed into the learned offset.
+    mode "none"   (neither): untrusted.
+    """
+    if not sent_at_ms:
+        return {"mode": "none"}
+    sent_at = int(sent_at_ms)
+    if sent_gmt_ms:
+        gmt = int(sent_gmt_ms)
+        raw = recv_ms - gmt
+        transport = max(-MAX_TRANSPORT_REPORT_MS,
+                        min(MAX_TRANSPORT_REPORT_MS, raw))
+        sample = gmt - sent_at            # = tick age at send − broker TZ
+        ea_tick_age = kill.clock_drift_residual_ms(sample)
+        transport_ok = (-kill.MAX_EA_CLOCK_SKEW_MS <= raw
+                        <= MAX_BATCH_TRANSPORT_AGE_MS)
+        return {"mode": "gmt", "transport_ms": float(max(0, transport)),
+                "raw_transport_ms": float(raw),
+                "transport_ok": transport_ok,
+                "drift_sample_ms": float(sample),
+                "ea_tick_age_ms": float(ea_tick_age)}
+    return {"mode": "legacy", "raw_transport_ms": float(recv_ms - sent_at)}
+
+
 class ScalpRunner:
     def __init__(self, account_id: str, user_id: str, symbol: str):
         self.account_id = account_id
@@ -835,7 +869,8 @@ class ScalpRunner:
     # ---------------- ingestion ----------------
 
     async def ingest(self, db, account: dict, ticks: list[dict],
-                     sent_at_ms: int | None) -> dict:
+                     sent_at_ms: int | None,
+                     sent_gmt_ms: int | None = None) -> dict:
         self.account = account
         self.equity = float(account.get("equity") or 0)
         self.broker = str(account.get("broker") or "")
@@ -848,11 +883,28 @@ class ScalpRunner:
         # batch's transport RELATIVE to that median so sloppy-but-constant
         # broker clocks (≤15s) still trade while delayed batches are
         # rejected precisely.
-        raw_transport = (recv - int(sent_at_ms)) if sent_at_ms else None
-        if raw_transport is None:
+        fresh = clock_freshness(recv, sent_at_ms, sent_gmt_ms)
+        self.state.set_clock_mode(fresh["mode"] == "gmt")
+        if fresh["mode"] == "none":
             batch_residual = None
             trusted = False
+            transport_age = None
+        elif fresh["mode"] == "gmt":
+            # EA v1.58+ — transport is measured DIRECTLY against the EA's
+            # UTC send clock; the drift sample (sent_gmt − sent_at) carries
+            # only the broker timezone + broker clock error + newest-tick
+            # age at send, never transport.
+            sample = fresh["drift_sample_ms"]
+            batch_residual = fresh["ea_tick_age_ms"]
+            if abs(batch_residual) <= kill.MAX_CLOCK_DRIFT_GMT_MS:
+                self.state.record_offset_sample(float(sample))
+            trusted = (fresh["transport_ok"]
+                       and abs(batch_residual) <= kill.MAX_CLOCK_DRIFT_GMT_MS)
+            transport_age = fresh["transport_ms"]
+            self.state.last_transport_ms = transport_age
+            self.state.last_ea_tick_age_ms = batch_residual
         else:
+            raw_transport = fresh["raw_transport_ms"]
             batch_residual = kill.clock_drift_residual_ms(raw_transport)
             if abs(batch_residual) <= kill.MAX_CLOCK_DRIFT_MS:
                 self.state.record_offset_sample(float(raw_transport))
@@ -861,8 +913,8 @@ class ScalpRunner:
                            <= MAX_BATCH_TRANSPORT_AGE_MS)
             else:   # bootstrap — tolerate clock error until median stable
                 trusted = abs(batch_residual) <= kill.MAX_CLOCK_DRIFT_MS
+            transport_age = batch_residual
         self.state.last_batch_residual_ms = batch_residual
-        transport_age = batch_residual
         # round 4 item 4: ordering watermark spans BATCHES, not just this one
         last_tm = (self.state.last_tick.broker_time_ms
                    if self.state.last_tick else None)
@@ -918,6 +970,8 @@ class ScalpRunner:
                 "risk_restored": self._risk_restored,
                 "batch_fresh": batch_fresh,
                 "transport_age_ms": transport_age,
+                "clock_mode": fresh["mode"],
+                "ea_tick_age_ms": fresh.get("ea_tick_age_ms"),
                 "trusted": trusted,
                 "broker_age_ms": broker_age,
                 "data_quality": ((self._dq_snapshot or {}).get("rating"),

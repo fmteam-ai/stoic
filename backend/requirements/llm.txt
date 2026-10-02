@@ -1,4 +1,7 @@
 # LLM services — copilot, news/narrative analysis, self-evaluation.
 # Install: pip install -c ../requirements.txt -r llm.txt
 -r api.txt
+# Official Anthropic SDK (default LLM backend when ANTHROPIC_API_KEY is set)
+anthropic
+# Legacy wrapper — LLM_BACKEND=emergent fallback (and Stripe checkout)
 emergentintegrations

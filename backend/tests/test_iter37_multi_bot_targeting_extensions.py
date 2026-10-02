@@ -98,20 +98,46 @@ async def test_nl_strategy_apply_routes_through_targeting():
 # =========================================================
 # (P0-3) Telegram /run, /stop, /panic — broadcast via update_many
 # =========================================================
+class _AsyncCursor:
+    def __init__(self, docs):
+        self._docs = list(docs)
+
+    def __aiter__(self):
+        self._it = iter(self._docs)
+        return self
+
+    async def __anext__(self):
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration
+
+
+def _telegram_run_db(configs=()):
+    """review-sec: /run now checks users.status and refuses live configs —
+    model an ACTIVE user whose bots are all on paper accounts."""
+    db = MagicMock()
+    db.users.find_one = AsyncMock(return_value={"_id": ObjectId(), "status": "active"})
+    db.bot_configs.find = MagicMock(side_effect=lambda *a, **k: _AsyncCursor(configs))
+    db.accounts.find_one = AsyncMock(return_value={"mode": "paper"})
+    db.accounts.count_documents = AsyncMock(return_value=0)
+    return db
+
+
 @pytest.mark.asyncio
 async def test_telegram_run_broadcasts_to_all_bots():
     from routes.telegram_routes import _cmd_run
-    db = MagicMock()
+    db = _telegram_run_db([{"account_id": str(ObjectId())} for _ in range(3)])
     db.bot_configs.update_many = AsyncMock(return_value=MagicMock(modified_count=3))
     sent = {}
     async def _fake_send(token, chat_id, msg):
         sent["msg"] = msg
     with patch("routes.telegram_routes.get_db", return_value=db), \
          patch("routes.telegram_routes._send_reply", new=_fake_send):
-        await _cmd_run("tok", "chat", "u1")
-    # update_many called with {"user_id": "u1"} (no account filter)
+        await _cmd_run("tok", "chat", str(ObjectId()))
+    # update_many called with {"user_id": <uid>} (no account filter)
     call = db.bot_configs.update_many.await_args
-    assert call[0][0] == {"user_id": "u1"}
+    assert list(call[0][0].keys()) == ["user_id"]
     assert call[0][1]["$set"]["active"] is True
     assert "All 3 bots" in sent["msg"]
 
@@ -135,13 +161,13 @@ async def test_telegram_stop_broadcasts_to_all_bots():
 @pytest.mark.asyncio
 async def test_telegram_run_reports_when_no_bots():
     from routes.telegram_routes import _cmd_run
-    db = MagicMock()
+    db = _telegram_run_db([])
     db.bot_configs.update_many = AsyncMock(return_value=MagicMock(modified_count=0))
     sent = {}
     async def _fake_send(t, c, m): sent["msg"] = m
     with patch("routes.telegram_routes.get_db", return_value=db), \
          patch("routes.telegram_routes._send_reply", new=_fake_send):
-        await _cmd_run("tok", "chat", "u1")
+        await _cmd_run("tok", "chat", str(ObjectId()))
     assert "No bots to start" in sent["msg"]
 
 
@@ -167,7 +193,7 @@ async def test_generate_signal_uses_correct_config_by_account_id():
 
     # Capture which risk_level was used
     captured = {}
-    async def _fake_analyze(symbol, risk_level):
+    async def _fake_analyze(symbol, risk_level, **_kw):
         captured["risk"] = risk_level
         return {"symbol": symbol, "action": "BUY", "confidence": 70}
 

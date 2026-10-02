@@ -1,14 +1,25 @@
 """iter-60 · Macro Agent Fed-tone scoring — Claude reads Fed/FOMC headlines
 and scores hawkish(+1) ↔ dovish(-1). Cached 6h; failures return None so the
 signal loop never blocks on it. Extreme tone (|score| ≥ 0.7) gates XAUUSD."""
-import json
 import logging
 import os
 import time
 
 import httpx
+from pydantic import BaseModel
+
+import llm_client
+from llm_models import finite_float
 
 logger = logging.getLogger(__name__)
+
+class FedToneOut(BaseModel):
+    score: float            # clamped to [-1, 1] by finite_float after the call
+    label: str
+    summary: str = ""
+
+
+_SYSTEM = "You are a monetary policy analyst."
 
 CACHE_TTL = 6 * 3600
 FED_TONE_EXTREME = 0.7
@@ -48,30 +59,21 @@ async def get_fed_tone() -> dict | None:
     prompt = (
         "Score the Federal Reserve policy tone from these headlines on a scale "
         "from -1.0 (extremely dovish: cuts, easing, stimulus) to +1.0 (extremely "
-        "hawkish: hikes, tightening, higher-for-longer). Respond ONLY with JSON: "
-        '{"score": <float>, "label": "hawkish|dovish|neutral", "summary": "<one sentence>"}\n\n'
-        + "\n".join(f"- {h['title']} ({h['source']})" for h in heads[:8])
+        "hawkish: hikes, tightening, higher-for-longer). label is one of "
+        "hawkish|dovish|neutral; summary is one sentence."
     )
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"fed-tone-{int(now)}",
-            system_message="You are a monetary policy analyst. Respond only with JSON.",
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-        raw = await chat.send_message(UserMessage(text=prompt))
-        txt = str(raw).strip()
-        if txt.startswith("```"):
-            txt = txt.strip("`").replace("json", "", 1).strip()
-        parsed = json.loads(txt)
-        payload = {"score": max(-1.0, min(1.0, float(parsed.get("score") or 0))),
-                   "label": str(parsed.get("label") or "neutral"),
-                   "summary": str(parsed.get("summary") or ""),
-                   "headlines": len(heads)}
-    except Exception as e:
-        logger.warning("fed_tone scoring failed: %s", e)
+    res = await llm_client.complete(
+        feature="fed_tone", system=_SYSTEM, user=prompt,
+        untrusted=[f"- {h['title']} ({h['source']})" for h in heads[:8]],
+        schema=FedToneOut, max_tokens=400)
+    if not res.ok:
+        logger.warning("fed_tone scoring failed: %s", res.error)
         _cache.update(exp=now + 900, payload=None)
         return None
+    payload = {"score": finite_float(res.data.score, -1.0, 1.0, 0.0),
+               "label": str(res.data.label or "neutral"),
+               "summary": str(res.data.summary or ""),
+               "headlines": len(heads)}
     _cache.update(exp=now + CACHE_TTL, payload=payload)
     return payload
 

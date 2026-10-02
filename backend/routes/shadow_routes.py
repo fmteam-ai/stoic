@@ -62,6 +62,7 @@ async def register_shadow_model(req: RegisterModelRequest,
     from model_shadow import register_model
     db = get_db()
     engine, symbol, params, source = req.engine, req.symbol, req.params, "manual"
+    gate = None
     if req.proposal_id:
         from bson import ObjectId
         try:
@@ -73,6 +74,10 @@ async def register_shadow_model(req: RegisterModelRequest,
             raise HTTPException(status_code=404, detail="Proposal not found")
         engine, symbol, params = prop["engine"], prop["symbol"], prop["params"]
         source = "bayes_opt"
+        # Shadow testing is itself an evaluation, so gate-rejected proposals
+        # may still be shadowed manually — but the verdict (OOS/DSR/PBO) is
+        # carried along so nobody mistakes an in-sample gain for evidence.
+        gate = prop.get("gate")
         await db.tuning_proposals.update_one(
             {"_id": prop["_id"]}, {"$set": {"status": "shadow_testing"}})
     if not engine or not symbol:
@@ -84,6 +89,8 @@ async def register_shadow_model(req: RegisterModelRequest,
     except ValueError as e:
         from errors import api_error
         raise api_error(422, "shadow_model_invalid", str(e), exc=e)
+    if gate is not None and isinstance(model, dict):
+        model["selection_gate"] = gate
     return model
 
 

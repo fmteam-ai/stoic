@@ -15,6 +15,7 @@ from safety_guardian import audit_pre_trade
 from order_authorization import authorize_order
 from ws_manager import manager as ws_manager
 from silent_failures import record_swallow
+from fail_closed import fail_closed
 
 logger = logging.getLogger("execution")
 
@@ -64,6 +65,107 @@ def stamp_pamm_identity(trade_doc: dict, signal: dict) -> None:
         "pamm_risk_snapshot_id": ident.get("risk_snapshot_id")})
 
 
+def sl_tp_side_block(signal: dict) -> dict | None:
+    """Explicit SL/TP side check. BUY needs sl < entry < tp, SELL needs
+    tp < entry < sl (each leg checked only when > 0). A wrong-side stop is
+    either an instant stop-out or no stop at all — never send it."""
+    action = (signal.get("action") or "").upper()
+    try:
+        entry = float(signal.get("entry_price") or 0)
+        sl = float(signal.get("stop_loss") or 0)
+        tp = float(signal.get("take_profit") or 0)
+    except (TypeError, ValueError):
+        return {"blocked": "invalid_geometry", "reason": "non-numeric price"}
+    if action not in ("BUY", "SELL") or entry <= 0:
+        return None
+    bad = []
+    if action == "BUY":
+        if sl > 0 and not sl < entry:
+            bad.append(f"BUY stop_loss {sl} must be below entry {entry}")
+        if tp > 0 and not tp > entry:
+            bad.append(f"BUY take_profit {tp} must be above entry {entry}")
+    else:
+        if sl > 0 and not sl > entry:
+            bad.append(f"SELL stop_loss {sl} must be above entry {entry}")
+        if tp > 0 and not tp < entry:
+            bad.append(f"SELL take_profit {tp} must be below entry {entry}")
+    if bad:
+        return {"blocked": "invalid_sl_tp_side", "reason": "; ".join(bad)}
+    return None
+
+
+def _parse_hb_age_sec(hb) -> float:
+    """Seconds since `hb` (ISO string or datetime). Naive values are UTC.
+    Raises TypeError/ValueError when unparseable."""
+    ts = hb if isinstance(hb, datetime) else datetime.fromisoformat(
+        str(hb).replace("Z", "+00:00"))
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - ts).total_seconds()
+
+
+async def reserve_trade_exposure(db, *, user_id, account: dict,
+                                 signal: dict, safety: dict | None,
+                                 max_concurrent: int = 0,
+                                 cfg_account_id: str | None = None,
+                                 max_total: int | None = None) -> dict:
+    """Engine-side adapter over execution_authority.reserve_exposure.
+
+    Caps (identical to the legacy count gate): auto slots < max_concurrent
+    and total slots < max_concurrent + EXEC_TOTAL_POSITIONS_BUFFER (when a
+    cap is configured); for LIVE accounts with a Safety Guardian verdict,
+    the account's open stop-risk + this trade ≤ SAFETY_MAX_TOTAL_OPEN_RISK_PCT
+    of equity (the guardian's own aggregate cap, now race-free)."""
+    from execution_authority import reserve_exposure, trade_stop_risk_usd
+    equity = float(account.get("equity") or account.get("balance") or 0)
+    ctx = (safety or {}).get("context") or {}
+    risk = ctx.get("risk_usd")
+    if risk is None:
+        risk = trade_stop_risk_usd(
+            {"lot_size": signal.get("lot_size"),
+             "entry_price": signal.get("entry_price"),
+             "stop_loss": signal.get("stop_loss"),
+             "symbol": signal.get("symbol")}, account, equity)
+    max_risk = None
+    if (safety and safety.get("ok") and ctx.get("aggregate_risk") is not None
+            and equity > 0):
+        from safety_guardian import MAX_TOTAL_OPEN_RISK_PCT
+        max_risk = equity * (MAX_TOTAL_OPEN_RISK_PCT / 100.0)
+    if max_total is None and max_concurrent > 0:
+        max_total = max_concurrent + int(os.environ.get(
+            "EXEC_TOTAL_POSITIONS_BUFFER", "2"))
+    return await reserve_exposure(
+        db, user_id=user_id,
+        account_id=str(account.get("_id") or account.get("account_id")
+                       or cfg_account_id or ""),
+        cfg_account_id=cfg_account_id, symbol=signal.get("symbol") or "",
+        lot=float(signal.get("lot_size") or 0), risk_usd=float(risk or 0),
+        auto=signal.get("origin") == "auto",
+        max_concurrent=max_concurrent, max_total=max_total,
+        max_risk_usd=max_risk, account=account)
+
+
+@fail_closed("heartbeat_freshness", pass_args=True,
+             block_factory=lambda name, exc, a, k: {
+                 "blocked": "heartbeat_unparseable",
+                 "last_heartbeat": str(a[0] if a else k.get("hb"))})
+def heartbeat_freshness_block(hb) -> dict | None:
+    """Capital-protecting: a stale heartbeat blocks; an UNPARSEABLE one
+    blocks too (we cannot prove the terminal is alive)."""
+    age = _parse_hb_age_sec(hb)
+    if age > float(os.environ.get("EXEC_MAX_HEARTBEAT_AGE_SEC", "120")):
+        return {"blocked": "stale_heartbeat", "heartbeat_age_sec": int(age)}
+    return None
+
+
+@fail_closed("quote_freshness", block_factory=lambda name, exc: 0.0)
+async def live_quote_price(symbol: str) -> float:
+    """Capital-protecting: any quote failure yields 0.0, which the caller
+    treats as ``quote_unavailable`` (BLOCK)."""
+    q = await get_quote(symbol)
+    return float((q or {}).get("price") or 0)
+
+
 class ExecutionEngine(ABC):
     @abstractmethod
     async def execute(self, *, user_id, account, signal,
@@ -104,6 +206,13 @@ class MT5BridgeEngine(ExecutionEngine):
             return {"blocked": "unauthorized_execution_path",
                     "reason": _refusal}
         db = get_db()
+
+        _geo_block = sl_tp_side_block(signal)
+        if _geo_block:
+            logger.warning("MT5 execute blocked by SL/TP side check user=%s "
+                           "sym=%s: %s", user_id, signal.get("symbol"),
+                           _geo_block.get("reason"))
+            return _geo_block
 
         # FINAL ENTITLEMENT CHECK (iter-122 Phase 2) — the dispatcher never
         # trusts upstream gates; plan authority is re-verified per trade.
@@ -174,15 +283,9 @@ class MT5BridgeEngine(ExecutionEngine):
                             "account_status": fresh.get("status")}
                 hb = fresh.get("last_heartbeat")
                 if hb:
-                    try:
-                        age = (datetime.now(timezone.utc)
-                               - datetime.fromisoformat(str(hb))).total_seconds()
-                        if age > float(os.environ.get(
-                                "EXEC_MAX_HEARTBEAT_AGE_SEC", "120")):
-                            return {"blocked": "stale_heartbeat",
-                                    "heartbeat_age_sec": int(age)}
-                    except (TypeError, ValueError):
-                        pass
+                    _hb_block = heartbeat_freshness_block(hb)
+                    if _hb_block:
+                        return _hb_block
                 if not (fresh.get("equity") or fresh.get("balance")):
                     return {"blocked": "equity_unknown"}
                 account = {**account, **fresh}
@@ -191,12 +294,13 @@ class MT5BridgeEngine(ExecutionEngine):
             # far since signal generation that the approved geometry no
             # longer holds (entry deviation > 50% of stop distance, or the
             # market already traded through the stop).
-            px = 0.0
-            try:
-                q = await get_quote(signal["symbol"])
-                px = float((q or {}).get("price") or 0)
-            except Exception:
-                px = 0.0
+            px = await live_quote_price(signal["symbol"])
+            if px <= 0:
+                # FAIL CLOSED: without a live quote the freshness/deviation
+                # preflight cannot run.
+                logger.warning("MT5 execute blocked: no live quote user=%s "
+                               "sym=%s", user_id, signal.get("symbol"))
+                return {"blocked": "quote_unavailable"}
             entry0 = float(signal.get("entry_price") or 0)
             sl0 = float(signal.get("stop_loss") or 0)
             if px > 0 and entry0 > 0 and sl0 > 0:
@@ -297,8 +401,15 @@ class MT5BridgeEngine(ExecutionEngine):
                         "reasons": gate.get("reasons")}
             if gate.get("reduce_factor") and signal.get("lot_size"):
                 _orig_lot = float(signal["lot_size"])
-                signal["lot_size"] = max(
-                    0.01, round(_orig_lot * float(gate["reduce_factor"]), 2))
+                from risk import scale_lot
+                _red = scale_lot(_orig_lot, float(gate["reduce_factor"]))
+                if _red <= 0:
+                    # Floor-based reduce left less than the broker minimum —
+                    # block instead of rounding back UP to 0.01.
+                    return {"blocked": "trading_authority_reduce_below_min_lot",
+                            "authority_level": gate.get("level"),
+                            "reasons": gate.get("reasons")}
+                signal["lot_size"] = _red
                 signal["_authority_reduced"] = True
                 logger.warning(
                     "TRADING AUTHORITY REDUCED — lot %s → %s user=%s sym=%s",
@@ -521,7 +632,35 @@ class MT5BridgeEngine(ExecutionEngine):
             trade_doc["authority_reduced"] = True
         if signal.get("latency_trace"):
             trade_doc["latency_trace"] = dict(signal["latency_trace"])
-        r = await db.trades.insert_one(trade_doc)
+        # ATOMIC EXPOSURE RESERVATION — the count gate above is a cheap
+        # pre-filter; THIS is the race-free cap authority (slot + open stop
+        # risk reserved atomically before the row exists).
+        _rsv = await reserve_trade_exposure(
+            db, user_id=user_id, account=account, signal=signal,
+            safety=safety, max_concurrent=max_concurrent,
+            cfg_account_id=cfg_account_id)
+        if not _rsv.get("ok"):
+            logger.warning(
+                "execute blocked by atomic exposure reservation user=%s "
+                "acct=%s sym=%s: %s", user_id, cfg_account_id or "default",
+                signal.get("symbol"), _rsv.get("blocked"))
+            if intent is None and _intent:
+                try:
+                    from execution_authority import _finalize_pre_dispatch
+                    await _finalize_pre_dispatch(
+                        db, _intent["intent_id"], "cancelled",
+                        f"engine block: {_rsv.get('blocked')}")
+                except Exception as _sw:  # noqa: BLE001
+                    record_swallow("execution", "reservation_cancel", _sw)
+            return {k: v for k, v in _rsv.items() if k != "ok"}
+        if _rsv.get("reservation"):
+            trade_doc["exposure_reservation"] = _rsv["reservation"]
+        try:
+            r = await db.trades.insert_one(trade_doc)
+        except BaseException:
+            from execution_authority import release_reservation
+            await release_reservation(db, _rsv.get("reservation"))
+            raise
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)
         if _intent:
@@ -643,7 +782,31 @@ class PaperEngine(ExecutionEngine):
         stamp_pamm_identity(trade_doc, signal)
         if signal.get("latency_trace"):
             trade_doc["latency_trace"] = dict(signal["latency_trace"])
-        r = await db.trades.insert_one(trade_doc)
+        # Atomic reservation (paper semantics: max_concurrent bounds ALL
+        # open/pending rows in scope, no auto/manual split).
+        _rsv = await reserve_trade_exposure(
+            db, user_id=user_id, account=account,
+            signal={**signal, "entry_price": trade_doc["entry_price"]},
+            safety=None, max_concurrent=0, cfg_account_id=cfg_account_id,
+            max_total=max_concurrent if max_concurrent > 0 else None)
+        if not _rsv.get("ok"):
+            logger.warning("paper execute blocked by atomic exposure "
+                           "reservation user=%s acct=%s sym=%s: %s",
+                           user_id, cfg_account_id or "default",
+                           signal.get("symbol"), _rsv.get("blocked"))
+            out = {k: v for k, v in _rsv.items() if k != "ok"}
+            if out.get("blocked") == "max_concurrent_cap":
+                out["inflight"] = out.get("total_inflight")
+                out["cap"] = max_concurrent
+            return out
+        if _rsv.get("reservation"):
+            trade_doc["exposure_reservation"] = _rsv["reservation"]
+        try:
+            r = await db.trades.insert_one(trade_doc)
+        except BaseException:
+            from execution_authority import release_reservation
+            await release_reservation(db, _rsv.get("reservation"))
+            raise
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)
         await ws_manager.broadcast(user_id, "trade_created", trade_doc)
@@ -682,7 +845,11 @@ async def settle_paper_trades_against_price() -> int:
     Returns number of trades closed in this sweep.
     """
     db = get_db()
-    cursor = db.trades.find({"status": "open", "mode": "paper"})
+    cursor = db.trades.find({"status": "open", "mode": "paper",
+                            # crypto TESTNET trades are mode=paper but hold
+                            # real sandbox positions + protective orders —
+                            # crypto_lifecycle owns them.
+                            "broker_kind": {"$ne": "binance"}})
     open_trades = await cursor.to_list(length=500)
     closed = 0
     # Cache quotes per symbol to avoid hammering free APIs
@@ -726,6 +893,11 @@ async def settle_paper_trades_against_price() -> int:
              if t.get("account_id") else None},
             {"$inc": {"balance": pnl, "equity": pnl}},
         )
+        try:
+            from execution_authority import release_reservation
+            await release_reservation(db, t)
+        except Exception as _sw:  # noqa: BLE001 — rebuild heals a miss
+            record_swallow("execution", "paper_release_reservation", _sw)
         await ws_manager.broadcast(t["user_id"], "trade_updated", {
             "trade_id": str(t["_id"]),
             "status": "closed",

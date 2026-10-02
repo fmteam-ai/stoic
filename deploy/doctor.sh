@@ -125,7 +125,7 @@ if [ -f .stoic-installed ]; then ok "installer: LOCKED since $(grep '^installed_
 elif [ "$(envval backend/.env APP_ENV)" = production ]; then warn "installer: not locked — a re-run of bootstrap/install.sh would rebuild the stack (finish an install via deploy/bootstrap.sh to lock it)"; fi
 for f in .env backend/.env; do [ -f "$f" ] && ok "$f present" || fail "$f missing (run deploy/install.sh)"; done
 if [ -d secrets ]; then
-  for s in mongo_url mongo_keyfile jwt_secret key_vault_master metrics_token order_auth_secret ledger_anchor_key signer_token signer_ed25519_key signer_cert.pem signer_cert_key.pem; do
+  for s in mongo_url mongo_keyfile jwt_secret key_vault_master metrics_token ops_deploy_token order_auth_secret ledger_anchor_key signer_token signer_ed25519_key signer_cert.pem signer_cert_key.pem; do
     [ -s "secrets/$s" ] || fail "secrets/$s missing or empty"; done
   ok "secrets/ ($(ls secrets | wc -l) files, mode $(stat -c %a secrets))"
   [ "$(stat -c %a secrets)" = 700 ] || warn "secrets/ should be mode 700"
@@ -136,6 +136,7 @@ if [ "${APP_ENV}" = production ]; then
   grep -q '^ED25519_SIGNING_KEY_B64=' backend/.env && fail "ED25519_SIGNING_KEY_B64 present in backend/.env (private key must not live in the API)" || ok "no private signing key in API env"
   [ "$(envval backend/.env ADMIN_MFA_ENFORCED)" = true ] && ok "ADMIN_MFA_ENFORCED=true" || fail "production requires ADMIN_MFA_ENFORCED=true"
   grep -qE '^(STEP_UP|RATE_LIMIT)_BYPASS_TOKEN=.+' backend/.env && fail "test bypass tokens present in backend/.env" || ok "no test bypass tokens"
+  [ "$(envval backend/.env OPS_ALLOW_METRICS_TOKEN_FOR_DEPLOY)" = true ] && warn "OPS_ALLOW_METRICS_TOKEN_FOR_DEPLOY=true — METRICS_TOKEN still authorises mutating ops; migrate callers to OPS_DEPLOY_TOKEN and unset it" || ok "METRICS_TOKEN is read-only (mutating ops need OPS_DEPLOY_TOKEN)"
   [ -n "$(envval backend/.env CORS_ORIGINS)" ] && ok "CORS_ORIGINS=$(envval backend/.env CORS_ORIGINS)" || fail "CORS_ORIGINS empty"
 fi
 DOMAIN=$(envval .env DOMAIN)

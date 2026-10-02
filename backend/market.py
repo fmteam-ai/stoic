@@ -489,7 +489,74 @@ def _hist_meta(sym: str, provider: str, cache_status: str) -> None:
     HISTORY_META[sym] = {"provider": provider, "cache_status": cache_status}
 
 
-async def get_history(symbol: str) -> list:
+# EA v1.58 — broker-native daily bars pushed by the EA through
+# /api/bridge/candles (timeframe "D1") into intraday_candles. Preferred over
+# the public proxies (Frankfurter/ECB O=H=L=C fixings, GC=F futures) when the
+# caller identifies the user whose broker feed should be used.
+BROKER_D1_MIN_BARS = 100
+BROKER_D1_MAX_STALENESS_S = 4 * 86400   # newest bar older → weekend+ gap / dead feed
+BROKER_D1_CACHE_TTL = 300
+USER_HISTORY_META: dict = {}   # (sym, user_id) → {provider, cache_status}
+
+
+def _broker_d1_rows(bars: list, now_ts: float | None = None) -> list | None:
+    """Convert stored EA D1 bars ({t,o,h,l,c,v}, t = broker server time as
+    epoch seconds — i.e. the broker's calendar date at 00:00) into
+    get_history rows. None when too few / stale / malformed."""
+    rows = {}
+    for b in bars or []:
+        try:
+            t = int(b["t"])
+            o, h, lo, c = float(b["o"]), float(b["h"]), float(b["l"]), float(b["c"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if min(o, h, lo, c) <= 0 or h < lo:
+            continue
+        d = datetime.fromtimestamp(t, tz=timezone.utc).strftime("%Y-%m-%d")
+        rows[d] = {"date": d, "open": o, "high": h, "low": lo, "close": c,
+                   "volume": float(b.get("v") or 0), "_t": t}
+    if len(rows) < BROKER_D1_MIN_BARS:
+        return None
+    out = [rows[d] for d in sorted(rows)]
+    now_ts = time.time() if now_ts is None else now_ts
+    # broker server time runs up to ~+14h ahead of UTC; allow that skew
+    if now_ts - out[-1]["_t"] > BROKER_D1_MAX_STALENESS_S:
+        return None
+    for r in out:
+        r.pop("_t", None)
+    return out
+
+
+async def _broker_d1_history(sym: str, user_id: str) -> list | None:
+    try:
+        from database import get_db
+        doc = await get_db().intraday_candles.find_one(
+            {"user_id": user_id, "symbol": sym, "timeframe": "D1"},
+            {"bars": 1})
+    except Exception as e:  # noqa: BLE001 — fall back to public sources
+        log.debug("broker D1 load failed for %s/%s: %s", sym, user_id, e)
+        return None
+    if not doc:
+        return None
+    return _broker_d1_rows(doc.get("bars") or [])
+
+
+async def get_history(symbol: str, user_id: str | None = None) -> list:
+    """Daily OHLC history. With ``user_id`` the requesting user's own broker
+    D1 bars (EA v1.58+ feed) are preferred when present and fresh; without
+    it (or when absent) behaviour is unchanged (public sources + caches)."""
+    if user_id:
+        sym_u = _key(symbol)
+        ukey = f"history:{sym_u}:user:{user_id}"
+        cached_u = _cache_get(ukey)
+        if cached_u:
+            return cached_u
+        broker = await _broker_d1_history(sym_u, str(user_id))
+        if broker:
+            _cache_set(ukey, broker, BROKER_D1_CACHE_TTL)
+            USER_HISTORY_META[(sym_u, str(user_id))] = {
+                "provider": "broker_d1", "cache_status": "broker_feed"}
+            return broker
     sym = _key(symbol)
     cache_key = f"history:{sym}"
     cached = _cache_get(cache_key)

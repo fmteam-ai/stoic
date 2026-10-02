@@ -25,6 +25,16 @@ from ws_manager import manager as ws_manager
 from silent_failures import record_swallow
 
 
+async def _release_exposure(db, trade: dict) -> None:
+    """impr-wiring — free the closed/cancelled trade's exposure reservation
+    (idempotent, never raises; rebuild_reservations heals a miss)."""
+    try:
+        from execution_authority import release_reservation
+        await release_reservation(db, trade)
+    except Exception as _sw:  # noqa: BLE001
+        record_swallow("trade_reconciler", "release_reservation", _sw)
+
+
 def _infer_close_reason(t: dict, exit_price) -> str:
     """iter-45 — when ghost-closing with an estimated exit, infer TP/SL hit
     from proximity to the trade's targets (~0.04% tolerance)."""
@@ -110,7 +120,15 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
                 update["close_reason"] = t.get("close_reason") or _infer_close_reason(t, live_price)
             else:
                 update["pnl_unknown"] = True
-        await db.trades.update_one({"_id": t["_id"]}, {"$set": update})
+        # Status guard: only close a row that is STILL open/pending — a
+        # concurrent EA close report (exact P&L) must never be overwritten
+        # by this estimated reconciliation.
+        res = await db.trades.update_one(
+            {"_id": t["_id"], "status": {"$in": ["open", "pending"]}},
+            {"$set": update})
+        if getattr(res, "matched_count", 1) == 0:
+            continue
+        await _release_exposure(db, t)
         closed.append(str(t["_id"]))
 
         # WS push so the UI refreshes immediately
@@ -195,6 +213,7 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
                 "reconciled_at": now_iso,
             }
             await db.trades.update_one({"_id": t["_id"]}, {"$set": update})
+            await _release_exposure(db, t)
             closed_ids.append(str(t["_id"]))
             await ws_manager.broadcast(user_id, "trade_updated", {
                 "trade_id": str(t["_id"]),
@@ -255,6 +274,10 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
                 "account_id": str(acc["_id"]),
                 "status": {"$in": ["pending", "open"]},
                 "mt5_ticket": None,
+                # Crypto trades never carry an MT5 ticket — their exchange
+                # positions are reconciled by crypto_lifecycle; reaping them
+                # here would orphan a live, protected exchange position.
+                "broker_kind": {"$ne": "binance"},
             })
             cancelled = []
             now_iso = datetime.now(timezone.utc).isoformat()
@@ -269,6 +292,7 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
                     "reconciled_at": now_iso,
                 }
                 await db.trades.update_one({"_id": t["_id"]}, {"$set": update})
+                await _release_exposure(db, t)
                 cancelled.append(str(t["_id"]))
             summary["cancelled_pending_opens"] = len(cancelled)
             summary["closed_count"] = summary.get("closed_count", 0) + len(cancelled)

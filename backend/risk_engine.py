@@ -37,13 +37,33 @@ def _trades_weekends(symbol) -> bool:
     return base_symbol(symbol) in WEEKEND_TRADED_BASES
 
 
-def _notional(symbol: str, lot: float, price: float) -> float:
-    base = (symbol or "").upper()
-    return float(lot) * float(price) * (100 if "XAU" in base else 1)
+def _notional(symbol: str, lot: float, price: float, spec=None,
+              fx: float | None = None) -> float:
+    # Instrument spec service — EA-reported contract size when a spec is
+    # supplied, else the canonical static registry (instruments.py). The
+    # old `lot × price × (100 if gold else 1)` understated FX by ~100,000×.
+    if spec is None:
+        from instruments import notional_usd
+        return notional_usd(symbol, lot, price)
+    from instrument_specs import notional_usd as _spec_notional
+    return _spec_notional(spec, lot, price, fx)
+
+
+def _spec_for(account, symbol):
+    """EA-reported spec when the account carries one, else None (static)."""
+    if str((account or {}).get("account_type") or "").lower() in (
+            "cent", "microcent"):
+        return None   # cent deposit units not certified — legacy tables
+    try:
+        from instrument_specs import spec_from_account
+        sp = spec_from_account(account, symbol)
+        return sp if sp.from_broker else None
+    except Exception:  # noqa: BLE001 — malformed spec → static tables
+        return None
 
 
 def leverage_check(equity, symbol, lot, price, bars, uncertainty,
-                   max_leverage=DEF_MAX_LEVERAGE) -> dict:
+                   max_leverage=DEF_MAX_LEVERAGE, spec=None) -> dict:
     if equity <= 0 or not lot or not price:
         return {"name": "leverage", "status": "ok", "scale": 1.0,
                 "detail": "no sizing context"}
@@ -57,7 +77,7 @@ def leverage_check(equity, symbol, lot, price, bars, uncertainty,
     if conf is not None:
         conf_adj = 0.6 if conf < 65 else (1.2 if conf > 85 else 1.0)
     cap = equity * max_leverage * vol_adj * conf_adj
-    notional = _notional(symbol, lot, price)
+    notional = _notional(symbol, lot, price, spec)
     if notional <= cap:
         return {"name": "leverage", "status": "ok", "scale": 1.0,
                 "detail": f"notional ${notional:,.0f} ≤ dynamic cap "
@@ -152,7 +172,8 @@ def abnormal_market_check(bars, now_ts=None, symbol=None) -> dict:
 
 
 async def cvar_budget_check(open_trades, new_position, equity,
-                            budget_pct=DEF_CVAR_BUDGET_PCT) -> dict:
+                            budget_pct=DEF_CVAR_BUDGET_PCT,
+                            account: dict | None = None) -> dict:
     from portfolio.var import calculate_var
     snap = await calculate_var(list(open_trades) + [new_position],
                                equity=equity)
@@ -178,8 +199,16 @@ async def cvar_budget_check(open_trades, new_position, equity,
         if not slp or entry <= 0 or lot <= 0:
             all_stopped = False
             break
-        contract = 100 if (p.get("symbol") or "").upper() in ("XAUUSD", "GOLD") else 1
-        bounded += abs(entry - float(slp)) * lot * contract * 1.5
+        # USD loss at the stop via the instrument spec service: broker
+        # tick value when the account reported one, else the canonical
+        # STANDARD-contract static pip table (broker-suffix aware).
+        from pip_utils import price_to_pips
+        from instrument_specs import pip_value_usd, static_spec
+        _sym = p.get("symbol") or ""
+        _sp = _spec_for(account, _sym) or static_spec(_sym)
+        stop_usd = (price_to_pips(_sym, abs(entry - float(slp)))
+                    * pip_value_usd(_sp, lot, price=entry))
+        bounded += stop_usd * 1.5
     if all_stopped and equity > 0:
         bounded_pct = 100.0 * bounded / equity
         if bounded_pct <= budget_pct:
@@ -274,9 +303,11 @@ async def risk_engine_evaluate(db, user_id, cfg, account, signal,
     bars = (cdoc or {}).get("bars") or []
     checks.append(abnormal_market_check(bars, symbol=base))
 
+    new_spec = _spec_for(account, sym)
     checks.append(leverage_check(
         equity, sym, lot, price, bars, signal.get("uncertainty"),
-        max_leverage=float(cfg.get("max_leverage") or DEF_MAX_LEVERAGE)))
+        max_leverage=float(cfg.get("max_leverage") or DEF_MAX_LEVERAGE),
+        spec=new_spec))
 
     open_q = {"user_id": user_id, "status": {"$in": ["open", "pending"]}}
     if account_id:
@@ -284,10 +315,13 @@ async def risk_engine_evaluate(db, user_id, cfg, account, signal,
     open_trades = await db.trades.find(open_q).to_list(50)
     open_notional = sum(
         _notional(t.get("symbol"), t.get("lot_size") or 0,
-                  t.get("entry_price") or 0) for t in open_trades)
+                  t.get("entry_price") or 0,
+                  _spec_for(account, t.get("symbol") or ""))
+        for t in open_trades)
     minutes_to = (signal.get("calendar_intel") or {}).get("minutes_to")
     checks.append(event_exposure_check(
-        open_notional, _notional(sym, lot, price), equity, minutes_to,
+        open_notional, _notional(sym, lot, price, new_spec), equity,
+        minutes_to,
         event_title=(signal.get("calendar_intel") or {}).get("title"),
         cap_pct=float(cfg.get("event_exposure_cap_pct")
                       or DEF_EVENT_EXPOSURE_CAP_PCT)))
@@ -299,7 +333,8 @@ async def risk_engine_evaluate(db, user_id, cfg, account, signal,
              "stop_loss": signal.get("stop_loss"), "status": "open"},
             equity,
             budget_pct=float(cfg.get("cvar_budget_pct")
-                             or DEF_CVAR_BUDGET_PCT)))
+                             or DEF_CVAR_BUDGET_PCT),
+            account=account))
     except Exception as e:  # noqa: BLE001
         logger.debug("cvar check skipped: %s", e)
 

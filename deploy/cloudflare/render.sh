@@ -26,6 +26,9 @@ RANGES="${RANGES% }"
   echo "{"
   echo "        servers {"
   echo "                trusted_proxies static ${RANGES}"
+  # {client_ip} = CF-Connecting-IP when the peer is a trusted Cloudflare edge,
+  # else the socket peer (headers from untrusted peers are ignored by Caddy)
+  echo "                client_ip_headers CF-Connecting-IP"
   echo "        }"
   echo "}"
   echo "${D}, www.${D} {"
@@ -35,7 +38,10 @@ RANGES="${RANGES% }"
     echo "        abort @notcf"
   fi
   echo "        encode gzip"
-  echo "        reverse_proxy frontend:3000"
+  echo "        reverse_proxy frontend:3000 {"
+  echo "                header_up X-Forwarded-For {client_ip}"
+  echo "                header_up X-Real-IP {client_ip}"
+  echo "        }"
   echo "}"
 } > deploy/cloudflare/Caddyfile
 echo "   rendered deploy/cloudflare/Caddyfile (cf-only=${CF_ONLY})"

@@ -18,31 +18,51 @@ STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_cr
                    "release_promote", "release_rollback", "agent_config_push",
                    "canary_set", "release_trust", "audit_anchor",
                    # round 10–12 — two-admin governance + model promotion
-                   "authority_relax", "model_promotion"}
+                   "authority_relax", "model_promotion",
+                   # impr-auth — dedicated passkey enrolment proof (was
+                   # reusing api_key_create); short TTL: it gates minting a
+                   # credential that can itself mint every other step-up.
+                   "passkey_enroll",
+                   # impr-auth — EA bridge-token rotation (account_routes)
+                   "bridge_token_rotate"}
+# Per-action TTL overrides (seconds); everything else uses STEP_UP_TTL_SECONDS.
+STEP_UP_ACTION_TTL = {"passkey_enroll": 120}
+
+
+def step_up_ttl(action: str) -> int:
+    return int(STEP_UP_ACTION_TTL.get(action, STEP_UP_TTL_SECONDS))
 
 
 def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-async def issue_step_up_token(db, user_id: str, action: str) -> dict:
+async def issue_step_up_token(db, user_id: str, action: str,
+                              method: str = "totp") -> dict:
+    """`method` records which factor minted the token ("totp" | "webauthn")
+    so actions can demand a specific factor (see require_step_up)."""
     token = secrets.token_urlsafe(32)
     now = datetime.now(timezone.utc)
+    ttl = step_up_ttl(action)
     await db.step_up_tokens.insert_one({
         "user_id": user_id,
         "token_hash": _hash_token(token),
         "action": action,
+        "method": method,
         "created_at": now.isoformat(),
-        "expires_at": (now + timedelta(seconds=STEP_UP_TTL_SECONDS)).isoformat(),
+        "expires_at": (now + timedelta(seconds=ttl)).isoformat(),
         "used_at": None,
     })
-    return {"step_up_token": token, "expires_in": STEP_UP_TTL_SECONDS,
+    return {"step_up_token": token, "expires_in": ttl,
             "action": action}
 
 
-async def require_step_up(db, user, request, action: str) -> None:
+async def require_step_up(db, user, request, action: str,
+                          required_method: str | None = None) -> None:
     """403 unless the request carries a fresh, unused step-up token for
-    `action`. Users without TOTP enrolled are blocked entirely."""
+    `action`. Users without TOTP enrolled are blocked entirely.
+    `required_method` (e.g. "totp") additionally pins the factor that must
+    have minted the token (tokens without a recorded `method` never match)."""
     # Test-suite bypass (mirrors RATE_LIMIT_BYPASS_TOKEN) — server-side
     # secret, refused outright when APP_ENV=production (SEC-001).
     from app_env import bypass_token
@@ -71,15 +91,20 @@ async def require_step_up(db, user, request, action: str) -> None:
             "code": "step_up_required", "action": action,
             "message": "This action requires a fresh 2FA code."})
     now_iso = datetime.now(timezone.utc).isoformat()
+    query = {"user_id": user["id"], "token_hash": _hash_token(token),
+             "action": action, "used_at": None, "expires_at": {"$gt": now_iso}}
+    if required_method:
+        query["method"] = required_method
     doc = await db.step_up_tokens.find_one_and_update(
-        {"user_id": user["id"], "token_hash": _hash_token(token),
-         "action": action, "used_at": None, "expires_at": {"$gt": now_iso}},
-        {"$set": {"used_at": now_iso}})
+        query, {"$set": {"used_at": now_iso}})
     if not doc:
         raise HTTPException(status_code=403, detail={
             "code": "step_up_invalid", "action": action,
-            "message": "Step-up token expired or already used — verify your "
-                       "2FA code again."})
+            **({"required_method": required_method} if required_method else {}),
+            "message": ("Step-up token expired or already used — verify your "
+                        "2FA code again." if required_method != "totp" else
+                        "This action requires a fresh authenticator-app (TOTP) "
+                        "code — a passkey cannot authorise it.")})
 
 
 async def audit_event(db, user_id: str, action: str, detail: dict = None,

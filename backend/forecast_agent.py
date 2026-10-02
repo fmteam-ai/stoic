@@ -158,6 +158,31 @@ def summarize(closes: list, q: list, source: str, horizon: int,
 
 
 async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
+    """Raw (shared, cached) Chronos forecast + a per-user conformal layer.
+
+    The conformal step (conformal.py · ACI over CQR scores) resolves
+    matured forecasts against realised candles, updates this user+symbol's
+    coverage state and attaches `fc["conformal"]`. Gates use the
+    conformalised band only once that state is mature; otherwise the raw
+    deciles are used exactly as before. Fail-open throughout."""
+    payload = await _get_forecast_raw(db, user_id, symbol)
+    if not payload or db is None:
+        return payload
+    try:
+        import conformal
+        if not conformal.enabled():
+            return payload
+        base = base_symbol(symbol)
+        cdoc = await db.intraday_candles.find_one(
+            {"user_id": user_id, "symbol": base}, {"bars": 1})
+        return await conformal.apply_to_forecast(
+            db, user_id, base, payload, (cdoc or {}).get("bars") or [])
+    except Exception as e:  # noqa: BLE001 — conformal layer is optional
+        logger.debug("conformal layer skipped: %s", e)
+        return payload
+
+
+async def _get_forecast_raw(db, user_id: str, symbol: str) -> dict | None:
     # Deployment kill-switch — set FORECAST_AGENT_ENABLED=false on
     # memory-constrained pods to skip loading the Chronos/torch model
     # entirely (fail-open: no forecast, no veto). Default enabled.
@@ -215,17 +240,31 @@ async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
 
 
 def forecast_gate(action: str, fc: dict | None) -> str | None:
-    """Veto only when the entire 80% interval moves against the trade."""
+    """Veto only when the entire 80% interval moves against the trade.
+
+    Uses the CONFORMALISED band (fc["conformal"], adaptive conformal
+    inference — realised coverage tracks the 80% target) when it is
+    active for this user+symbol; otherwise the raw q10/q90 deciles."""
     if action not in ("BUY", "SELL") or not fc:
         return None
-    if action == "BUY" and fc["q90"] < fc["last"]:
+    conf = fc.get("conformal") or {}
+    if conf.get("active"):
+        q10, q90 = float(conf["q10"]), float(conf["q90"])
+        lo_pct, hi_pct = conf["band_low_pct"], conf["band_high_pct"]
+        tag = (f" [conformal band, realised coverage "
+               f"{(conf.get('coverage') or {}).get('conformal')}]")
+    else:
+        q10, q90 = fc["q10"], fc["q90"]
+        lo_pct, hi_pct = fc["band_low_pct"], fc["band_high_pct"]
+        tag = ""
+    if action == "BUY" and q90 < fc["last"]:
         return (f"Forecast gate: even the 90th-percentile path is below current "
-                f"price ({fc['band_high_pct']:+.2f}% .. {fc['band_low_pct']:+.2f}% "
-                f"over next {fc['horizon']} {fc['source']} steps) — BUY fights the "
-                f"entire forecast band. Vetoed.")
-    if action == "SELL" and fc["q10"] > fc["last"]:
+                f"price ({hi_pct:+.2f}% .. {lo_pct:+.2f}% "
+                f"over next {fc['horizon']} {fc['source']} steps){tag} — BUY "
+                f"fights the entire forecast band. Vetoed.")
+    if action == "SELL" and q10 > fc["last"]:
         return (f"Forecast gate: even the 10th-percentile path is above current "
-                f"price ({fc['band_low_pct']:+.2f}% .. {fc['band_high_pct']:+.2f}% "
-                f"over next {fc['horizon']} {fc['source']} steps) — SELL fights the "
-                f"entire forecast band. Vetoed.")
+                f"price ({lo_pct:+.2f}% .. {hi_pct:+.2f}% "
+                f"over next {fc['horizon']} {fc['source']} steps){tag} — SELL "
+                f"fights the entire forecast band. Vetoed.")
     return None

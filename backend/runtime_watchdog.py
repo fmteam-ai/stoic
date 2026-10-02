@@ -26,6 +26,10 @@ logger = logging.getLogger("watchdog")
 
 SAMPLE_INTERVAL_SEC = int(os.environ.get("WATCHDOG_SAMPLE_SEC", "15"))
 BLOCK_THRESHOLD_SEC = float(os.environ.get("WATCHDOG_BLOCK_SEC", "5"))
+# Event-loop lag: sleep LAG_PROBE_SEC, measure how late we wake up.
+LAG_PROBE_SEC = float(os.environ.get("WATCHDOG_LAG_PROBE_SEC", "1"))
+LAG_WARN_MS = float(os.environ.get("WATCHDOG_LAG_WARN_MS", "500"))
+LAG_LOG_EVERY_SEC = 30.0      # rate-limit the lag warning while degraded
 
 _boot_at = datetime.now(timezone.utc)
 _heartbeat = time.monotonic()
@@ -33,6 +37,11 @@ _samples = deque(maxlen=60)
 _last_blockage = None
 _max_rss = 0.0
 _thread_started = False
+
+# event-loop lag telemetry (ms) — last 5 min of 1 s probes
+_lag_window = deque(maxlen=300)
+_lag = {"last_ms": 0.0, "max_ms": 0.0, "over_threshold_total": 0,
+        "samples_total": 0, "last_over_at": None}
 
 
 def _now_iso() -> str:
@@ -127,6 +136,7 @@ async def _watchdog_task():
                               "last_seen": _now_iso(),
                               "rss_mb": round(r, 1),
                               "max_rss_mb": round(_max_rss, 1),
+                              "loop_lag": lag_stats(),
                               "last_blockage": _last_blockage}},
                     upsert=True)
             except Exception:  # noqa: BLE001
@@ -139,14 +149,84 @@ async def _watchdog_task():
         await asyncio.sleep(SAMPLE_INTERVAL_SEC)
 
 
-def start_watchdog():
+def record_lag(lag_ms: float) -> None:
+    """Record one event-loop lag probe (ms)."""
+    lag_ms = max(0.0, float(lag_ms))
+    _lag_window.append(lag_ms)
+    _lag["last_ms"] = round(lag_ms, 1)
+    _lag["max_ms"] = round(max(_lag["max_ms"], lag_ms), 1)
+    _lag["samples_total"] += 1
+    if lag_ms > LAG_WARN_MS:
+        _lag["over_threshold_total"] += 1
+        _lag["last_over_at"] = _now_iso()
+
+
+def lag_stats() -> dict:
+    """Event-loop lag summary (ms): last / max since boot / p50 / p99 over
+    the last ~5 min, and how many probes exceeded LAG_WARN_MS."""
+    w = sorted(_lag_window)
+
+    def pct(p):
+        if not w:
+            return 0.0
+        return round(w[min(len(w) - 1, int(round(p * (len(w) - 1))))], 1)
+    return {**_lag, "p50_ms": pct(0.50), "p99_ms": pct(0.99),
+            "window_samples": len(w), "warn_threshold_ms": LAG_WARN_MS}
+
+
+def prometheus_lines() -> list[str]:
+    """Prometheus text-format lines for /api/metrics (per process)."""
+    st = lag_stats()
+    pid = os.getpid()
+    out = []
+    for name, key, help_txt in (
+            ("stoic_event_loop_lag_ms", "last_ms", "Event-loop lag, last 1s probe (ms)"),
+            ("stoic_event_loop_lag_p99_ms", "p99_ms", "Event-loop lag p99 over ~5 min (ms)"),
+            ("stoic_event_loop_lag_max_ms", "max_ms", "Event-loop lag max since boot (ms)"),
+            ("stoic_event_loop_lag_over_threshold_total", "over_threshold_total",
+             f"Lag probes above {LAG_WARN_MS:.0f} ms since boot")):
+        out += [f"# HELP {name} {help_txt}", f"# TYPE {name} gauge",
+                f'{name}{{pid="{pid}"}} {st[key]}']
+    return out
+
+
+async def loop_lag_monitor(probe_sec: float | None = None, sleep=asyncio.sleep,
+                           clock=time.monotonic):
+    """Sleep `probe_sec` repeatedly; the oversleep is the event-loop lag
+    (time other coroutines / blocking calls held the loop). Logs a warning
+    (rate-limited) whenever lag exceeds LAG_WARN_MS."""
+    probe = LAG_PROBE_SEC if probe_sec is None else probe_sec
+    last_log = -LAG_LOG_EVERY_SEC
+    while True:
+        t0 = clock()
+        await sleep(probe)
+        lag_ms = (clock() - t0 - probe) * 1000.0
+        record_lag(lag_ms)
+        if lag_ms > LAG_WARN_MS:
+            now = clock()
+            if now - last_log >= LAG_LOG_EVERY_SEC:
+                last_log = now
+                logger.warning("event loop lag %.0fms (> %.0fms) — p99=%.0fms "
+                               "over_threshold=%d", lag_ms, LAG_WARN_MS,
+                               lag_stats()["p99_ms"], _lag["over_threshold_total"])
+
+
+def start_watchdog(registry=None):
+    """Start the sentinel thread + watchdog + event-loop lag monitor. With a
+    workers.registry.TaskRegistry the tasks are supervised and cancelled on
+    shutdown; without one they are plain tasks (legacy callers)."""
     global _thread_started
     faulthandler.enable()
     if not _thread_started:
         threading.Thread(target=_sentinel_thread, daemon=True,
                          name="loop-sentinel").start()
         _thread_started = True
-    return asyncio.get_event_loop().create_task(_watchdog_task())
+    if registry is not None:
+        registry.spawn("event_loop_lag", loop_lag_monitor)
+        return registry.spawn("runtime_watchdog", _watchdog_task)
+    loop = asyncio.get_event_loop()
+    loop.create_task(loop_lag_monitor())
+    return loop.create_task(_watchdog_task())
 
 
 async def full_stats(db) -> dict:
@@ -157,6 +237,7 @@ async def full_stats(db) -> dict:
             "uptime_s": round(up),
             "rss_mb": round(rss_mb(), 1), "max_rss_mb": round(_max_rss, 1),
             "loop_lag_s": round(max(0.0, time.monotonic() - _heartbeat), 1),
+            "event_loop_lag_ms": lag_stats(),
             "last_blockage": _last_blockage,
             "samples": list(_samples)[-20:],
             "restarts": restarts}

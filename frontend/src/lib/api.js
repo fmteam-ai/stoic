@@ -78,6 +78,13 @@ function makeResponseInterceptor(client) {
         }
         // Step-up MFA — sensitive action needs a fresh TOTP verification.
         const detail = error.response?.data?.detail;
+        // Server-enforced password change (bootstrap/admin-reset accounts):
+        // every API call except change-password/logout/me returns this 403.
+        if (status === 403 && detail?.code === "password_change_required"
+            && typeof window !== "undefined"
+            && !window.location.pathname.startsWith("/settings")) {
+            window.location.assign("/settings");
+        }
         if (status === 403 && !cfg._stepUpRetried
             && (detail?.code === "step_up_required"
                 || detail?.code === "mfa_enrollment_required")) {

@@ -36,13 +36,13 @@ def world(request):
     request.addfinalizer(_cleanup)
     acc_id = _run(db.accounts.insert_one({"user_id": uid, "label": "r27", "mode": "live", "account_type": "demo",
                                           "broker": "RoboForex", "server": "RoboForex-Demo", "bridge_token": f"r27-{uid}",
-                                          "account_number": "777", "ea_version": "1.57",
+                                          "account_number": "777", "ea_version": "1.58",
                                           "ea_identity": {"installation_id": "inst-A", "authoritative": True, "broker_server": "RoboForex-Demo"},
                                           "broker_account_id_reported": "777", "last_heartbeat": datetime.now(timezone.utc).isoformat(),})).inserted_id
     live_id = _run(db.accounts.insert_one({"user_id": uid, "label": "r27-live", "mode": "live",
                                            "account_type": "standard", "broker": "RoboForex", "bridge_token": f"r27l-{uid}",
                                            "server": "RoboForex-ECN", "account_number": "778",
-                                           "ea_version": "1.57"})).inserted_id
+                                           "ea_version": "1.58"})).inserted_id
     return {"db": db, "acc_id": acc_id, "live_id": live_id, "admin": admin}
 
 

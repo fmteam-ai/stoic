@@ -11,19 +11,16 @@ from secrets_loader import resolve_file_secrets
 resolve_file_secrets()
 
 import os
-import asyncio
 import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
-from bson import ObjectId
 
 from database import close_client, get_db
 from app_env import is_production
 from seed import seed_admin, ensure_indexes
-from auth import decode_token
 from ws_manager import manager as ws_manager
 import bot_runner
 import trade_manager
@@ -104,6 +101,11 @@ from routes.optimizer_routes import router as optimizer_router
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("trading-bot")
+# httpx logs every request URL at INFO — Telegram puts the bot token in the
+# URL path (api.telegram.org/bot<TOKEN>/...), which would defeat the vault
+# encryption of telegram_bot_token. Keep transport libraries at WARNING.
+for _noisy in ("httpx", "httpcore"):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 # iter-158 — correlation ids on every log record (API + workers)
 from correlation import install as _install_correlation, set_correlation_id
@@ -576,17 +578,11 @@ async def ws_endpoint(websocket: WebSocket):
     if not token:
         await _reject(4401)
         return
-    try:
-        payload = decode_token(token)
-        if payload.get("type") != "access":
-            await _reject(4401)
-            return
-        user_id = payload["sub"]
-        db = get_db()
-        if not await db.users.find_one({"_id": ObjectId(user_id)}):
-            await _reject(4401)
-            return
-    except Exception:
+    # same gate as get_current_user: rejects suspended/terminated accounts,
+    # revoked tokens and must-change-password users
+    from auth import authenticate_ws_token
+    user_id = await authenticate_ws_token(token)
+    if not user_id:
         await _reject(4401)
         return
 
@@ -697,16 +693,6 @@ app.add_middleware(_StripStrayCorsCredentials)
 app.add_middleware(_RequestBodyLimit)
 
 
-_bot_runner_task = None
-_warmer_task = None
-_trade_manager_task = None
-_auto_heal_task = None
-_stuck_sync_task = None
-_optimizer_task = None
-_nightly_tuner_task = None
-_scalp_reconcile_task = None
-
-
 from background_loops import (_analytics_loop, _auto_heal_loop,
                               _eod_flatten_loop, _heartbeat_watch_loop,
                               _mode_guardian_loop,
@@ -717,16 +703,67 @@ from background_loops import (_analytics_loop, _auto_heal_loop,
                               _soak_sampler_loop, _soak_tracker_loop,
                               _stuck_open_sync_loop,
                               _billing_loop)
-_protection_task = None
-_analytics_task = None
-_model_maint_task = None
-_ops_alert_task = None
-_portfolio_stop_task = None
-_scheduled_drills_task = None
+# Every background coroutine of this process runs under the supervised task
+# registry (restart with backoff, cancelled + awaited on shutdown) — no
+# fire-and-forget asyncio.create_task at startup.
+from workers.registry import REGISTRY as _bg_tasks, named_loop as _named_loop  # noqa: E402
+
+# Lease name for the cluster-singleton ops loops that have no dedicated
+# worker yet (billing, PAMM sweep, outbox sweeper, drills, …).
+INPROCESS_OPS_LEASE = "inprocess-ops"
+
+
+def _inprocess_worker_groups() -> dict:
+    """In-process mode: lease name → loop factories. The six groups mirror
+    workers/{trading,protection,reconciliation,analytics,model,tuning}.py
+    EXACTLY (same lease names, same loops) so an API replica and a dedicated
+    worker contend for the same lease and can never double-run a loop."""
+    from alerting import _ops_alert_loop
+    from broker_intel import _broker_intel_loop
+    from crypto_lifecycle import crypto_lifecycle_loop
+    from deploy_watch import loop as _deploy_watch_loop
+    from risk_layers import _portfolio_stop_loop
+    from routes.panic_routes import ops_outbox_loop as _ops_outbox_loop
+    from scheduled_drills import scheduled_drill_loop
+    return {
+        "trading": [bot_runner.loop, warmer.loop, trade_manager.run_loop],
+        "protection": [_protection_guard_loop, _portfolio_stop_loop,
+                       crypto_lifecycle_loop],
+        "reconciliation": [_auto_heal_loop, _stuck_open_sync_loop,
+                           _scalp_reconcile_loop, _eod_flatten_loop,
+                           _ops_alert_loop],
+        "analytics": [_analytics_loop],
+        "model": [_model_maintenance_loop],
+        "tuning": [_optimizer_loop, _nightly_tuning_loop],
+        INPROCESS_OPS_LEASE: [_soak_tracker_loop, _billing_loop,
+                              _mode_guardian_loop, _pamm_sweep_loop,
+                              _heartbeat_watch_loop, _deploy_watch_loop,
+                              _ops_outbox_loop, _broker_intel_loop,
+                              scheduled_drill_loop],
+    }
+
+
+# Per-process loops (NOT leased): every replica samples its own RSS/identity.
+_PER_PROCESS_LOOPS = (_soak_sampler_loop,)
+
+
+def _start_inprocess_workers(registry=None) -> list:
+    """Spawn every leased worker group (+ per-process loops) under the task
+    registry. Returns the registry task names."""
+    registry = registry or _bg_tasks
+    from workers.base import run_worker_forever
+    names = []
+    for lease, loops in _inprocess_worker_groups().items():
+        name = f"worker:{lease}"
+        registry.spawn(name, _named_loop(run_worker_forever, lease, loops))
+        names.append(name)
+    for fn in _PER_PROCESS_LOOPS:
+        registry.spawn(fn.__name__, fn)
+        names.append(fn.__name__)
+    return names
 
 
 async def on_startup():
-    global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task, _scalp_reconcile_task
     # review item 5 / iter-182 — Origin enforcement is AUTOMATIC in
     # production (no CSRF_ENFORCE_ORIGIN secret needed) and localhost /
     # preview entries are filtered out of CORS_ORIGINS automatically.
@@ -780,7 +817,7 @@ async def on_startup():
     # iter-183 — runtime watchdog & crash forensics (RSS, loop-blockage
     # stacks, restart history) — must start before anything heavy.
     from runtime_watchdog import start_watchdog
-    start_watchdog()
+    start_watchdog(_bg_tasks)
     # provenance guard must fail at BOOT, never at the first /api/health request
     from modules.pamm import strategy_guard as _sg
     logging.getLogger("server").info("build provenance: sha=%s kind=%s digest=%s",
@@ -842,43 +879,11 @@ async def on_startup():
             logger.info("Background loops NOT started in-process "
                         "(external workers mode).")
             return
-        _bot_runner_task = asyncio.create_task(bot_runner.loop())
-        _warmer_task = asyncio.create_task(warmer.loop())
-        _trade_manager_task = asyncio.create_task(trade_manager.run_loop())
-        _auto_heal_task = asyncio.create_task(_auto_heal_loop())
-        _stuck_sync_task = asyncio.create_task(_stuck_open_sync_loop())
-        _optimizer_task = asyncio.create_task(_optimizer_loop())
-        _nightly_tuner_task = asyncio.create_task(_nightly_tuning_loop())
-        _scalp_reconcile_task = asyncio.create_task(_scalp_reconcile_loop())
-        _eod_flatten_task = asyncio.create_task(_eod_flatten_loop())
-        asyncio.create_task(_soak_sampler_loop())
-        asyncio.create_task(_soak_tracker_loop())
-        asyncio.create_task(_billing_loop())
-        asyncio.create_task(_mode_guardian_loop())
-        asyncio.create_task(_pamm_sweep_loop())
-        asyncio.create_task(_heartbeat_watch_loop())
-        from deploy_watch import loop as _deploy_watch_loop
-        asyncio.create_task(_deploy_watch_loop())
-        from routes.panic_routes import ops_outbox_loop as _ops_outbox_loop
-        asyncio.create_task(_ops_outbox_loop())
-        # Phase F — separated services (in-process mode runs them all)
-        global _protection_task, _analytics_task, _model_maint_task
-        _protection_task = asyncio.create_task(_protection_guard_loop())
-        _analytics_task = asyncio.create_task(_analytics_loop())
-        _model_maint_task = asyncio.create_task(_model_maintenance_loop())
-        from alerting import _ops_alert_loop
-        global _ops_alert_task
-        _ops_alert_task = asyncio.create_task(_ops_alert_loop())
-        from risk_layers import _portfolio_stop_loop
-        global _portfolio_stop_task
-        _portfolio_stop_task = asyncio.create_task(_portfolio_stop_loop())
-        from broker_intel import _broker_intel_loop
-        global _broker_intel_task
-        _broker_intel_task = asyncio.create_task(_broker_intel_loop())
-        from scheduled_drills import scheduled_drill_loop
-        global _scheduled_drills_task
-        _scheduled_drills_task = asyncio.create_task(scheduled_drill_loop())
-        logger.info("Bot runner + warmer + trade manager + auto-heal + stuck-sync + optimizer + nightly-tuner scheduled.")
+        # Leader-leased worker groups (workers.base.run_worker) — the same
+        # leases the dedicated workers use, so >1 replica cannot double-trade.
+        _started = _start_inprocess_workers()
+        logger.info("In-process workers scheduled under leader leases: %s",
+                    ", ".join(_started))
     except Exception as e:
         logger.exception("Startup error: %s", e)
         # audit r3 P0 · a failed startup must not serve silently: readiness
@@ -890,17 +895,8 @@ async def on_startup():
 
 
 async def on_shutdown():
-    for task in (_bot_runner_task, _warmer_task, _trade_manager_task,
-                 _auto_heal_task, _stuck_sync_task, _optimizer_task,
-                 _nightly_tuner_task, _scalp_reconcile_task,
-                 _protection_task, _analytics_task, _model_maint_task,
-                 _ops_alert_task, _portfolio_stop_task,
-                 _scheduled_drills_task):
-        if task and not task.done():
-            task.cancel()
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+    # cancels + awaits EVERY registered background task (worker groups,
+    # watchdog, lag monitor) before the Mongo client goes away
+    await _bg_tasks.shutdown(timeout=float(os.environ.get("SHUTDOWN_TASK_TIMEOUT_SEC", "10")))
     await close_client()
 

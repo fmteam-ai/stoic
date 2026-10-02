@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 from pydantic import BaseModel, Field
 
-from auth import get_current_user, generate_bridge_token, verify_password
+from auth import (get_current_user, generate_bridge_token, verify_password,
+                  bridge_token_fields)
 from database import get_db
 from state_contract import HEARTBEAT_FRESH_S
 from models import AccountCreate, AccountCredsUpdate
@@ -59,8 +60,10 @@ def _serialize(doc: dict) -> dict:
     doc["has_master_password"] = bool(creds.get("master"))
     # SEC hardening — the bridge token is a secret; never bulk-return it.
     # The owner fetches it on demand via GET /{id}/bridge-token.
-    doc["has_bridge_token"] = bool(doc.pop("bridge_token", None))
-    doc.pop("bridge_token_prev", None)
+    doc["has_bridge_token"] = bool(doc.pop("bridge_token", None)
+                                   or doc.get("bridge_token_hash"))
+    for _k in ("bridge_token_prev", "bridge_token_hash", "bridge_token_prev_hash"):
+        doc.pop(_k, None)
     return doc
 
 
@@ -560,7 +563,8 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
                                    else None),
         "base_currency": payload.base_currency,
         "mode": payload.mode,
-        "bridge_token": generate_bridge_token(),  # unused for paper but harmless
+        # Only the sha256 is stored; the plaintext is issued via rotate-token.
+        **bridge_token_fields(generate_bridge_token()),
         "status": "connected" if is_paper else "disconnected",
         # P0 (release review): enablement is ALWAYS an explicit boolean —
         # new accounts start OFF until the owner turns trading on.
@@ -801,21 +805,35 @@ async def trust_terminal(account_id: str, request: Request,
 
 
 @router.post("/{account_id}/rotate-token")
-async def rotate_token(account_id: str, user=Depends(get_current_user)):
+async def rotate_token(account_id: str, request: Request,
+                       user=Depends(get_current_user)):
     db = get_db()
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
+    # A stolen session must not be able to mint itself a valid EA credential.
+    # Users with MFA prove a fresh factor; users without MFA can still rotate
+    # (rotation is the remedy for a leaked token and must stay available).
+    from step_up import require_step_up
+    from webauthn_mfa import has_passkey
+    full = await db.users.find_one({"_id": parse_object_id(user["id"], "User")},
+                                   {"two_factor_enabled": 1})
+    if (full or {}).get("two_factor_enabled") or await has_passkey(db, user["id"]):
+        await require_step_up(db, user, request, "bridge_token_rotate")
+    from auth import hash_bridge_token
     new_token = generate_bridge_token()
     grace_until = (datetime.now(timezone.utc)
                    + timedelta(minutes=15)).isoformat()
+    prev_hash = acc.get("bridge_token_hash") or (
+        hash_bridge_token(acc["bridge_token"]) if acc.get("bridge_token") else None)
     await db.accounts.update_one(
         {"_id": acc["_id"]},
-        {"$set": {"bridge_token": new_token,
-                  "bridge_token_prev": acc.get("bridge_token"),
+        {"$set": {**bridge_token_fields(new_token),
+                  "bridge_token_prev_hash": prev_hash,
                   "bridge_token_prev_expires": grace_until,
-                  "status": "disconnected"}},
+                  "status": "disconnected"},
+         "$unset": {"bridge_token": "", "bridge_token_prev": ""}},
     )
     return {"bridge_token": new_token, "prev_token_grace_until": grace_until}
 
@@ -911,12 +929,15 @@ async def get_bridge_token(account_id: str, user=Depends(get_current_user)):
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"),
          "user_id": user["id"]},
-        {"bridge_token": 1, "bridge_last_used_at": 1})
+        {"bridge_token": 1, "bridge_token_hash": 1, "bridge_token_last4": 1,
+         "bridge_last_used_at": 1})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     tok = acc.get("bridge_token") or ""
-    return {"bridge_token_masked": (f"••••••••••••{tok[-4:]}" if tok else ""),
-            "has_bridge_token": bool(tok),
+    last4 = acc.get("bridge_token_last4") or tok[-4:]
+    has = bool(tok or acc.get("bridge_token_hash"))
+    return {"bridge_token_masked": (f"••••••••••••{last4}" if has else ""),
+            "has_bridge_token": has,
             "last_used_at": acc.get("bridge_last_used_at"),
             "note": "Full token is shown only once at creation/rotation. "
                     "Rotate to get a new one (15-min grace for the old)."}
@@ -936,6 +957,8 @@ async def revoke_bridge_token(account_id: str,
     await db.accounts.update_one(
         {"_id": acc["_id"]},
         {"$unset": {"bridge_token": "", "bridge_token_prev": "",
+                    "bridge_token_hash": "", "bridge_token_prev_hash": "",
+                    "bridge_token_last4": "",
                     "bridge_token_prev_expires": ""},
          "$set": {"bridge_token_revoked_at":
                   datetime.now(timezone.utc).isoformat()}})
@@ -1451,8 +1474,8 @@ async def accounts_certification(user=Depends(get_current_user)):
              "value": v or "—", "ok": bool(v) and v == LATEST_EA,
              "hint": f"latest is {LATEST_EA}"},
             {"key": "bridge_paired", "label": "Bridge paired",
-             "value": "yes" if a.get("bridge_token") else "no",
-             "ok": bool(a.get("bridge_token"))},
+             "value": "yes" if (a.get("bridge_token") or a.get("bridge_token_hash")) else "no",
+             "ok": bool(a.get("bridge_token") or a.get("bridge_token_hash"))},
             {"key": "heartbeat", "label": "EA heartbeat",
              "value": f"{int(hb_age)}s ago" if hb_age is not None else "never",
              "ok": hb_age is not None and hb_age < HEARTBEAT_FRESH_S},

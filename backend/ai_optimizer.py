@@ -6,8 +6,10 @@ Pipeline (per account scope):
                            symbol / direction / session / close_reason,
                            worst losing streak. Pure math, no LLM.
   2. Claude analysis     — strict-JSON verdict + patterns + recommendations.
-                           Tries `claude-fable-5` first (user's choice),
-                           falls back to `claude-opus-4-8` if rejected.
+                           Tries Claude Fable 5.1 first (user's choice of the
+                           frontier tier), falls back to Claude Opus 5.5 only
+                           on transport/API errors. Override with
+                           LLM_MODEL_AI_OPTIMIZER / LLM_MODEL_AI_OPTIMIZER_FALLBACK.
   3. Validation          — every LLM recommendation is whitelisted against
                            ALLOWED_FIELDS with hard clamps; anything the
                            model hallucinates is dropped. `from` values are
@@ -27,6 +29,11 @@ import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
+from typing import Optional, Union
+
+from pydantic import BaseModel, Field
+
+import llm_client
 from database import get_db
 from strategy_presets import PRESETS, get_preset
 
@@ -36,9 +43,12 @@ MIN_TRADES = 3          # below this we store an insufficient_data report, no LL
 CACHE_MINUTES = 5       # manual re-analyze within this window returns cached report
 SCHEDULED_EVERY_HOURS = 24
 
-# LLM preference order — user asked for Claude Fable 5; Opus 4.8 is the
-# guaranteed-supported fallback on the Emergent Universal Key.
-MODEL_CANDIDATES = [("anthropic", "claude-fable-5"), ("anthropic", "claude-opus-4-8")]
+# LLM preference order — user asked for the Claude Fable tier; Claude Fable
+# 5.1 is its successor at the same price. Claude Opus 5.5 is the fallback.
+MODEL_CANDIDATES = [
+    ("anthropic", os.environ.get("LLM_MODEL_AI_OPTIMIZER") or "claude-fable-5-1"),
+    ("anthropic", os.environ.get("LLM_MODEL_AI_OPTIMIZER_FALLBACK") or "claude-opus-5-5"),
+]
 
 # Optimizer reviews BOT-EXECUTED trades only. `origin` values seen in the wild:
 # 'auto' (bot), 'manual' / 'external' / 'other_ea' (broker-terminal trades),
@@ -219,26 +229,58 @@ def _parse_llm_json(raw: str) -> dict:
     return json.loads(raw)
 
 
+class _PatternOut(BaseModel):
+    title: str = ""
+    detail: str = ""
+    severity: str = "info"
+
+
+class _RecOut(BaseModel):
+    type: str
+    field: Optional[str] = None
+    to: Optional[Union[bool, float, str]] = None
+    preset_key: Optional[str] = None
+    reason: str = ""
+    expected_impact: str = ""
+
+
+class OptimizerOut(BaseModel):
+    """Structured-output schema. Whitelisting/clamping of recommendations
+    stays in ``validate_recommendations``."""
+    verdict: str
+    headline: str = ""
+    summary: str = ""
+    patterns: list[_PatternOut] = Field(default_factory=list)
+    recommendations: list[_RecOut] = Field(default_factory=list)
+
+
 async def _call_llm(window_hours: int, payload: dict) -> tuple[dict | None, str | None]:
-    """Try Fable 5 first, fall back to Opus 4.8. Returns (analysis, model_used)."""
+    """Try the primary model, fall back on API/transport errors only.
+
+    A response that arrives but is unusable (refusal, truncation, schema
+    failure) is NOT retried on the fallback model — that just pays for a
+    second frontier-tier call to get the same result. Returns
+    (analysis, model_used)."""
     system = _SYSTEM_PROMPT.format(
         window=window_hours,
         allowed_fields=", ".join(ALLOWED_FIELDS.keys()),
         preset_keys=", ".join(PRESETS.keys()),
     )
     text = json.dumps(payload, default=str)
-    for provider, model in MODEL_CANDIDATES:
-        try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=f"optimizer-{uuid.uuid4().hex[:10]}",
-                system_message=system,
-            ).with_model(provider, model)
-            response = await chat.send_message(UserMessage(text=text))
-            return _parse_llm_json(response), model
-        except Exception as e:  # noqa: BLE001
-            logger.warning("optimizer LLM %s failed: %s", model, e)
+    for _provider, model in MODEL_CANDIDATES:
+        res = await llm_client.complete(
+            feature="ai_optimizer", system=system, user=text, model=model,
+            schema=OptimizerOut, max_tokens=4000)
+        if res.ok:
+            return res.data.model_dump(exclude_none=True), model
+        if res.error_kind == "disabled":
+            return None, None
+        if res.retryable or res.error_kind == "circuit_open":
+            logger.warning("optimizer LLM %s failed: %s", model, res.error)
+            continue
+        logger.warning("optimizer LLM %s returned unusable output: %s",
+                       model, res.error)
+        return None, model
     return None, None
 
 

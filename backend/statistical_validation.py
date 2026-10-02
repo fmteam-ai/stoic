@@ -3,7 +3,10 @@
 Promotion to autonomous_live requires EVIDENCE, expressed with confidence
 intervals rather than single averages:
   • ≥ MIN_TRADES executed trades in the window
-  • positive expectancy after costs at the 95% CI LOWER BOUND
+  • positive expectancy after costs at the 95% CI LOWER BOUND — the more
+    conservative of the normal-theory bound and a moving-block bootstrap
+    bound (validation.block_bootstrap_lower_bound), because consecutive
+    trades share regimes and are serially dependent
   • drawdown within budget (R terms)
   • stable calibration (MAE ≤ MAX_MAE)
 """
@@ -26,7 +29,13 @@ async def promotion_evidence(db, user_id: str, days: int = 90) -> dict:
         sem = math.sqrt(var / n)
     else:
         sem = 0.0
-    ci_lower = round(mean - 1.96 * sem, 4)
+    ci_normal = mean - 1.96 * sem
+    ci_boot = None
+    if n >= 10:
+        from validation import block_bootstrap_lower_bound
+        ci_boot = block_bootstrap_lower_bound(rs, alpha=0.025)
+    ci_lower = round(min(ci_normal, ci_boot) if ci_boot is not None
+                     else ci_normal, 4)
     equity = peak = dd = 0.0
     for r in rs:
         equity += r
@@ -62,6 +71,10 @@ async def promotion_evidence(db, user_id: str, days: int = 90) -> dict:
     blockers = [f"statistical validation: {c['detail']}"
                 for c in checks.values() if not c["pass"]]
     return {"days": days, "n": n, "mean_r": round(mean, 4),
-            "ci95_lower_r": ci_lower, "max_drawdown_r": round(dd, 2),
+            "ci95_lower_r": ci_lower,
+            "ci95_lower_normal_r": round(ci_normal, 4),
+            "ci95_lower_block_bootstrap_r": (round(ci_boot, 4)
+                                             if ci_boot is not None else None),
+            "max_drawdown_r": round(dd, 2),
             "calibration_mae": mae, "checks": checks,
             "sufficient": not blockers, "blockers": blockers}

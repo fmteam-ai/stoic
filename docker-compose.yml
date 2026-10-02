@@ -19,7 +19,8 @@ x-app-common: &app-common
     JWT_SECRET_FILE: /run/secrets/jwt_secret
     KEY_VAULT_MASTER_FILE: /run/secrets/key_vault_master
     SECRETS_MASTER_KEY_FILE: /run/secrets/secrets_master_key
-    METRICS_TOKEN_FILE: /run/secrets/metrics_token
+    METRICS_TOKEN_FILE: /run/secrets/metrics_token        # Prometheus scrape + READ-ONLY ops
+    OPS_DEPLOY_TOKEN_FILE: /run/secrets/ops_deploy_token  # MUTATING machine ops (deploy tooling)
     ORDER_AUTH_SECRET_FILE: /run/secrets/order_auth_secret
     LEDGER_ANCHOR_KEY_FILE: /run/secrets/ledger_anchor_key
     # Release signing: the private key lives ONLY in the signer sidecar. The
@@ -29,12 +30,17 @@ x-app-common: &app-common
     # Exact backend image identity — REQUIRED in production risk snapshots
     # (deploy/install.sh writes it to .env after the image build).
     STOIC_IMAGE_DIGEST: ${STOIC_IMAGE_DIGEST:-}
+  # default network (mongo, frontend) + the internal-only signer network
+  networks:
+    - default
+    - signer_net
   secrets:
     - mongo_url
     - jwt_secret
     - key_vault_master
     - secrets_master_key
     - metrics_token
+    - ops_deploy_token
     - order_auth_secret
     - ledger_anchor_key
     - signer_token
@@ -86,6 +92,10 @@ services:
     build:
       context: ./deploy/signer
     restart: unless-stopped
+    # internal-only network shared with the API + workers: no published port,
+    # no route to the outside world, unreachable from mongo/frontend/caddy.
+    networks:
+      - signer_net
     environment:
       SIGNER_TOKEN_FILE: /run/secrets/signer_token
       ED25519_SIGNING_KEY_B64_FILE: /run/secrets/signer_ed25519_key
@@ -174,6 +184,8 @@ secrets:
     file: ./secrets/secrets_master_key
   metrics_token:
     file: ./secrets/metrics_token
+  ops_deploy_token:
+    file: ./secrets/ops_deploy_token
   order_auth_secret:
     file: ./secrets/order_auth_secret
   ledger_anchor_key:
@@ -189,3 +201,7 @@ secrets:
 
 volumes:
   mongo_data:
+
+networks:
+  signer_net:
+    internal: true

@@ -34,8 +34,15 @@ def _atr(bars: list, period: int = 14) -> float:
     return sum(trs[-period:]) / period
 
 
-def compute_intraday_features(bars: list) -> dict | None:
-    """Pure computation on M15 bars (dicts with t/o/h/l/c/v)."""
+def compute_intraday_features(bars: list, now_ts: float | None = None) -> dict | None:
+    """Pure computation on M15 bars (dicts with t/o/h/l/c/v).
+
+    `now_ts` is the evaluation instant whose session (calendar date of the
+    bar epoch) anchors VWAP / day range / range position. It defaults to the
+    LAST bar's timestamp so historical replays (bayes_opt, model_shadow,
+    nightly_tuner) see the same session the live bot saw at that bar —
+    using the wall clock made every replayed bar "not today" (vwap=None).
+    Live: the last bar is the current one, so behaviour is unchanged."""
     if not bars or len(bars) < MIN_BARS:
         return None
     closes = [float(b["c"]) for b in bars]
@@ -82,8 +89,9 @@ def compute_intraday_features(bars: list) -> dict | None:
             elif c < lo:
                 recent_break = "DOWN"
 
-    # Session VWAP — today's UTC bars, volume-weighted typical price
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    # Session VWAP — bars of the evaluated bar's day, volume-weighted typical price
+    ref_ts = now_ts if now_ts is not None else bars[-1]["t"]
+    today = datetime.fromtimestamp(float(ref_ts), tz=timezone.utc).strftime("%Y-%m-%d")
     pv = vol = 0.0
     for b in bars:
         if datetime.fromtimestamp(b["t"], tz=timezone.utc).strftime("%Y-%m-%d") != today:
@@ -125,7 +133,7 @@ def compute_intraday_features(bars: list) -> dict | None:
     prior = {}
     for b in bars:
         d = datetime.fromtimestamp(b["t"], tz=timezone.utc).strftime("%Y-%m-%d")
-        if d != today:
+        if d < today:   # only days before the evaluated session
             e = prior.setdefault(d, [float(b["h"]), float(b["l"])])
             e[0] = max(e[0], float(b["h"]))
             e[1] = min(e[1], float(b["l"]))
@@ -181,13 +189,20 @@ def intraday_alignment(action: str, feats: dict | None) -> tuple[int, str]:
     return score, ", ".join(notes)
 
 
-async def fetch_intraday_pack(symbol: str) -> dict | None:
-    """Latest fresh M15 features for the symbol from the EA candle stream."""
+async def fetch_intraday_pack(symbol: str, user_id: str | None = None) -> dict | None:
+    """Latest fresh M15 features for the symbol from the EA candle stream.
+
+    Pass `user_id` so the features come from THIS tenant's broker feed
+    (same key bridge_routes writes: user_id+symbol+timeframe). Without it
+    the legacy any-tenant "freshest doc" lookup is kept for old callers."""
     try:
         from database import get_db
         from pip_utils import base_symbol
+        q = {"symbol": base_symbol(symbol)}
+        if user_id:
+            q.update(user_id=user_id, timeframe="M15")
         doc = await get_db().intraday_candles.find_one(
-            {"symbol": base_symbol(symbol)},
+            q,
             {"bars": {"$slice": -120}, "updated_at": 1},
             sort=[("updated_at", -1)],
         )

@@ -80,14 +80,24 @@ def tf_trend(bars: list) -> str:
 
 def detect_pullback(m15: list, direction: str, atr15: float,
                     retrace_lo: float = 0.25, retrace_hi: float = 0.70,
-                    impulse_atr: float = 2.0) -> dict:
+                    impulse_atr: float = 2.0,
+                    last_is_forming: bool = True) -> dict:
     """Impulse leg in `direction` + a retrace inside the window = setup.
-    Returns the minor swing level whose break confirms trend resumption."""
+    Returns the minor swing level whose break confirms trend resumption.
+
+    The swing level is taken from the last 3 COMPLETED bars. The EA streams
+    CopyRates from shift 0, so the newest bar is still forming; its high/low
+    keeps moving with price, which made "live break of the swing" partly
+    self-referential. Bar timestamps are broker server time (unknown
+    UTC+2/+3 offset), so we can't robustly tell from the clock whether the
+    last bar has closed — `last_is_forming=True` (default) conservatively
+    always excludes it."""
     out = {"ready": False, "swing_level": None, "note": ""}
     if len(m15) < 20 or atr15 <= 0:
         out["note"] = "insufficient M15 data"
         return out
     closes = [float(b["c"]) for b in m15]
+    swing_bars = m15[-4:-1] if last_is_forming else m15[-3:]
     seg = m15[-24:]
     leg_low = min(float(b["l"]) for b in seg)
     leg_high = max(float(b["h"]) for b in seg)
@@ -100,7 +110,7 @@ def detect_pullback(m15: list, direction: str, atr15: float,
         if not (retrace_lo <= retrace <= retrace_hi):
             out["note"] = f"retrace {retrace:.0%} outside {retrace_lo:.0%}-{retrace_hi:.0%}"
             return out
-        swing = max(float(b["h"]) for b in m15[-3:])
+        swing = max(float(b["h"]) for b in swing_bars)
         out.update(ready=True, swing_level=round(swing, 2),
                    note=f"pullback {retrace:.0%} of {leg:.1f}pt leg — break {swing:.2f} to resume UP")
     else:
@@ -108,7 +118,7 @@ def detect_pullback(m15: list, direction: str, atr15: float,
         if not (retrace_lo <= retrace <= retrace_hi):
             out["note"] = f"retrace {retrace:.0%} outside {retrace_lo:.0%}-{retrace_hi:.0%}"
             return out
-        swing = min(float(b["l"]) for b in m15[-3:])
+        swing = min(float(b["l"]) for b in swing_bars)
         out.update(ready=True, swing_level=round(swing, 2),
                    note=f"pullback {retrace:.0%} of {leg:.1f}pt leg — break {swing:.2f} to resume DOWN")
     return out
@@ -163,14 +173,21 @@ def analyze_mtf_confluence(m15_bars: list, live_price: float, atr15: float,
 
 
 async def fetch_mtf_confluence(symbol: str, live_price: float,
-                               mode: str = "strict") -> dict | None:
-    """Cascade report from the freshest EA M15 stream (≤30 min old)."""
+                               mode: str = "strict",
+                               user_id: str | None = None) -> dict | None:
+    """Cascade report from the freshest EA M15 stream (≤30 min old).
+
+    Pass `user_id` to read this tenant's own feed (user_id+symbol+timeframe,
+    the key bridge_routes writes); omitted → legacy any-tenant lookup."""
     try:
         from database import get_db
         from pip_utils import base_symbol
         from intraday_features import _atr
+        q = {"symbol": base_symbol(symbol)}
+        if user_id:
+            q.update(user_id=user_id, timeframe="M15")
         doc = await get_db().intraday_candles.find_one(
-            {"symbol": base_symbol(symbol)},
+            q,
             {"bars": {"$slice": -800}, "updated_at": 1},
             sort=[("updated_at", -1)],
         )
