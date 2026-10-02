@@ -364,3 +364,16 @@ def test_installer_gates_on_infrastructure_and_lists_release_gates():
     df = _read("Dockerfile.backend")
     for f in ("scripts/verify_ea_release.py", "release/rc_lock.json", "docs/RELEASE_HASHES.json"):
         assert f"COPY {f} /app/{f}" in df, f
+
+
+def test_host_mount_fix_script_wires_mountflags_slave():
+    """cPanel overlay2 EBUSY: doctor points at host-mount-fix.sh, which writes MountFlags=slave drop-ins."""
+    import stat
+    fix = _read("deploy", "host-mount-fix.sh")
+    for needle in ("MountFlags=slave", "10-stoic-mountflags.conf", "systemctl daemon-reload", "--apply", "--restart",
+                   "/overlay2/", "ns/mnt", "try-restart"):
+        assert needle in fix, needle
+    assert "host-mount-fix.sh" in _read("deploy", "doctor.sh")
+    assert "host-mount-fix.sh" in _read("docs", "DEPLOYMENT.md")
+    assert os.stat(os.path.join(ROOT, "deploy", "host-mount-fix.sh")).st_mode & stat.S_IXUSR
+    assert subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", "host-mount-fix.sh")]).returncode == 0

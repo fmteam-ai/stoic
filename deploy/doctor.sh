@@ -163,7 +163,7 @@ if [ -n "${DK_PID}" ]; then
       printf '%s\n' "$(cat "$p/comm" 2>/dev/null)"
     done | sort | uniq -c | sort -rn | head -8 | awk '{printf "%s×%s ", $2, $1}')
   [ -z "${LEAKERS// /}" ] && ok "no host process holds docker overlay mounts in a foreign mount namespace" \
-    || warn "overlay mounts leaked into other mount namespaces (process×count): ${LEAKERS}— container removal hits EBUSY until these restart; for systemd units add a drop-in with PrivateTmp=no / PrivateMounts=no, or start them BEFORE docker"
+    || warn "overlay mounts leaked into other mount namespaces (process×count): ${LEAKERS}— container removal hits EBUSY until these restart; fix: deploy/host-mount-fix.sh --apply --restart (MountFlags=slave drop-in per leaking unit)"
   # host processes with open files inside a container rootfs (scanners, indexers) → umount EBUSY
   HOLDERS=$(for c in $(docker compose ps -q 2>/dev/null); do
       m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$c" 2>/dev/null); [ -n "$m" ] || continue

@@ -272,3 +272,21 @@ pip-audit/gitleaks/image scans.
 - `docs/RUNBOOK.md` — day-2 operations
 - `docs/DISASTER_RECOVERY.md`, `docs/ROLLBACK.md`, `docs/INCIDENT_RESPONSE.md`
 - `docs/MT5_VALIDATION_CAMPAIGN.md` — pre-live broker validation + soak
+
+## Docker `device or resource busy` on restarts (cPanel hosts)
+
+Other services started with their own mount namespace (`PrivateTmp=yes`: php-fpm pools,
+httpd, mariadb, node apps) receive copies of Docker's overlay mounts; while a copy exists
+the kernel refuses to remove a container's rootfs and `update.sh` has to retry. Two layers
+fix it for good:
+
+1. `deploy/docker-root-slave.sh` — installed by `bootstrap.sh` as `docker.service`
+   `ExecStartPre`; makes the Docker root a SLAVE mount so new container mounts never
+   propagate out. Check: `findmnt -no PROPAGATION /var/lib/docker` → `slave`.
+2. `deploy/host-mount-fix.sh` — detects the units that still hold copies and writes a
+   systemd drop-in `MountFlags=slave` for each (`--apply`), then restarts them
+   (`--restart`) so the current copies are released. Dry run by default; survives
+   EasyApache/cPanel updates. Processes that are not systemd services (CageFS/LVE user
+   processes such as a `next-server`) are listed and must be restarted by their owner.
+
+`deploy/doctor.sh` (section *docker mount propagation*) reports both layers.
