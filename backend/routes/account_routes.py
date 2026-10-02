@@ -5,7 +5,7 @@ from bson import ObjectId
 from pydantic import BaseModel, Field
 
 from auth import (get_current_user, generate_bridge_token, verify_password,
-                  bridge_token_fields)
+                  bridge_token_fields, strip_bridge_token_fields)
 from database import get_db
 from state_contract import HEARTBEAT_FRESH_S
 from models import AccountCreate, AccountCredsUpdate
@@ -60,10 +60,11 @@ def _serialize(doc: dict) -> dict:
     doc["has_master_password"] = bool(creds.get("master"))
     # SEC hardening — the bridge token is a secret; never bulk-return it.
     # The owner fetches it on demand via GET /{id}/bridge-token.
-    doc["has_bridge_token"] = bool(doc.pop("bridge_token", None)
-                                   or doc.get("bridge_token_hash"))
-    for _k in ("bridge_token_prev", "bridge_token_hash", "bridge_token_prev_hash"):
-        doc.pop(_k, None)
+    # Audit v2 P2-02 — no bridge_token* field (plaintext, hash, prev, last4,
+    # stamps) ever leaves in an account listing/export.
+    has_token = bool(doc.get("bridge_token") or doc.get("bridge_token_hash"))
+    strip_bridge_token_fields(doc)
+    doc["has_bridge_token"] = has_token
     return doc
 
 
@@ -813,14 +814,24 @@ async def rotate_token(account_id: str, request: Request,
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     # A stolen session must not be able to mint itself a valid EA credential.
-    # Users with MFA prove a fresh factor; users without MFA can still rotate
-    # (rotation is the remedy for a leaked token and must stay available).
-    from step_up import require_step_up
+    # Users with MFA prove a fresh factor (step-up); users without MFA must
+    # re-enter their current password (audit v2 P2-01 — a session alone is
+    # not enough). Rotation stays available as the remedy for a leaked token.
+    from step_up import require_step_up, audit_event
     from webauthn_mfa import has_passkey
     full = await db.users.find_one({"_id": parse_object_id(user["id"], "User")},
-                                   {"two_factor_enabled": 1})
+                                   {"two_factor_enabled": 1, "password_hash": 1})
     if (full or {}).get("two_factor_enabled") or await has_passkey(db, user["id"]):
         await require_step_up(db, user, request, "bridge_token_rotate")
+        method = "step_up"
+    else:
+        try:
+            body = await request.json()
+        except Exception:
+            body = None
+        password = (body or {}).get("current_password") if isinstance(body, dict) else None
+        method = await _require_rotate_password(db, user["id"], full or {}, password,
+                                                request)
     from auth import hash_bridge_token
     new_token = generate_bridge_token()
     grace_until = (datetime.now(timezone.utc)
@@ -835,7 +846,55 @@ async def rotate_token(account_id: str, request: Request,
                   "status": "disconnected"},
          "$unset": {"bridge_token": "", "bridge_token_prev": ""}},
     )
+    await audit_event(db, user["id"], "bridge_token_rotated",
+                      {"account_id": account_id, "method": method,
+                       "prev_token_grace_until": grace_until},
+                      request, step_up=(method == "step_up"))
     return {"bridge_token": new_token, "prev_token_grace_until": grace_until}
+
+
+BRIDGE_ROTATE_SCOPE = "bridge_rotate"
+
+
+def _test_bypass_ok(request) -> bool:
+    """Same server-side test bypass as step_up.require_step_up (refused in
+    production): lets the live HTTP suites rotate without a password."""
+    import secrets as _secrets
+    from app_env import bypass_token, is_production
+    expected = bypass_token("STEP_UP_BYPASS_TOKEN")
+    got = (getattr(request, "headers", {}) or {}).get("X-Step-Up-Bypass") or ""
+    return bool(expected and got and not is_production()
+                and _secrets.compare_digest(expected, got))
+
+
+async def _require_rotate_password(db, user_id: str, full: dict,
+                                   password: str | None, request=None) -> str:
+    """Audit v2 P2-01 — password re-auth for bridge-token rotation by users
+    without MFA. Failure lockout 5 / 10 min (same helpers as /auth/step-up
+    and the 2FA-enrol re-auth). Returns the audit `method` label.
+    Passwordless (OAuth-only) accounts have nothing stronger to check."""
+    if not full.get("password_hash"):
+        return "session_passwordless"
+    if request is not None and _test_bypass_ok(request):
+        return "test_bypass"
+    from security import check_failure_limit, record_failure, clear_failures
+    await check_failure_limit(db, BRIDGE_ROTATE_SCOPE, user_id, 5, 600,
+                              "Too many failed password attempts. "
+                              "Try again in a few minutes.")
+    if not password or not isinstance(password, str) \
+            or not verify_password(password, full["password_hash"]):
+        if password:
+            await record_failure(db, BRIDGE_ROTATE_SCOPE, user_id, 600)
+            from step_up import audit_event
+            await audit_event(db, user_id, "bridge_token_rotate_failed",
+                              {"reason": "bad_password"})
+        raise HTTPException(status_code=401, detail={
+            "code": "password_required",
+            "message": ("Enter your current password to rotate the bridge "
+                        "token." if not password else
+                        "Current password is incorrect.")})
+    await clear_failures(db, BRIDGE_ROTATE_SCOPE, user_id)
+    return "password"
 
 
 @router.post("/{account_id}/request-sync")
