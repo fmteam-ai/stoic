@@ -303,8 +303,24 @@ def test_vault_dual_read_and_rewrap_manifest(monkeypatch):
         # old key removed → still opens with the current key alone
         monkeypatch.delenv("SECRETS_MASTER_KEY_PREVIOUS")
         assert integ.unseal(doc) == "re_dummy_value_1234"
+        # audit v2 P2-03: readiness needs every LIVE worker to acknowledge the
+        # target key — zero live workers is not proof of rollout
+        _run(db.worker_leases.delete_many({"_id": "r29-vault-probe"}))
         rr = _run(integ.rewrap_readiness(db))
-        assert rr["ok"] is True
+        if not rr.get("live_workers"):
+            assert rr["ok"] is False
+        from datetime import datetime, timedelta, timezone
+        _run(db.worker_leases.replace_one(
+            {"_id": "r29-vault-probe"},
+            {"_id": "r29-vault-probe", "holder": "test",
+             "expires_at": datetime.now(timezone.utc) + timedelta(minutes=5),
+             "vault_key_id": integ.master_key_id()}, upsert=True))
+        try:
+            rr = _run(integ.rewrap_readiness(db))
+            assert "r29-vault-probe" not in rr.get("unacknowledged", [])
+            assert rr["ok"] is True or rr.get("unacknowledged"), rr
+        finally:
+            _run(db.worker_leases.delete_many({"_id": "r29-vault-probe"}))
         # production with the previous key still configured is a readiness blocker
         monkeypatch.setenv("APP_ENV", "production")
         monkeypatch.setenv("SECRETS_MASTER_KEY_PREVIOUS", k_old)

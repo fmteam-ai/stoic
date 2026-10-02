@@ -33,6 +33,9 @@ class ChartProvenance(BaseModel):
     reconciliation_id: Optional[str] = None
     note: Optional[str] = None
     share_allowed: Optional[bool] = None
+    # audit v2 — newest data point, exposed SEPARATELY from as_of: a quiet
+    # series (no new points) is not stale when its authoritative watermark is fresh
+    last_point_at: Optional[str] = None
 
 
 # CI inventory: every financial series endpoint → (module path, response key holding the series)
@@ -72,11 +75,16 @@ def _weekend_only(a: datetime, b: datetime) -> bool:
 def build(*, provider: str, source_kind: str, points: list | None = None, time_key: str = "date",
           expected_interval_s: int = 86400, as_of=None, cache_status: str = "live",
           ledger_id: str | None = None, reconciliation_id: str | None = None,
-          note: str | None = None) -> dict:
+          note: str | None = None, as_of_from_points: bool = True) -> dict:
+    """``as_of`` is the authoritative watermark. When it is not supplied the
+    newest point is used — unless ``as_of_from_points=False`` (series whose
+    freshness must NOT be keyed on activity, e.g. broker-reconciled P&L where
+    a quiet account produces no new points): then as_of stays None."""
     assert source_kind in SOURCE_KINDS, source_kind
     now = datetime.now(timezone.utc)
     stamps = sorted(t for t in (_ts((p or {}).get(time_key)) for p in (points or []) if isinstance(p, dict)) if t)
-    last = _ts(as_of) or (stamps[-1] if stamps else None)
+    last_point = stamps[-1] if stamps else None
+    last = _ts(as_of) or (last_point if as_of_from_points else None)
     freshness = int((now - last).total_seconds()) if last else None
     gaps = []
     for a, b in zip(stamps, stamps[1:]):
@@ -102,4 +110,5 @@ def build(*, provider: str, source_kind: str, points: list | None = None, time_k
         "ledger_id": ledger_id,
         "reconciliation_id": reconciliation_id,
         "note": note,
+        "last_point_at": last_point.isoformat() if last_point else None,
     }).model_dump()
