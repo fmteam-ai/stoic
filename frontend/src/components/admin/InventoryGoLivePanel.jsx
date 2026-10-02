@@ -1,0 +1,132 @@
+import { useCallback, useEffect, useState } from "react";
+import api, { formatApiError } from "@/lib/api";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Loader2, Trash2, ShieldCheck, ClipboardCheck } from "lucide-react";
+
+const Row = ({ label, children, testId }) => (
+    <div data-testid={testId} className="flex items-start justify-between gap-4 py-2 border-b border-white/5 text-sm">
+        <span className="font-mono text-xs text-white/50 uppercase tracking-wider pt-0.5">{label}</span>
+        <span className="text-right">{children}</span>
+    </div>
+);
+
+export const InventoryGoLivePanel = () => {
+    const [inv, setInv] = useState(null);
+    const [pend, setPend] = useState(null);
+    const [busy, setBusy] = useState("");
+    const [exp, setExp] = useState({ accounts: "", enabled: "", bots: "" });
+
+    const load = useCallback(async () => {
+        try {
+            const [a, b] = await Promise.all([api.get("/authority/inventory"), api.get("/authority/inventory/pending")]);
+            setInv(a.data); setPend(b.data);
+            const cur = b.data?.expectation || {};
+            setExp((e) => ({
+                accounts: e.accounts === "" && cur.accounts != null ? String(cur.accounts) : e.accounts,
+                enabled: e.enabled === "" && cur.enabled != null ? String(cur.enabled) : e.enabled,
+                bots: e.bots === "" && cur.bots != null ? String(cur.bots) : e.bots,
+            }));
+        } catch (err) { toast.error(formatApiError(err)); }
+    }, []);
+    useEffect(() => { load(); }, [load]);
+
+    const run = async (key, fn, okMsg) => {
+        setBusy(key);
+        try { await fn(); toast.success(okMsg); await load(); }
+        catch (err) { toast.error(formatApiError(err)); }
+        finally { setBusy(""); }
+    };
+
+    if (!inv || !pend) return <div className="p-4 text-white/40 text-sm font-mono"><Loader2 className="inline h-4 w-4 animate-spin mr-2" />loading inventory…</div>;
+    const c = inv.counts || {};
+    const violations = inv.violations || [];
+    const secondAdminMissing = (pend.admin_count || 0) < 2;
+    const fill = () => setExp({ accounts: String(c.configured ?? 0), enabled: String(c.live_enabled ?? 0), bots: String(c.bots_enabled ?? 0) });
+
+    return (
+        <section data-testid="inventory-golive-panel" className="rounded-xl border border-white/10 bg-[#0B0F14] p-5 space-y-5">
+            <header className="flex items-center justify-between">
+                <h3 className="text-base md:text-lg font-semibold flex items-center gap-2"><ClipboardCheck className="h-5 w-5 text-[#FFB000]" />Inventory &amp; Go-Live Gate</h3>
+                <span data-testid="inventory-gate-status" className={`font-mono text-xs px-2 py-1 rounded ${inv.ok ? "bg-emerald-500/15 text-emerald-300" : "bg-[#FF3B30]/15 text-[#FF3B30]"}`}>{inv.ok ? "GATE PASS" : `GATE FAIL · ${violations.length}`}</span>
+            </header>
+
+            <div className="grid md:grid-cols-2 gap-6">
+                <div>
+                    <Row label="accounts (cfg / live / enabled)" testId="inventory-count-accounts">{c.configured} / {c.live_configured} / {c.live_enabled}</Row>
+                    <Row label="bots enabled (raw / orphan)" testId="inventory-count-bots">{c.bots_enabled} ({c.bots_configured_raw} / {c.bots_null_account})</Row>
+                    <Row label="expected A/E/B" testId="inventory-expected">{c.expected_accounts ?? "—"} / {c.expected_enabled ?? "—"} / {c.expected_bots ?? "—"}</Row>
+                    <Row label="inventory hash" testId="inventory-hash"><code className="text-xs">{(inv.inventory_hash || "").slice(0, 16)}</code>{inv.approved_hash ? " · approved" : " · NOT approved"}</Row>
+                    <Row label="admins" testId="inventory-admin-count">{pend.admin_count}{secondAdminMissing && <span className="text-[#FFB000] ml-2">second admin required for approvals</span>}</Row>
+                </div>
+                <div>
+                    <div className="font-mono text-xs text-white/50 uppercase tracking-wider mb-2">violations</div>
+                    {violations.length === 0 ? <div className="text-emerald-300 text-sm">none</div> : (
+                        <ul data-testid="inventory-violations" className="space-y-1 text-sm text-[#FF3B30]">{violations.map((v) => <li key={v}>· {v}</li>)}</ul>
+                    )}
+                </div>
+            </div>
+
+            {pend.orphan_bots?.length > 0 && (
+                <div data-testid="inventory-orphans" className="rounded-lg border border-[#FF3B30]/30 p-3 space-y-2">
+                    <div className="font-mono text-xs text-[#FF3B30] uppercase">bot configs with no account ({pend.orphan_total ?? pend.orphan_bots.length}{pend.orphan_total > pend.orphan_bots.length ? `, showing ${pend.orphan_bots.length}` : ""}) — delete to clear the defect</div>
+                    {pend.orphan_bots.map((b) => (
+                        <div key={b.id} className="flex items-center justify-between text-sm">
+                            <span className="font-mono text-xs">{b.id} · {b.symbol || b.name || "—"} · owner {b.user_id || "?"} · {b.active ? "ACTIVE" : "inactive"}</span>
+                            <Button size="sm" variant="ghost" data-testid={`orphan-bot-delete-${b.id}`} disabled={!!busy} onClick={() => run(b.id, () => api.delete(`/authority/inventory/orphan-bots/${b.id}`), "orphan bot config deleted")}>
+                                <Trash2 className="h-4 w-4 text-[#FF3B30]" />
+                            </Button>
+                        </div>
+                    ))}
+                </div>
+            )}
+
+            <div className="grid md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                    <div className="font-mono text-xs text-white/50 uppercase tracking-wider">1 · declare expectation (accounts / enabled / bots)</div>
+                    <div className="flex gap-2">
+                        {["accounts", "enabled", "bots"].map((k) => (
+                            <Input key={k} data-testid={`expectation-${k}`} inputMode="numeric" placeholder={k} value={exp[k]} onChange={(e) => setExp({ ...exp, [k]: e.target.value.replace(/\D/g, "") })} className="w-24" />
+                        ))}
+                        <Button variant="ghost" size="sm" data-testid="expectation-fill-current" onClick={fill}>use current</Button>
+                    </div>
+                    {pend.expectation_pending ? (
+                        <div data-testid="expectation-pending" className="text-xs text-[#FFB000] font-mono">pending {pend.expectation_pending.accounts}/{pend.expectation_pending.enabled}/{pend.expectation_pending.bots} proposed by {pend.expectation_pending.proposed_by} — a DIFFERENT admin must approve</div>
+                    ) : null}
+                    <div className="flex gap-2">
+                        <Button size="sm" data-testid="expectation-propose" disabled={!!busy || !exp.accounts || !exp.enabled || !exp.bots}
+                            onClick={() => run("prop", () => api.post("/authority/inventory/expectation", { accounts: +exp.accounts, enabled: +exp.enabled, bots: +exp.bots }), "expectation proposed — second admin must approve")}>
+                            {busy === "prop" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Propose"}
+                        </Button>
+                        <Button size="sm" variant="outline" data-testid="expectation-approve" disabled={!!busy || !pend.expectation_pending || pend.expectation_pending?.proposed_by === pend.me}
+                            onClick={() => run("appr", () => api.post("/authority/inventory/expectation/approve"), "expectation approved")}>
+                            <ShieldCheck className="h-4 w-4 mr-1" />Approve (2nd admin)
+                        </Button>
+                    </div>
+                </div>
+                <div className="space-y-2">
+                    <div className="font-mono text-xs text-white/50 uppercase tracking-wider">2 · approve current inventory hash</div>
+                    {pend.hash_pending ? (
+                        <div data-testid="hash-pending" className="text-xs text-[#FFB000] font-mono">hash {pend.hash_pending.inventory_hash?.slice(0, 16)} proposed by {pend.hash_pending.proposed_by} — a DIFFERENT admin must confirm</div>
+                    ) : <div className="text-xs text-white/40">requires zero violations above</div>}
+                    <div className="flex gap-2">
+                        <Button size="sm" data-testid="hash-propose" disabled={!!busy || violations.length > 0}
+                            onClick={() => run("hp", () => api.post("/authority/inventory/approve", { note: "go-live approval" }), "inventory hash proposed — second admin must confirm")}>
+                            {busy === "hp" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Propose approval"}
+                        </Button>
+                        <Button size="sm" variant="outline" data-testid="hash-confirm" disabled={!!busy || !pend.hash_pending || pend.hash_pending?.proposed_by === pend.me}
+                            onClick={() => run("hc", () => api.post("/authority/inventory/approve/confirm"), "inventory approved — gate clears on next decision")}>
+                            <ShieldCheck className="h-4 w-4 mr-1" />Confirm (2nd admin)
+                        </Button>
+                    </div>
+                </div>
+            </div>
+            {secondAdminMissing && (
+                <div data-testid="second-admin-hint" className="text-xs font-mono text-white/50">
+                    Second admin: register the account normally, then on the server run <code className="text-white/80">docker compose exec -T backend python ops/promote_admin.py you2@example.com</code>
+                </div>
+            )}
+        </section>
+    );
+};

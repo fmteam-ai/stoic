@@ -178,6 +178,55 @@ async def inventory_approve_confirm_ep(request: Request, user=Depends(get_curren
     return await confirm_current(db, user.get("email", ""))
 
 
+@router.get("/inventory/pending")
+async def inventory_pending_ep(user=Depends(get_current_user)):
+    """Admin go-live view: expectation (current + pending), hash approval pending, orphan bot configs."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    from inventory_projection import pending_hash_approval
+    db = get_db()
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"}, {"_id": 0}) or {}
+    exp_pending = await db.platform_state.find_one({"_id": "inventory_expectation_pending"}, {"_id": 0}) or None
+    pend = await pending_hash_approval(db)
+    if pend:
+        pend = {k: v for k, v in pend.items() if k != "_id"}
+    orphan_q = {"$or": [{"account_id": None}, {"account_id": ""}, {"account_id": {"$exists": False}}]}
+    orphans = []
+    async for b in db.bot_configs.find(orphan_q, {"user_id": 1, "active": 1, "symbol": 1, "created_at": 1, "name": 1}).limit(50):
+        orphans.append({"id": str(b["_id"]), "user_id": b.get("user_id"), "active": bool(b.get("active")),
+                        "symbol": b.get("symbol"), "name": b.get("name"),
+                        "created_at": b["created_at"].isoformat() if hasattr(b.get("created_at"), "isoformat") else b.get("created_at")})
+    admins = await db.users.count_documents({"role": "admin"})
+    return {"expectation": exp, "expectation_pending": exp_pending, "hash_pending": pend,
+            "orphan_bots": orphans, "orphan_total": await db.bot_configs.count_documents(orphan_q),
+            "admin_count": admins, "me": user.get("email", "")}
+
+
+@router.delete("/inventory/orphan-bots/{bot_id}")
+async def inventory_delete_orphan_bot_ep(bot_id: str, request: Request, user=Depends(get_current_user)):
+    """Delete ONE bot config that has no account id (inventory defect). Step-up + audited.
+    Refuses to touch a bot that is bound to an account — those are deleted via the account flow."""
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    db = get_db()
+    from bson import ObjectId
+    from step_up import require_step_up, audit_event
+    try:
+        q = {"_id": ObjectId(bot_id)}
+    except Exception:  # noqa: BLE001
+        q = {"_id": bot_id}
+    bot = await db.bot_configs.find_one(q)
+    if not bot:
+        raise HTTPException(status_code=404, detail="bot config not found")
+    if bot.get("account_id"):
+        raise HTTPException(status_code=409, detail={"code": "bot_has_account", "account_id": str(bot["account_id"])})
+    await require_step_up(db, user, request, "authority_relax")
+    await db.bot_configs.delete_one(q)
+    await audit_event(db, user["id"], "inventory_orphan_bot_deleted",
+                      {"bot_id": bot_id, "owner_user_id": bot.get("user_id"), "symbol": bot.get("symbol")}, request)
+    return {"ok": True, "deleted": bot_id}
+
+
 @router.post("/platform")
 async def set_platform_ep(payload: dict, request: Request,
                           user=Depends(get_current_user)):
