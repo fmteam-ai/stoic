@@ -71,3 +71,12 @@
 - Frontend corrections still open: typed UI state model (loading/stale/partial/blocked/degraded/unavailable/ready) across every trading-critical number with source/broker timestamps + reconciliation age; route-level error boundaries distinguishing auth/outage/bundle failures; visual-regression + a11y + mobile tests in release evidence; sweep remaining client-side derivations of ready/executing/free/certified → consume /api/authority/decision.
 - Backend corrections still open: singleton background-worker ownership exposure (current lease owner endpoint); AI decision lineage fields (model version, training window, feature schema, owner, approval, expiry, rollback target) + quarantine on drift/missing features; backtest cost model completeness (spread/slippage/commission/swap/latency/rejects/partial fills/survivorship/leakage); explainability tied to actual gates; portfolio-level composition of strategy limits.
 - Staging candidate drills (rollback, broker timeout, late-ACK, stale-position, Turnstile outage, memory pressure) with the signed 6/3/3 pre-promotion bundle.
+
+## Operator "STOIC Improvement Roadmap" (PDF, 2026-10-02) — 20 steps, 6 phases, 1 PR each, 1–2 days demo soak between
+Fingerprint rule per step: `python scripts/generate_test_manifest.py` → `python scripts/freeze_rc_lock.py`. Deploy: `STOIC_READINESS_POLICY=onboarding-close-only ./deploy/update.sh` (check `ls -t backups/ | head -3` first).
+- Phase 1 Trading correctness: **1 C1 calibration (DONE 2026-10-02)** · 2 sizing H3-H5 (JPY pip 100×, lot round-up +25%, FX notional) · 3 reconciliation/stale orders C3,C4 · 4 fail-closed risk checks C2,H6,H7 · 5 broker symbol matching H1,H2 (XAUUSD-ECN) · 6 signal data H8-H11 (missing data, leakage, unfinished candles)
+- Phase 2 AI: 7 central model settings (exists on GitHub as reverted PR #17: llm_client.py/llm_models.py; LLM_MODEL_FAST=claude-haiku-4-5-20251001) · 8 AI safety H12-H14
+- Phase 3 Security (no migrations): 9 step-up/passkey/Telegram H15-H17 (set WEBAUTHN_ORIGIN) · 10 worker lease H18 · 11 real client IPs + separate deploy token
+- Phase 4 Quant (~1 week each): 12 purged CV/DSR/PBO/cost model · 13 broker instrument specs · 14 HMM regimes + conformal bands · 15 meta-labelling
+- Phase 5: 16 EA v1.58 server part first, then one demo terminal (Windows compile + verify_ea_release.py --sign)
+- Phase 6 when needed: 17 billing idempotency · 18 crypto SL lifecycle · 19 ▲ login/token hardening (hashed terminal tokens — caused 2 Oct rollback; DB restore needed on undo) · 20 Node 22/uvicorn/image pinning

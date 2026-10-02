@@ -16,7 +16,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock
 
 from probability_calibrator import (
-    fit_platt, apply_platt, brier_score, _logit, _sigmoid,
+    fit_platt, apply_platt, brier_score, _logit, _sigmoid, platt_is_valid, PLATT_SIGN,
 )
 from drift_detector import (
     record_residual, _check_session, maybe_trigger_retrain,
@@ -77,6 +77,42 @@ def test_platt_improves_brier_on_miscalibrated_data():
     brier_cal = brier_score(p_cal, labels)
     # Calibrated Brier should be ≤ raw (with a small slack for GD convergence)
     assert brier_cal <= brier_raw + 0.01
+
+
+# ---- C1 (roadmap step 1): calibration must PRESERVE direction, never invert ----
+def test_c1_identity_params_are_identity_not_inversion():
+    calib = {"skipped": False, "sign": PLATT_SIGN, "A": 1.0, "B": 0.0}
+    for p in (0.1, 0.3, 0.5, 0.8, 0.95):
+        assert apply_platt(p, calib) == pytest.approx(p, abs=1e-9)
+
+
+def test_c1_well_calibrated_scores_stay_close_and_monotone():
+    rng = np.random.default_rng(0)
+    scores = rng.uniform(0.05, 0.95, 400)
+    labels = (rng.uniform(size=400) < scores).astype(float)   # labels ~ Bernoulli(score)
+    calib = fit_platt(scores, labels)
+    assert calib["sign"] == PLATT_SIGN and calib["A"] > 0
+    mapped = [apply_platt(p, calib) for p in (0.2, 0.5, 0.8)]
+    assert mapped == sorted(mapped)                           # monotone increasing
+    assert mapped[0] < 0.35 and mapped[2] > 0.65              # no inversion
+    assert abs(mapped[1] - 0.5) < 0.1
+
+
+@pytest.mark.parametrize("n,seed", [(12, 1), (20, 2), (40, 3), (60, 4), (100, 5)])
+def test_c1_small_samples_never_anti_rank(n, seed):
+    """The old sign convention anti-ranked setups at these sizes (0.7 → 0.27)."""
+    rng = np.random.default_rng(seed)
+    scores = rng.uniform(0.3, 0.7, n)
+    labels = (rng.uniform(size=n) < scores).astype(float)
+    calib = fit_platt(scores, labels)
+    assert apply_platt(0.7, calib) > apply_platt(0.3, calib)
+
+
+def test_c1_legacy_artifact_without_sign_marker_is_not_applied():
+    legacy = {"skipped": False, "A": 0.5, "B": 0.6}            # fitted under sigmoid(-(Az+B))
+    assert platt_is_valid(legacy) is False
+    assert apply_platt(0.7, legacy) == pytest.approx(0.7)
+    assert platt_is_valid({"skipped": False, "sign": PLATT_SIGN, "A": 1.2, "B": 0.1}) is True
 
 
 # =========================== drift_detector ===========================
@@ -211,7 +247,7 @@ async def test_predict_p_win_returns_calibrated_and_raw(monkeypatch):
         "n_samples": 50,
         "train_auc": 0.7,
         "label": "GLOBAL",
-        "calibration": {"A": 1.0, "B": 0.0, "skipped": False,
+        "calibration": {"A": 1.0, "B": 0.0, "skipped": False, "sign": PLATT_SIGN,
                         "brier_raw": 0.25, "brier_calibrated": 0.22},
     }
     monkeypatch.setattr("learned_meta.get_artifact",
@@ -228,6 +264,13 @@ async def test_predict_p_win_returns_calibrated_and_raw(monkeypatch):
     assert "p_win" in out and "p_win_raw" in out and "p_win_calibrated" in out
     assert out["calibrated"] is True
     assert out["brier_raw"] == 0.25
+    assert out["p_win_calibrated"] == pytest.approx(out["p_win_raw"], abs=1e-3)  # identity, not 1-p
+
+    # C1: a legacy artifact (no sign marker, fitted under the inverted convention) is NOT applied
+    fake_art["calibration"] = {"A": 1.0, "B": 0.0, "skipped": False}
+    out = await predict_p_win(signal)
+    assert out["calibrated"] is False
+    assert out["p_win"] == pytest.approx(out["p_win_raw"])
 
 
 import pytest as _pytest  # noqa: E402

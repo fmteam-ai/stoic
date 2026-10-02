@@ -20,7 +20,7 @@ Algorithm
 4. Persist (A, B) alongside the artifact, plus Brier + ECE so calibration
    error is TRACKED over time (db.calibration_history).
 
-At inference, calibrated p_win = sigmoid(-(A*z + B)).
+At inference, calibrated p_win = sigmoid(A*z + B).
 
 Notes
 -----
@@ -29,6 +29,11 @@ Notes
   on tiny datasets. Implemented below.
 * When N < 10 we skip calibration entirely (A=1, B=0 → identity).
 * Pure NumPy — no sklearn dependency to keep the stack lean.
+* C1 (roadmap step 1): the previous sign convention sigmoid(-(A*z+B)) made
+  the A=1,B=0 "identity" an INVERSION (0.8 → 0.2) and started gradient descent
+  on the wrong side, so under-converged fits anti-ranked setups. Artifacts
+  now carry `sign="standard"`; legacy artifacts without it are ignored
+  (raw p is used) until the model worker refits.
 """
 from __future__ import annotations
 import logging
@@ -37,6 +42,7 @@ import numpy as np
 logger = logging.getLogger("probability_calibrator")
 
 _EPS = 1e-12
+PLATT_SIGN = "standard"  # p_cal = sigmoid(A*z + B); artifacts without this marker are legacy
 HOLDOUT_MIN_N = 100      # chronological-tail holdout kicks in at this size
 HOLDOUT_FRACTION = 0.3   # last 30% of samples reserved for calibration
 
@@ -88,7 +94,7 @@ def fit_platt(scores: np.ndarray, labels: np.ndarray,
     """
     n = len(labels)
     if n < 10:
-        return {"A": 1.0, "B": 0.0, "n": int(n),
+        return {"A": 1.0, "B": 0.0, "n": int(n), "sign": PLATT_SIGN,
                 "converged": False, "skipped": True,
                 "reason": f"need ≥10 samples for calibration (have {n})"}
 
@@ -104,36 +110,41 @@ def fit_platt(scores: np.ndarray, labels: np.ndarray,
     B = 0.0
     prev_loss = float("inf")
     for it in range(max_iter):
-        # p = sigmoid(-(A*z + B)) — Platt's parameterisation matches the
-        # classic +A,+B sign convention from the original paper.
+        # p = sigmoid(A*z + B): A=1,B=0 is the identity, so GD starts from
+        # "trust the raw score" and only bends it where the labels disagree.
         lin = A * z + B
-        p = _sigmoid(-lin)
+        p = _sigmoid(lin)
         # NLL = -[t*log(p) + (1-t)*log(1-p)]
         loss = -np.mean(targets * np.log(p + _EPS) +
                         (1 - targets) * np.log(1 - p + _EPS))
-        # ∂loss/∂A and ∂B  (derived from chain rule of sigmoid(-(A z + B)))
-        grad_A = np.mean((p - targets) * (-z))
-        grad_B = np.mean(p - targets) * (-1.0)
+        grad_A = np.mean((p - targets) * z)
+        grad_B = np.mean(p - targets)
         A -= lr * grad_A
         B -= lr * grad_B
         if abs(prev_loss - loss) < 1e-7:
-            return {"A": float(A), "B": float(B), "n": int(n),
+            return {"A": float(A), "B": float(B), "n": int(n), "sign": PLATT_SIGN,
                     "converged": True, "skipped": False, "iters": it + 1,
                     "final_nll": float(loss)}
         prev_loss = loss
-    return {"A": float(A), "B": float(B), "n": int(n),
+    return {"A": float(A), "B": float(B), "n": int(n), "sign": PLATT_SIGN,
             "converged": False, "skipped": False, "iters": max_iter,
             "final_nll": float(loss)}
 
 
+def platt_is_valid(calib: dict | None) -> bool:
+    """True only for a fitted artifact produced under the standard sign convention."""
+    return bool(calib) and not calib.get("skipped") and calib.get("sign") == PLATT_SIGN
+
+
 def apply_platt(raw_p: float, calib: dict | None) -> float:
-    """Map a raw probability through the persisted (A, B). No-op if missing."""
-    if not calib or calib.get("skipped"):
+    """Map a raw probability through the persisted (A, B). No-op if missing,
+    skipped, or a legacy artifact fitted under the inverted convention."""
+    if not platt_is_valid(calib):
         return float(raw_p)
     A = float(calib.get("A", 1.0))
     B = float(calib.get("B", 0.0))
     z = _logit(np.asarray(raw_p, dtype=float))
-    p_cal = _sigmoid(-(A * z + B))
+    p_cal = _sigmoid(A * z + B)
     return float(p_cal)
 
 

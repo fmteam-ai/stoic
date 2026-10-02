@@ -45,7 +45,7 @@ def _xgb():
 from database import get_db
 from probability_calibrator import (fit_platt, apply_platt, brier_score,
                                     expected_calibration_error,
-                                    holdout_tail_indices)
+                                    holdout_tail_indices, platt_is_valid)
 
 logger = logging.getLogger("learned_meta")
 
@@ -605,12 +605,13 @@ async def predict_p_win(signal: dict) -> Optional[dict]:
 
         threshold = float(art["threshold"])
         calib = art.get("calibration") or {}
-        p_cal = apply_platt(p, calib) if calib and not calib.get("skipped") else p
+        calibrated = platt_is_valid(calib)   # C1: legacy inverted-convention artifacts are NOT applied
+        p_cal = apply_platt(p, calib) if calibrated else p
         return {
             "p_win": round(p_cal, 4),
             "p_win_raw": round(p, 4),
             "p_win_calibrated": round(p_cal, 4),
-            "calibrated": bool(calib) and not calib.get("skipped"),
+            "calibrated": calibrated,
             "threshold": round(threshold, 4),
             "verdict": "REJECT" if p_cal < threshold else "ACCEPT",
             "n_samples": int(art.get("n_samples", 0)),

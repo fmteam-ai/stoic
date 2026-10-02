@@ -1662,3 +1662,9 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - iter222 live_setup now seeds a genuine open EURUSD trade (invariant is 'CLOSE EXISTING position').
 - Audit also noted [P3, informational]: crypto_routes → BinanceCCXTEngine bypasses submit_intent (pre-existing, non-PAMM; confirm Binance accounts can never be PAMM masters) — left as backlog note.
 - Verified by testing agent (iteration_143): 87/87 — hardening unit 17/17, iter222 10/10, iter218/220/221 regression green, fresh _validate probes 8/8, e2e manual BUY still works, Pydantic drops extra flags at the route boundary.
+
+## 2026-10-02 — Roadmap step 1 / C1: inverted Platt calibration fixed
+- `probability_calibrator.py`: Platt scaling used `sigmoid(-(A·z+B))` with identity A=1,B=0 → the "identity" was an inversion (0.8→0.2) and GD started on the wrong side; under-converged fits anti-ranked setups (raw 0.70→0.27 at n=40). Switched to standard `sigmoid(A·z+B)`, artifacts now carry `sign="standard"`; `platt_is_valid()` — legacy unversioned artifacts are NOT applied (raw p used) until the model worker refits.
+- `learned_meta.py`: `predict_p_win` uses `platt_is_valid` so `calibrated` reflects reality.
+- Tests: 5 new direction tests in `tests/test_iter52_drift_and_calibration.py` (identity, monotone, small-n never anti-rank, legacy ignored, predict_p_win legacy path). TEST_MANIFEST + rc_lock regenerated.
+- Not touched: `scalp/model.py` Platt (already correct convention); `calibration.py` (empirical reliability table, no inversion).
