@@ -74,6 +74,11 @@ verify_attestation || gate_refused
 echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test manifest bind to one commit)"
 verify_release_provenance || gate_refused
 
+if [ "$(app_env)" = "production" ]; then
+  echo "-- production pre-build gate (operator state a rebuild cannot change: EA release record · inventory · canonical decision)"
+  strict_prebuild_gate || gate_refused
+fi
+
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
 ensure_release_secrets
 provision_images || rollback

@@ -149,6 +149,24 @@ sys.exit(0 if not missing else 1)
 ' "$1" "${READINESS_INFRA}"
 }
 
+# Production pre-build gate: operator state that no rebuild can change (EA release
+# record in the checkout, inventory approval + canonical decision on the RUNNING
+# stack). Refusing here avoids a build → restart → rollback churn for a known outcome.
+strict_prebuild_gate() {
+  local tok body k bad=""
+  python3 scripts/verify_ea_release.py --check >/dev/null 2>&1 || bad="${bad} ea_release"
+  tok=$(metrics_token) || return 1
+  body=$(curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null || true)
+  if [ -n "${body}" ]; then
+    for k in inventory canonical_decision; do
+      printf '%s' "${body}" | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.exit(0 if (d.get("checks") or {}).get(sys.argv[1], {}).get("ok") else 1)' "$k" 2>/dev/null || bad="${bad} ${k}"
+    done
+  fi
+  [ -z "${bad}" ] && return 0
+  echo "!! production gates already failing on the RUNNING stack:${bad} — a rebuild cannot fix these; complete onboarding first (docs/PUBLISH_RUNBOOK.md)"
+  return 1
+}
+
 wait_release_ready() {
   local n="${1:-45}" tok body i mode="infra"
   tok=$(metrics_token) || return 1
