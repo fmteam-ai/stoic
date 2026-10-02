@@ -3059,3 +3059,12 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Security audit (this session): CONDITIONAL PASS, no Critical/High; SEC-001 LOW open + 4 P3 deploy-script
   hardening items (env-inherited onboarding policy, PATH-prepend perms assert, mount sweep scoped to docker
   root ids, eval in host-python-fix.sh). User decision pending.
+
+## Turnstile CSP + project-copy detach (June 2026 — VERIFIED by user)
+- Login Turnstile widget blocked by nginx CSP (script-src 'self') → allowed challenges.cloudflare.com in
+  script-src/frame-src/connect-src (deploy/nginx.conf). User confirmed widget renders "Success!".
+- lib.sh `detach_project_copies` (VirtFS copies of live project containers, before compose up) — pending
+  verification on next deploy (expect zero EBUSY retries).
+- Deployed 5a6cd3d (onboarding-close-only). Remaining gates: orphan bot delete, inventory 3/3/3 declare/
+  approve/hash, ea_release workflow, v1.0.0 tag (attestation + rc_lock), RECONCILE_* env, plain update.sh.
+- Open decision: audit follow-ups (SEC-001 + 4 P3 hardening).
