@@ -1,20 +1,16 @@
 """Insights aggregation routes — Weekly AI Digest and related analytical
 summaries the dashboard surfaces to users.
 """
-import os
 import logging
-import uuid
 from datetime import datetime, timedelta, timezone
-import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from bson import ObjectId
 
 from auth import get_current_user
 from database import get_db
 from email_sender import send_email, is_configured as email_is_configured
-from llm_models import provider_model
+import llm_client
 
 logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
@@ -36,33 +32,27 @@ Output: plain text only. No markdown, no JSON, no headings."""
 
 
 async def _generate_ai_reflection(digest_payload: dict) -> Optional[str]:
-    """Ask Claude Sonnet 4.5 for a narrative reflection on the digest data."""
-    key = os.environ.get("EMERGENT_LLM_KEY")
-    if not key:
+    """Ask Claude for a narrative reflection on the digest data. None when
+    the LLM is not configured or the call fails (digest ships without it)."""
+    if not llm_client.is_configured():
         return None
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=key,
-            session_id=f"weekly-digest-{uuid.uuid4().hex[:8]}",
-            system_message=_REFLECTION_SYSTEM_PROMPT,
-        ).with_model(*provider_model("weekly_insights"))
-        # Pass a slim payload — Claude doesn't need the raw trade list.
-        slim = {
-            "stats": digest_payload.get("stats"),
-            "best_trade": digest_payload.get("best_trade"),
-            "worst_trade": digest_payload.get("worst_trade"),
-            "auto_heal_breakdown": digest_payload.get("auto_heal_breakdown"),
-            "hold_reasons": digest_payload.get("hold_reasons"),
-            "window_days": digest_payload.get("window_days"),
-        }
-        prompt = f"Here is this week's digest:\n\n{slim}\n\nWrite the reflection."
-        response = await chat.send_message(UserMessage(text=prompt))
-        text = str(response).strip()
-        return text or None
-    except Exception as e:
-        logger.warning("weekly-digest reflection failed: %s", e)
+    # Pass a slim payload — Claude doesn't need the raw trade list.
+    slim = {
+        "stats": digest_payload.get("stats"),
+        "best_trade": digest_payload.get("best_trade"),
+        "worst_trade": digest_payload.get("worst_trade"),
+        "auto_heal_breakdown": digest_payload.get("auto_heal_breakdown"),
+        "hold_reasons": digest_payload.get("hold_reasons"),
+        "window_days": digest_payload.get("window_days"),
+    }
+    prompt = f"Here is this week's digest:\n\n{slim}\n\nWrite the reflection."
+    res = await llm_client.complete(
+        feature="weekly_insights", system=_REFLECTION_SYSTEM_PROMPT,
+        user=prompt, max_tokens=1500)
+    if not res.ok:
+        logger.warning("weekly-digest reflection failed: %s", res.error)
         return None
+    return res.text.strip() or None
 
 
 def _safe_dt(s: str) -> Optional[datetime]:

@@ -9,11 +9,9 @@ Plus dynamic Regime Swapping — SL/TP/Kelly mutate based on live regime.
 """
 import os
 import json
-import uuid
 import re
 import logging
 from datetime import datetime, timezone, timedelta
-from llm_models import provider_model, send_with_timeout
 
 logger = logging.getLogger("ai_signals")
 
@@ -145,17 +143,28 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # (brokers differ in price, server-time offset and CFD vs futures).
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
-    history = await get_history(symbol)
+    history = await get_history(symbol, user_id=user_id)
     # iter-117 · Live-price patch — refresh the in-flight daily bar with the
     # live quote so intraday indicators track the real market instead of the
     # history cache (bot missed a 60-pt gold drop analyzing a stale close).
+    # Only the CURRENT day's bar is patched; when the last bar is yesterday's
+    # (daily sources publish after the close) today is appended instead of
+    # silently rewriting yesterday's OHLC.
     live_px = float(quote.get("price") or 0)
     if history and live_px > 0:
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         lb = dict(history[-1])
-        lb["close"] = live_px
-        lb["high"] = max(float(lb.get("high") or live_px), live_px)
-        lb["low"] = min(float(lb.get("low") or live_px), live_px)
-        history = history[:-1] + [lb]
+        if str(lb.get("date") or "")[:10] >= today:
+            lb["close"] = live_px
+            lb["high"] = max(float(lb.get("high") or live_px), live_px)
+            lb["low"] = min(float(lb.get("low") or live_px), live_px)
+            history = history[:-1] + [lb]
+        else:
+            pc = float(lb.get("close") or live_px)
+            history = history + [{"date": today, "open": pc,
+                                  "high": max(pc, live_px),
+                                  "low": min(pc, live_px),
+                                  "close": live_px, "volume": 0}]
     indicators = compute_indicators(history) or {}
     sentiment = await score_sentiment(symbol)
     session = current_session()
@@ -439,21 +448,25 @@ async def analyze_symbol(symbol: str, risk_level: str,
             f"Live break of {mtf_conf.get('swing_level')}",
         ]
         try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
-                system_message=NARRATOR_PROMPT,
-            ).with_model(*provider_model("signal_narration"))
+            import llm_client
+            from pydantic import BaseModel as _BM, Field as _F
+
+            class _Narration(_BM):
+                reasoning: str = ""
+                key_factors: list[str] = _F(default_factory=list)
+
             # Narration is cosmetic — never let it delay a confirmed entry
-            # by more than the hot-path budget.
-            narration = await send_with_timeout(chat, UserMessage(text=json.dumps({
-                "confirmed_setup": {"direction": action, "cascade": mtf_conf},
-                "market_context": json.loads(user_text),
-            }, separators=(",", ":"))))
-            parsed = _parse_ai_json(str(narration))
-            if not isinstance(parsed, dict):
-                parsed = {}
+            # by more than the hot-path budget (fast tier → hot-path timeout).
+            _res = await llm_client.complete(
+                feature="signal_narration", system=NARRATOR_PROMPT,
+                user=json.dumps({
+                    "confirmed_setup": {"direction": action, "cascade": mtf_conf},
+                    "market_context": json.loads(user_text),
+                }, separators=(",", ":")),
+                schema=_Narration, max_tokens=800)
+            if not _res.ok:
+                raise RuntimeError(_res.error)
+            parsed = _res.data.model_dump()
             if isinstance(parsed.get("reasoning"), str) and parsed["reasoning"]:
                 reasoning = f"{reasoning}\n\n{parsed['reasoning'][:2000]}"
             kf = parsed.get("key_factors")

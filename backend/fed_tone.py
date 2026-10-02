@@ -1,16 +1,25 @@
 """iter-60 · Macro Agent Fed-tone scoring — Claude reads Fed/FOMC headlines
 and scores hawkish(+1) ↔ dovish(-1). Cached 6h; failures return None so the
 signal loop never blocks on it. Extreme tone (|score| ≥ 0.7) gates XAUUSD."""
-import json
 import logging
 import os
 import time
 
 import httpx
-from llm_models import (provider_model, finite_float, untrusted_block,
-                        send_with_timeout, UNTRUSTED_PREAMBLE)
+from pydantic import BaseModel
+
+import llm_client
+from llm_models import finite_float
 
 logger = logging.getLogger(__name__)
+
+class FedToneOut(BaseModel):
+    score: float            # clamped to [-1, 1] by finite_float after the call
+    label: str
+    summary: str = ""
+
+
+_SYSTEM = "You are a monetary policy analyst."
 
 CACHE_TTL = 6 * 3600
 FED_TONE_EXTREME = 0.7
@@ -50,36 +59,21 @@ async def get_fed_tone() -> dict | None:
     prompt = (
         "Score the Federal Reserve policy tone from these headlines on a scale "
         "from -1.0 (extremely dovish: cuts, easing, stimulus) to +1.0 (extremely "
-        "hawkish: hikes, tightening, higher-for-longer). Respond ONLY with JSON: "
-        '{"score": <float>, "label": "hawkish|dovish|neutral", "summary": "<one sentence>"}\n\n'
-        + untrusted_block(f"- {h['title']} ({h['source']})" for h in heads[:8])
+        "hawkish: hikes, tightening, higher-for-longer). label is one of "
+        "hawkish|dovish|neutral; summary is one sentence."
     )
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"fed-tone-{int(now)}",
-            system_message=("You are a monetary policy analyst. Respond only "
-                            "with JSON.\n\n" + UNTRUSTED_PREAMBLE),
-        ).with_model(*provider_model("fed_tone"))
-        raw = await send_with_timeout(chat, UserMessage(text=prompt))
-        txt = str(raw).strip()
-        if txt.startswith("```"):
-            # strip only a leading ```json fence, never a "json" in content
-            txt = txt.strip("`").strip()
-            if txt[:4].lower() == "json":
-                txt = txt[4:].strip()
-        parsed = json.loads(txt)
-        if not isinstance(parsed, dict):
-            raise ValueError("fed_tone response is not a JSON object")
-        payload = {"score": finite_float(parsed.get("score"), -1.0, 1.0, 0.0),
-                   "label": str(parsed.get("label") or "neutral"),
-                   "summary": str(parsed.get("summary") or ""),
-                   "headlines": len(heads)}
-    except Exception as e:
-        logger.warning("fed_tone scoring failed: %s", e)
+    res = await llm_client.complete(
+        feature="fed_tone", system=_SYSTEM, user=prompt,
+        untrusted=[f"- {h['title']} ({h['source']})" for h in heads[:8]],
+        schema=FedToneOut, max_tokens=400)
+    if not res.ok:
+        logger.warning("fed_tone scoring failed: %s", res.error)
         _cache.update(exp=now + 900, payload=None)
         return None
+    payload = {"score": finite_float(res.data.score, -1.0, 1.0, 0.0),
+               "label": str(res.data.label or "neutral"),
+               "summary": str(res.data.summary or ""),
+               "headlines": len(heads)}
     _cache.update(exp=now + CACHE_TTL, payload=payload)
     return payload
 

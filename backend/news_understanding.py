@@ -15,7 +15,9 @@ import time
 from datetime import datetime, timezone
 
 import httpx
-from llm_models import provider_model, untrusted_block, send_with_timeout, UNTRUSTED_PREAMBLE
+from pydantic import BaseModel, Field
+
+import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -221,30 +223,43 @@ def _parse_array(text: str) -> list:
         return []
 
 
+class HeadlineScore(BaseModel):
+    i: int
+    score: float            # -3..+3; non-finite rows dropped below
+    why: str = ""
+
+
+class HeadlineScores(BaseModel):
+    """Structured outputs need a top-level object — the per-headline array
+    is wrapped in ``scores``."""
+    scores: list[HeadlineScore] = Field(default_factory=list)
+
+
+_SYSTEM = ("You are a senior macro strategist at a bullion desk. "
+           "You read central-bank statements, FOMC minutes, CPI and "
+           "NFP prints for their asset-specific price impact.")
+
+
 async def _score_headlines(base: str, heads: list) -> list:
     ctx = ASSET_CONTEXT.get(base, base)
-    numbered = untrusted_block(f"{i}. [{h['source']}] {h['title']}"
-                               for i, h in enumerate(heads))
     prompt = (
         f"For EACH numbered headline below, answer: how bullish is this "
         f"specifically for {ctx}?\n"
         f"Score each from -3 (extremely bearish) to +3 (extremely bullish), "
         f"0 = irrelevant/no impact. Half-points allowed.\n"
-        f'Respond ONLY with a JSON array: [{{"i": <index>, "score": <float>, '
-        f'"why": "<max 10 words>"}}, ...] — one entry per headline.\n\n{numbered}')
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"news-ai-{base}-{int(time.time())}",
-        system_message=("You are a senior macro strategist at a bullion desk. "
-                        "You read central-bank statements, FOMC minutes, CPI and "
-                        "NFP prints for their asset-specific price impact. "
-                        "Respond only with JSON.\n\n" + UNTRUSTED_PREAMBLE),
-    ).with_model(*provider_model("news_understanding"))
-    raw = await send_with_timeout(chat, UserMessage(text=prompt))
+        f"Return one entry per headline in `scores`: i = the headline index, "
+        f"score = the float score, why = max 10 words.")
+    res = await llm_client.complete(
+        feature="news_understanding", system=_SYSTEM, user=prompt,
+        untrusted=[f"{i}. [{h['source']}] {h['title']}" for i, h in enumerate(heads)],
+        schema=HeadlineScores, max_tokens=1500)
+    if not res.ok:
+        # Fail-open: no scores → aggregate_scores([]) → None → no gate/bias.
+        return []
+    rows = [r.model_dump() for r in res.data.scores]
     out = []
     seen: set[int] = set()
-    for row in _parse_array(str(raw)):
+    for row in rows:
         try:
             i = int(row["i"])
             # Reject negative / out-of-range / repeated indices — otherwise a

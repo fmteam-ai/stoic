@@ -17,10 +17,8 @@ Collections:
   • `loss_reviews` — one doc per review run (auto or manual)
   • `auto_guards`  — evidence-gated live guards (apply / revert audit trail)
 """
-import os
 import json
 import logging
-import uuid
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -29,8 +27,12 @@ from bson import ObjectId
 from pip_utils import base_symbol
 from regime_adapter import velocity_veto
 from ws_manager import manager as ws_manager
-from llm_models import (provider_model, finite_float, send_with_timeout,
-                        SWEEP_TIMEOUT_S)
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+import llm_client
+from llm_models import finite_float, SWEEP_TIMEOUT_S
 
 logger = logging.getLogger("loss-advisor")
 
@@ -321,30 +323,49 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
 
 
 # -------------------------------------------------------------------- LLM
+class _MeasureParams(BaseModel):
+    """Union of every measure type's params (all optional). Values are NOT
+    trusted — ``_sanitize_measure`` re-validates and clamps each one."""
+    symbol: Optional[str] = None
+    value: Optional[float] = None
+    regime: Optional[str] = None
+    velocity_counter_max: Optional[float] = None
+    velocity_veto_threshold: Optional[float] = None
+    session: Optional[str] = None
+    action: Optional[str] = None
+    mode: Optional[str] = None
+    minutes_before: Optional[float] = None
+
+
+class _MeasureOut(BaseModel):
+    title: str = ""
+    rationale: str = ""
+    priority: str = "medium"
+    type: str
+    params: _MeasureParams = Field(default_factory=_MeasureParams)
+
+
+class AdvisorOut(BaseModel):
+    diagnosis: str = ""
+    market_context: str = ""
+    measures: list[_MeasureOut] = Field(default_factory=list)
+
+
 async def _claude_measures(payload: dict) -> dict:
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"loss-review-{uuid.uuid4().hex[:8]}",
-            system_message=_ADVISOR_SYSTEM,
-        ).with_model(*provider_model("loss_advisor"))
-        raw = str(await send_with_timeout(
-            chat, UserMessage(text=json.dumps(payload, default=str)),
-            SWEEP_TIMEOUT_S)).strip()
-        if raw.startswith("```"):
-            raw = raw.strip("`")
-            if raw.lower().startswith("json"):
-                raw = raw[4:].strip()
-        out = json.loads(raw)
-        if not isinstance(out, dict):
-            raise ValueError("loss-review response is not a JSON object")
-        out.setdefault("measures", [])
-        return out
-    except Exception as e:  # noqa: BLE001
-        logger.warning("loss-review LLM failed: %s", e)
+    res = await llm_client.complete(
+        feature="loss_advisor", system=_ADVISOR_SYSTEM,
+        user=json.dumps(payload, default=str), schema=AdvisorOut,
+        timeout_s=SWEEP_TIMEOUT_S, max_tokens=4000)
+    if not res.ok:
+        logger.warning("loss-review LLM failed: %s", res.error)
         return {"diagnosis": "LLM analysis unavailable — see aggregates.",
                 "market_context": "", "measures": [], "_llm_failed": True}
+    out = res.data.model_dump()
+    # Unset params are dropped so the sanitiser sees the same shape as before
+    # (an explicit null symbol and an absent one both mean "all symbols").
+    for m in out["measures"]:
+        m["params"] = {k: v for k, v in m["params"].items() if v is not None}
+    return out
 
 
 # ---------------------------------------------------------- auto-learning

@@ -29,6 +29,11 @@ import logging
 import uuid
 from datetime import datetime, timezone, timedelta
 
+from typing import Optional, Union
+
+from pydantic import BaseModel, Field
+
+import llm_client
 from database import get_db
 from strategy_presets import PRESETS, get_preset
 
@@ -224,36 +229,58 @@ def _parse_llm_json(raw: str) -> dict:
     return json.loads(raw)
 
 
+class _PatternOut(BaseModel):
+    title: str = ""
+    detail: str = ""
+    severity: str = "info"
+
+
+class _RecOut(BaseModel):
+    type: str
+    field: Optional[str] = None
+    to: Optional[Union[bool, float, str]] = None
+    preset_key: Optional[str] = None
+    reason: str = ""
+    expected_impact: str = ""
+
+
+class OptimizerOut(BaseModel):
+    """Structured-output schema. Whitelisting/clamping of recommendations
+    stays in ``validate_recommendations``."""
+    verdict: str
+    headline: str = ""
+    summary: str = ""
+    patterns: list[_PatternOut] = Field(default_factory=list)
+    recommendations: list[_RecOut] = Field(default_factory=list)
+
+
 async def _call_llm(window_hours: int, payload: dict) -> tuple[dict | None, str | None]:
     """Try the primary model, fall back on API/transport errors only.
 
-    A response that arrives but fails to parse is NOT retried on the
-    fallback model — that just pays for a second frontier-tier call to get
-    the same malformed shape. Returns (analysis, model_used)."""
+    A response that arrives but is unusable (refusal, truncation, schema
+    failure) is NOT retried on the fallback model — that just pays for a
+    second frontier-tier call to get the same result. Returns
+    (analysis, model_used)."""
     system = _SYSTEM_PROMPT.format(
         window=window_hours,
         allowed_fields=", ".join(ALLOWED_FIELDS.keys()),
         preset_keys=", ".join(PRESETS.keys()),
     )
     text = json.dumps(payload, default=str)
-    for provider, model in MODEL_CANDIDATES:
-        try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=f"optimizer-{uuid.uuid4().hex[:10]}",
-                system_message=system,
-            ).with_model(provider, model)
-            response = await chat.send_message(UserMessage(text=text))
-        except Exception as e:  # noqa: BLE001
-            logger.warning("optimizer LLM %s failed: %s", model, e)
+    for _provider, model in MODEL_CANDIDATES:
+        res = await llm_client.complete(
+            feature="ai_optimizer", system=system, user=text, model=model,
+            schema=OptimizerOut, max_tokens=4000)
+        if res.ok:
+            return res.data.model_dump(exclude_none=True), model
+        if res.error_kind == "disabled":
+            return None, None
+        if res.retryable or res.error_kind == "circuit_open":
+            logger.warning("optimizer LLM %s failed: %s", model, res.error)
             continue
-        try:
-            return _parse_llm_json(response), model
-        except Exception as e:  # noqa: BLE001
-            logger.warning("optimizer LLM %s returned unparseable output: %s",
-                           model, e)
-            return None, model
+        logger.warning("optimizer LLM %s returned unusable output: %s",
+                       model, res.error)
+        return None, model
     return None, None
 
 

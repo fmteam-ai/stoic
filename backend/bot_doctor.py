@@ -30,14 +30,14 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 
+from pydantic import BaseModel, Field, field_validator
+
+import llm_client
 from database import get_db
-from llm_models import provider_model
 
 logger = logging.getLogger("bot_doctor")
 
@@ -62,7 +62,7 @@ Return STRICTLY valid JSON in this exact shape (no markdown, no prose):
     {"action": "<concrete action>", "rationale": "<why>",
      "effort": "low"|"medium"|"high", "destructive": false}
   ],
-  "evidence": {"<key>": "<value pulled from telemetry>"}
+  "evidence": [{"key": "<key>", "value": "<value pulled from telemetry>"}]
 }
 
 RULES:
@@ -245,6 +245,34 @@ async def diagnose(db=None, user_id: str = None,
     return {**diagnosis, "cache_age_seconds": 0, "cache_hit": False}
 
 
+class _DoctorRec(BaseModel):
+    action: str
+    rationale: str = ""
+    effort: str = "medium"
+    destructive: bool = False
+
+
+class _EvidenceItem(BaseModel):
+    key: str
+    value: str
+
+    @field_validator("key", "value", mode="before")
+    @classmethod
+    def _to_str(cls, v):
+        return "" if v is None else str(v)
+
+
+class DoctorOut(BaseModel):
+    status: str
+    headline: str = ""
+    findings: list[str] = Field(default_factory=list)
+    root_cause_hypothesis: str = ""
+    recommendations: list[_DoctorRec] = Field(default_factory=list)
+    # Structured outputs need fixed object keys, so the free-form evidence
+    # map travels as key/value pairs and is folded back into a dict.
+    evidence: list[_EvidenceItem] = Field(default_factory=list)
+
+
 async def _ask_llm(telemetry: dict) -> dict:
     """LLM call → strict JSON response. Falls back to a deterministic
     rule-based diagnosis when the LLM is unavailable so the dashboard
@@ -254,26 +282,15 @@ async def _ask_llm(telemetry: dict) -> dict:
         f"{LOOKBACK_MINUTES} minutes follows. Return JSON only.\n\n"
         + json.dumps(telemetry, default=str)
     )
-    try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"bot-doctor-{uuid.uuid4().hex[:8]}",
-            system_message=_DOCTOR_SYSTEM,
-        ).with_model(*provider_model("bot_doctor"))
-        resp = await chat.send_message(UserMessage(text=user_text))
-        raw = str(resp).strip()
-        if raw.startswith("```"):
-            raw = raw.strip("`")
-            if raw.lower().startswith("json"):
-                raw = raw[4:].strip()
-        parsed = json.loads(raw)
-        if not isinstance(parsed, dict) or "status" not in parsed:
-            raise ValueError("malformed LLM JSON")
-        return parsed
-    except Exception as e:  # noqa: BLE001
-        logger.warning("Bot Doctor LLM failed: %s — using rule-based fallback", e)
-        return _rule_based_fallback(telemetry, llm_error=str(e))
+    res = await llm_client.complete(
+        feature="bot_doctor", system=_DOCTOR_SYSTEM, user=user_text,
+        schema=DoctorOut, max_tokens=2000)
+    if not res.ok:
+        logger.warning("Bot Doctor LLM failed: %s — using rule-based fallback", res.error)
+        return _rule_based_fallback(telemetry, llm_error=str(res.error))
+    out = res.data.model_dump()
+    out["evidence"] = {e.key: e.value for e in res.data.evidence}
+    return out
 
 
 def _rule_based_fallback(t: dict, llm_error: str = "") -> dict:

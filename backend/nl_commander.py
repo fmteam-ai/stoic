@@ -12,11 +12,13 @@ Two LLM-powered surfaces over the bot:
 Backed by Claude Sonnet 4.5 via the Emergent LLM Key. Strict JSON only; any
 ambiguity returns a clarification request instead of inventing parameters.
 """
-import os
 import json
-import uuid
 import re
-from llm_models import provider_model
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+import llm_client
 
 
 # --- Strategy Builder -------------------------------------------------------
@@ -87,29 +89,68 @@ def _parse_json(text: str) -> dict:
         return {"error": f"Failed to parse: {e}", "raw": text[:300]}
 
 
+# --- Structured-output schemas --------------------------------------------
+# Deliberately permissive (plain str / Optional): closed-vocab enforcement
+# stays where it was — routes/nl_routes.py (nl_actions.validate_actions) and
+# the strategy pipeline validators — so their error messages are unchanged.
+class StrategyOut(BaseModel):
+    clarification_needed: Optional[str] = None
+    risk_level: Optional[str] = None
+    symbols: Optional[list[str]] = None
+    max_concurrent_trades: Optional[int] = None
+    auto_execute: Optional[bool] = None
+    session_preference: Optional[str] = None
+    strategy_style: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class LeafParams(BaseModel):
+    risk_level: Optional[str] = None
+
+
+class LeafActionOut(BaseModel):
+    type: str
+    target: Optional[str] = None
+    params: LeafParams = Field(default_factory=LeafParams)
+
+
+class ActionParams(BaseModel):
+    """Union of every action's params (SET_RISK_LEVEL / SET_CONDITIONAL_TRIGGER);
+    unused keys are omitted from the returned dict."""
+    risk_level: Optional[str] = None
+    symbol: Optional[str] = None
+    condition: Optional[str] = None
+    threshold_pct: Optional[float] = None
+    then: Optional[list[LeafActionOut]] = None
+
+
+class ActionOut(BaseModel):
+    type: str
+    target: Optional[str] = None
+    params: ActionParams = Field(default_factory=ActionParams)
+
+
+class CommandOut(BaseModel):
+    clarification_needed: Optional[str] = None
+    actions: list[ActionOut] = Field(default_factory=list)
+    summary: Optional[str] = None
+
+
 async def build_strategy(prompt: str) -> dict:
     """Convert NL strategy description → structured bot config."""
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"strategy-{uuid.uuid4().hex[:8]}",
-        system_message=STRATEGY_BUILDER_SYSTEM,
-    ).with_model(*provider_model("nl_commander"))
-
-    response = await chat.send_message(UserMessage(text=prompt))
-    parsed = _parse_json(str(response))
-    return parsed
+    res = await llm_client.complete(
+        feature="nl_commander", system=STRATEGY_BUILDER_SYSTEM, user=prompt,
+        schema=StrategyOut, max_tokens=800)
+    if not res.ok:
+        return {"error": f"Failed to parse: {res.error}", "raw": (res.text or "")[:300]}
+    return res.data.model_dump(exclude_none=True)
 
 
 async def interpret_command(prompt: str) -> dict:
     """Convert NL command → structured action list."""
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"command-{uuid.uuid4().hex[:8]}",
-        system_message=COMMAND_INTERPRETER_SYSTEM,
-    ).with_model(*provider_model("nl_commander"))
-
-    response = await chat.send_message(UserMessage(text=prompt))
-    parsed = _parse_json(str(response))
-    return parsed
+    res = await llm_client.complete(
+        feature="nl_commander", system=COMMAND_INTERPRETER_SYSTEM, user=prompt,
+        schema=CommandOut, max_tokens=1200)
+    if not res.ok:
+        return {"error": f"Failed to parse: {res.error}", "raw": (res.text or "")[:300]}
+    return res.data.model_dump(exclude_none=True)

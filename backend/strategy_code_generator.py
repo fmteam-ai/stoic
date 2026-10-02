@@ -34,12 +34,14 @@ Schema returned:
   "pseudocode": "..."        # Python-flavoured human-readable code block
 }
 """
-import os
 import json
 import re
-import uuid
 import logging
-from llm_models import provider_model
+from typing import Optional, Union
+
+from pydantic import BaseModel
+
+import llm_client
 
 
 logger = logging.getLogger("strategy-code-generator")
@@ -148,40 +150,68 @@ def _validate(dsl: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
-# H7 lazy-loaded LLM SDK — module attrs stay patchable by tests
+class DslParams(BaseModel):
+    min_confidence: Optional[float] = None
+    rsi_oversold: Optional[float] = None
+    rsi_overbought: Optional[float] = None
+    atr_pct_max: Optional[float] = None
+    max_concurrent_trades: Optional[float] = None
+
+
+class DslEntryRule(BaseModel):
+    field: str
+    op: str
+    side: str
+    value_ref: Optional[str] = None
+    value: Optional[Union[float, str, list[Union[float, str]]]] = None
+    description: str = ""
+
+
+class DslExitRule(BaseModel):
+    kind: str
+    value: float
+
+
+class DslOut(BaseModel):
+    """Structured-output schema. Closed-vocab checks and param clamps stay in
+    ``_validate`` (same messages as before)."""
+    version: str
+    name: str
+    symbols: list[str]
+    session_preference: str = "any"
+    params: DslParams
+    entry_rules: list[DslEntryRule]
+    exit_rules: list[DslExitRule]
+    pseudocode: str
+
+
+# Legacy wrapper hook — None in production. Tests monkeypatch
+# ``strategy_code_generator.LlmChat`` with a fake; when set, the call is
+# routed through llm_client's emergent backend using that class.
 LlmChat = None
 UserMessage = None
 
 
-def _ensure_llm():
-    global LlmChat, UserMessage
-    if LlmChat is None or UserMessage is None:
-        from emergentintegrations.llm.chat import LlmChat as _L, UserMessage as _U
-        if LlmChat is None:
-            LlmChat = _L
-        if UserMessage is None:
-            UserMessage = _U
+class _UserMessage:
+    def __init__(self, text: str):
+        self.text = text
 
 
 async def generate_code(compiled: dict) -> dict:
     """Expand a compiled NL strategy into the DSL + pseudocode."""
-    _ensure_llm()
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"strat-code-{uuid.uuid4().hex[:8]}",
-        system_message=SYSTEM_PROMPT,
-    ).with_model(*provider_model("strategy_codegen"))
-
     user_msg = ("Expand this compiled strategy into the full DSL + "
                 "pseudocode per the system schema:\n\n"
                 + json.dumps(compiled, indent=2))
-    response = await chat.send_message(UserMessage(text=user_msg))
-    try:
-        dsl = _parse_json(str(response))
-    except Exception as e:
-        logger.warning("DSL parse failed: %s", e)
-        return {"error": f"Code generator returned non-JSON: {e}",
-                "raw": str(response)[:400]}
+    res = await llm_client.complete(
+        feature="strategy_codegen", system=SYSTEM_PROMPT, user=user_msg,
+        schema=DslOut, max_tokens=3000,
+        emergent_chat_cls=LlmChat,
+        emergent_message_cls=(UserMessage or _UserMessage) if LlmChat else None)
+    if not res.ok:
+        logger.warning("DSL generation failed: %s", res.error)
+        return {"error": f"Code generator returned non-JSON: {res.error}",
+                "raw": (res.text or "")[:400]}
+    dsl = res.data.model_dump(exclude_none=True)
 
     ok, reason = _validate(dsl)
     if not ok:

@@ -8,13 +8,14 @@ import os
 import json
 import re
 import time
-import uuid
 import asyncio
 import httpx
 import logging
 from datetime import datetime, timezone, timedelta
-from llm_models import (provider_model, finite_float, untrusted_block,
-                        send_with_timeout, UNTRUSTED_PREAMBLE)
+from pydantic import BaseModel, Field
+
+import llm_client
+from llm_models import finite_float
 
 logger = logging.getLogger("news")
 
@@ -110,6 +111,15 @@ key_drivers: 2-4 short bullets (max 8 words each), citing actual headlines.
 """
 
 
+class SentimentOut(BaseModel):
+    """Structured-output schema. Ranges are enforced after the call
+    (finite_float clamp), not by the schema, so a near-miss still parses."""
+    score: float
+    label: str
+    summary: str = ""
+    key_drivers: list[str] = Field(default_factory=list)
+
+
 def _parse_json(text: str) -> dict:
     text = (text or "").strip()
     text = re.sub(r"^```(?:json)?\s*", "", text)
@@ -155,31 +165,23 @@ async def score_sentiment(symbol: str) -> dict:
             _set_cache(ck, payload, 3600)
             return {**payload, "cached": False}
 
-        # Build prompt
-        compact = "\n".join(
-            f"- [{h['source']}] {h['title']}" for h in headlines
+        # Everything that can fail (missing key, timeout, refusal, malformed
+        # output) comes back as ok=False and degrades to NEUTRAL. A raise here
+        # used to propagate into analyze_symbol and fail signal generation for
+        # every user, uncached, so every tick retried the LLM.
+        res = await llm_client.complete(
+            feature="news_sentiment",
+            system=SENTIMENT_PROMPT,
+            user=f"Market: {sym}\nHeadlines (last 24h):",
+            untrusted=[f"- [{h['source']}] {h['title']}" for h in headlines],
+            schema=SentimentOut,
+            max_tokens=600,
         )
-        user_text = (f"Market: {sym}\nHeadlines (last 24h):\n"
-                     f"{untrusted_block(compact.splitlines())}")
-
-        # Everything that can raise (missing key, wrapper import, timeout,
-        # malformed / non-dict JSON) degrades to NEUTRAL. A raise here used to
-        # propagate into analyze_symbol and fail signal generation for every
-        # user, uncached, so every tick retried the LLM.
-        try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=f"sent-{sym}-{uuid.uuid4().hex[:6]}",
-                system_message=SENTIMENT_PROMPT + "\n\n" + UNTRUSTED_PREAMBLE,
-            ).with_model(*provider_model("news_sentiment"))
-            resp = await send_with_timeout(chat, UserMessage(text=user_text))
-            parsed = _parse_json(str(resp))
-            if not isinstance(parsed, dict):
-                raise ValueError("sentiment response is not a JSON object")
+        if res.ok:
+            parsed = res.data.model_dump()
             failed = False
-        except Exception as e:  # noqa: BLE001
-            logger.warning("news sentiment LLM failed for %s: %s", sym, e)
+        else:
+            logger.warning("news sentiment LLM failed for %s: %s", sym, res.error)
             parsed = {"score": 0.0, "label": "neutral", "summary": "Sentiment model failed.", "key_drivers": []}
             failed = True
 

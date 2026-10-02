@@ -5,13 +5,14 @@ account balances, current regime/sentiment, panic state, active triggers — and
 hands it to Claude Sonnet 4.5 as JSON context. Multi-turn history persisted
 in `db.copilot_sessions` keyed by (user_id, session_id).
 """
-import os
 import uuid
 import json
 from datetime import datetime, timezone
 
+import llm_client
 from database import get_db
-from llm_models import provider_model
+
+HISTORY_TURNS = 6   # prior messages (3 user + 3 assistant) replayed per call
 
 
 SYSTEM_PROMPT = """You are the user's personal Trading Co-Pilot for an AI trading
@@ -143,25 +144,24 @@ async def chat(user_id: str, message: str, session_id: str | None = None) -> dic
     session = await get_or_create_session(user_id, session_id)
     snapshot = await _build_context_snapshot(user_id)
 
-    # Compose grounded system message
-    grounded_system = (
-        SYSTEM_PROMPT
-        + "\n\nCURRENT USER STATE (JSON snapshot, just now):\n"
+    # Static instructions go in the (cached) system prompt; the live snapshot
+    # changes every call, so it travels with the user turn instead.
+    grounded_user = (
+        "CURRENT USER STATE (JSON snapshot, just now):\n"
         + json.dumps(snapshot, default=str, indent=2)
+        + "\n\nQUESTION:\n" + message
     )
-
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat_client = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=session["session_id"],
-        system_message=grounded_system,
-    ).with_model(*provider_model("copilot"))
-
-    # Replay last 6 turns of history (3 user + 3 assistant) for continuity.
-    # NOTE: emergentintegrations LlmChat persists by session_id across processes,
-    # so we just send the new user message. Older history is kept in our DB.
-    response = await chat_client.send_message(UserMessage(text=message))
-    answer = str(response).strip()
+    # History is passed explicitly from our own DB copy (the API is stateless).
+    history = [{"role": m.get("role"), "content": m.get("content")}
+               for m in (session.get("messages") or [])[-HISTORY_TURNS:]]
+    res = await llm_client.complete(
+        feature="copilot", system=SYSTEM_PROMPT, user=grounded_user,
+        history=history, max_tokens=1500,
+        usage_meta={"user_id": user_id})
+    if not res.ok:
+        # Route maps exceptions to a 502 "Co-Pilot unavailable" — same as before.
+        raise RuntimeError(f"Co-Pilot LLM call failed: {res.error}")
+    answer = res.text.strip()
 
     # Append to our DB history (we keep our own copy for the UI)
     await db.copilot_sessions.update_one(
