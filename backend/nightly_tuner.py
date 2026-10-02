@@ -2,9 +2,19 @@
 
 Once per 24h per user: run a Bayesian optimization pass for every tunable
 (engine, symbol) combo the user's ACTIVE bots actually trade, and when a
-proposal beats the default parameters by a meaningful margin, auto-register
-it as a LOCKED challenger in the Shadow Lab. Shadow models are then
-re-evaluated so promotion-ready alerts fire without anyone opening the UI.
+proposal passes the out-of-sample selection gate (see `gate_proposal`),
+auto-register it as a LOCKED challenger in the Shadow Lab. Shadow models
+are then re-evaluated so promotion-ready alerts fire without anyone opening
+the UI.
+
+Selection gate (validation.selection_gate) — ALL of:
+  · in-sample score gain ≥ MIN_IMPROVEMENT (the optimiser's own claim)
+  · OOS net-R improvement vs default > 0 AFTER costs, on bars the GP never saw
+  · ≥ TUNER_MIN_OOS_TRADES (default 20) OOS trades
+  · Deflated Sharpe ≥ TUNER_MIN_DSR (default 0.95), deflated by the
+    CUMULATIVE number of trials logged for that (engine, symbol)
+  · PBO ≤ TUNER_MAX_PBO (default 0.2) when ≥ TUNER_PBO_MIN_TRIALS trials
+Rejected proposals are kept with status `rejected_by_gate` + the reasons.
 
 Nothing is ever auto-promoted — the P3 gate + human approval still stand.
 """
@@ -13,11 +23,12 @@ from datetime import datetime, timedelta, timezone
 
 from pip_utils import base_symbol
 from strategy_engines import PARAM_BOUNDS, resolve_engine
+from validation import selection_gate
 
 logger = logging.getLogger("nightly-tuner")
 
 MIN_IMPROVEMENT = 1.0      # score gain (R) vs default required to auto-register
-MIN_TRADES = 5             # proposal must have a real sample in the replay
+MIN_TRADES = 5             # in-sample trades floor (OOS floor: TUNER_MIN_OOS_TRADES)
 MAX_RUNS_PER_USER = 6
 PERIOD_HOURS = 24
 
@@ -33,6 +44,32 @@ def combos_from_configs(configs: list) -> list:
         for s in (cfg.get("symbols") or []):
             out.add((engine, base_symbol(str(s))))
     return sorted(out)
+
+
+def gate_proposal(prop: dict) -> dict:
+    """Pure: decide whether a bayes_opt proposal may be auto-registered.
+    In-sample gains alone never pass — the OOS/DSR/PBO checks must too."""
+    oos_best = (prop.get("oos") or {}).get("best") or {}
+    n_trials = int((prop.get("trial_log") or {}).get("n_trials_total")
+                   or prop.get("evaluations") or 0)
+    gate = selection_gate(
+        oos_improvement=prop.get("oos_improvement"),
+        oos_trades=oos_best.get("trades"),
+        dsr=(prop.get("dsr") or {}).get("dsr"),
+        pbo=(prop.get("pbo") or {}).get("pbo"),
+        n_trials=n_trials)
+    pre = [
+        {"name": f"in_sample_improvement ≥ {MIN_IMPROVEMENT}",
+         "value": prop.get("improvement"),
+         "passed": (prop.get("improvement") or 0) >= MIN_IMPROVEMENT},
+        {"name": f"in_sample_trades ≥ {MIN_TRADES}",
+         "value": (prop.get("best") or {}).get("trades"),
+         "passed": ((prop.get("best") or {}).get("trades") or 0) >= MIN_TRADES},
+    ]
+    checks = pre + gate["checks"]
+    failed = [c["name"] for c in checks if not c["passed"]]
+    return {"accepted": not failed, "checks": checks, "failed": failed,
+            "thresholds": gate["thresholds"], "n_trials": n_trials}
 
 
 async def sweep_user(db, user_id: str) -> dict:
@@ -54,7 +91,7 @@ async def sweep_user(db, user_id: str) -> dict:
     from bayes_opt import run_bayes_optimization
     from model_shadow import evaluate_user_models, register_model
 
-    ran, registered, errors = 0, [], []
+    ran, registered, rejected, errors = 0, [], [], []
     for engine, symbol in combos:
         try:
             prop = await run_bayes_optimization(db, user_id, engine, symbol)
@@ -62,21 +99,30 @@ async def sweep_user(db, user_id: str) -> dict:
             errors.append(f"{engine}/{symbol}: {e}")
             continue
         ran += 1
-        if (prop["improvement"] >= MIN_IMPROVEMENT
-                and prop["best"]["trades"] >= MIN_TRADES):
-            model = await register_model(
-                db, user_id, engine, symbol, prop["params"],
-                source="nightly_bayes",
-                note=f"auto: +{prop['improvement']}R score vs default")
-            if not model.get("duplicate"):
-                await db.tuning_proposals.update_one(
-                    {"user_id": user_id, "version": prop["version"],
-                     "symbol": symbol},
-                    {"$set": {"status": "shadow_testing"}})
-                registered.append(model["version"])
-                logger.info("Nightly tuner: %s auto-registered in Shadow Lab "
-                            "(user=%s, +%.2fR)", model["version"], user_id,
-                            prop["improvement"])
+        gate = gate_proposal(prop)
+        await db.tuning_proposals.update_one(
+            {"user_id": user_id, "version": prop["version"], "symbol": symbol},
+            {"$set": {"gate": gate, **({} if gate["accepted"] else
+                                       {"status": "rejected_by_gate"})}})
+        if not gate["accepted"]:
+            rejected.append({"version": prop["version"],
+                             "failed": gate["failed"]})
+            continue
+        model = await register_model(
+            db, user_id, engine, symbol, prop["params"],
+            source="nightly_bayes",
+            note=(f"auto: OOS {prop['oos_improvement']:+}R net of costs "
+                  f"vs default, DSR {prop['dsr'].get('dsr')}, "
+                  f"PBO {(prop.get('pbo') or {}).get('pbo')}"))
+        if not model.get("duplicate"):
+            await db.tuning_proposals.update_one(
+                {"user_id": user_id, "version": prop["version"],
+                 "symbol": symbol},
+                {"$set": {"status": "shadow_testing"}})
+            registered.append(model["version"])
+            logger.info("Nightly tuner: %s auto-registered in Shadow Lab "
+                        "(user=%s, OOS %+.2fR)", model["version"], user_id,
+                        prop["oos_improvement"])
 
     # re-evaluate shadow models — fires promotion-ready Telegram alerts
     try:
@@ -92,7 +138,7 @@ async def sweep_user(db, user_id: str) -> dict:
         errors.append(f"canary eval: {e}")
 
     result = {"ran": ran, "combos": len(combos), "registered": registered,
-              "errors": errors, "at": now.isoformat()}
+              "rejected_by_gate": rejected, "errors": errors, "at": now.isoformat()}
     await db.quant_tuning_state.update_one(
         {"user_id": user_id},
         {"$set": {"last_run_at": now.isoformat(), "last_result": result}},
