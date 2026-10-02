@@ -3028,3 +3028,13 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
   healthwatch/install_report prepend that dir to PATH. bootstrap.sh never touches /usr/bin/python3 anymore
   and self-repairs old damage. doctor.sh fails when system python lacks dnf. Docs: DEPLOYMENT.md.
 - User must run on host: `sudo bash deploy/host-python-fix.sh --apply`, then re-check WHM MultiPHP.
+
+## Onboarding publish policy for update.sh (June 2026 — DONE, user verification pending)
+- Blocker: prod runs 68f4fbc (no InventoryGoLivePanel); strict_prebuild_gate refused every update because
+  inventory/canonical_decision can only be cleared with the new panel (chicken-and-egg).
+- Fix: `STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh` (or `--onboarding-close-only`): skips
+  pre-build operator gate + topology policy (reported, not enforced), readiness mode "onboarding" (infra must be
+  green), writes deploy/releases/deployment_state.json, releases.log tagged policy=onboarding-close-only.
+  Backend keeps trading CLOSE_ONLY until gates clear. Docs: PUBLISH_RUNBOOK.md. Test added.
+- User sequence: python fix → onboarding publish → clear gates in Admin panel + ea-release workflow →
+  plain deploy/update.sh.

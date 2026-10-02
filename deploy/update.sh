@@ -9,11 +9,25 @@
 #   deploy/update.sh <sha>       → an exact commit
 #   UPDATE_HOLD_ON_FAILURE=1 deploy/update.sh → keep the new build running on
 #   verification failure (print failing checks, no auto-rollback) for inspection
+#   STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh [ref]
+#     (or: deploy/update.sh [ref] --onboarding-close-only) → on a PRODUCTION host,
+#     publish while the operator release gates (inventory approval, EA release
+#     record, canonical decision, topology policy) are still pending. Needed when the
+#     running build predates the Admin tooling that clears those gates. The backend
+#     keeps trading fail-closed (CLOSE_ONLY) until they clear — this flag never opens
+#     trading, it only lets the code that clears the gates reach the host.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . deploy/lib.sh
 
-REF="${1:-origin/main}"
+REF="origin/main"
+for a in "$@"; do
+  case "$a" in
+    --onboarding-close-only) export STOIC_READINESS_POLICY=onboarding-close-only ;;
+    *) REF="$a" ;;
+  esac
+done
+ONBOARDING=0; [ "${STOIC_READINESS_POLICY:-}" = "onboarding-close-only" ] && ONBOARDING=1
 LOCK=/tmp/stoic-deploy.lock
 
 if [ -n "${STOIC_UPDATE_REEXEC:-}" ]; then
@@ -75,8 +89,13 @@ echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test
 verify_release_provenance || gate_refused
 
 if [ "$(app_env)" = "production" ]; then
-  echo "-- production pre-build gate (operator state a rebuild cannot change: EA release record · inventory · canonical decision)"
-  strict_prebuild_gate || gate_refused
+  if [ "${ONBOARDING}" = 1 ]; then
+    echo "!! STOIC_READINESS_POLICY=onboarding-close-only on a PRODUCTION host — operator release gates (ea_release · inventory · canonical_decision · topology policy) are REPORTED, not enforced, for this publish"
+    echo "   trading stays fail-closed (CLOSE_ONLY) in the backend until every gate is green; clear them in Admin → Inventory & Go-Live Gate, then re-run deploy/update.sh WITHOUT the flag"
+  else
+    echo "-- production pre-build gate (operator state a rebuild cannot change: EA release record · inventory · canonical decision)"
+    strict_prebuild_gate || gate_refused
+  fi
 fi
 
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
@@ -115,7 +134,11 @@ APP_ENV_VAL=$(app_env)   # production if ./.env OR backend/.env says so (lib.sh 
 RECONCILE_EXPECT=$(_envval RECONCILE_EXPECT)
 RECONCILE_SCOPE=$(_envval RECONCILE_SCOPE_USER_ID)
 APPROVED_POLICY=$(_envval RECONCILE_APPROVED_POLICY); APPROVED_POLICY="${APPROVED_POLICY:-6/3/3}"
-if [ "${APP_ENV_VAL}" = "production" ]; then
+if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 1 ]; then
+  echo "!! topology policy gate SKIPPED (onboarding-close-only) — RECONCILE_EXPECT=${RECONCILE_EXPECT:-unset}; trading stays CLOSE_ONLY until a full deploy/update.sh passes"
+  RECONCILE_EXPECT=""
+fi
+if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 0 ]; then
   [ -n "${RECONCILE_EXPECT}" ] || { echo "!! production requires RECONCILE_EXPECT in .env (approved policy ${APPROVED_POLICY})"; rollback; }
   echo "${RECONCILE_EXPECT}" | grep -Eq '^[0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N)"; rollback; }
   [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY}"; rollback; }
@@ -157,7 +180,19 @@ fi
 echo "-- pruning dangling images"
 docker image prune -f >/dev/null 2>&1 || true
 
+mkdir -p deploy/releases
+printf '%s' "${BODY}" | ONBOARDING="${ONBOARDING}" python3 -c '
+import json, os, sys
+d = json.load(sys.stdin); c = d.get("checks") or {}
+pending = sorted(k for k, v in c.items() if isinstance(v, dict) and v.get("ok") is False)
+state = "release_ready" if d.get("ready") else ("onboarding_close_only" if os.environ["ONBOARDING"] == "1" else "release_gates_pending")
+json.dump({"deployment_state": state, "readiness_policy": "onboarding-close-only" if os.environ["ONBOARDING"] == "1" else "release-ready",
+           "release_ready": bool(d.get("ready")), "pending_gates": pending,
+           "trading_posture": "OPEN" if d.get("ready") else "CLOSE_ONLY"}, open("deploy/releases/deployment_state.json", "w"), sort_keys=True, indent=1)
+print(f"   deployment state: {state} · trading posture: {'OPEN' if d.get('ready') else 'CLOSE_ONLY'}" + (f" · pending gates: {', '.join(pending)}" if pending else ""))
+' 2>/dev/null || true
+
 echo "   API + frontend + full topology verified on $(git rev-parse --short HEAD)"
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-from=$(git rev-parse --short "${PREV}")" >> deploy/releases.log
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-from=$(git rev-parse --short "${PREV}")$([ "${ONBOARDING}" = 1 ] && echo ' policy=onboarding-close-only')" >> deploy/releases.log
 docker compose ps --format '{{.Name}}\t{{.Status}}'
 echo "== update complete =="

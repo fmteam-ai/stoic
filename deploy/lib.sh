@@ -148,7 +148,7 @@ if mode == "strict":
 missing = [k for k in infra if not (c.get(k) or {}).get("ok")]
 pending = [k for k, v in c.items() if k not in infra and isinstance(v, dict) and not v.get("ok")]
 if pending:
-    print("   pending release gates (operator onboarding, not blocking outside production): " + ", ".join(pending), file=sys.stderr)
+    print("   pending release gates (operator onboarding, " + ("onboarding-close-only: trading stays CLOSE_ONLY" if mode == "onboarding" else "not blocking outside production") + "): " + ", ".join(pending), file=sys.stderr)
 sys.exit(0 if not missing else 1)
 ' "$1" "${READINESS_INFRA}"
 }
@@ -174,7 +174,9 @@ strict_prebuild_gate() {
 wait_release_ready() {
   local n="${1:-45}" tok body i mode="infra"
   tok=$(metrics_token) || return 1
-  [ "$(app_env)" = "production" ] && mode="strict"
+  if [ "$(app_env)" = "production" ]; then
+    if [ "${STOIC_READINESS_POLICY:-}" = "onboarding-close-only" ]; then mode="onboarding"; else mode="strict"; fi
+  fi
   for i in $(seq 1 "$n"); do
     body=$(curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null || true)
     if [ -n "${body}" ] && printf '%s' "${body}" | _readiness_eval "${mode}" 2>/dev/null; then

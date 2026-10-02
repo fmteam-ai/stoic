@@ -84,7 +84,7 @@ def test_deploy_gates_read_app_env_from_backend_env_too(tmp_path):
     """install.sh wrote APP_ENV=production only to backend/.env while update.sh keyed its
     production gates off ./.env → gates silently ran non-strict on production hosts."""
     lib = _read("deploy", "lib.sh")
-    assert "app_env()" in lib and '[ "$(app_env)" = "production" ] && mode="strict"' in lib
+    assert "app_env()" in lib and 'if [ "$(app_env)" = "production" ]; then' in lib and 'mode="strict"' in lib
     assert "APP_ENV_VAL=$(app_env)" in _read("deploy", "update.sh")
     inst = _read("deploy", "install.sh")
     assert "set_kv .env APP_ENV production" in inst and "set_kv backend/.env APP_ENV production" in inst
@@ -398,3 +398,19 @@ def test_bootstrap_never_repoints_system_python_and_ships_repair_script():
         assert path_line in _read("deploy", script), script
     assert "alternatives --set python3" not in _read("deploy", "doctor.sh")
     assert "host-python-fix.sh" in _read("deploy", "doctor.sh") and "host-python-fix.sh" in _read("docs", "DEPLOYMENT.md")
+
+
+def test_update_honours_onboarding_close_only_policy_without_opening_trading():
+    """Running build predates the go-live Admin panel → pre-build gate can never clear (chicken-and-egg).
+    STOIC_READINESS_POLICY=onboarding-close-only reports operator gates instead of refusing; trading stays CLOSE_ONLY."""
+    u = _read("deploy", "update.sh"); lib = _read("deploy", "lib.sh")
+    assert "--onboarding-close-only) export STOIC_READINESS_POLICY=onboarding-close-only" in u
+    assert u.index('[ "${ONBOARDING}" = 1 ]') < u.index("strict_prebuild_gate || gate_refused")   # gate skipped only under the policy
+    assert "topology policy gate SKIPPED (onboarding-close-only)" in u and 'RECONCILE_EXPECT=""' in u
+    assert '"onboarding_close_only"' in u and "deployment_state.json" in u
+    assert "policy=onboarding-close-only" in u                                      # releases.log records the relaxed publish
+    assert 'if [ "${STOIC_READINESS_POLICY:-}" = "onboarding-close-only" ]; then mode="onboarding"; else mode="strict"; fi' in lib
+    # infra checks remain mandatory under the relaxed policy (only "strict" short-circuits on d.ready)
+    assert 'if mode == "strict":' in lib and "missing = [k for k in infra if not" in lib
+    assert "onboarding-close-only" in _read("docs", "PUBLISH_RUNBOOK.md")
+    assert subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", "update.sh")]).returncode == 0

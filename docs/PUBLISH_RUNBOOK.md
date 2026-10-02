@@ -188,6 +188,15 @@ The verified record is kept at `release/attestation.current.json`.
 
 **Production detection (r31 fix):** `deploy/lib.sh app_env()` reports `production` when EITHER `./.env` or `backend/.env` says so (the API reads `backend/.env`; older installers wrote only there, so deploy gates silently ran non-strict on production hosts). In production every `update.sh` is fail-closed: tagged + cosign-attested release, strict provenance, `RECONCILE_EXPECT`/`RECONCILE_SCOPE_USER_ID` in `./.env`, signed topology + pre-promotion evidence, and `release-readiness.ready == true`. Gates that fail BEFORE the build (`gate_refused`) restore the checkout and exit without touching the running stack. `ATTESTATION_REQUIRED=false` in `./.env` disables the gate (dev only). cosign is installed automatically on first use.
 
+**Onboarding publish (operator gates still pending):** when the running build predates the Admin tooling that clears the inventory / canonical-decision gates, `update.sh` refuses before the build (`production gates already failing on the RUNNING stack`) and nothing can ever change — a chicken-and-egg. Publish once with the explicit onboarding policy (same policy `install.sh --onboarding-close-only` uses):
+
+```bash
+STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh      # env form works with any older update.sh on the host
+deploy/update.sh --onboarding-close-only                            # flag form once the host runs this release
+```
+
+Operator gates and the topology policy are then REPORTED, not enforced; infrastructure checks still must be green and auto-rollback still applies. The backend keeps trading fail-closed (CLOSE_ONLY) until every gate is green — the flag never opens trading. `deploy/releases/deployment_state.json` records `onboarding_close_only` + the pending gates. Clear the gates in Admin → Inventory & Go-Live Gate, run the `ea-release` workflow, then run `deploy/update.sh` WITHOUT the flag to return to the fail-closed path.
+
 ### Option A — two clicks + one command (recommended to start)
 
 1. In Emergent: build/fix → **Save to GitHub** (pushes `main`).
