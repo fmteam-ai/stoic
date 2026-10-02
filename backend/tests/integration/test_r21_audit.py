@@ -54,7 +54,7 @@ def _hb(world, **extra):
 def test_token_only_heartbeat_echoing_pinned_hash_never_unlocks_live(world, monkeypatch):
     monkeypatch.setenv("EA_RELEASE_SHA256", PINNED)
     from ea_capabilities import live_gate
-    acc = _hb(world, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+    acc = _hb(world, ea_version="1.58", client_version="1.58", ea_binary_sha256=PINNED)
     assert acc.get("ea_binary_sha256") is None                      # not admitted as proof
     assert acc["ea_binary_sha256_reported"] == PINNED               # recorded as unverified telemetry
     assert acc["ea_identity"]["authoritative"] is False
@@ -76,14 +76,14 @@ def test_verified_chain_admits_proof_and_unverified_takeover_revokes_it(world, m
                                       "device_key": {"revoked": False, "expires_at": "2999-01-01T00:00:00+00:00"},
                                       "broker_server": "Demo-Server", "revoked": False}))
     _run(db.execution_leases.insert_one({"account_id": acc_id, "installation_id": inst, "revoked": False}))
-    acc = _hb(world, installation_id=inst, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+    acc = _hb(world, installation_id=inst, ea_version="1.58", client_version="1.58", ea_binary_sha256=PINNED)
     assert acc["ea_identity"]["authoritative"] is True, acc["ea_identity"]
     assert acc["ea_binary_sha256"] == PINNED
     assert acc["ea_binary_sha256_method"] == "installer_attested"
     assert live_gate(acc) is None
     # a bridge-token-only measurement (no device signature) is never proof
     _run(db.installations.update_one({"installation_id": inst}, {"$set": {"ex5_measured_by": "installer"}}))
-    acc = _hb(world, installation_id=inst, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+    acc = _hb(world, installation_id=inst, ea_version="1.58", client_version="1.58", ea_binary_sha256=PINNED)
     assert acc["ea_binary_sha256_method"] == "installer_unattested"
     assert live_gate(acc)["code"] == "EA_BINARY_PROOF_UNATTESTED"
     _run(db.installations.update_one({"installation_id": inst}, {"$set": {"ex5_measured_by": "device_signature"}}))
@@ -93,21 +93,21 @@ def test_verified_chain_admits_proof_and_unverified_takeover_revokes_it(world, m
                        ({"revoked": False, "expires_at": "garbage"}, "device_key_invalid"),
                        (None, "device_not_enrolled")):
         _run(db.installations.update_one({"installation_id": inst}, {"$set": {"device_key": dk}}))
-        acc = _hb(world, installation_id=inst, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+        acc = _hb(world, installation_id=inst, ea_version="1.58", client_version="1.58", ea_binary_sha256=PINNED)
         assert acc["ea_binary_sha256_method"] == expect, (dk, acc["ea_binary_sha256_method"])
         assert live_gate(acc)["code"] == "EA_BINARY_PROOF_UNATTESTED"
     _run(db.installations.update_one({"installation_id": inst}, {"$set": {
         "device_key": {"revoked": False, "expires_at": "2999-01-01T00:00:00+00:00"}}}))
-    acc = _hb(world, installation_id=inst, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+    acc = _hb(world, installation_id=inst, ea_version="1.58", client_version="1.58", ea_binary_sha256=PINNED)
     assert acc["ea_binary_sha256_method"] == "installer_attested"
     # a token-only terminal (no chain) taking over the token loses the admitted proof
-    acc = _hb(world, ea_version="1.57", client_version="1.57", ea_binary_sha256=PINNED)
+    acc = _hb(world, ea_version="1.58", client_version="1.58", ea_binary_sha256=PINNED)
     assert acc.get("ea_binary_sha256") is None
     assert live_gate(acc)["code"] == "EA_BINARY_PROOF_MISSING"
 
 
 def test_malformed_hash_is_ignored(world):
-    acc = _hb(world, ea_version="1.57", ea_binary_sha256="Z" * 64)
+    acc = _hb(world, ea_version="1.58", ea_binary_sha256="Z" * 64)
     assert "ea_binary_sha256_reported" not in acc and acc.get("ea_binary_sha256") is None
 
 

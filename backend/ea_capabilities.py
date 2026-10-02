@@ -8,8 +8,9 @@ import re
 CAPABILITIES = {
     "command_fencing_v1": (1, 50),      # intent/seq dedupe + durable new-order journal (r4)
     "nl_close_fence_v1": (1, 57),       # close_idem_key dedupe + per-trade close_seq ordering (r17/r18)
+    "exec_contract_v1": (1, 58),        # order expiry + max deviation, magic ownership, tick/step rounding
 }
-LIVE_REQUIRED = ("command_fencing_v1", "nl_close_fence_v1")
+LIVE_REQUIRED = ("command_fencing_v1", "nl_close_fence_v1", "exec_contract_v1")
 LIVE_MIN_VERSION = max(CAPABILITIES[c] for c in LIVE_REQUIRED)
 
 
@@ -44,7 +45,8 @@ def live_gate(account: dict) -> dict | None:
     t = version_tuple(v)
     if t is None:
         return {"code": "EA_VERSION_UNKNOWN",
-                "reason": f"EA version unknown — update to v{version_str(LIVE_MIN_VERSION)}+ (nl_close_fence_v1)"}
+                "reason": f"EA version unknown — update to v{version_str(LIVE_MIN_VERSION)}+ "
+                          f"({', '.join(LIVE_REQUIRED)})"}
     missing = missing_live_capabilities(v)
     if missing:
         return {"code": "EA_CAPABILITY_BELOW_MIN",

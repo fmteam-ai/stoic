@@ -63,7 +63,7 @@ def _acc(uid, suffix, **over):
             "server": "VTMarkets-Demo", "broker_server": "VTMarkets-Demo",
             "account_number": f"{suffix}-{uid[-6:]}",
             "bridge_token": f"r29http-{suffix}-{uid}",
-            "ea_version": "1.57", "creds_version": 0,
+            "ea_version": "1.58", "creds_version": 0,
             "broker_account_id_reported": f"{suffix}-{uid[-6:]}",
             "last_heartbeat": datetime.now(timezone.utc).isoformat(),
             "ea_identity": {"installation_id": f"inst-{suffix}-{uid[-6:]}",

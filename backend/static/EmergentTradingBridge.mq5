@@ -1446,15 +1446,25 @@ void AppendSymbolSpec(string &json, string sym, bool &first) {
    double vol_min    = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
    double vol_max    = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
    double vol_step   = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+   // v1.58 — instrument currencies so the backend can convert tick_value /
+   // margin into account currency without guessing from the symbol name.
+   string cur_base   = SymbolInfoString(sym, SYMBOL_CURRENCY_BASE);
+   string cur_profit = SymbolInfoString(sym, SYMBOL_CURRENCY_PROFIT);
+   string cur_margin = SymbolInfoString(sym, SYMBOL_CURRENCY_MARGIN);
+   StringReplace(cur_base, "\"", "");     // keep the JSON body valid
+   StringReplace(cur_profit, "\"", "");
+   StringReplace(cur_margin, "\"", "");
    if (!first) json += ",";
    json += StringFormat(
       "\"%s\":{\"point\":%.8f,\"digits\":%I64d,"
       "\"stops_level_points\":%I64d,\"freeze_level_points\":%I64d,"
       "\"trade_mode\":%I64d,"
       "\"tick_size\":%.8f,\"tick_value\":%.5f,\"contract_size\":%.2f,"
-      "\"volume_min\":%.4f,\"volume_max\":%.2f,\"volume_step\":%.4f}",
+      "\"volume_min\":%.4f,\"volume_max\":%.2f,\"volume_step\":%.4f,"
+      "\"currency_base\":\"%s\",\"currency_profit\":\"%s\",\"currency_margin\":\"%s\"}",
       sym, point, digits, stops, freeze, tmode,
-      tick_size, tick_value, contract, vol_min, vol_max, vol_step);
+      tick_size, tick_value, contract, vol_min, vol_max, vol_step,
+      cur_base, cur_profit, cur_margin);
    first = false;
 }
 

@@ -35,7 +35,7 @@ ADMIN = {"id": str(ObjectId()), "email": "adm29@example.com", "role": "admin", "
 def _acc(uid, **over):
     base = {"user_id": uid, "label": "r29", "mode": "live", "account_type": "demo", "broker": "VT Markets",
             "server": "VTMarkets-Demo", "account_number": "1289887", "bridge_token": f"r29-{uid}-{over.get('n', 0)}",
-            "ea_version": "1.57", "broker_account_id_reported": "1289887",
+            "ea_version": "1.58", "broker_account_id_reported": "1289887",
             "last_heartbeat": datetime.now(timezone.utc).isoformat(),
             "ea_identity": {"installation_id": "inst-A", "authoritative": True, "broker_server": "VTMarkets-Demo"}}
     over.pop("n", None)

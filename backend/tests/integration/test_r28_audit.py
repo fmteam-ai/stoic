@@ -32,7 +32,7 @@ def _db():
 def _demo_acc(uid):
     return {"user_id": uid, "label": "r28", "mode": "live", "account_type": "demo", "broker": "VT Markets",
             "server": "VTMarkets-Demo", "broker_server": "VTMarkets-Demo", "account_number": "1289887",
-            "bridge_token": f"r28-{uid}", "ea_version": "1.57", "creds_version": 0,
+            "bridge_token": f"r28-{uid}", "ea_version": "1.58", "creds_version": 0,
             "broker_account_id_reported": "1289887", "last_heartbeat": datetime.now(timezone.utc).isoformat(),
             "ea_identity": {"installation_id": "inst-A", "authoritative": True, "broker_server": "VTMarkets-Demo"}}
 

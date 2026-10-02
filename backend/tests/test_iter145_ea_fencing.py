@@ -281,22 +281,27 @@ class TestLiveActivationGate:
     def test_old_ea_blocks_live(self):
         from routes.bot_routes import _activation_readiness, FENCING_MIN_EA
         from ea_capabilities import LIVE_MIN_VERSION, version_str
-        assert FENCING_MIN_EA == version_str(LIVE_MIN_VERSION) == "1.57"
+        assert FENCING_MIN_EA == version_str(LIVE_MIN_VERSION) == "1.58"
         problems = asyncio.run(_activation_readiness(None, self._account("1.49")))
         assert len(problems) == 1
         assert "command_fencing_v1" in problems[0] and "nl_close_fence_v1" in problems[0]
         # v1.50 has fencing but not the NL close fence — still blocked
         problems = asyncio.run(_activation_readiness(None, self._account("1.50")))
         assert len(problems) == 1 and "nl_close_fence_v1" in problems[0]
+        # v1.57 has the NL close fence but not the execution contract — still blocked
+        problems = asyncio.run(_activation_readiness(None, self._account("1.57")))
+        assert len(problems) == 1 and "exec_contract_v1" in problems[0]
+        assert "nl_close_fence_v1" not in problems[0]
 
     def test_fencing_capable_ea_passes(self):
         from routes.bot_routes import _activation_readiness
-        assert asyncio.run(_activation_readiness(None, self._account("1.57"))) == []
         assert asyncio.run(_activation_readiness(None, self._account("1.58"))) == []
+        assert asyncio.run(_activation_readiness(None, self._account("1.58.1"))) == []
+        assert asyncio.run(_activation_readiness(None, self._account("1.60"))) == []
 
     def test_capable_ea_without_binary_proof_blocks_live(self):
         from routes.bot_routes import _activation_readiness
-        problems = asyncio.run(_activation_readiness(None, self._account("1.57", attested=False)))
+        problems = asyncio.run(_activation_readiness(None, self._account("1.58", attested=False)))
         assert len(problems) == 1 and "EX5 hash" in problems[0]
 
     def test_missing_ea_version_still_blocks(self):

@@ -81,7 +81,7 @@ def test_admin_attest_flow(admin_session):
     demo_doc = {"user_id": uid, "label": "r28-http-demo", "mode": "live", "account_type": "demo",
                 "broker": "VT Markets", "server": "VTMarkets-Demo", "broker_server": "VTMarkets-Demo",
                 "account_number": f"demo-{uid[-6:]}", "bridge_token": f"r28http-demo-{uid}",
-                "ea_version": "1.57", "creds_version": 0,
+                "ea_version": "1.58", "creds_version": 0,
                 # r29 P1-02: attestation needs fresh authoritative EA evidence
                 "broker_account_id_reported": f"demo-{uid[-6:]}",
                 "last_heartbeat": datetime.now(timezone.utc).isoformat(),

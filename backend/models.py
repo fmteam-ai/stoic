@@ -415,6 +415,10 @@ class BridgeSymbolSpec(BaseModel):
     volume_min: Optional[float] = None
     volume_max: Optional[float] = None
     volume_step: Optional[float] = None
+    # EA v1.58+ — instrument currencies (SYMBOL_CURRENCY_BASE/PROFIT/MARGIN).
+    currency_base: Optional[str] = None
+    currency_profit: Optional[str] = None
+    currency_margin: Optional[str] = None
 
 
 class BridgeHeartbeat(BaseModel):
