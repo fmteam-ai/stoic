@@ -629,8 +629,28 @@ reap_zombies() {
 # fall back to a local build of an unverified tree. On hosts where every
 # container's overlay mount is held busy (cPanel), each `up` pass fails on the
 # NEXT container it recreates — reap and retry until compose converges.
+# The containers compose is about to recreate are still alive when reap_zombies runs, so
+# their VirtFS copies are not "orphan" yet — and `docker rm` hits them seconds later.
+# Drop the COPIES (never the original mount) for this project's containers up front: the
+# copies are private, so the running container is unaffected and the jail never uses them.
+detach_project_copies() {
+  repair_enabled || return 0
+  local n=0 c m id p
+  for c in $(docker compose ps -aq 2>/dev/null); do
+    m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$c" 2>/dev/null) || continue; [ -n "$m" ] || continue
+    id=$(basename "$(dirname "$m")")
+    for p in $(awk -v id="$id" '$5 ~ ("/overlay2/" id "/merged$") && $5 !~ /^\/var\/lib\/docker\// {
+                 sh = 0; for (i = 7; i <= NF && $i != "-"; i++) if ($i ~ /^shared:/) sh = 1; if (!sh) print $5 }' /proc/1/mountinfo 2>/dev/null); do
+      umount -l "$p" 2>/dev/null && n=$((n+1))
+    done
+  done
+  [ "$n" -gt 0 ] && echo "-- detached ${n} VirtFS copies of this project's container rootfs mounts ahead of recreate"
+  return 0
+}
+
 compose_up() {
   reap_zombies || return 1
+  detach_project_copies
   local flags="-d --remove-orphans" attempt pass_started
   [ "$(deploy_mode)" = "registry" ] && flags="${flags} --no-build"
   for attempt in 1 2 3 4 5 6; do

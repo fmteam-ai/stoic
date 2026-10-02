@@ -47,7 +47,10 @@ export const InventoryGoLivePanel = () => {
     if (!inv || !pend) return <div className="p-4 text-white/40 text-sm font-mono"><Loader2 className="inline h-4 w-4 animate-spin mr-2" />loading inventory…</div>;
     const c = inv.counts || {};
     const violations = inv.violations || [];
-    const secondAdminMissing = (pend.admin_count || 0) < 2;
+    const singleAdmin = pend.approval_mode === "single_admin";
+    const secondAdminMissing = !singleAdmin && (pend.admin_count || 0) < 2;
+    const selfBlocked = (proposedBy) => !singleAdmin && proposedBy === pend.me;
+    const approverLabel = singleAdmin ? "same admin · fresh step-up" : "2nd admin";
     const fill = () => setExp({ accounts: String(c.configured ?? 0), enabled: String(c.live_enabled ?? 0), bots: String(c.bots_enabled ?? 0) });
 
     return (
@@ -63,7 +66,7 @@ export const InventoryGoLivePanel = () => {
                     <Row label="bots enabled (raw / orphan)" testId="inventory-count-bots">{c.bots_enabled} ({c.bots_configured_raw} / {c.bots_null_account})</Row>
                     <Row label="expected A/E/B" testId="inventory-expected">{c.expected_accounts ?? "—"} / {c.expected_enabled ?? "—"} / {c.expected_bots ?? "—"}</Row>
                     <Row label="inventory hash" testId="inventory-hash"><code className="text-xs">{(inv.inventory_hash || "").slice(0, 16)}</code>{inv.approved_hash ? " · approved" : " · NOT approved"}</Row>
-                    <Row label="admins" testId="inventory-admin-count">{pend.admin_count}{secondAdminMissing && <span className="text-[#FFB000] ml-2">second admin required for approvals</span>}</Row>
+                    <Row label="admins" testId="inventory-admin-count">{pend.admin_count}{secondAdminMissing && <span className="text-[#FFB000] ml-2">second admin required for approvals</span>}{singleAdmin && <span className="text-[#FFB000] ml-2">single-operator mode</span>}</Row>
                 </div>
                 <div>
                     <div className="font-mono text-xs text-white/50 uppercase tracking-wider mb-2">violations</div>
@@ -105,28 +108,28 @@ export const InventoryGoLivePanel = () => {
                     {lastError && <div data-testid="golive-last-error" className="text-xs text-[#FF3B30] font-mono">{lastError}</div>}
                     <div className="flex gap-2">
                         <Button size="sm" data-testid="expectation-propose" disabled={!!busy || !exp.accounts || !exp.enabled || !exp.bots}
-                            onClick={() => run("prop", () => api.post("/authority/inventory/expectation", { accounts: +exp.accounts, enabled: +exp.enabled, bots: +exp.bots }), "expectation proposed — second admin must approve")}>
+                            onClick={() => run("prop", () => api.post("/authority/inventory/expectation", { accounts: +exp.accounts, enabled: +exp.enabled, bots: +exp.bots }), singleAdmin ? "expectation proposed — approve with a fresh step-up" : "expectation proposed — second admin must approve")}>
                             {busy === "prop" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Propose"}
                         </Button>
-                        <Button size="sm" variant="outline" data-testid="expectation-approve" disabled={!!busy || !pend.expectation_pending || pend.expectation_pending?.proposed_by === pend.me}
+                        <Button size="sm" variant="outline" data-testid="expectation-approve" disabled={!!busy || !pend.expectation_pending || selfBlocked(pend.expectation_pending?.proposed_by)}
                             onClick={() => run("appr", () => api.post("/authority/inventory/expectation/approve"), "expectation approved")}>
-                            <ShieldCheck className="h-4 w-4 mr-1" />Approve (2nd admin)
+                            <ShieldCheck className="h-4 w-4 mr-1" />Approve ({approverLabel})
                         </Button>
                     </div>
                 </div>
                 <div className="space-y-2">
                     <div className="font-mono text-xs text-white/50 uppercase tracking-wider">2 · approve current inventory hash</div>
                     {pend.hash_pending ? (
-                        <div data-testid="hash-pending" className="text-xs text-[#FFB000] font-mono">hash {pend.hash_pending.inventory_hash?.slice(0, 16)} proposed by {pend.hash_pending.proposed_by} — a DIFFERENT admin must confirm</div>
+                        <div data-testid="hash-pending" className="text-xs text-[#FFB000] font-mono">hash {pend.hash_pending.inventory_hash?.slice(0, 16)} proposed by {pend.hash_pending.proposed_by} — {singleAdmin ? "confirm with a fresh step-up (single-operator mode)" : "a DIFFERENT admin must confirm"}</div>
                     ) : <div className="text-xs text-white/40">requires zero violations above</div>}
                     <div className="flex gap-2">
                         <Button size="sm" data-testid="hash-propose" disabled={!!busy || violations.length > 0}
-                            onClick={() => run("hp", () => api.post("/authority/inventory/approve", { note: "go-live approval" }), "inventory hash proposed — second admin must confirm")}>
+                            onClick={() => run("hp", () => api.post("/authority/inventory/approve", { note: "go-live approval" }), singleAdmin ? "inventory hash proposed — confirm it" : "inventory hash proposed — second admin must confirm")}>
                             {busy === "hp" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Propose approval"}
                         </Button>
-                        <Button size="sm" variant="outline" data-testid="hash-confirm" disabled={!!busy || !pend.hash_pending || pend.hash_pending?.proposed_by === pend.me}
+                        <Button size="sm" variant="outline" data-testid="hash-confirm" disabled={!!busy || !pend.hash_pending || selfBlocked(pend.hash_pending?.proposed_by)}
                             onClick={() => run("hc", () => api.post("/authority/inventory/approve/confirm"), "inventory approved — gate clears on next decision")}>
-                            <ShieldCheck className="h-4 w-4 mr-1" />Confirm (2nd admin)
+                            <ShieldCheck className="h-4 w-4 mr-1" />Confirm ({approverLabel})
                         </Button>
                     </div>
                 </div>
@@ -134,6 +137,12 @@ export const InventoryGoLivePanel = () => {
             {secondAdminMissing && (
                 <div data-testid="second-admin-hint" className="text-xs font-mono text-white/50">
                     Second admin: register the account normally, then on the server run <code className="text-white/80">docker compose exec -T backend python ops/promote_admin.py you2@example.com</code>
+                    <span className="block mt-1">No second person? Set <code className="text-white/80">INVENTORY_APPROVAL_MODE=single_admin</code> in backend/.env and restart — approvals then need only a fresh step-up and are stamped single_admin in the audit chain.</span>
+                </div>
+            )}
+            {singleAdmin && (
+                <div data-testid="single-admin-mode" className="text-xs font-mono text-[#FFB000]">
+                    single-operator mode (INVENTORY_APPROVAL_MODE=single_admin): no 4-eyes — the proposing admin may approve after a fresh step-up; every approval is stamped in the audit chain
                 </div>
             )}
         </section>

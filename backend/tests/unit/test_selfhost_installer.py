@@ -456,3 +456,14 @@ def test_frontend_csp_allows_cloudflare_turnstile():
     assert "https://challenges.cloudflare.com" in directives["connect-src"]
     assert "'unsafe-inline'" not in directives["script-src"] and "'unsafe-eval'" not in directives["script-src"]
     assert directives["frame-ancestors"] == "frame-ancestors 'none'"
+
+
+def test_compose_up_detaches_virtfs_copies_of_live_project_containers_first():
+    """Live containers' VirtFS copies are not orphans when reap_zombies runs, yet docker rm hits them
+    seconds later during recreate — compose_up drops the COPIES (never originals, never shared) up front."""
+    lib = _read("deploy", "lib.sh")
+    body = lib[lib.index("detach_project_copies() {"):lib.index("compose_up() {")]
+    assert "docker compose ps -aq" in body and "repair_enabled || return 0" in body
+    assert "$5 !~ /^\\/var\\/lib\\/docker\\//" in body and 'if ($i ~ /^shared:/) sh = 1' in body
+    cu = lib[lib.index("compose_up() {"):]
+    assert cu.index("reap_zombies || return 1") < cu.index("detach_project_copies") < cu.index("docker compose up ${flags}")

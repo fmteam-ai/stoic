@@ -91,6 +91,30 @@ class TestInventoryFailsClosed:
             if saved:
                 _run(db.platform_state.replace_one({"_id": "inventory_expectation"}, saved, upsert=True))
 
+    def test_single_admin_mode_lets_proposer_approve_and_stamps_it(self, monkeypatch):
+        """Explicit operator choice (INVENTORY_APPROVAL_MODE=single_admin): no 4-eyes, but the
+        expectation + audit entry are stamped approval_mode=single_admin; default stays four_eyes."""
+        from inventory_projection import propose_expectation, approve_expectation, approval_mode
+        monkeypatch.delenv("INVENTORY_APPROVAL_MODE", raising=False)
+        assert approval_mode() == "four_eyes"
+        monkeypatch.setenv("INVENTORY_APPROVAL_MODE", "single_admin")
+        assert approval_mode() == "single_admin"
+        db = _db()
+        saved = _run(db.platform_state.find_one({"_id": "inventory_expectation"}))
+        try:
+            _run(propose_expectation(db, {"accounts": 3, "enabled": 3, "bots": 3, "account_ids": ["a", "b", "c"]}, "solo@stoic.test"))
+            doc = _run(approve_expectation(db, "solo@stoic.test"))
+            assert doc["approved_by"] == "solo@stoic.test" == doc["proposed_by"]
+            assert doc["approval_mode"] == "single_admin"
+            chain = _run(db.admin_audit_log.find_one({"action": "inventory_expectation_approved"}, sort=[("at", -1)]))
+            assert chain and chain["meta"]["approval_mode"] == "single_admin"
+        finally:
+            _run(db.platform_state.delete_one({"_id": "inventory_expectation_pending"}))
+            if saved:
+                _run(db.platform_state.replace_one({"_id": "inventory_expectation"}, saved, upsert=True))
+            else:
+                _run(db.platform_state.delete_one({"_id": "inventory_expectation"}))
+
     def test_expectation_requires_a_second_admin(self):
         from inventory_projection import propose_expectation, approve_expectation
         db = _db()

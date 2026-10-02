@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 705 |
+| unit | pure logic, no external I/O | every CI job | 706 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3805 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3806 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4721 tests across 485 files.**
+**Total: 4723 tests across 485 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -240,7 +240,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter236_turnstile_round9.py` | http-live | 18 |
 | `backend/tests/test_iter237_signer_round9.py` | http-live | 13 |
 | `backend/tests/test_iter238_authority_round9.py` | http-live | 14 |
-| `backend/tests/test_iter239_round10.py` | http-live | 24 |
+| `backend/tests/test_iter239_round10.py` | http-live | 25 |
 | `backend/tests/test_iter23_reconciler.py` | http-live | 9 |
 | `backend/tests/test_iter242_round12.py` | http-live | 15 |
 | `backend/tests/test_iter24_objectid_hardening.py` | http-live | 10 |
@@ -496,7 +496,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_review_llm_and_calibration.py` | unit | 10 |
 | `backend/tests/unit/test_review_quant_fixes.py` | unit | 9 |
 | `backend/tests/unit/test_review_sec_fixes.py` | unit | 15 |
-| `backend/tests/unit/test_selfhost_installer.py` | unit | 23 |
+| `backend/tests/unit/test_selfhost_installer.py` | unit | 24 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |

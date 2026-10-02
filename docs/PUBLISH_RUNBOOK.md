@@ -197,6 +197,8 @@ deploy/update.sh --onboarding-close-only                            # flag form 
 
 Operator gates and the topology policy are then REPORTED, not enforced; infrastructure checks still must be green and auto-rollback still applies. The backend keeps trading fail-closed (CLOSE_ONLY) until every gate is green — the flag never opens trading. `deploy/releases/deployment_state.json` records `onboarding_close_only` + the pending gates. Clear the gates in Admin → Inventory & Go-Live Gate, run the `ea-release` workflow, then run `deploy/update.sh` WITHOUT the flag to return to the fail-closed path.
 
+**Inventory approvals without a second admin.** The go-live gate is 4-eyes by default (the admin who proposes an expectation / inventory hash cannot approve it). A one-person operation can opt out explicitly with `INVENTORY_APPROVAL_MODE=single_admin` in `backend/.env` (then `docker compose up -d backend`): the same admin approves after a fresh step-up (password + authenticator), the panel shows *single-operator mode*, every approval event and audit-chain entry is stamped `approval_mode: single_admin`, and `/api/ops/release-readiness` → `inventory.note` says so. Remove the variable to return to 4-eyes.
+
 ### Option A — two clicks + one command (recommended to start)
 
 1. In Emergent: build/fix → **Save to GitHub** (pushes `main`).
