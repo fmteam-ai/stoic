@@ -158,6 +158,13 @@ if [ -n "${DK_PID}" ]; then
     *) fail "${DROOT} propagation is '${DPROP}' — every container rootfs mount is propagated into sandboxed services' namespaces and 'docker rm' hits EBUSY. Fix: mount --bind ${DROOT} ${DROOT}; mount --make-rslave ${DROOT} (bootstrap.sh persists this as a docker.service drop-in; dockerd flips a PRIVATE root back to shared, slave is kept)" ;;
   esac
   [ "$(readlink /proc/${DK_PID}/ns/mnt 2>/dev/null)" = "${HOST_NS}" ] && ok "dockerd runs in the host mount namespace" || warn "dockerd runs in its own mount namespace (systemd MountFlags?) — containerd/runc may not see its mounts"
+  # cPanel VirtFS (jailed shells) bind-mounts /var/lib into /home/virtfs/<user>/ — a copy of every
+  # container rootfs mount lands IN THE HOST NAMESPACE and shares the merged dir's dentry; once the
+  # container is gone that copy alone makes `rmdir merged` → EBUSY (kernel is_local_mountpoint).
+  ORPHANS=$(. deploy/lib.sh; orphan_merged_copies 2>/dev/null | grep -c . || true)
+  if [ "${ORPHANS:-0}" -gt 0 ]; then
+    fail "${ORPHANS} host-namespace copies of DEAD containers' rootfs mounts (cPanel VirtFS binds under /home/virtfs/*) — these alone cause 'device or resource busy'; fix: deploy/docker-orphan-mounts.sh --apply (Docker-only, no site is touched; update.sh now sweeps them before compose up)"
+  else ok "no orphan container-rootfs mount copies in the host namespace (cPanel VirtFS)"; fi
   # foreign mount namespaces that hold copies of docker's overlay mounts: unmounting on the
   # host then leaves the copy → docker rm fails EBUSY. Name the processes so they can be fixed
   # (cPanel: CageFS/LVE, httpd PrivateTmp, imunify360, systemd units with PrivateTmp=yes)

@@ -3038,3 +3038,13 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
   Backend keeps trading CLOSE_ONLY until gates clear. Docs: PUBLISH_RUNBOOK.md. Test added.
 - User sequence: python fix → onboarding publish → clear gates in Admin panel + ea-release workflow →
   plain deploy/update.sh.
+
+## overlay2 EBUSY — TRUE root cause: cPanel VirtFS (June 2026 — DONE, user verification pending)
+- Alma 8.10 / 4.18: foreign-namespace copies cannot block rmdir (is_local_mountpoint); host-mount-fix.sh
+  (MountFlags=slave on php-fpm etc.) was NOT the cause — do not restart cPanel services again (shared host).
+- Cause: VirtFS bind-mounts /var/lib into /home/virtfs/<user>/ (15 jails) → container rootfs mounts copied
+  INTO THE HOST NAMESPACE; 743 merged mounts for 10 containers; copies of dead layers share the dentry → EBUSY.
+- Fix: lib.sh `orphan_merged_copies` / `detach_orphan_copies` (copies only, no shared peers, no docker-root
+  paths, nothing when dockerd down) run first in reap_zombies; zombie removal unmounts all host paths of the
+  layer. Standalone `deploy/docker-orphan-mounts.sh [--apply]`; doctor.sh fails while orphans exist.
+- host-mount-fix.sh now classifies copies shared/private/slave.

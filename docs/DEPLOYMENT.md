@@ -291,6 +291,25 @@ fix it for good:
 
 `deploy/doctor.sh` (section *docker mount propagation*) reports both layers.
 
+**Root cause found on the production host (Alma 8.10, kernel 4.18) — cPanel VirtFS.** On a 4.18
+kernel a mount copy in *another* namespace cannot block `rmdir` (the kernel only checks the caller's
+own namespace and lazily detaches foreign copies), so layers 1–2 above are not what triggers the
+EBUSY. The trigger is VirtFS: every jailed-shell account gets `/var/lib` bind-mounted into
+`/home/virtfs/<user>/`, which copies each container rootfs mount **into the host namespace**. The
+copy shares the `merged` directory's dentry, so once the container is gone that copy alone makes
+`unlinkat …/merged` fail. Fix, confined to Docker (no cPanel service, site or jail is touched):
+
+```bash
+sudo deploy/docker-orphan-mounts.sh           # list the copies of dead layers (dry run)
+sudo deploy/docker-orphan-mounts.sh --apply   # umount -l those copies only
+```
+
+`lib.sh reap_zombies` runs the same sweep (`detach_orphan_copies`) before every `compose up`, and
+unmounts every host-namespace path of a zombie's layer (original + VirtFS copies) before
+`docker rm`. Guard rails: only copies (path ≠ docker root), only layers no container in any state
+owns, never a `shared:` peer, nothing when dockerd is unreachable. `doctor.sh` fails while such
+copies exist.
+
 ## cPanel/WHM: `ModuleNotFoundError: No module named 'dnf'` (packman)
 
 cPanel's package manager (`/usr/local/cpanel/bin/packman*`, shebang `#!/usr/bin/python3`)

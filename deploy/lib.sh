@@ -556,8 +556,31 @@ diagnose_zombies() {   # read-only picture used by the default (no-repair) path
   return 1
 }
 
+# cPanel VirtFS (jailed shells) bind-mounts /var/lib into /home/virtfs/<user>/ and so
+# copies every container rootfs mount INTO THE HOST NAMESPACE. A copy shares the merged
+# dir's dentry: after the container dies `rmdir merged` → EBUSY even on 4.18 kernels
+# (is_local_mountpoint). Only COPIES (path ≠ docker root) of layers NO container owns
+# are touched, never shared peers (their umount would propagate back and kill a live
+# container), and never with dockerd down (every layer would look orphaned).
+orphan_merged_copies() {   # stdout: "<layer-id> <mount-path>" for each detachable copy
+  local live
+  live=" $(docker ps -aq --no-trunc 2>/dev/null | xargs -r docker inspect -f '{{.GraphDriver.Data.MergedDir}}' 2>/dev/null | sed 's|.*/overlay2/||; s|/merged$||' | tr '\n' ' ') " || return 0
+  docker info >/dev/null 2>&1 || return 0
+  awk '$5 ~ /\/var\/lib\/docker\/overlay2\/[^\/]+\/merged$/ && $5 !~ /^\/var\/lib\/docker\// {
+         sh = 0; for (i = 7; i <= NF && $i != "-"; i++) if ($i ~ /^shared:/) sh = 1
+         if (!sh) { n = split($5, a, "/"); print a[n-1], $5 } }' "${PROC_ROOT:-/proc}/1/mountinfo" 2>/dev/null \
+    | while read -r id p; do case "${live}" in *" ${id} "*) ;; *) echo "${id} ${p}" ;; esac; done
+}
+detach_orphan_copies() {
+  local n=0 id p
+  while read -r id p; do [ -n "${p}" ] && umount -l "${p}" 2>/dev/null && n=$((n+1)); done < <(orphan_merged_copies)
+  [ "${n}" -gt 0 ] && { echo "-- detached ${n} host-namespace copies of dead containers' rootfs mounts (cPanel VirtFS binds of /var/lib)"; repair_journal detach_orphan_copies "virtfs copies=${n}"; }
+  return 0
+}
+
 reap_zombies() {
   if ! repair_enabled; then diagnose_zombies; return $?; fi
+  detach_orphan_copies
   detach_leaked_mounts
   local zombies; zombies=$(zombie_ids)
   [ -n "${zombies// /}" ] || return 0
@@ -571,8 +594,9 @@ reap_zombies() {
   local snap; snap=$(snapshot_container_metadata ${targets}); repair_journal snapshot "${snap} ids=${targets}"
   [ "$(cat /proc/sys/fs/may_detach_mounts 2>/dev/null || echo 1)" = 1 ] \
     || { echo "-- fs.may_detach_mounts=0 — enabling so leaked overlay mounts can be detached"; sysctl -qw fs.may_detach_mounts=1 2>/dev/null || true; repair_journal sysctl "fs.may_detach_mounts=1"; }
-  for z in ${targets}; do   # overlay "device or resource busy": lazily unmount the merged dir first
-    m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] && { umount -l "$m" 2>/dev/null || true; }
+  for z in ${targets}; do   # overlay "device or resource busy": lazily unmount the merged dir first — and every VirtFS copy of it
+    m=$(docker inspect -f '{{.GraphDriver.Data.MergedDir}}' "$z" 2>/dev/null || true); [ -n "$m" ] || continue
+    for p in $(awk -v id="$(basename "$(dirname "$m")")" '$5 ~ ("/overlay2/" id "/merged$") {print $5}' /proc/1/mountinfo 2>/dev/null) "$m"; do umount -l "$p" 2>/dev/null || true; done
   done
   if ! docker rm -f ${targets} >/dev/null 2>&1 || [ -n "$(zombie_ids | tr -d ' ')" ]; then
     repair_journal docker_rm_failed "ids=${targets}"

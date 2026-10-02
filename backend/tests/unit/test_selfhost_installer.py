@@ -414,3 +414,33 @@ def test_update_honours_onboarding_close_only_policy_without_opening_trading():
     assert 'if mode == "strict":' in lib and "missing = [k for k in infra if not" in lib
     assert "onboarding-close-only" in _read("docs", "PUBLISH_RUNBOOK.md")
     assert subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", "update.sh")]).returncode == 0
+
+
+def test_virtfs_orphan_copy_sweep_is_docker_scoped(tmp_path):
+    """cPanel VirtFS copies container rootfs mounts into the HOST namespace; the sweep detaches only
+    copies of layers no container owns — never the docker root, never shared peers, never live layers."""
+    import stat
+    lib = _read("deploy", "lib.sh")
+    assert lib.index("detach_orphan_copies\n") < lib.index("detach_leaked_mounts\n  local zombies")   # sweep runs first in reap_zombies
+    assert 'docker info >/dev/null 2>&1 || return 0' in lib                                            # dockerd down → every layer looks orphaned → do nothing
+    assert "$5 !~ /^\\/var\\/lib\\/docker\\//" in lib and 'if ($i ~ /^shared:/) sh = 1' in lib
+    assert '("/overlay2/" id "/merged$")' in lib                                                     # zombie removal unmounts every host path of the layer
+    proc = tmp_path / "1"; proc.mkdir()
+    (proc / "mountinfo").write_text(
+        "100 50 0:60 / /var/lib/docker/overlay2/live1/merged rw - overlay overlay rw\n"
+        "101 50 0:61 / /home/virtfs/u1/var/lib/docker/overlay2/live1/merged rw - overlay overlay rw\n"
+        "102 50 0:62 / /home/virtfs/u1/var/lib/docker/overlay2/dead1/merged rw - overlay overlay rw\n"
+        "103 50 0:63 / /home/virtfs/u2/var/lib/docker/overlay2/dead1/merged rw shared:9 - overlay overlay rw\n"
+        "104 50 0:64 / /home/virtfs/u2/var/lib/docker/overlay2/dead2/merged rw master:3 - overlay overlay rw\n"
+        "105 50 0:65 / /var/lib/docker/overlay2/dead3/merged rw - overlay overlay rw\n")
+    fake = tmp_path / "bin"; fake.mkdir()
+    (fake / "docker").write_text('#!/bin/sh\ncase "$1" in info) exit 0;; ps) echo c1;; inspect) echo /var/lib/docker/overlay2/live1/merged;; esac\n')
+    (fake / "docker").chmod(0o755)
+    env = dict(os.environ, PATH=f"{fake}:{os.environ['PATH']}", PROC_ROOT=str(tmp_path))
+    out = subprocess.run(["bash", "-c", ". deploy/lib.sh; orphan_merged_copies"], cwd=ROOT, env=env, capture_output=True, text=True).stdout.split()
+    assert out == ["dead1", "/home/virtfs/u1/var/lib/docker/overlay2/dead1/merged",
+                   "dead2", "/home/virtfs/u2/var/lib/docker/overlay2/dead2/merged"]
+    s = _read("deploy", "docker-orphan-mounts.sh")
+    assert "--apply" in s and "dry run" in s and "orphan_merged_copies" in s and "detach_orphan_copies" in s
+    assert os.stat(os.path.join(ROOT, "deploy", "docker-orphan-mounts.sh")).st_mode & stat.S_IXUSR
+    assert "docker-orphan-mounts.sh" in _read("deploy", "doctor.sh") and "VirtFS" in _read("docs", "DEPLOYMENT.md")
