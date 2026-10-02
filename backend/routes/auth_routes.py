@@ -4,6 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 from fastapi import APIRouter, HTTPException, Request, Response, Depends
+from fastapi.responses import JSONResponse
 from bson import ObjectId
 from pydantic import BaseModel
 
@@ -597,6 +598,15 @@ async def refresh_token(request: Request, response: Response):
     except HTTPException as e:
         if e.status_code == 429:
             raise
+        if e.status_code == 409:
+            # Audit v2 P1-01 — benign concurrent refresh: the token was
+            # already rotated by a parallel request whose response set the
+            # successor cookie. No mint, no revoke, NO Set-Cookie here.
+            return JSONResponse(status_code=409, content={
+                "code": "refresh_superseded",
+                "detail": {"code": "refresh_superseded",
+                           "message": "Refresh already completed by a "
+                                      "concurrent request — retry."}})
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid refresh token")

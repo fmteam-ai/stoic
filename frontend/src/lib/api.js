@@ -41,13 +41,42 @@ api.interceptors.request.use(attachCsrf);
 axios.interceptors.request.use(attachCsrf);
 
 // ------------------------------------------- 401 silent refresh (single-flight)
+// Single-flight per tab (refreshPromise) AND across tabs (Web Locks API, when
+// available): only one tab at a time presents the refresh cookie, so the next
+// tab sends the already-rotated successor instead of a consumed token.
+// Audit v2 P1-01 — the server answers 409 {code:"refresh_superseded"} (no
+// Set-Cookie, nothing minted) when a concurrent request already rotated the
+// token; the cookie jar holds the successor, so that counts as success and
+// the original request is retried once.
 let refreshPromise = null;
+
+function isRefreshSuperseded(err) {
+    const data = err?.response?.data;
+    return err?.response?.status === 409
+        && (data?.code === "refresh_superseded"
+            || data?.detail?.code === "refresh_superseded");
+}
+
+function postRefresh() {
+    return axios
+        .post(`${API}/auth/refresh`, {}, { withCredentials: true })
+        .catch((err) => {
+            if (isRefreshSuperseded(err)) return { data: { ok: true, superseded: true } };
+            throw err;
+        });
+}
 
 function silentRefresh() {
     if (!refreshPromise) {
-        refreshPromise = axios
-            .post(`${API}/auth/refresh`, {}, { withCredentials: true })
-            .finally(() => { refreshPromise = null; });
+        const locks = (typeof navigator !== "undefined" && navigator.locks
+            && typeof navigator.locks.request === "function") ? navigator.locks : null;
+        let p;
+        try {
+            p = locks ? locks.request("stoic-refresh", () => postRefresh()) : postRefresh();
+        } catch (_) {
+            p = postRefresh();          // locks unavailable (insecure context etc.)
+        }
+        refreshPromise = Promise.resolve(p).finally(() => { refreshPromise = null; });
     }
     return refreshPromise;
 }
@@ -59,8 +88,11 @@ function makeResponseInterceptor(client) {
         const url = String(cfg.url || "");
         const isAuthPath = url.includes("/auth/login") || url.includes("/auth/refresh")
             || url.includes("/auth/register") || url.includes("/auth/logout");
-        // Access token expired → refresh once, retry once.
-        if (status === 401 && !cfg._retried && !isAuthPath) {
+        // Access token expired → refresh once, retry once. A re-auth prompt
+        // (password_required) is not an expired session — don't refresh.
+        const code401 = error.response?.data?.detail?.code;
+        if (status === 401 && !cfg._retried && !isAuthPath
+            && code401 !== "password_required") {
             cfg._retried = true;
             try {
                 await silentRefresh();

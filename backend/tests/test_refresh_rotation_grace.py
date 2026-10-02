@@ -2,8 +2,10 @@
 
 Two tabs whose 30-min access tokens expire together both call /auth/refresh with
 the same cookie. The second presents the token the first just consumed: inside the
-grace window (same hash) the chain continues from the newest successor; a real
-replay (hash mismatch / outside grace / revoked successor) still kills the family.
+grace window (same hash, live chain head) it gets 409 refresh_superseded WITHOUT a
+new session being minted (audit v2 P1-01 — possession of a consumed token never
+mints; the winner's response already set the successor cookie); a real replay
+(hash mismatch / outside grace / revoked successor) still kills the family.
 """
 import os
 import sys
@@ -27,19 +29,21 @@ def _seed(db, jti, token, **extra):
     return db.auth_sessions.insert_one(doc)
 
 
-def test_concurrent_refresh_within_grace_continues_chain_instead_of_revoking():
+def test_concurrent_refresh_within_grace_is_superseded_not_minted_nor_revoked():
     db = get_db(); jti = f"grace-{os.urandom(6).hex()}"; tok = f"tok-{jti}"
 
     async def go():
         await _seed(db, jti, tok)
         first = await consume_and_rotate(db, {"jti": jti}, tok)          # tab A rotates
         await stamp_session_token(db, first["jti"], f"tok-{first['jti']}")
-        second = await consume_and_rotate(db, {"jti": jti}, tok)         # tab B re-presents the consumed token
-        assert second["jti"] not in (jti, first["jti"]) and second["fam"] == first["fam"]
+        with pytest.raises(HTTPException) as e:                           # tab B re-presents the consumed token
+            await consume_and_rotate(db, {"jti": jti}, tok)
+        assert e.value.status_code == 409 and e.value.detail["code"] == "refresh_superseded"
         fam = [d async for d in db.auth_sessions.find({"family": f"fam-{jti}"})]
+        assert len(fam) == 2, "no new session may be minted from a consumed token"
         assert all(not d["revoked"] for d in fam), "family must stay alive"
-        assert sum(1 for d in fam if not d["consumed"]) == 1                 # exactly one live head
-        head = next(d for d in fam if not d["consumed"]); assert head["jti"] == second["jti"]
+        live = [d for d in fam if not d["consumed"]]
+        assert len(live) == 1 and live[0]["jti"] == first["jti"]          # R1 still the live head
         await db.auth_sessions.delete_many({"family": f"fam-{jti}"})
     run_async(go())
 
@@ -84,7 +88,7 @@ def test_consume_is_atomic_no_duplicate_live_successors():
         results = await asyncio.gather(*[consume_and_rotate(db, {"jti": jti}, tok) for _ in range(4)],
                                        return_exceptions=True)
         ok = [r for r in results if isinstance(r, dict)]
-        assert ok, "at least one refresh must succeed"
+        assert len(ok) == 1, "exactly one refresh must succeed (losers get 409)"
         assert not any(isinstance(r, HTTPException) and "reuse" in str(r.detail) for r in results)
         fam = [d async for d in db.auth_sessions.find({"family": f"fam-{jti}"})]
         assert all(not d["revoked"] for d in fam)
