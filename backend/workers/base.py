@@ -177,13 +177,16 @@ def _supervise(name: str, loop_name: str, factory, stats: dict):
     return run
 
 
-async def run_worker(name: str, loop_factories: list) -> None:
+async def run_worker(name: str, loop_factories: list, *,
+                     set_role: bool = True) -> None:
     """Acquire the leader lease for `name`, then run all loops until the
     lease is lost or the process is terminated. loop_factories: list of
-    zero-arg callables returning coroutines."""
+    zero-arg callables returning coroutines. set_role=False when embedded in
+    the API process (in-process mode) — the process stays role "api"."""
     db = get_db()
     logger.info("worker %s starting (holder=%s)", name, HOLDER)
-    os.environ.setdefault("STOIC_PROCESS_ROLE", f"worker-{name}")
+    if set_role:
+        os.environ.setdefault("STOIC_PROCESS_ROLE", f"worker-{name}")
     while not await _try_acquire(db, name):
         logger.info("worker %s standing by — another holder owns the lease",
                     name)
@@ -211,10 +214,24 @@ async def run_worker(name: str, loop_factories: list) -> None:
             if d is not lost_waiter and d.exception():
                 logger.error("worker %s loop crashed: %s", name, d.exception())
     finally:
+        lost_waiter.cancel()
         for t in tasks:
             t.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*tasks, lost_waiter, return_exceptions=True)
         logger.info("worker %s stopped", name)
+
+
+async def run_worker_forever(name: str, loop_factories: list) -> None:
+    """In-process mode (BACKGROUND_WORKERS_IN_PROCESS=true): the API replica
+    runs the same leased worker groups as the dedicated workers. Only the
+    lease holder runs the loops; after a lease loss it returns to standby
+    and keeps contending — so >1 API replica (or an API + a dedicated
+    worker) can never double-run trading loops."""
+    while True:
+        await run_worker(name, loop_factories, set_role=False)
+        logger.warning("in-process worker %s lost its lease — back to standby",
+                       name)
+        await asyncio.sleep(LEASE_RENEW_SEC)
 
 
 def main(name: str, loop_factories: list) -> None:

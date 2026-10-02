@@ -55,14 +55,16 @@ async def create_bug(payload: dict, user=Depends(get_current_user)):
             "received_at": doc["created_at"]}
 
 
-def _is_admin(user) -> bool:
-    return user.get("role") == "admin" or user.get("email") == "admin@trading.bot"
+def _require_admin(user) -> None:
+    """Real admin gate (role + mandatory TOTP MFA via auth.require_admin).
+    No e-mail-address back door: an address is not an authorization attribute."""
+    from auth import require_admin
+    require_admin(user)
 
 
 @router.get("")
 async def list_bugs(user=Depends(get_current_user), limit: int = 50):
-    if not _is_admin(user):
-        raise HTTPException(status_code=403, detail="admin only")
+    _require_admin(user)
     db = get_db()
     cursor = db.bug_reports.find({}, {"screenshot": 0}).sort("created_at", -1).limit(limit)
     docs = await cursor.to_list(length=limit)
@@ -75,8 +77,7 @@ async def list_bugs(user=Depends(get_current_user), limit: int = 50):
 
 @router.get("/{bug_id}")
 async def get_bug(bug_id: str, user=Depends(get_current_user)):
-    if not _is_admin(user):
-        raise HTTPException(status_code=403, detail="admin only")
+    _require_admin(user)
     db = get_db()
     try:
         oid = ObjectId(bug_id)
@@ -91,8 +92,7 @@ async def get_bug(bug_id: str, user=Depends(get_current_user)):
 
 @router.patch("/{bug_id}/status")
 async def update_status(bug_id: str, payload: dict, user=Depends(get_current_user)):
-    if not _is_admin(user):
-        raise HTTPException(status_code=403, detail="admin only")
+    _require_admin(user)
     new_status = payload.get("status")
     if new_status not in ("new", "triaged", "in_progress", "resolved", "wont_fix"):
         raise HTTPException(status_code=400, detail="invalid status")

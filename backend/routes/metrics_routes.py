@@ -234,5 +234,12 @@ async def metrics(request: Request):
           sum(len(s) for s in ws_manager._connections.values()),
           "Connected websocket clients")
 
+    # Event-loop lag (runtime_watchdog probe, per process).
+    try:
+        from runtime_watchdog import prometheus_lines
+        lines.extend(prometheus_lines())
+    except Exception:  # noqa: BLE001
+        pass
+
     lines.append("")
     return "\n".join(lines)

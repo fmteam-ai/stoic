@@ -3,7 +3,9 @@
 # /admin/host-migration a privileged worker that can stop/start this stack
 # (docker socket) and drive the NEW host over SSH. The API container itself
 # never gets docker or SSH access — it only proxies to this service with the
-# shared METRICS_TOKEN. Remove after the migration: `make migrator-off`.
+# dedicated, 24h-expiring migrator_token. Remove after the migration:
+# `make migrator-off`. The docker socket is root-equivalent and cannot be made
+# read-only (see Dockerfile.migrator) — it exists only while this overlay is on.
 services:
   migrator:
     build:
@@ -21,6 +23,7 @@ services:
       # end with simulated commands, nothing is touched on either host
       MIGRATOR_DRY_RUN: ${MIGRATOR_DRY_RUN:-0}
     volumes:
+      # required: stop/start of this stack. NOT restrictable with :ro (socket API)
       - /var/run/docker.sock:/var/run/docker.sock
       # same absolute path inside and outside so `docker compose` resolves
       # bind mounts / secrets exactly like the host does — READ-ONLY; only the
