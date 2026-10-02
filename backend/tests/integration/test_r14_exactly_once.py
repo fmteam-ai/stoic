@@ -1,5 +1,6 @@
 """Audit r14 P0-01 / P0-02 / P1-01 — exactly-once NL confirmations & trigger
 firing, active-only 6/3/3 counting. REQUIRED CI lane (critical_controls)."""
+from unittest.mock import MagicMock
 import asyncio
 import os
 import sys
@@ -20,6 +21,11 @@ load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
 def _run(coro):
     from conftest import run_async
     return run_async(coro)
+
+
+# Route handlers take the Request for step-up; these tests never reach
+# a live context, so a bare stub is enough.
+_REQ = MagicMock()
 
 
 @pytest.fixture
@@ -73,7 +79,7 @@ def test_fifty_concurrent_confirms_execute_once(world, monkeypatch):
 
     async def _one():
         try:
-            return await nr.nl_command_confirm({"proposal_id": doc["id"]}, user=user)
+            return await nr.nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user)
         except HTTPException as e:
             return e.detail
 
@@ -126,7 +132,7 @@ def test_crash_recovery_never_replays_completed_action(world, monkeypatch):
 
     # lease still live → confirm refuses (execution_in_progress)
     with pytest.raises(HTTPException) as ei:
-        _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+        _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert ei.value.detail["code"] == "execution_in_progress"
 
     # expire the lease → recovery resumes: action 0 (done) NOT replayed,
@@ -136,7 +142,7 @@ def test_crash_recovery_never_replays_completed_action(world, monkeypatch):
     _run(real_update({"_id": ObjectId(doc["id"])}, {"$set": {
         "execution.lease_until": (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()}}))
 
-    res = _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+    res = _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert calls == ["CLOSE_ALL_TRADES", "DISABLE_BOTS", "MOVE_STOPS_BREAKEVEN"]
     states = [r["state"] for r in res["receipts"]]
     assert states == ["done", "done", "done"]
@@ -144,7 +150,7 @@ def test_crash_recovery_never_replays_completed_action(world, monkeypatch):
     assert res["status"] == "executed" and res["confirmed"] is True
     # replay after completion → refused, receipts returned
     with pytest.raises(HTTPException) as ei2:
-        _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+        _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert ei2.value.detail["code"] == "proposal_not_pending"
     assert calls.count("CLOSE_ALL_TRADES") == 1
 
@@ -168,7 +174,7 @@ def test_partial_failure_is_visible_and_authority_suppresses_risk_increase(world
                               {"type": "MOVE_STOPS_BREAKEVEN", "target": "all"},
                               {"type": "ENABLE_BOTS", "target": "all"},
                               {"type": "SET_RISK_LEVEL", "params": {"risk_level": "high"}}])
-    res = _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+    res = _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert [r["state"] for r in res["receipts"]] == ["done", "failed", "suppressed", "suppressed"]
     assert res["status"] == "partially_executed"
     assert res["receipts"][2]["decision_id"] == "dec_blk"
@@ -196,7 +202,7 @@ def test_confirm_revalidates_inside_claim(world, monkeypatch):
         return await real(db_, uid_, acts)
     monkeypatch.setattr(nl_preview, "build_preview", _drift_once)
     with pytest.raises(HTTPException) as ei:
-        _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, user=user))
+        _run(nr.nl_command_confirm({"proposal_id": doc["id"]}, request=_REQ, user=user))
     assert ei.value.detail["code"] == "preview_stale"
     stored = _run(db.nl_proposals.find_one({"_id": ObjectId(doc["id"])}))
     assert stored["status"] == "pending" and "execution" not in stored
