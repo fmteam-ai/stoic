@@ -370,6 +370,12 @@ async def ensure_indexes():
         # one subscription doc per user, TTL cleanup of short-lived
         # VPS credentials (BSON-date expiries).
         await db.payment_transactions.create_index("session_id", unique=True)
+        # audit v2 P2-03 — one checkout intent per idempotency key (legacy rows
+        # without the field are exempt) and one orphan record per paid session.
+        await db.payment_transactions.create_index(
+            "idempotency_key", unique=True, name="uniq_checkout_idempotency_key",
+            partialFilterExpression={"idempotency_key": {"$type": "string"}})
+        await db.orphan_payments.create_index("session_id", unique=True)
         await db.affiliate_commissions.create_index(
             [("session_id", 1), ("tier", 1)], unique=True, sparse=True)
         await db.affiliate_outbox.create_index("session_id", unique=True)

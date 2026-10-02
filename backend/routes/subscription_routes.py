@@ -18,8 +18,8 @@ from emergentintegrations.payments.stripe.checkout import (
 from auth import get_current_user
 from subscription_plans import get_plan, all_plans_public
 from subscription_service import (
-    get_subscription, is_active, record_transaction, apply_successful_payment,
-    revoke_payment,
+    get_subscription, is_active, apply_successful_payment,
+    revoke_payment, fulfil_paid_session, is_pending_session_id,
 )
 from database import get_db
 
@@ -85,7 +85,7 @@ async def list_transactions(user=Depends(get_current_user), limit: int = 50):
             "amount_usd": float(tx.get("amount_usd") or 0),
             "currency": (tx.get("currency") or "usd").upper(),
             "payment_status": tx.get("payment_status") or "unknown",
-            "session_id": tx.get("session_id"),
+            "session_id": None if is_pending_session_id(tx.get("session_id")) else tx.get("session_id"),
             "created_at": tx.get("created_at"),
             "completed_at": tx.get("completed_at"),
         })
@@ -181,33 +181,76 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
         raise HTTPException(status_code=400, detail=f"unknown plan: {plan_id}")
     # audit r29 P1-01 — single immutable snapshot; nothing below re-reads pricing globals
     import subscription_plans as _sp
-    snap = _sp.pricing_snapshot(plan)
-
+    import subscription_service as _ss
+    # audit v2 billing — deterministic idempotency key per checkout intent
+    client_key = request.headers.get("Idempotency-Key") if hasattr(request, "headers") else None
     host_url = str(request.base_url)
-    stripe = _stripe_client(host_url)
     success_url = f"{origin.rstrip('/')}/subscription/success?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{origin.rstrip('/')}/subscription"
 
-    metadata = {
-        "user_id": user["id"],
-        "user_email": user.get("email", ""),
-        "plan_id": snap["plan_id"],
-        "duration_months": str(snap["duration_months"]),
-        "amount_minor": str(snap["amount_minor"]),
-        "currency": snap["currency"],
-        "pricing_version": str(snap["pricing_version"]),
-        "idempotency_key": snap["idempotency_key"],
-    }
+    row = snap = None
+    for attempt in range(5):
+        try:
+            key = _sp.checkout_idempotency_key(user["id"], plan, _sp.PRICING_VERSION,
+                                               client_key=client_key, attempt=attempt)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        snap = _sp.pricing_snapshot(plan, idempotency_key=key)
+        metadata = {
+            "user_id": user["id"],
+            "user_email": user.get("email", ""),
+            "plan_id": snap["plan_id"],
+            "duration_months": str(snap["duration_months"]),
+            "amount_minor": str(snap["amount_minor"]),
+            "currency": snap["currency"],
+            "pricing_version": str(snap["pricing_version"]),
+            "idempotency_key": key,
+        }
+        # 1) ledger row FIRST (status "initiated", unique by idempotency_key)
+        row, _created = await _ss.open_checkout_intent(
+            idempotency_key=key, user_id=user["id"], user_email=user.get("email", ""),
+            plan_id=snap["plan_id"], amount_usd=snap["amount_usd"], metadata=metadata,
+            amount_cents=snap["amount_minor"], currency=snap["currency"],
+            pricing_version=snap["pricing_version"], snapshot=snap)
+        if row.get("user_id") != user["id"] or row.get("plan_id") != snap["plan_id"] \
+                or row.get("pricing_version") != snap["pricing_version"]:
+            raise HTTPException(status_code=409, detail="Idempotency-Key was already used for a different checkout")
+        terminal = row.get("applied") or row.get("payment_status") in _ss.TERMINAL_PAYMENT_STATUSES
+        if terminal and client_key is None:
+            continue            # previous intent in this window is finished — derive a fresh one
+        break
+    else:
+        raise HTTPException(status_code=429, detail="Too many checkouts for this plan; try again shortly.")
 
+    def _response(r: dict, reused: bool) -> dict:
+        return {"checkout_url": r.get("checkout_url"), "session_id": r.get("session_id"),
+                "plan": snap["public"], "pricing_version": snap["pricing_version"],
+                "idempotency_key": key, "reused": reused}
+
+    # 2) a retry of an intent that already has a Stripe session reuses it
+    if not _ss.is_pending_session_id(row.get("session_id")):
+        return _response(row, True)
+
+    # 3) create the Stripe session. The emergentintegrations wrapper's
+    #    create_checkout_session(request) takes no idempotency key; when a wrapper
+    #    exposes one (`idempotency_key` kwarg) we pass ours so a crash between Stripe
+    #    create and step 4 replays the SAME session. Without it, the row-first +
+    #    reuse logic here and the webhook's metadata.idempotency_key recovery
+    #    (fulfil_paid_session) are the guarantee.
+    stripe = _stripe_client(host_url)
     req = CheckoutSessionRequest(
-        amount=snap["amount_usd"],
-        currency=snap["currency"],
+        amount=row.get("amount_usd", snap["amount_usd"]),
+        currency=row.get("currency", snap["currency"]),
         success_url=success_url,
         cancel_url=cancel_url,
-        metadata=metadata,
+        metadata=dict(row.get("metadata") or metadata),
     )
+    await _ss.mark_checkout_create_attempt(key)
     try:
-        session = await stripe.create_checkout_session(req)
+        if _accepts_idempotency_key(stripe.create_checkout_session):
+            session = await stripe.create_checkout_session(req, idempotency_key=key)
+        else:
+            session = await stripe.create_checkout_session(req)
     except Exception as e:
         logger.exception("Stripe checkout create failed for user=%s", user["id"])
         raise HTTPException(
@@ -215,25 +258,19 @@ async def create_checkout(payload: dict, request: Request, user=Depends(get_curr
             detail="Could not start Stripe checkout. Please try again shortly.",
         ) from e
 
-    await record_transaction(
-        user_id=user["id"],
-        user_email=user.get("email", ""),
-        plan_id=snap["plan_id"],
-        session_id=session.session_id,
-        amount_usd=snap["amount_usd"],
-        metadata=metadata,
-        amount_cents=snap["amount_minor"],
-        currency=snap["currency"],
-        pricing_version=snap["pricing_version"],
-        snapshot=snap,
-    )
-    return {
-        "checkout_url": session.url,
-        "session_id": session.session_id,
-        "plan": snap["public"],
-        "pricing_version": snap["pricing_version"],
-        "idempotency_key": snap["idempotency_key"],
-    }
+    # 4) bind the session to the intent row (a concurrent twin may have won)
+    row = await _ss.attach_checkout_session(key, session.session_id, session.url)
+    return _response(row, row.get("session_id") != session.session_id)
+
+
+def _accepts_idempotency_key(fn) -> bool:
+    import inspect
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return "idempotency_key" in params or any(
+        p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
 
 
 @sub_router.get("/poll/{session_id}")
@@ -344,9 +381,17 @@ async def stripe_webhook(request: Request):
                 status_code=502,
                 detail="Could not verify payment with Stripe.") from e
         if status.payment_status == "paid":
-            await apply_successful_payment(event.session_id, source="webhook",
-                                           paid_amount_minor=getattr(status, "amount_total", None),
-                                           paid_currency=getattr(status, "currency", None))
+            # audit v2 — never drop a paid session silently: unknown sessions are
+            # recovered via metadata (idempotency_key → intent row, else rebuild) or
+            # recorded in orphan_payments + ops alert. Metadata is taken from the
+            # Stripe re-verified session; the event body's copy only when signed.
+            md = getattr(status, "metadata", None) or (
+                getattr(event, "metadata", None) if signature_verified else None) or {}
+            result = await fulfil_paid_session(
+                event.session_id, metadata=dict(md), source="webhook",
+                paid_amount_minor=getattr(status, "amount_total", None),
+                paid_currency=getattr(status, "currency", None))
+            logger.info("webhook fulfilment session=%s outcome=%s", event.session_id, result.get("outcome"))
         else:
             logger.warning("Webhook 'paid' for session=%s rejected — Stripe "
                            "reports payment_status=%s (possible forgery)",

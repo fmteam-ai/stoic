@@ -49,10 +49,25 @@ def trial_grant_for_signup(created: datetime) -> Optional[dict]:
             "granted_at": _now().isoformat()}
 
 
+def _signup_offer_version() -> Optional[int]:
+    """The offer/pricing version in effect in THIS process right now (the last
+    snapshot applied by plan_settings). 0 means no snapshot was ever loaded —
+    treated as unknown (None), never as a real version."""
+    try:
+        import plan_settings
+        v = plan_settings.trial_config().get("offer_version")
+        v = int(v) if v is not None else None
+    except Exception:  # noqa: BLE001
+        return None
+    return v if v and v > 0 else None
+
+
 async def decide_trial_at_signup(db, created: datetime) -> dict:
     """audit r29 P2-02 — immutable decision record. A transient failure yields
-    `pending_error` (with the offer version seen, if any) so it can be retried
-    idempotently against the ORIGINAL offer — never silently no-grant."""
+    `pending_error` carrying the offer version in effect at sign-up (the
+    in-process pricing snapshot; None only if none was ever loaded) so a later
+    retry can verify it is still deciding against that SAME offer — never
+    silently no-grant, never grant a later offer."""
     import plan_settings
     at = _now().isoformat()
     try:
@@ -64,14 +79,19 @@ async def decide_trial_at_signup(db, created: datetime) -> dict:
         return {"status": "not_eligible", "offer_version": offer_version, "decided_at": at}
     except Exception as e:  # noqa: BLE001
         logger.exception("trial decision failed at registration")
-        return {"status": "pending_error", "offer_version": None, "error": str(e)[:200],
+        return {"status": "pending_error", "offer_version": _signup_offer_version(), "error": str(e)[:200],
                 "created_at": created.isoformat(), "decided_at": at, "attempts": 1}
 
 
 async def retry_pending_trial_decision(db, user: dict) -> Optional[dict]:
     """Idempotent retry of a `pending_error` decision before the first entitlement
-    calculation. Evaluates against the offer version that was CURRENT at sign-up
-    (`offer_version` pinned from the pricing audit history), never a newer offer."""
+    calculation (audit v2). Grants ONLY when the current offer version equals the
+    `offer_version` recorded at sign-up. If the recorded version is missing
+    (legacy rows → "offer_version_unknown") or the offer has moved since
+    ("offer_changed_since_signup"), nothing is granted: the decision stays
+    `pending_error` with `admin_review_required=True` + `review_reason`, and the
+    user document gets an admin-visible `trial_admin_review` flag (plus a
+    best-effort ops alert) so an admin decides explicitly."""
     import plan_settings
     dec = (user or {}).get("trial_decision") or {}
     if dec.get("status") != "pending_error":
@@ -80,28 +100,52 @@ async def retry_pending_trial_decision(db, user: dict) -> Optional[dict]:
         created = datetime.fromisoformat(str(dec.get("created_at") or user.get("created_at")).replace("Z", "+00:00"))
     except (TypeError, ValueError):
         return None
+    attempts = int(dec.get("attempts") or 1) + 1
+    review_reason = None
     try:
         await plan_settings.ensure_fresh(db)
         pinned = dec.get("offer_version")
         cur = plan_settings.trial_config()
-        if pinned is not None and cur.get("offer_version") != pinned:
-            # the offer moved since sign-up — only an explicit, audited migration may re-decide
-            new = {**dec, "attempts": int(dec.get("attempts") or 1) + 1,
-                   "note": f"offer moved {pinned}->{cur.get('offer_version')}; awaiting explicit migration"}
+        if pinned is None:
+            review_reason = "offer_version_unknown"
+        elif cur.get("offer_version") != pinned:
+            review_reason = "offer_changed_since_signup"
+        if review_reason:
+            # only an explicit, audited admin decision may resolve this — never auto-grant
+            new = {**dec, "attempts": attempts, "admin_review_required": True,
+                   "review_reason": review_reason,
+                   "current_offer_version": cur.get("offer_version"),
+                   "note": (f"offer moved {pinned}->{cur.get('offer_version')}; awaiting admin decision"
+                            if pinned is not None else
+                            "offer version at sign-up unknown; awaiting admin decision")}
         else:
             grant = trial_grant_for_signup(created)
-            new = ({"status": "granted", "offer_version": cur.get("offer_version"), "grant": grant}
-                   if grant else {"status": "not_eligible", "offer_version": cur.get("offer_version")})
+            new = ({"status": "granted", "offer_version": pinned, "grant": grant}
+                   if grant else {"status": "not_eligible", "offer_version": pinned})
             new.update({"decided_at": _now().isoformat(), "retried_from": "pending_error",
-                        "attempts": int(dec.get("attempts") or 1) + 1})
+                        "attempts": attempts})
     except Exception as e:  # noqa: BLE001
-        new = {**dec, "attempts": int(dec.get("attempts") or 1) + 1, "error": str(e)[:200]}
+        new = {**dec, "attempts": attempts, "error": str(e)[:200]}
     # idempotent: only replace while the stored decision is still the pending one we read
     upd = {"$set": {"trial_decision": new}}
     if new.get("status") == "granted":
         upd["$set"]["trial_grant"] = new["grant"]
+    if review_reason:
+        upd["$set"]["trial_admin_review"] = {"required": True, "reason": review_reason,
+                                             "signup_offer_version": dec.get("offer_version"),
+                                             "current_offer_version": new.get("current_offer_version"),
+                                             "flagged_at": _now().isoformat()}
     res = await db.users.update_one({"_id": user["_id"], "trial_decision.status": "pending_error",
                                      "trial_decision.decided_at": dec.get("decided_at")}, upd)
+    if review_reason and res.modified_count:
+        try:
+            from alerting import raise_alert
+            await raise_alert(db, "trial_decision_review", "warning",
+                              f"Trial decision for user {user['_id']} needs an admin decision ({review_reason})",
+                              dedup_key=f"trial_decision_review:{user['_id']}",
+                              meta={"user_id": str(user["_id"]), "reason": review_reason})
+        except Exception:  # noqa: BLE001 — the user-doc flag is the durable signal
+            logger.warning("trial review alert failed for user=%s", user.get("_id"))
     return new if res.modified_count else None
 
 
@@ -263,6 +307,7 @@ async def record_transaction(
     session_id: str, amount_usd: float, metadata: dict,
     amount_cents: Optional[int] = None, currency: str = "usd",
     pricing_version: Optional[int] = None, snapshot: Optional[dict] = None,
+    extra: Optional[dict] = None,
 ) -> str:
     db = get_db()
     doc = {
@@ -282,8 +327,179 @@ async def record_transaction(
         "payment_status": "initiated",
         "created_at": _now().isoformat(),
     }
+    if extra:
+        doc.update(extra)
     r = await db.payment_transactions.insert_one(doc)
     return str(r.inserted_id)
+
+
+# ─── audit v2 billing: row-first checkout + crash recovery ───────────────────
+# The ledger row is written BEFORE the Stripe session exists. Until the session
+# id is known it carries a unique placeholder session_id so it coexists with the
+# existing unique(session_id) index (which is not sparse).
+PENDING_SESSION_PREFIX = "pending:"
+TERMINAL_PAYMENT_STATUSES = ("paid", "expired", "refunded")
+
+
+def is_pending_session_id(session_id: Optional[str]) -> bool:
+    return not session_id or str(session_id).startswith(PENDING_SESSION_PREFIX)
+
+
+async def open_checkout_intent(*, idempotency_key: str, user_id: str, user_email: str,
+                               plan_id: str, amount_usd: float, metadata: dict,
+                               amount_cents: int, currency: str, pricing_version,
+                               snapshot: dict) -> tuple[dict, bool]:
+    """Find-or-create the `payment_transactions` row for one checkout intent
+    (keyed by idempotency_key). Returns (row, created). Never touches Stripe."""
+    db = get_db()
+    row = await db.payment_transactions.find_one({"idempotency_key": idempotency_key})
+    if row:
+        return row, False
+    try:
+        await record_transaction(
+            user_id=user_id, user_email=user_email, plan_id=plan_id,
+            session_id=PENDING_SESSION_PREFIX + idempotency_key, amount_usd=amount_usd,
+            metadata=metadata, amount_cents=amount_cents, currency=currency,
+            pricing_version=pricing_version, snapshot={**snapshot, "idempotency_key": idempotency_key},
+            extra={"checkout_url": None, "stripe_create_attempts": 0})
+    except Exception as e:  # noqa: BLE001 — concurrent twin won the unique insert
+        row = await db.payment_transactions.find_one({"idempotency_key": idempotency_key})
+        if row:
+            return row, False
+        raise e
+    row = await db.payment_transactions.find_one({"idempotency_key": idempotency_key})
+    return row, True
+
+
+async def mark_checkout_create_attempt(idempotency_key: str) -> None:
+    await get_db().payment_transactions.update_one(
+        {"idempotency_key": idempotency_key},
+        {"$inc": {"stripe_create_attempts": 1},
+         "$set": {"stripe_create_started_at": _now().isoformat()}})
+
+
+async def attach_checkout_session(idempotency_key: str, session_id: str, url: Optional[str]) -> dict:
+    """Bind the Stripe session to the intent row. Only a still-pending row is
+    rebound; if a twin request already attached a session, that one wins and is
+    returned (the caller must answer with the winner's session)."""
+    db = get_db()
+    await db.payment_transactions.update_one(
+        {"idempotency_key": idempotency_key,
+         "session_id": {"$regex": "^" + PENDING_SESSION_PREFIX}},
+        {"$set": {"session_id": session_id, "checkout_url": url,
+                  "session_attached_at": _now().isoformat()}})
+    return await db.payment_transactions.find_one({"idempotency_key": idempotency_key})
+
+
+async def _record_orphan_payment(db, session_id: str, *, reason: str, metadata: dict,
+                                 paid_amount_minor, paid_currency, source: str) -> dict:
+    now = _now().isoformat()
+    await db.orphan_payments.update_one(
+        {"session_id": session_id},
+        {"$setOnInsert": {"session_id": session_id, "reason": reason,
+                          "metadata": dict(metadata or {}), "paid_amount_minor": paid_amount_minor,
+                          "paid_currency": paid_currency, "source": source,
+                          "status": "open", "created_at": now},
+         "$set": {"last_seen_at": now}},
+        upsert=True)
+    try:
+        from alerting import raise_alert
+        await raise_alert(db, "orphan_payment", "critical",
+                          f"PAID Stripe session {session_id} has no fulfilable ledger row ({reason}) — manual reconciliation required",
+                          dedup_key=f"orphan_payment:{session_id}",
+                          meta={"session_id": session_id, "reason": reason,
+                                "user_id": (metadata or {}).get("user_id"),
+                                "plan_id": (metadata or {}).get("plan_id"),
+                                "idempotency_key": (metadata or {}).get("idempotency_key")})
+    except Exception:  # noqa: BLE001 — the orphan_payments row is the durable record
+        logger.exception("orphan payment alert failed for session=%s", session_id)
+    logger.error("ORPHAN PAYMENT session=%s reason=%s", session_id, reason)
+    return {"outcome": "orphaned", "reason": reason, "subscription": None}
+
+
+def _int_or_none(v):
+    try:
+        return int(v) if v not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
+async def fulfil_paid_session(session_id: str, *, metadata: Optional[dict] = None,
+                              source: str = "webhook", paid_amount_minor: Optional[int] = None,
+                              paid_currency: Optional[str] = None) -> dict:
+    """audit v2 billing — fulfil a session Stripe CONFIRMED as paid, recovering
+    when the local row is missing (crash between Stripe create and DB write):
+
+      1. row by session_id            → apply_successful_payment (atomic claim)
+      2. row by metadata.idempotency_key (the intent row, possibly still holding
+         a placeholder or a superseded unpaid session) → rebind it to this
+         session and apply. If that intent was already fulfilled by ANOTHER
+         session this is a duplicate payment → orphan + alert.
+      3. metadata carries user_id + a known plan for an existing user → rebuild
+         the row from metadata (upsert on unique session_id) and apply once.
+      4. otherwise → `orphan_payments` record + critical ops alert.
+    Never returns silently: the outcome is always one of applied / not_applied
+    / rebound / rebuilt / orphaned.
+    `metadata` MUST come from Stripe's re-verified session, not an unsigned body."""
+    db = get_db()
+    md = dict(metadata or {})
+    kw = {"source": source, "paid_amount_minor": paid_amount_minor, "paid_currency": paid_currency}
+    if await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 1}):
+        sub = await apply_successful_payment(session_id, **kw)
+        return {"outcome": "applied" if sub else "not_applied", "subscription": sub}   # not_applied: already applied, claim held elsewhere, or price-blocked (row records why)
+
+    key = md.get("idempotency_key")
+    if key:
+        row = await db.payment_transactions.find_one({"idempotency_key": key})
+        if row:
+            if row.get("applied") or row.get("payment_status") == "paid":
+                return await _record_orphan_payment(
+                    db, session_id, reason="duplicate_payment_for_intent", metadata=md, source=source,
+                    paid_amount_minor=paid_amount_minor, paid_currency=paid_currency)
+            res = await db.payment_transactions.update_one(
+                {"_id": row["_id"], "session_id": row.get("session_id"), "applied": {"$ne": True}},
+                {"$set": {"session_id": session_id, "rebound_at": _now().isoformat()},
+                 "$push": {"superseded_session_ids": row.get("session_id")}})
+            if not res.modified_count:          # raced — re-dispatch on the fresh state
+                return await fulfil_paid_session(session_id, metadata=md, **kw)
+            sub = await apply_successful_payment(session_id, **kw)
+            return {"outcome": "rebound", "subscription": sub}
+
+    user_id, plan_id = md.get("user_id"), md.get("plan_id")
+    plan = get_plan(plan_id or "")
+    user = None
+    if user_id and plan:
+        from bson import ObjectId
+        try:
+            user = await db.users.find_one({"_id": ObjectId(user_id)}, {"_id": 1, "email": 1})
+        except Exception:  # noqa: BLE001
+            user = None
+    if not user:
+        return await _record_orphan_payment(
+            db, session_id, reason=("metadata_not_rebuildable" if not (user_id and plan) else "user_not_found"),
+            metadata=md, source=source, paid_amount_minor=paid_amount_minor, paid_currency=paid_currency)
+
+    amount_minor = _int_or_none(md.get("amount_minor"))
+    pv = _int_or_none(md.get("pricing_version"))
+    months = _int_or_none(md.get("duration_months")) or plan.duration_months
+    now = _now().isoformat()
+    doc = {"user_id": user_id, "user_email": md.get("user_email") or user.get("email") or "",
+           "plan_id": plan.id, "session_id": session_id,
+           "amount_usd": (amount_minor / 100.0) if amount_minor is not None else plan.amount_usd,
+           "amount_minor": amount_minor, "currency": str(md.get("currency") or paid_currency or "usd").lower(),
+           "pricing_version": pv, "metadata": md, "payment_status": "initiated",
+           "idempotency_key": key,
+           "snapshot": {"plan_id": plan.id, "tier": plan.tier, "duration_months": months,
+                        "pricing_version": pv, "idempotency_key": key},
+           "rebuilt_from_metadata": True, "rebuilt_at": now, "created_at": now}
+    try:
+        await db.payment_transactions.update_one({"session_id": session_id}, {"$setOnInsert": doc}, upsert=True)
+    except Exception:  # noqa: BLE001 — a concurrent rebuild won the unique(session_id) upsert
+        pass
+    logger.warning("rebuilt payment_transactions row from Stripe metadata session=%s user=%s plan=%s",
+                   session_id, user_id, plan.id)
+    sub = await apply_successful_payment(session_id, **kw)
+    return {"outcome": "rebuilt", "subscription": sub}
 
 
 _CLAIM_STALE_MINUTES = 5
