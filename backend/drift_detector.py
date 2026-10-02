@@ -68,13 +68,19 @@ async def record_residual(
     session: str,
     p_predicted: float,
     outcome: int,
+    user_id: str | None = None,
+    account_id: str | None = None,
 ) -> None:
-    """Persist a single residual point. `outcome` ∈ {0,1}."""
+    """Persist a single residual point. `outcome` ∈ {0,1}. `user_id` /
+    `account_id` scope the residual so drift can retrain the owner's
+    scoped learned_meta model (learned_meta.retrain(user, account))."""
     if not DRIFT_ENABLED:
         return
     try:
         await db.learned_meta_residuals.insert_one({
             "trade_id": str(trade_id),
+            **({"user_id": str(user_id)} if user_id else {}),
+            **({"account_id": str(account_id)} if account_id else {}),
             "session": (session or "GLOBAL").upper(),
             "p_predicted": float(p_predicted),
             "outcome": int(1 if outcome else 0),
@@ -127,16 +133,29 @@ async def record_residual_for_trade(db, trade_id) -> bool:
         session = session_bucket(entered_at)
         outcome = 1 if float(trade.get("pnl") or 0) > 0 else 0
         await record_residual(db, trade_id=str(oid), session=session,
-                              p_predicted=float(p_pred), outcome=outcome)
+                              p_predicted=float(p_pred), outcome=outcome,
+                              user_id=trade.get("user_id"),
+                              account_id=trade.get("account_id"))
         return True
     except Exception as e:  # noqa: BLE001
         logger.debug("record_residual_for_trade failed (%s)", e)
         return False
 
 
-async def _fetch_residuals(db, session: str, limit: int) -> list[float]:
+def _scope_filter(user_id: str | None = None,
+                  account_id: str | None = None) -> dict:
+    q: dict = {}
+    if user_id:
+        q["user_id"] = str(user_id)
+        if account_id:
+            q["account_id"] = str(account_id)
+    return q
+
+
+async def _fetch_residuals(db, session: str, limit: int,
+                           scope: dict | None = None) -> list[float]:
     cur = db.learned_meta_residuals.find(
-        {"session": session.upper()},
+        {"session": session.upper(), **(scope or {})},
     ).sort("closed_at", -1).limit(limit)
     rows = await cur.to_list(length=limit)
     # We want chronological order for ADWIN (oldest → newest).
@@ -144,12 +163,12 @@ async def _fetch_residuals(db, session: str, limit: int) -> list[float]:
     return [float(r.get("residual") or 0.0) for r in rows]
 
 
-async def _check_session(db, session: str) -> dict:
+async def _check_session(db, session: str, scope: dict | None = None) -> dict:
     """Run ADWIN over the rolling window of one session's residuals.
 
     Returns {session, n, drift_detected, mean_residual, last_drift_at?}.
     """
-    series = await _fetch_residuals(db, session, WINDOW_SIZE)
+    series = await _fetch_residuals(db, session, WINDOW_SIZE, scope)
     n = len(series)
     out = {"session": session, "n": n, "drift_detected": False,
            "mean_residual": 0.0}
@@ -169,21 +188,32 @@ async def _check_session(db, session: str) -> dict:
     return out
 
 
-async def check_drift(db, sessions: Iterable[str] = ("ASIA", "LONDON", "NY", "GLOBAL")) -> dict:
-    """Read-only: compute drift status across sessions for inspection."""
+async def check_drift(db, sessions: Iterable[str] = ("ASIA", "LONDON", "NY", "GLOBAL"),
+                      *, user_id: str | None = None,
+                      account_id: str | None = None) -> dict:
+    """Read-only: compute drift status across sessions for inspection
+    (optionally over one user's / account's residuals only)."""
     if not DRIFT_ENABLED:
         return {"enabled": False, "sessions": {}}
+    scope = _scope_filter(user_id, account_id)
     results: dict = {}
     for sess in sessions:
-        results[sess] = await _check_session(db, sess)
+        results[sess] = await _check_session(db, sess, scope)
     return {"enabled": True, "sessions": results,
             "window_size": WINDOW_SIZE, "min_samples": MIN_RESIDUALS_PER_SESSION,
             "adwin_delta": ADWIN_DELTA}
 
 
-async def _cooldown_ok(db) -> tuple[bool, datetime | None]:
+def _cooldown_key(user_id: str | None = None,
+                  account_id: str | None = None) -> str:
+    if not user_id:
+        return "last_retrain"
+    return f"last_retrain:{user_id}:{account_id or '*'}"
+
+
+async def _cooldown_ok(db, key: str = "last_retrain") -> tuple[bool, datetime | None]:
     """Check whether the cooldown window has elapsed since the last retrain."""
-    last = await db.drift_detector_state.find_one({"key": "last_retrain"})
+    last = await db.drift_detector_state.find_one({"key": key})
     if not last:
         return True, None
     ts = last.get("at")
@@ -195,21 +225,61 @@ async def _cooldown_ok(db) -> tuple[bool, datetime | None]:
     return elapsed >= timedelta(hours=RETRAIN_COOLDOWN_HOURS), ts
 
 
-async def maybe_trigger_retrain(db) -> dict:
+# Upper bound on per-user scoped retrains fired by one GLOBAL drift event.
+MAX_SCOPED_RETRAINS = int(os.environ.get("DRIFT_MAX_SCOPED_RETRAINS", "25"))
+
+
+async def _scoped_retrains_for_drift(db, retrain) -> list:
+    """A global drift event also retrains every recently-active owner's
+    SCOPED model (learned_meta.retrain(user, account)) — the scoped
+    artifacts are what predict_p_win prefers. Advisory: never raises."""
+    out: list = []
+    try:
+        rows = await db.learned_meta_residuals.find(
+            {"user_id": {"$exists": True}},
+            {"user_id": 1, "account_id": 1},
+        ).sort("closed_at", -1).limit(WINDOW_SIZE).to_list(length=WINDOW_SIZE)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("scoped drift retrain scan failed (%s)", e)
+        return out
+    seen: list = []
+    for r in rows or []:
+        pair = (r.get("user_id"), r.get("account_id"))
+        if pair[0] and pair not in seen:
+            seen.append(pair)
+    for uid, acct in seen[:MAX_SCOPED_RETRAINS]:
+        try:
+            res = await retrain(uid, acct)
+            out.append({"user_id": uid, "account_id": acct,
+                        "trained": (res or {}).get("trained")})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("scoped drift retrain failed user=%s acct=%s: %s",
+                           uid, acct, e)
+    return out
+
+
+async def maybe_trigger_retrain(db, user_id: str | None = None,
+                                account_id: str | None = None) -> dict:
     """Run drift checks; if any session drifts AND cooldown elapsed, retrain.
+
+    With `user_id` (and optionally `account_id`) the drift check runs over
+    that owner's residuals only and the owner's SCOPED learned_meta model is
+    retrained; without, the global stream is checked and the legacy global
+    model plus every recently-active owner's scoped model are retrained.
 
     Returns audit dict suitable for logging / API response.
     """
     if not DRIFT_ENABLED:
         return {"checked": False, "reason": "drift detection disabled"}
 
-    status = await check_drift(db)
+    status = await check_drift(db, user_id=user_id, account_id=account_id)
     any_drift = any(s.get("drift_detected") for s in status["sessions"].values())
     if not any_drift:
         return {"checked": True, "drift": False, "retrained": False,
                 "status": status}
 
-    ok, last_at = await _cooldown_ok(db)
+    ckey = _cooldown_key(user_id, account_id)
+    ok, last_at = await _cooldown_ok(db, ckey)
     if not ok:
         return {"checked": True, "drift": True, "retrained": False,
                 "reason": f"cooldown active — last retrain at {last_at.isoformat()}",
@@ -217,8 +287,13 @@ async def maybe_trigger_retrain(db) -> dict:
 
     # Trigger retrain — local import to avoid circular dependency.
     from learned_meta import retrain
+    scoped: list = []
     try:
-        result = await retrain()
+        if user_id:
+            result = await retrain(user_id, account_id)
+        else:
+            result = await retrain()
+            scoped = await _scoped_retrains_for_drift(db, retrain)
     except Exception as e:  # noqa: BLE001
         logger.exception("Drift-triggered retrain failed")
         return {"checked": True, "drift": True, "retrained": False,
@@ -227,13 +302,17 @@ async def maybe_trigger_retrain(db) -> dict:
     # Persist cooldown anchor + audit.
     now = datetime.now(timezone.utc)
     await db.drift_detector_state.update_one(
-        {"key": "last_retrain"},
-        {"$set": {"at": now, "result": result, "trigger": "adwin_drift"}},
+        {"key": ckey},
+        {"$set": {"at": now, "result": result, "trigger": "adwin_drift",
+                  "user_id": user_id, "account_id": account_id}},
         upsert=True,
     )
     await db.drift_detector_audit.insert_one({
         "at": now, "status": status, "retrain_result": result,
+        "user_id": user_id, "account_id": account_id,
+        "scoped_retrains": scoped,
     })
     logger.warning("ADWIN drift → retrained learned_meta (trained=%s)", result.get("trained"))
     return {"checked": True, "drift": True, "retrained": True,
-            "retrain_result": result, "status": status}
+            "retrain_result": result, "status": status,
+            **({"scoped_retrains": scoped} if scoped else {})}

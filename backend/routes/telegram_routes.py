@@ -259,12 +259,20 @@ async def _cmd_panic(token, chat_id, user_id) -> None:
     bot_res = await db.bot_configs.update_many(
         {"user_id": user_id}, {"$set": {"active": False}}
     )
-    # Cancel pending trades
+    # Cancel pending trades (tagged so exactly these rows release exposure)
+    cancel_tag = f"tg_panic:{secrets.token_hex(6)}"
     cancel_res = await db.trades.update_many(
         {"user_id": user_id, "status": "pending"},
         {"$set": {"status": "cancelled", "closed_at": datetime.now(timezone.utc).isoformat(),
-                  "close_reason": "panic"}},
+                  "close_reason": "panic", "_cancel_tag": cancel_tag}},
     )
+    if getattr(cancel_res, "modified_count", 0):
+        try:
+            from routes.panic_routes import _release_cancelled
+            await _release_cancelled(db, cancel_tag)
+        except Exception as _e:  # noqa: BLE001 — rebuild heals a miss
+            logging.getLogger(__name__).warning(
+                "telegram panic exposure release failed: %s", _e)
     # Mark open for close
     from close_commands import request_close
     close_res = await request_close(db, {"user_id": user_id}, reason="panic", actor=f"telegram:{user_id}")

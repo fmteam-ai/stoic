@@ -266,14 +266,33 @@ class BinanceCCXTEngine(ExecutionEngine):
                     "cap_pct_used": cap_pct_used,
                     "cap_source": "per_account" if per_account_cap is not None else "env_default"}
 
-        # 4. Signed single-use order authorization (same as MT5).
-        from order_authorization import authorize_order
         _acct_id = str(account.get("_id") or account.get("account_id")
                        or cfg_account_id or "")
+
+        # 3b. ATOMIC EXPOSURE RESERVATION (execution_authority) — the count
+        # gate above is a cheap pre-filter; this is the race-free authority
+        # for slots + open stop risk, reserved BEFORE anything leaves STOIC.
+        # Crypto amounts are base-asset units, not lots: the stop risk is
+        # amount × |entry − stop| in quote currency (stop is mandatory).
+        rsv = await self._reserve_exposure(
+            db, user_id=user_id, account=account, acct_id=_acct_id,
+            cfg_account_id=cfg_account_id, symbol=symbol_internal,
+            amount=amount, risk_usd=crypto_risk_usd, safety=safety,
+            origin=signal.get("origin"), max_concurrent=max_concurrent)
+        if not rsv.get("ok"):
+            logger.warning(
+                "binance execute blocked by atomic exposure reservation "
+                "user=%s sym=%s: %s", user_id, ccxt_symbol, rsv.get("blocked"))
+            return {k: v for k, v in rsv.items() if k != "ok"}
+        reservation = rsv.get("reservation")
+
+        # 4. Signed single-use order authorization (same as MT5).
+        from order_authorization import authorize_order
         order_auth = await authorize_order(
             db, user_id=user_id, account_id=_acct_id,
             symbol=symbol_internal, side=action)
         if not order_auth.get("ok"):
+            await self._release(db, reservation)
             logger.warning("crypto execute blocked — order authorization failed "
                            "user=%s sym=%s: %s", user_id, symbol_internal,
                            order_auth.get("reason"))
@@ -294,6 +313,7 @@ class BinanceCCXTEngine(ExecutionEngine):
         entry_uncertain = None
         protect_result = None
         trade_doc: dict = {}
+        inserted = False
         try:
             async with BinanceClient(account) as client:
                 try:
@@ -332,8 +352,11 @@ class BinanceCCXTEngine(ExecutionEngine):
                 trade_doc["order_authorization"] = order_auth
                 if intent:
                     trade_doc["execution_intent_id"] = intent.get("intent_id")
+                if reservation:
+                    trade_doc["exposure_reservation"] = reservation
                 await self._enrich_and_insert(db, user_id, symbol_internal,
                                               signal, trade_doc)
+                inserted = True
                 await _intent_transition(
                     db, intent, "submitted",
                     detail=(f"crypto order {trade_doc['exchange_order_id'] or client_order_id} "
@@ -348,6 +371,9 @@ class BinanceCCXTEngine(ExecutionEngine):
                     protect_result = await protect_or_flatten(
                         db, client, account, trade_doc, entry_order=order_resp)
         except Exception as e:  # noqa: BLE001
+            if not inserted:
+                # no trade row exists → nothing will ever release this hold
+                await self._release(db, reservation)
             if not trade_doc.get("_id"):
                 logger.exception("Binance order placement failed: %s", e)
                 return {"blocked": "exchange_error",
@@ -374,6 +400,56 @@ class BinanceCCXTEngine(ExecutionEngine):
             pass
 
         return trade_doc
+
+    @staticmethod
+    async def _reserve_exposure(db, *, user_id, account, acct_id, cfg_account_id,
+                                symbol, amount, risk_usd, safety, origin,
+                                max_concurrent) -> dict:
+        """Reserve one slot + this entry's stop risk (quote-currency $) via
+        execution_authority.reserve_exposure. Same caps as the MT5 adapter
+        (execution.reserve_trade_exposure): auto slots < max_concurrent,
+        total < max_concurrent + EXEC_TOTAL_POSITIONS_BUFFER, and — when the
+        Safety Guardian ran its aggregate check — open risk ≤
+        SAFETY_MAX_TOTAL_OPEN_RISK_PCT of equity. Fails closed on db errors
+        (reserve_exposure returns a typed block)."""
+        from execution_authority import RESERVATIONS, reserve_exposure
+        if not callable(getattr(getattr(db, RESERVATIONS, None),
+                                "find_one_and_update", None)):
+            # Same semantics as reserve_exposure's ReservationStoreUnavailable
+            # (non-motor test double): the legacy count gate above already
+            # ran. A real motor collection always exposes this method, so
+            # production database errors still FAIL CLOSED below.
+            logger.error("exposure reservation store unavailable (db handle "
+                         "lacks find_one_and_update) — legacy count gate only")
+            return {"ok": True, "reservation": None,
+                    "skipped": "reservation_store_unavailable"}
+        equity = float(account.get("equity") or account.get("balance") or 0)
+        ctx = (safety or {}).get("context") or {}
+        max_risk = None
+        if ((safety or {}).get("ok") and ctx.get("aggregate_risk") is not None
+                and equity > 0):
+            from safety_guardian import MAX_TOTAL_OPEN_RISK_PCT
+            max_risk = equity * (MAX_TOTAL_OPEN_RISK_PCT / 100.0)
+        max_total = None
+        if max_concurrent > 0:
+            max_total = max_concurrent + int(os.environ.get(
+                "EXEC_TOTAL_POSITIONS_BUFFER", "2"))
+        return await reserve_exposure(
+            db, user_id=user_id, account_id=acct_id,
+            cfg_account_id=cfg_account_id, symbol=symbol or "",
+            lot=float(amount or 0), risk_usd=float(risk_usd or 0),
+            auto=origin == "auto", max_concurrent=max_concurrent,
+            max_total=max_total, max_risk_usd=max_risk, account=account)
+
+    @staticmethod
+    async def _release(db, reservation) -> None:
+        if not reservation:
+            return
+        try:
+            from execution_authority import release_reservation
+            await release_reservation(db, reservation)
+        except Exception as e:  # noqa: BLE001 — rebuild heals a miss
+            logger.warning("exposure reservation release failed: %s", e)
 
     @staticmethod
     async def _enrich_and_insert(db, user_id, symbol_internal, signal, trade_doc) -> None:

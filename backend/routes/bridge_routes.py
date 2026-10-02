@@ -17,6 +17,32 @@ from intelligence_counters import increment as inc_intel_counter
 from trade_reconciler import reconcile_account, reconcile_user
 from silent_failures import record_swallow
 
+_TERMINAL_TRADE_STATES = ("closed", "cancelled", "rejected", "error", "failed")
+
+
+async def _release_exposure(db, trade: dict | None) -> None:
+    """impr-wiring — free the trade's atomic exposure reservation (slot +
+    stop risk) once its status became terminal. Idempotent, never raises;
+    a miss is healed by the next rebuild_reservations tick."""
+    if not trade:
+        return
+    try:
+        from execution_authority import release_reservation
+        await release_reservation(db, trade)
+    except Exception as _sw:  # noqa: BLE001 — advisory, rebuild heals
+        record_swallow("bridge", "release_reservation", _sw)
+
+
+def _write_matched(res) -> bool:
+    """True when an update actually hit a document (test doubles without
+    counters are treated as matched)."""
+    for attr in ("matched_count", "modified_count"):
+        v = getattr(res, attr, None)
+        if isinstance(v, int):
+            return v > 0
+    return True
+
+
 async def _bridge_ip_throttle(request: Request) -> None:
     """r22: per-IP volume guard on the unauthenticated bridge surface (token
     guessing / probing). Generous enough for a VPS running many terminals."""
@@ -1034,6 +1060,8 @@ async def _cancel_stale_pending_opens(db, account_id: str, stale_cutoff: str) ->
     without reporting) are NOT cancelled — they are only excluded from
     re-dispatch so a late /bridge/report can still attach the ticket."""
     now_iso = datetime.now(timezone.utc).isoformat()
+    import uuid as _uuid
+    cancel_tag = f"stale:{_uuid.uuid4().hex[:12]}"
     res = await db.trades.update_many(
         {"account_id": account_id, "status": "pending",
          "mt5_ticket": None,
@@ -1045,9 +1073,21 @@ async def _cancel_stale_pending_opens(db, account_id: str, stale_cutoff: str) ->
                   "close_reason": "stale_pending",
                   "error": "stale_pending",
                   "submission_state": "cancelled_stale",
+                  "_stale_cancel_tag": cancel_tag,
                   "closed_at": now_iso}})
     n = int(getattr(res, "modified_count", 0) or 0)
     if n:
+        # release exactly the docs THIS update_many cancelled (tagged)
+        try:
+            rows = await db.trades.find(
+                {"_stale_cancel_tag": cancel_tag},
+                {"_id": 1, "account_id": 1, "user_id": 1,
+                 "exposure_reservation": 1}).to_list(length=None)
+        except Exception as _sw:  # noqa: BLE001 — rebuild heals a miss
+            record_swallow("bridge", "stale_cancel_release_fetch", _sw)
+            rows = []
+        for row in rows or []:
+            await _release_exposure(db, row)
         logger.warning("Cancelled %d stale pending open order(s) for account=%s "
                        "(older than %.0fs — not executing at market on a stale "
                        "signal)", n, account_id, _max_pending_open_age_s())
@@ -1130,12 +1170,14 @@ async def poll_trades(payload: PollRequest):
             stale = ((not lease_live) or ep != cur_epoch
                      or ep < int((owner or {}).get("max_order_epoch") or 0))
             if stale:
-                await db.trades.update_one(
+                _cres = await db.trades.update_one(
                     {"_id": t["_id"]},
                     {"$set": {"status": "cancelled",
                               "error": "stale_scalp_lease_epoch",
                               "close_reason": "stale_scalp_lease_epoch",
                               "closed_at": now_iso}})
+                if _write_matched(_cres):
+                    await _release_exposure(db, t)
                 logger.warning(
                     "rejected stale-epoch scalp order trade=%s epoch=%d "
                     "(owner epoch=%d, lease_live=%s)",
@@ -1840,7 +1882,10 @@ async def report_trade(payload: BridgeTradeReport):
                     close_reason = "take_profit" if profit_dir else "stop_loss"
             update["close_reason"] = close_reason
 
-    await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    _rres = await db.trades.update_one({"_id": ObjectId(payload.trade_id)},
+                                       {"$set": update})
+    if payload.status in _TERMINAL_TRADE_STATES and _write_matched(_rres):
+        await _release_exposure(db, trade)
     # Scalp fast-path reconciliation (EA v1.44). /bridge/report is the
     # OPERATIONAL acknowledgement path only: it feeds fill confirmation and
     # frees the position slot. Financial reconciliation (P&L, commission,
@@ -2388,6 +2433,10 @@ async def external_deal(payload: BridgeExternalDeal):
         if close_ack:
             update["close_command"] = close_ack
         await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
+        # Broker-side closes (SL/TP hit, manual close in the terminal) arrive
+        # here — free the trade's exposure hold. Idempotent, so the
+        # confirm-only path (already released via /report) is harmless.
+        await _release_exposure(db, existing)
         tid = str(existing["_id"])
         # Scalp fast-path AUTHORITATIVE financial reconciliation (round 5
         # item 1 / round 6 durable state): SIGNED profit/commission/swap +

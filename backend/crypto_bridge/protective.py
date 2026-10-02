@@ -360,6 +360,13 @@ async def flatten_and_close(db, client, account: dict, trade: dict,
             "exit_order_id": str(o.get("id") or ""),
             "protection": prot}
     r = await db.trades.update_one({"_id": tid, "status": "open"}, {"$set": sets})
+    if getattr(r, "modified_count", 1):
+        # impr-wiring — free the exposure reservation (idempotent, never raises)
+        try:
+            from execution_authority import release_reservation
+            await release_reservation(db, trade)
+        except Exception as e:  # noqa: BLE001 — rebuild heals a miss
+            logger.debug("exposure release failed for %s: %s", tid, e)
     await _audit(db, trade, "flattened", {"exit_price": exit_px, "pnl": pnl,
                                           "close_reason": close_reason,
                                           "stop_error": reason_detail})

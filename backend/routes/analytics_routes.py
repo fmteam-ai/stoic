@@ -417,18 +417,23 @@ async def refresh_auto_tune(user=Depends(get_current_user)):
 
 
 @router.post("/learned-meta/retrain")
-async def retrain_learned_meta(user=Depends(get_current_user)):
-    """Retrain the local logistic-regression classifier on the latest closed
-    trades. Returns the new artifact summary (or a reason if training was
-    skipped due to insufficient data)."""
-    res = await learned_retrain()
+async def retrain_learned_meta(account_id: str | None = None,
+                               user=Depends(get_current_user)):
+    """Retrain the local logistic-regression classifier on the CALLER's
+    latest closed trades (optionally one broker `account_id`). Artifacts are
+    scoped to that user/account — one user can no longer retrain (or read
+    from) the global model on everyone's data. Returns the new artifact
+    summary (or a reason if training was skipped due to insufficient data)."""
+    res = await learned_retrain(user["id"], account_id or None)
     return res
 
 
 @router.get("/learned-meta")
-async def get_learned_meta(user=Depends(get_current_user)):
-    """Inspect the currently-active learned classifier."""
-    art = await learned_artifact()
+async def get_learned_meta(account_id: str | None = None,
+                           user=Depends(get_current_user)):
+    """Inspect the currently-active learned classifier (scoped artifact
+    first — account → user → legacy global)."""
+    art = await learned_artifact(None, user["id"], account_id or None)
     if not art:
         return {"trained": False}
     # Don't expose mu/sd vectors — keep the response compact
@@ -463,10 +468,13 @@ async def get_drift_status(user=Depends(get_current_user)):
 
 
 @router.post("/learned-meta/drift/check-now")
-async def check_drift_now(user=Depends(get_current_user)):
-    """Force a drift check (respects cooldown). Returns whether a retrain fired."""
+async def check_drift_now(account_id: str | None = None,
+                          user=Depends(get_current_user)):
+    """Force a drift check over the CALLER's residuals (respects the
+    per-owner cooldown). A drift retrains the caller's scoped model only."""
     from drift_detector import maybe_trigger_retrain
     from database import get_db
     from entitlements import enforce_feature
     await enforce_feature(user, "drift_auto_retrain")
-    return await maybe_trigger_retrain(get_db())
+    return await maybe_trigger_retrain(get_db(), user_id=user["id"],
+                                       account_id=account_id or None)

@@ -105,6 +105,16 @@ async def _notify_closed(db, trade: dict, fields: dict) -> None:
         logger.debug("close notification failed: %s", e)
 
 
+async def _release_exposure(db, trade: dict) -> None:
+    """impr-wiring — free the trade's atomic exposure reservation after a
+    status-guarded close/cancel matched. Idempotent, never raises."""
+    try:
+        from execution_authority import release_reservation
+        await release_reservation(db, trade)
+    except Exception as e:  # noqa: BLE001 — rebuild_reservations heals a miss
+        logger.debug("exposure release failed for %s: %s", trade.get("_id"), e)
+
+
 async def _close(db, trade: dict, *, exit_price: float, reason: str,
                  exit_order: Optional[dict] = None, stats: dict) -> bool:
     """open → closed (status-guarded). Returns True if THIS call closed it."""
@@ -121,6 +131,7 @@ async def _close(db, trade: dict, *, exit_price: float, reason: str,
                                    {"$set": fields})
     if not getattr(r, "modified_count", 0):
         return False
+    await _release_exposure(db, trade)
     stats["closed"] += 1
     stats.setdefault("closed_by_reason", {}).setdefault(reason, 0)
     stats["closed_by_reason"][reason] += 1
@@ -162,6 +173,7 @@ async def _reconcile_entry(db, client, account: dict, trade: dict, stats: dict) 
                               "close_reason": "entry_not_found",
                               "exchange_order_status": "not_found"}})
                 if getattr(r, "modified_count", 0):
+                    await _release_exposure(db, trade)
                     stats["cancelled"] += 1
                     await _intent(db, trade, "failed_confirmed",
                                   "exchange truth: entry order not found")
@@ -196,6 +208,7 @@ async def _reconcile_entry(db, client, account: dict, trade: dict, stats: dict) 
                       "close_reason": "entry_" + ("cancelled" if st.startswith("cancel") else st),
                       "exchange_order_status": order.get("status")}})
         if getattr(r, "modified_count", 0):
+            await _release_exposure(db, trade)
             stats["cancelled"] += 1
             await _intent(db, trade, "cancelled", f"entry {st} with no fill")
     elif not trade.get("exchange_order_id") and order.get("id"):

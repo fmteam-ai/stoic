@@ -36,6 +36,7 @@ Engine-parameter learning already follows this pipeline via the Shadow Lab
 Every run is recorded in `learning_runs` for the pipeline UI.
 """
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("learning-pipeline")
@@ -320,11 +321,41 @@ async def _snapshot_version(db, user_id: str, model: str, coll: str):
         await db.model_versions.delete_one({"_id": old["_id"]})
 
 
+def meta_labeling_enabled() -> bool:
+    """META_LABELING_ENABLED (default true) — kill switch for the
+    triple-barrier meta-label retrain stage."""
+    return os.environ.get("META_LABELING_ENABLED", "true").strip().lower() \
+        not in ("0", "false", "no", "off")
+
+
+async def _meta_labeling_stage(db, user_id: str,
+                               account_id: str | None = None) -> dict:
+    """Retrain the triple-barrier meta-label model (meta_labeling.py) for
+    this owner. ADVISORY: any failure is logged and recorded on the run —
+    it must never block the rest of the pipeline or trading."""
+    if not meta_labeling_enabled():
+        return {"status": "disabled", "detail": "META_LABELING_ENABLED=false"}
+    try:
+        import meta_labeling
+        res = await meta_labeling.retrain(db, user_id, account_id)
+        res = res or {}
+        return {"status": "trained" if res.get("trained") else "skipped",
+                **{k: res.get(k) for k in ("n_events", "n", "n_pos", "reason",
+                                           "trained_at") if k in res}}
+    except Exception as e:  # noqa: BLE001 — advisory
+        logger.warning("meta-labeling retrain failed user=%s acct=%s: %s",
+                       user_id, account_id, e)
+        return {"status": f"failed: {e}"[:200]}
+
+
 # ---------------------------------------------------------- orchestration
 async def gated_retrain(db, user_id: str, trigger: str = "", *,
-                        n_tests: int = 1) -> dict:
+                        n_tests: int = 1,
+                        account_id: str | None = None) -> dict:
     """Full staged pass; writes an auditable `learning_runs` doc.
-    `n_tests` is forwarded to the ML validation stage (multiple-testing)."""
+    `n_tests` is forwarded to the ML validation stage (multiple-testing).
+    The triple-barrier meta-label model is retrained as an advisory stage
+    (`meta_labeling`, switch META_LABELING_ENABLED)."""
     run = {"user_id": user_id, "trigger": trigger, "at": _now(), "stages": {}}
     frz = await freeze_check(db, user_id)
     run["frozen"] = frz["frozen"]
@@ -351,6 +382,8 @@ async def gated_retrain(db, user_id: str, trigger: str = "", *,
                                     "detail": "snapshot kept for rollback"}
         except Exception as e:  # noqa: BLE001
             run["stages"][model] = {"status": f"failed: {e}"[:200]}
+    run["stages"]["meta_labeling"] = await _meta_labeling_stage(
+        db, user_id, account_id)
     await db.learning_runs.insert_one(dict(run))
     run.pop("_id", None)
     return run

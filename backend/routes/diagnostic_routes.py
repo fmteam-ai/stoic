@@ -353,13 +353,14 @@ async def _check_ea_config(db, user_id: str) -> dict:
                           f"{active_count}/{len(cfgs)} config(s) active"))
 
     # API keys
-    has_claude = bool(os.environ.get("EMERGENT_LLM_KEY"))
-    if has_claude:
-        checks.append(_mk("Claude (Emergent LLM key)", "pass", "Configured"))
+    from llm_client import backend as _llm_backend, is_configured as _llm_configured
+    if _llm_configured():
+        checks.append(_mk("Claude LLM", "pass",
+                          f"Configured ({_llm_backend()} backend)"))
     else:
-        checks.append(_mk("Claude (Emergent LLM key)", "fail",
-                          "Missing EMERGENT_LLM_KEY — AI signals disabled.",
-                          fix_label="Add EMERGENT_LLM_KEY in backend/.env"))
+        checks.append(_mk("Claude LLM", "fail",
+                          "No LLM credentials — AI signals disabled.",
+                          fix_label="Add ANTHROPIC_API_KEY (or EMERGENT_LLM_KEY) in backend/.env"))
 
     # Per-user Telegram (notifications collection)
     tg = await db.notifications.find_one({"user_id": user_id, "kind": "telegram"})
