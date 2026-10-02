@@ -196,19 +196,33 @@ class TestRefreshRotation:
             headers=hdrs2,
             timeout=10,
         )
-        assert r2.status_code == 401, f"replay of old refresh should 401, got {r2.status_code}: {r2.text}"
+        # Concurrent-refresh grace (second tab re-presenting the token the first tab just
+        # consumed): inside REFRESH_REUSE_GRACE_SECONDS the chain continues instead of
+        # revoking the family — the user is NOT logged out.
+        assert r2.status_code == 200, f"same-token re-present inside grace should continue the chain, got {r2.status_code}: {r2.text}"
+        newest = r2.cookies.get("refresh_token")
+        assert newest and newest not in (old_refresh, new_refresh)
 
-        # rotated successor should also be dead (family revoked on reuse)
+        # the intermediate successor was consumed by the grace continuation; the NEWEST head still works
         hdrs3 = {"X-CSRF-Token": new_csrf}
         if BYPASS:
             hdrs3["X-RateLimit-Bypass"] = BYPASS
         r3 = requests.post(
             f"{API}/auth/refresh",
-            cookies={"refresh_token": new_refresh, "csrf_token": new_csrf},
+            cookies={"refresh_token": newest, "csrf_token": new_csrf},
             headers=hdrs3,
             timeout=10,
         )
-        assert r3.status_code == 401, f"family should be revoked after reuse, successor got {r3.status_code}"
+        assert r3.status_code == 200, f"newest head must stay valid, got {r3.status_code}: {r3.text}"
+
+        # a FORGED/stolen token for a consumed jti is a genuine replay → 401 (family revoked)
+        r4 = requests.post(
+            f"{API}/auth/refresh",
+            cookies={"refresh_token": old_refresh[:-4] + "AAAA", "csrf_token": csrf_a},
+            headers=hdrs2,
+            timeout=10,
+        )
+        assert r4.status_code == 401
 
 
 # ---------- 4: Login rate limit ----------

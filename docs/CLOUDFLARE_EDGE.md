@@ -13,6 +13,12 @@ The app-side half is already implemented in code (iter-155):
 - `CF-Connecting-IP` support (`TRUST_CF_CONNECTING_IP=true` in prod env)
 - Session idle timeout (`SESSION_IDLE_TIMEOUT_MINUTES`) + new-IP login
   notification emails
+- Refresh-token rotation with reuse detection, plus a concurrent-refresh grace
+  window (`REFRESH_REUSE_GRACE_SECONDS`, default 60): two tabs whose access
+  tokens expire together no longer trip "reuse detected" and log the user out;
+  a token with a different hash, or re-presented after the window, still
+  revokes the whole family. Consumption is atomic (`find_one_and_update`), so
+  parallel refreshes mint exactly one live successor.
 - Existing layers: JWT cookies, per-endpoint app rate limits, step-up MFA,
   HMAC-signed host-agent commands, Ed25519-signed artifacts, audit chain
 

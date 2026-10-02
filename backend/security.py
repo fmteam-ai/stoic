@@ -1,6 +1,7 @@
 """Security hardening: Mongo-backed rate limiting, CSRF double-submit
 verification, and revocable refresh-token sessions with rotation + reuse
 detection. MongoDB is the shared store (no Redis in this stack)."""
+import asyncio
 import hashlib
 import os
 import secrets
@@ -194,11 +195,12 @@ def hash_token(token: str) -> str:
 
 async def create_session(db, user_id: str, request: Request | None = None,
                          family: str | None = None,
-                         session_id: str | None = None) -> dict:
+                         session_id: str | None = None,
+                         jti: str | None = None) -> dict:
     """Registers a new refresh-token session. Returns the claims to embed."""
     from auth import REFRESH_TOKEN_EXPIRE_DAYS
     now = datetime.now(timezone.utc)
-    claims = {"jti": uuid.uuid4().hex,
+    claims = {"jti": jti or uuid.uuid4().hex,
               "sid": session_id or uuid.uuid4().hex,
               "fam": family or uuid.uuid4().hex}
     await db.auth_sessions.insert_one({
@@ -222,7 +224,8 @@ async def stamp_session_token(db, jti: str, refresh_token: str) -> None:
 
 
 async def consume_and_rotate(db, payload: dict, presented_token: str,
-                             request: Request | None = None) -> dict | None:
+                             request: Request | None = None,
+                             _trusted: bool = False) -> dict | None:
     """Validates + rotates a session-tracked refresh token.
 
     Returns new claims on success, None on legacy tokens (no jti — accepted
@@ -258,20 +261,73 @@ async def consume_and_rotate(db, payload: dict, presented_token: str,
         except (ValueError, TypeError):
             pass
     if sess.get("consumed"):
-        await revoke_family(db, sess["family"], reason="refresh_token_reuse")
-        raise HTTPException(status_code=401,
-                            detail="Refresh token reuse detected — all "
-                                   "sessions in this chain were revoked")
-    if sess.get("token_hash") and sess["token_hash"] != hash_token(presented_token):
+        # Concurrent refresh (second tab / parallel 401s) re-presents the token the
+        # first refresh consumed moments ago. With a matching hash and inside a short
+        # grace window this is benign: continue the chain from its newest successor.
+        # A genuine replay (hash mismatch, outside grace, successor missing/revoked)
+        # still revokes the whole family.
+        head = await _grace_successor(db, sess, presented_token, _trusted)
+        if head is None:
+            await revoke_family(db, sess["family"], reason="refresh_token_reuse")
+            raise HTTPException(status_code=401,
+                                detail="Refresh token reuse detected — all "
+                                       "sessions in this chain were revoked")
+        sess, jti = head, head["jti"]
+    elif not _trusted and sess.get("token_hash") and sess["token_hash"] != hash_token(presented_token):
         raise HTTPException(status_code=401, detail="Invalid refresh token")
-    new_claims = await create_session(db, sess["user_id"], request,
-                                      family=sess["family"],
-                                      session_id=sess["session_id"])
-    await db.auth_sessions.update_one(
-        {"jti": jti, "consumed": False},
-        {"$set": {"consumed": True, "replaced_by_jti": new_claims["jti"],
-                  "last_used_at": datetime.now(timezone.utc).isoformat()}})
-    return new_claims
+    # Consume FIRST and atomically — a parallel refresh of the same jti loses the
+    # race here instead of minting a second live successor.
+    now_iso = datetime.now(timezone.utc).isoformat()
+    next_jti = uuid.uuid4().hex          # published with the consume so racers can follow the chain
+    won = await db.auth_sessions.find_one_and_update(
+        {"jti": jti, "consumed": False, "revoked": False},
+        {"$set": {"consumed": True, "consumed_at": now_iso, "last_used_at": now_iso,
+                  "replaced_by_jti": next_jti}})
+    if won is None:
+        sess = await db.auth_sessions.find_one({"jti": jti}) or sess
+        head = await _grace_successor(db, sess, presented_token, True)
+        if head is None:
+            raise HTTPException(status_code=401, detail="Invalid refresh token")
+        return await consume_and_rotate(db, {**payload, "jti": head["jti"]}, presented_token, request, _trusted=True)
+    return await create_session(db, sess["user_id"], request, family=sess["family"],
+                                session_id=sess["session_id"], jti=next_jti)
+
+
+REFRESH_REUSE_GRACE_SECONDS = int(os.environ.get("REFRESH_REUSE_GRACE_SECONDS", "60"))
+
+
+async def _grace_successor(db, sess: dict, presented_token: str,
+                           trusted: bool = False) -> dict | None:
+    """For a consumed session re-presented within the grace window (same token
+    hash, unless the caller already proved possession), returns the newest
+    unconsumed, unrevoked successor in its chain."""
+    if REFRESH_REUSE_GRACE_SECONDS <= 0:
+        return None
+    if not trusted and (not sess.get("token_hash") or sess["token_hash"] != hash_token(presented_token)):
+        return None
+    stamp = sess.get("consumed_at") or sess.get("last_used_at")
+    try:
+        consumed_dt = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
+        if consumed_dt.tzinfo is None:
+            consumed_dt = consumed_dt.replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        return None
+    if (datetime.now(timezone.utc) - consumed_dt).total_seconds() > REFRESH_REUSE_GRACE_SECONDS:
+        return None
+    cur, hops = sess, 0
+    while cur.get("consumed") and cur.get("replaced_by_jti") and hops < 10:
+        nxt = None
+        for _ in range(20):              # successor is inserted right after the consume — may still be in flight
+            nxt = await db.auth_sessions.find_one({"jti": cur["replaced_by_jti"]})
+            if nxt is not None:
+                break
+            await asyncio.sleep(0.05)
+        cur, hops = nxt, hops + 1
+        if cur is None or cur.get("revoked"):
+            return None
+    if cur.get("consumed") or cur.get("revoked") or cur["jti"] == sess["jti"]:
+        return None
+    return cur
 
 
 async def revoke_family(db, family: str, reason: str) -> int:

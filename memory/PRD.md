@@ -3048,3 +3048,14 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
   paths, nothing when dockerd down) run first in reap_zombies; zombie removal unmounts all host paths of the
   layer. Standalone `deploy/docker-orphan-mounts.sh [--apply]`; doctor.sh fails while orphans exist.
 - host-mount-fix.sh now classifies copies shared/private/slave.
+
+## Session logout after ~30 min — FIXED (June 2026, user verification pending)
+- Cause: refresh-token rotation reuse detection. Two tabs' access tokens (30 min) expire together → both
+  POST /auth/refresh with the same cookie → second one is "reuse" → whole family revoked → logged out.
+- Fix (security.py): consume is atomic (find_one_and_update publishes replaced_by_jti); a consumed token
+  re-presented with the same hash within REFRESH_REUSE_GRACE_SECONDS (60) continues the chain from the
+  newest successor; forged/late replays still revoke the family. Tests: tests/test_refresh_rotation_grace.py
+  (incl. 4-way concurrent), test_iter57 replay test updated. Docs: CLOUDFLARE_EDGE.md, .env.example.
+- Security audit (this session): CONDITIONAL PASS, no Critical/High; SEC-001 LOW open + 4 P3 deploy-script
+  hardening items (env-inherited onboarding policy, PATH-prepend perms assert, mount sweep scoped to docker
+  root ids, eval in host-python-fix.sh). User decision pending.
