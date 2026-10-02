@@ -77,6 +77,16 @@ class BinanceCCXTEngine(ExecutionEngine):
                            user_id, signal.get("symbol"), ent_block.get("reason"))
             return ent_block
 
+        # Real-money gates on the BOT path too (previously only the manual
+        # route checked BINANCE_LIVE_ENABLED, and no-sandbox exchanges sent
+        # "testnet" orders to the live venue).
+        from crypto_bridge.ccxt_engine import orders_blocked_reason
+        _ob = orders_blocked_reason(account)
+        if _ob:
+            logger.warning("binance execute blocked user=%s sym=%s: %s",
+                           user_id, signal.get("symbol"), _ob)
+            return {"blocked": "crypto_live_gate", "reason": _ob}
+
         symbol_internal = signal["symbol"]
         ccxt_symbol = normalize_symbol(symbol_internal)
         action = (signal.get("action") or "").upper()
@@ -161,15 +171,22 @@ class BinanceCCXTEngine(ExecutionEngine):
         # 4. Smart-routed order.
         order_type, limit_price = _smart_route(signal)
         order_resp: dict = {}
+        # Deterministic client order id (alphanumeric, ≤32 chars for OKX) so
+        # a retried submission of the same signal can't double-fill.
+        _cid_src = str(signal.get("signal_id") or signal.get("decision_id") or "")
+        _cid_src = "".join(ch for ch in _cid_src if ch.isalnum())
+        client_order_id = f"stoic{_cid_src}"[:32] if _cid_src else None
         try:
             async with BinanceClient(account) as client:
                 if order_type == "limit":
                     order_resp = await client.create_limit_order(
                         ccxt_symbol, side, amount, limit_price,
+                        client_order_id=client_order_id,
                     )
                 else:
                     order_resp = await client.create_market_order(
                         ccxt_symbol, side, amount,
+                        client_order_id=client_order_id,
                     )
         except Exception as e:  # noqa: BLE001
             logger.exception("Binance order placement failed: %s", e)
@@ -214,6 +231,7 @@ class BinanceCCXTEngine(ExecutionEngine):
             "testnet": _is_testnet(account),
             "mt5_ticket": None,
             "exchange_order_id": str(order_resp.get("id") or ""),
+            "client_order_id": client_order_id,
             "exchange_order_status": order_resp.get("status"),
             "opened_at": datetime.now(timezone.utc).isoformat(),
             "closed_at": None,

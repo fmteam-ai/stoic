@@ -185,20 +185,43 @@ def _new_exchange(account: dict):
     klass = getattr(ccxt, meta["klass"])
     ex = klass(config)
 
+    ex._stoic_unsandboxed_testnet = False
     if _is_testnet(account):
         if meta["sandbox"]:
             ex.set_sandbox_mode(True)
             logger.debug("%s instance using SANDBOX", meta["label"])
         else:
-            # Kraken / Binance.US have no public sandbox — log + proceed live
-            # (any orders are still blocked by the global BINANCE_LIVE_ENABLED
-            # gate at the route layer, so this is a no-op for execution).
+            # Kraken / Binance.US have no public sandbox — the instance talks
+            # to LIVE endpoints. Reads are allowed; every ORDER write on this
+            # instance is refused (see CCXTClient._assert_orders_allowed) so a
+            # testnet-flagged account can never place a real order.
+            ex._stoic_unsandboxed_testnet = True
             logger.warning(
-                "%s has no sandbox; account marked testnet will use live "
-                "endpoints but route-layer gates still block real orders.",
+                "%s has no sandbox; account marked testnet uses live endpoints "
+                "for reads only — order placement is BLOCKED.",
                 meta["label"],
             )
     return ex
+
+
+def orders_blocked_reason(account: dict) -> Optional[str]:
+    """Why order placement must be refused for this account, or None.
+
+    • testnet (incl. live-disabled) on an exchange with NO sandbox → the
+      orders would hit the real exchange.
+    • account not flagged testnet while the BINANCE_LIVE_ENABLED master
+      switch is off (mirrors the manual route gate in crypto_routes).
+    """
+    exchange_id = (account.get("exchange_id") or DEFAULT_EXCHANGE_ID).lower()
+    meta = EXCHANGES.get(exchange_id)
+    if not meta:
+        return f"unsupported exchange '{exchange_id}'"
+    if not account.get("testnet") and not _live_enabled():
+        return "live crypto execution disabled (BINANCE_LIVE_ENABLED=false)"
+    if _is_testnet(account) and not meta["sandbox"]:
+        return (f"{meta['label']} has no sandbox — testnet/paper account "
+                f"cannot place orders (would execute on the live exchange)")
+    return None
 
 
 # ────────────────────────────── Client ──────────────────────────────
@@ -236,11 +259,31 @@ class CCXTClient:
         return await self.exchange.fetch_open_orders(symbol)
 
     # ------- write -------
-    async def create_market_order(self, symbol: str, side: str, amount: float) -> dict:
-        return await self.exchange.create_order(symbol, "market", side.lower(), amount)
+    def _assert_orders_allowed(self) -> None:
+        if getattr(self.exchange, "_stoic_unsandboxed_testnet", False):
+            raise RuntimeError(
+                "order refused: testnet account on an exchange without a "
+                "sandbox would execute on the LIVE exchange")
 
-    async def create_limit_order(self, symbol: str, side: str, amount: float, price: float) -> dict:
-        return await self.exchange.create_order(symbol, "limit", side.lower(), amount, price)
+    @staticmethod
+    def _order_params(client_order_id: Optional[str]) -> dict:
+        # ccxt unified `clientOrderId` — deterministic per intent so a retry
+        # of the same order is rejected as a duplicate by the exchange.
+        return {"clientOrderId": client_order_id} if client_order_id else {}
+
+    async def create_market_order(self, symbol: str, side: str, amount: float,
+                                  client_order_id: Optional[str] = None) -> dict:
+        self._assert_orders_allowed()
+        return await self.exchange.create_order(
+            symbol, "market", side.lower(), amount, None,
+            self._order_params(client_order_id))
+
+    async def create_limit_order(self, symbol: str, side: str, amount: float, price: float,
+                                 client_order_id: Optional[str] = None) -> dict:
+        self._assert_orders_allowed()
+        return await self.exchange.create_order(
+            symbol, "limit", side.lower(), amount, price,
+            self._order_params(client_order_id))
 
     async def cancel_order(self, order_id: str, symbol: str) -> dict:
         return await self.exchange.cancel_order(order_id, symbol)

@@ -38,8 +38,10 @@ def _trades_weekends(symbol) -> bool:
 
 
 def _notional(symbol: str, lot: float, price: float) -> float:
-    base = (symbol or "").upper()
-    return float(lot) * float(price) * (100 if "XAU" in base else 1)
+    # Canonical registry (instruments.py) — the old `lot × price × (100 if
+    # gold else 1)` understated FX notional by ~100,000×.
+    from instruments import notional_usd
+    return notional_usd(symbol, lot, price)
 
 
 def leverage_check(equity, symbol, lot, price, bars, uncertainty,
@@ -178,8 +180,14 @@ async def cvar_budget_check(open_trades, new_position, equity,
         if not slp or entry <= 0 or lot <= 0:
             all_stopped = False
             break
-        contract = 100 if (p.get("symbol") or "").upper() in ("XAUUSD", "GOLD") else 1
-        bounded += abs(entry - float(slp)) * lot * contract * 1.5
+        # USD loss at the stop via the canonical pip helpers (broker-suffix
+        # aware; FX uses the 100k contract instead of an implicit ×1).
+        from pip_utils import price_to_pips, pip_value_usd_per_lot
+        _sym = p.get("symbol") or ""
+        stop_usd = (price_to_pips(_sym, abs(entry - float(slp)))
+                    * pip_value_usd_per_lot(_sym, "standard", price=entry)
+                    * lot)
+        bounded += stop_usd * 1.5
     if all_stopped and equity > 0:
         bounded_pct = 100.0 * bounded / equity
         if bounded_pct <= budget_pct:

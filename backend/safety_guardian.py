@@ -133,7 +133,7 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     audit.append(_ok("risk_inputs_present",
                      value=f"lot={lot} entry={entry} sl={sl}"))
     sl_pips = price_to_pips(sym, abs(entry - sl))
-    pip_usd = pip_value_usd_per_lot(sym, account.get("account_type"))
+    pip_usd = pip_value_usd_per_lot(sym, account.get("account_type"), price=entry)
     # FAIL CLOSED (audit E8): an unknown pip value would silently understate
     # risk — refuse the trade instead of guessing.
     if not pip_usd or pip_usd <= 0 or not sl_pips or sl_pips <= 0:
@@ -177,13 +177,18 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     # never silently truncated by a fixed to_list cap.
     day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     realized_today = 0.0
-    if cfg_account_id:
-        async for g in db.trades.aggregate([
-                {"$match": {"user_id": user_id, "status": "closed",
-                            "origin": "auto", "account_id": cfg_account_id,
-                            "closed_at": {"$gte": day_start}}},
-                {"$group": {"_id": None, "pnl": {"$sum": "$pnl"}}}]):
-            realized_today = float(g.get("pnl") or 0)
+    # Default-profile bots have cfg_account_id=None — fall back to the
+    # executing account's id (trades store str(account["_id"])) so the
+    # daily loss cap is never silently computed over nothing.
+    acct_id = cfg_account_id or (str(account["_id"]) if account.get("_id") else None)
+    rt_match = {"user_id": user_id, "status": "closed",
+                "origin": "auto", "closed_at": {"$gte": day_start}}
+    if acct_id:
+        rt_match["account_id"] = acct_id
+    async for g in db.trades.aggregate([
+            {"$match": rt_match},
+            {"$group": {"_id": None, "pnl": {"$sum": "$pnl"}}}]):
+        realized_today = float(g.get("pnl") or 0)
     max_daily_loss = -(balance * (MAX_DAILY_LOSS_PCT / 100.0))
     if realized_today < max_daily_loss:
         audit.append(_fail("daily_loss_cap",
@@ -197,9 +202,10 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
 
     # 7. Total open risk (sum of remaining SL risk on all open trades + this
     # trade) — uncapped cursor scan (audit E7): no silent truncation.
-    open_q = {"user_id": user_id, "status": "open"}
-    if cfg_account_id:
-        open_q["account_id"] = cfg_account_id
+    # `pending` orders are queued for the EA and carry real risk too.
+    open_q = {"user_id": user_id, "status": {"$in": ["open", "pending"]}}
+    if acct_id:
+        open_q["account_id"] = acct_id
     open_risk_usd = 0.0
     open_count = 0
     async for t in db.trades.find(
@@ -213,9 +219,16 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
             t_sym = t.get("symbol") or ""
             if t_lot > 0 and t_entry > 0 and t_sl > 0:
                 t_pips = price_to_pips(t_sym, abs(t_entry - t_sl))
-                t_pip_usd = pip_value_usd_per_lot(t_sym, account.get("account_type"))
+                t_pip_usd = pip_value_usd_per_lot(t_sym, account.get("account_type"),
+                                                  price=t_entry)
                 open_risk_usd += t_pips * t_pip_usd * t_lot
+            elif t_lot > 0:
+                # No usable stop → risk is unbounded; charge the per-trade
+                # maximum rather than $0 so it still counts toward the cap.
+                open_risk_usd += equity * (MAX_RISK_PCT_PER_TRADE / 100.0)
         except Exception:
+            # Unparseable position — count it conservatively, never as 0.
+            open_risk_usd += equity * (MAX_RISK_PCT_PER_TRADE / 100.0)
             continue
     aggregate_risk = open_risk_usd + risk_usd
     max_total_risk = equity * (MAX_TOTAL_OPEN_RISK_PCT / 100.0)

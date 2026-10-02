@@ -259,9 +259,11 @@ async def test_engine_places_limit_order_when_hinted():
             signal=sig, cfg_account_id="acc1",
         )
 
-    fake_client.create_limit_order.assert_awaited_once_with(
-        "BTC/USDT", "buy", 0.001, 59500.0,
-    )
+    fake_client.create_limit_order.assert_awaited_once()
+    args, kwargs = fake_client.create_limit_order.await_args
+    assert args[:4] == ("BTC/USDT", "buy", 0.001, 59500.0)
+    # review fix: a deterministic client order id makes retries idempotent
+    assert str(kwargs.get("client_order_id") or "").startswith("stoic")
     persisted = db.trades.insert_one.await_args[0][0]
     assert persisted["status"] == "pending"  # limit order not filled yet
     assert result.get("exchange_order_id") == "LIM456"

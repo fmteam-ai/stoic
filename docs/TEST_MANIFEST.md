@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 646 |
+| unit | pure logic, no external I/O | every CI job | 705 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3803 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3805 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4660 tests across 480 files.**
+**Total: 4721 tests across 485 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -33,7 +33,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter105_liquidity_map.py` | http-live | 13 |
 | `backend/tests/test_iter105_shadow_readiness.py` | http-live | 7 |
 | `backend/tests/test_iter105_shadow_readiness_http.py` | http-live | 6 |
-| `backend/tests/test_iter106_news_understanding.py` | http-live | 12 |
+| `backend/tests/test_iter106_news_understanding.py` | http-live | 14 |
 | `backend/tests/test_iter106_phase2.py` | http-live | 5 |
 | `backend/tests/test_iter107_calendar_intel.py` | http-live | 13 |
 | `backend/tests/test_iter108_ml_ensemble.py` | http-live | 7 |
@@ -491,6 +491,11 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_r28_chart_provenance.py` | unit | 2 |
 | `backend/tests/unit/test_r30_ea_release_chain.py` | unit | 4 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
+| `backend/tests/unit/test_review_exec_fixes.py` | unit | 23 |
+| `backend/tests/unit/test_review_lease_keeper.py` | unit | 2 |
+| `backend/tests/unit/test_review_llm_and_calibration.py` | unit | 10 |
+| `backend/tests/unit/test_review_quant_fixes.py` | unit | 9 |
+| `backend/tests/unit/test_review_sec_fixes.py` | unit | 15 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 23 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |

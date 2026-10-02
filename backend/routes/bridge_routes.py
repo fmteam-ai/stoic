@@ -347,19 +347,26 @@ async def heartbeat(payload: BridgeHeartbeat):
         # is stale → use the count as ground truth and let reconcile close
         # the leftovers in DB. (When positions reports MORE we keep the
         # tickets list — safer to under-close than to over-close.)
+        # FAIL SAFE: a count/ticket disagreement means this heartbeat's
+        # position view is untrustworthy. Previously tickets were forced to
+        # [] and reconciled — marking LIVE trades closed in the DB (they then
+        # run unmanaged at the broker). Skip ticket-level reconciliation for
+        # this heartbeat instead; the next consistent heartbeat (or a
+        # deliberate Force Sync) reconciles.
         ea_positions_count = payload.open_positions
-        if (ea_positions_count is not None
-                and ea_positions_count < len(tickets)):
+        ticket_count_mismatch = (ea_positions_count is not None
+                                 and ea_positions_count < len(tickets))
+        if ticket_count_mismatch:
             logger.warning(
-                "EA stale-tickets detected: positions=%s but %s tickets reported "
-                "for account=%s. Treating tickets as []; user should upgrade EA "
-                "to v1.26 for OnTradeTransaction + history sweep.",
+                "EA ticket-count mismatch: positions=%s but %s tickets reported "
+                "for account=%s — skipping reconciliation for this heartbeat "
+                "(not closing any trades). User should upgrade EA to v1.26 for "
+                "OnTradeTransaction + history sweep.",
                 ea_positions_count, len(tickets), str(acc["_id"]),
             )
-            tickets = []  # force orphan sweep; revive sweep also skipped below
-
-        set_doc["open_tickets"] = tickets
-        set_doc["open_tickets_updated_at"] = now_iso
+        else:
+            set_doc["open_tickets"] = tickets
+            set_doc["open_tickets_updated_at"] = now_iso
 
         # TICKET-LEVEL AUTO-REVIVE: if STOIC has closed a trade but the
         # broker is still reporting its ticket as open, STOIC was wrong.
@@ -371,7 +378,7 @@ async def heartbeat(payload: BridgeHeartbeat):
         #
         # Skip when tickets is empty after stale detection — otherwise we
         # would loop-revive trades the broker has actually closed.
-        if tickets:
+        if tickets and not ticket_count_mismatch:
             revive_candidates = await db.trades.find({
                 "account_id": str(acc["_id"]),
                 "mt5_ticket": {"$in": tickets},
@@ -400,9 +407,15 @@ async def heartbeat(payload: BridgeHeartbeat):
                 )
 
         # Auto-reconcile on every heartbeat — closes orphans within ~5s of EA tick.
-        reconcile_summary = await reconcile_account(
-            str(acc["_id"]), tickets, source="heartbeat",
-        )
+        if ticket_count_mismatch:
+            reconcile_summary = {"skipped": "ticket_count_mismatch",
+                                 "closed_count": 0,
+                                 "open_positions": ea_positions_count,
+                                 "open_tickets_reported": len(tickets)}
+        else:
+            reconcile_summary = await reconcile_account(
+                str(acc["_id"]), tickets, source="heartbeat",
+            )
 
     # iter-46 · Auto-heal: if closed trades carry estimated/unknown P&L, queue
     # a deep history sync so the EA re-pushes exact broker figures. Throttled
@@ -883,6 +896,44 @@ async def receive_dom(payload: BridgeDom):
     return {"status": "ok", "stored": len(bids) + len(asks)}
 
 
+def _max_pending_open_age_s() -> float:
+    try:
+        return float(os.environ.get("MAX_PENDING_OPEN_AGE_S", "120"))
+    except ValueError:
+        return 120.0
+
+
+def _stale_pending_open_cutoff_iso() -> str:
+    return (datetime.now(timezone.utc)
+            - timedelta(seconds=_max_pending_open_age_s())).isoformat()
+
+
+async def _cancel_stale_pending_opens(db, account_id: str, stale_cutoff: str) -> int:
+    """Cancel never-dispatched NEW-position orders older than the max
+    pending age. Orders already dispatched (the EA may have filled them
+    without reporting) are NOT cancelled — they are only excluded from
+    re-dispatch so a late /bridge/report can still attach the ticket."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    res = await db.trades.update_many(
+        {"account_id": account_id, "status": "pending",
+         "mt5_ticket": None,
+         "close_requested": {"$ne": True},
+         "opened_at": {"$lt": stale_cutoff},
+         "$or": [{"_dispatched_at": {"$exists": False}},
+                 {"_dispatched_at": None}]},
+        {"$set": {"status": "cancelled",
+                  "close_reason": "stale_pending",
+                  "error": "stale_pending",
+                  "submission_state": "cancelled_stale",
+                  "closed_at": now_iso}})
+    n = int(getattr(res, "modified_count", 0) or 0)
+    if n:
+        logger.warning("Cancelled %d stale pending open order(s) for account=%s "
+                       "(older than %.0fs — not executing at market on a stale "
+                       "signal)", n, account_id, _max_pending_open_age_s())
+    return n
+
+
 @router.post("/poll-trades")
 async def poll_trades(payload: PollRequest):
     db = get_db()
@@ -903,6 +954,12 @@ async def poll_trades(payload: PollRequest):
     # never lands), the lock auto-expires and the trade gets re-dispatched.
     DISPATCH_LOCK_SEC = 30
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=DISPATCH_LOCK_SEC)).isoformat()
+    # STALE-OPEN GUARD: a NEW-position order queued long ago (EA offline,
+    # reconnects hours later) must never be executed at market on a stale
+    # signal. Only applies to opens (no ticket, no close command) — close /
+    # modify commands on live tickets are always dispatched.
+    stale_open_cutoff = _stale_pending_open_cutoff_iso()
+    await _cancel_stale_pending_opens(db, str(acc["_id"]), stale_open_cutoff)
     out = []
     # Loop up to 20 times, each iteration atomically claims one pending doc.
     for _ in range(20):
@@ -910,10 +967,17 @@ async def poll_trades(payload: PollRequest):
             {
                 "account_id": str(acc["_id"]),
                 "status": "pending",
-                "$or": [
-                    {"_dispatched_at": {"$exists": False}},
-                    {"_dispatched_at": None},
-                    {"_dispatched_at": {"$lt": cutoff}},
+                "$and": [
+                    {"$or": [
+                        {"_dispatched_at": {"$exists": False}},
+                        {"_dispatched_at": None},
+                        {"_dispatched_at": {"$lt": cutoff}},
+                    ]},
+                    {"$or": [
+                        {"mt5_ticket": {"$ne": None}},
+                        {"close_requested": {"$eq": True}},  # read filter
+                        {"opened_at": {"$gte": stale_open_cutoff}},
+                    ]},
                 ],
             },
             {"$set": {"_dispatched_at": datetime.now(timezone.utc).isoformat(),

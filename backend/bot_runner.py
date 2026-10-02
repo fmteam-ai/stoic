@@ -30,7 +30,7 @@ from friday_flat import sweep_all as sweep_friday_flat, in_friday_flat_window
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
-from risk import get_profile, compute_lot_for_account
+from risk import get_profile, compute_lot_for_account, floor_lot, scale_lot
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
@@ -81,6 +81,33 @@ def _sl_cooldown_minutes_default() -> int:
     return int(os.environ.get("SL_COOLDOWN_MIN", "45"))
 
 
+def _sym_match(sym: str) -> dict:
+    """Match a trade by its plain symbol OR its broker-suffixed form.
+
+    execution.py stores the broker symbol (e.g. XAUUSD-ECN) in `symbol`
+    and the plain one in `base_symbol`; guards querying by the plain
+    symbol must match both or they silently never fire.
+    """
+    return {"$or": [{"symbol": sym}, {"base_symbol": sym}]}
+
+
+def _suggested_sl_valid(action, entry, current_sl, suggested_sl) -> bool:
+    """A suggested stop may only TIGHTEN the stop while staying on the
+    correct side of entry: BUY current_sl < suggested < entry, SELL
+    entry < suggested < current_sl. Anything else is rejected."""
+    try:
+        e, c, g = float(entry), float(current_sl), float(suggested_sl)
+    except (TypeError, ValueError):
+        return False
+    if e <= 0 or c <= 0 or g <= 0:
+        return False
+    if action == "BUY":
+        return c < g < e
+    if action == "SELL":
+        return e < g < c
+    return False
+
+
 async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int,
                           account_id: str | None = None) -> dict | None:
     """If the most recent trade for (user, symbol) was a stop-out within
@@ -91,7 +118,7 @@ async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int,
         return None
     q = {
         "user_id": user_id,
-        "symbol": symbol,
+        **_sym_match(symbol),
         "status": "closed",
         "origin": "auto",
         "close_reason": "stop_loss",
@@ -597,9 +624,11 @@ async def _process_user_account_locked(db, cfg: dict):
             day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             tod_q = {
                 "user_id": user_id,
-                "symbol": sym,
+                **_sym_match(sym),
                 "origin": "auto",
-                "created_at": {"$gte": day_start.isoformat()},
+                # Trade docs carry `opened_at` (execution.py); `created_at`
+                # never exists on them so the cap could never trip.
+                "opened_at": {"$gte": day_start.isoformat()},
             }
             if cfg_account_id:
                 tod_q["account_id"] = cfg_account_id
@@ -1295,7 +1324,9 @@ async def _process_user_account_locked(db, cfg: dict):
                             await inc_intel_counter(user_id, "prob_ev_block")
                             continue
                     if pf_mode == "enforce":
-                        if pe.get("suggested_sl"):
+                        if pe.get("suggested_sl") and _suggested_sl_valid(
+                                signal["action"], signal.get("entry_price"),
+                                signal.get("stop_loss"), pe["suggested_sl"]):
                             signal["stop_loss"] = pe["suggested_sl"]
                             signal["prob_sl_applied"] = True
                         if pe["lot_multiplier"] < 1.0:
@@ -1551,7 +1582,7 @@ async def _process_user_account_locked(db, cfg: dict):
         # direction pyramiding. Per-account scope to mirror inflight counting.
         pyramid_q = {
             "user_id": user_id,
-            "symbol": sym,
+            **_sym_match(sym),
             "action": signal["action"],
             "status": {"$in": ["pending", "open"]},
             "origin": "auto",
@@ -1575,7 +1606,7 @@ async def _process_user_account_locked(db, cfg: dict):
         LOSS_STREAK_COOLDOWN_HRS = 4
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=LOSS_STREAK_COOLDOWN_HRS)).isoformat()
         ls_q = {
-            "user_id": user_id, "symbol": sym, "action": signal["action"],
+            "user_id": user_id, **_sym_match(sym), "action": signal["action"],
             "status": "closed", "origin": "auto", "closed_at": {"$gte": cutoff},
         }
         if cfg.get("account_id"):
@@ -1833,7 +1864,7 @@ async def _process_user_account_locked(db, cfg: dict):
         # When max_lot_size is 0 (unset), fall back to absolute Kelly sizing.
         if _kelly_on and max_lot_cap > 0 and kelly_cap > 0:
             conf_scale = min(kelly_f / kelly_cap, 1.0) if kelly_f > 0 else 0.0
-            scaled_lot = max(round(max_lot_cap * conf_scale, 2), 0.01)
+            scaled_lot = floor_lot(max_lot_cap * conf_scale)
             # Pick the smaller of: absolute Kelly lot vs confidence-scaled cap.
             effective_lot = min(absolute_lot, scaled_lot)
             sizing_method = "max_cap_kelly_scaled"
@@ -1848,7 +1879,7 @@ async def _process_user_account_locked(db, cfg: dict):
         _md_mult = float((signal.get("meta_decision") or {})
                          .get("risk_multiplier") or 1.0)
         if 0 < _md_mult < 1.0:
-            effective_lot = max(0.01, round(effective_lot * _md_mult, 2))
+            effective_lot = scale_lot(effective_lot, _md_mult)
             sizing_method = f"{sizing_method}+meta_x{_md_mult}"
         # Portfolio Risk Brain — marginal contribution to the WHOLE
         # portfolio (correlated cluster / currency factor / stress), never
@@ -1896,8 +1927,8 @@ async def _process_user_account_locked(db, cfg: dict):
                                         signal=signal)
                     continue
                 if _pv["verdict"] == "REDUCE":
-                    effective_lot = max(0.01, round(
-                        effective_lot * float(_pv["approved_fraction"]), 2))
+                    effective_lot = scale_lot(
+                        effective_lot, float(_pv["approved_fraction"]))
                     sizing_method = (f"{sizing_method}+portfolio_x"
                                      f"{_pv['approved_fraction']}")
             except Exception as e:  # noqa: BLE001
@@ -1909,7 +1940,7 @@ async def _process_user_account_locked(db, cfg: dict):
                                error=str(e))
                 except Exception:  # noqa: BLE001
                     pass
-                effective_lot = max(0.01, round(effective_lot * 0.5, 2))
+                effective_lot = scale_lot(effective_lot, 0.5)
                 sizing_method = f"{sizing_method}+degraded_portfolio_x0.5"
 
         # Pre-Trade Digital Twin (v60) — simulate before committing
@@ -1945,9 +1976,8 @@ async def _process_user_account_locked(db, cfg: dict):
                                         reason=_msg, signal=signal)
                     continue
                 if _tw["verdict"] == "REDUCE":
-                    effective_lot = max(0.01, round(
-                        effective_lot
-                        * float(_tw["approved_fraction"]), 2))
+                    effective_lot = scale_lot(
+                        effective_lot, float(_tw["approved_fraction"]))
                     sizing_method = (f"{sizing_method}+twin_x"
                                      f"{_tw['approved_fraction']}")
             except Exception as e:  # noqa: BLE001
@@ -1989,7 +2019,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 corr_kelly_scale = float(ck.get("scale") or 1.0)
                 corr_kelly_info = ck
                 if corr_kelly_scale < 1.0:
-                    trimmed = max(round(effective_lot * corr_kelly_scale, 2), 0.01)
+                    trimmed = scale_lot(effective_lot, corr_kelly_scale)
                     logger.info(
                         "Correlation-Kelly trim acct=%s sym=%s lot=%s × scale=%.3f → %s · %s",
                         cfg_account_id or "default", sym, effective_lot,
@@ -2007,7 +2037,7 @@ async def _process_user_account_locked(db, cfg: dict):
             * float(signal.get("prob_lot_scale") or 1.0) \
             * float(signal.get("news_size_scale") or 1.0)
         if _rl_scale < 1.0:
-            effective_lot = max(round(effective_lot * _rl_scale, 2), 0.01)
+            effective_lot = scale_lot(effective_lot, _rl_scale)
             sizing_method = sizing_method + "+rl_scale"
             if signal.get("news_size_scale"):
                 sizing_method = sizing_method + "+narrative"
@@ -2022,7 +2052,7 @@ async def _process_user_account_locked(db, cfg: dict):
             await db.signals.update_one(
                 {"_id": result.inserted_id}, {"$set": {"allocator": alloc}})
             if alloc.get("mode") == "enforce" and float(alloc.get("weight") or 1.0) < 1.0:
-                effective_lot = max(round(effective_lot * float(alloc["weight"]), 2), 0.01)
+                effective_lot = scale_lot(effective_lot, float(alloc["weight"]))
                 sizing_method = sizing_method + "+allocator"
                 logger.info("RL allocator trim ×%.2f scope=%s user=%s: %s",
                             alloc["weight"], signal.get("scope"), user_id,
@@ -2052,8 +2082,7 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "risk_engine_block")
                     continue
                 if rev["scale"] < 1.0:
-                    effective_lot = max(
-                        round(effective_lot * rev["scale"], 2), 0.01)
+                    effective_lot = scale_lot(effective_lot, rev["scale"])
                     sizing_method = sizing_method + "+risk_engine"
                     logger.info(
                         "Risk engine trim ×%.3f user=%s sym=%s: %s",
@@ -2061,7 +2090,15 @@ async def _process_user_account_locked(db, cfg: dict):
                         "; ".join(c["detail"] for c in rev["checks"]
                                   if c["status"] == "trim"))
             except Exception as e:  # noqa: BLE001
-                logger.warning("risk engine failed (fail-open): %s", e)
+                # FAIL CLOSED: the risk engine is the final pre-trade
+                # authority — an evaluation error must not let the trade
+                # through unchecked.
+                logger.warning("risk engine failed (fail-closed, skipping %s): %s",
+                               sym, e)
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn",
+                    reason=f"Risk engine error — trade skipped (fail-closed): {e}")
+                continue
 
         # iter-58 · Pre-trade sector-cap fit. Prevents the bot from opening
         # trades that would immediately breach the per-account sector cap
@@ -2173,7 +2210,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 from pip_utils import price_to_pips as _p2p, \
                     pip_value_usd_per_lot as _pvpl
                 _pips = _p2p(sym, abs(float(_ep) - float(_slp)))
-                _pip_std = _pvpl(sym, "standard")
+                _pip_std = _pvpl(sym, "standard", price=float(_ep))
                 _eq = float(target_account.get("equity")
                             or target_account.get("balance") or 0)
                 _cap_pct = float(signal.get("risk_pct_cap")
@@ -2192,7 +2229,13 @@ async def _process_user_account_locked(db, cfg: dict):
                                 "at SL %.1f pips → max %.4f lots)",
                                 cfg_account_id or "default", sym, _cap_pct,
                                 _eq, _pips, _max_risk_lot)
-                            return
+                            await _record_pulse(db, cfg, symbol=sym,
+                                action="SKIP", level="warn",
+                                reason=(f"Risk clamp: minimum 0.01 lot exceeds "
+                                        f"{_cap_pct:.2f}% risk budget for {sym}."))
+                            # `continue` (not `return`): only this symbol is
+                            # unaffordable — the rest of the tick still runs.
+                            continue
                         logger.info(
                             "Std-contract risk clamp acct=%s sym=%s: %.2f → %.2f "
                             "lots (budget %.2f%% of $%.0f, SL %.1f pips)",
@@ -2201,7 +2244,14 @@ async def _process_user_account_locked(db, cfg: dict):
                         effective_lot = _floored
                         sizing_method = sizing_method + "+std_risk_clamp"
         except Exception as e:  # noqa: BLE001
-            logger.debug("std risk clamp skipped: %s", e)
+            # FAIL CLOSED: if the hard risk clamp cannot be computed we
+            # cannot prove the lot fits the risk budget.
+            logger.warning("std risk clamp failed (fail-closed, skipping %s): %s",
+                           sym, e)
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="warn",
+                reason=f"Risk clamp error — trade skipped (fail-closed): {e}")
+            continue
 
         # Phase-1 · VALUE-DRIVEN GATE: every autonomous trade carries a $
         # Expected Value (calibrated p_win × geometry − costs) and a 0-100
@@ -2341,7 +2391,7 @@ async def _process_user_account_locked(db, cfg: dict):
             await inc_intel_counter(user_id, f"mode_intercept_{_mg['mode']}")
             continue
         if _mg.get("lot_scale", 1.0) < 1.0:
-            effective_lot = max(0.01, round(effective_lot * _mg["lot_scale"], 2))
+            effective_lot = scale_lot(effective_lot, _mg["lot_scale"])
             signal["operational_mode"] = _mg["mode"]
 
         engine = engine_for_account(target_account)
@@ -2372,8 +2422,7 @@ async def _process_user_account_locked(db, cfg: dict):
                     continue
                 _pm = float(_plan.get("risk_multiplier") or 1.0)
                 if 0 < _pm < 1.0:
-                    effective_lot = max(0.01,
-                                        round(effective_lot * _pm, 2))
+                    effective_lot = scale_lot(effective_lot, _pm)
             except Exception as e:  # noqa: BLE001
                 logger.warning("execution alpha failed (fail-open): %s",
                                e)
@@ -2393,6 +2442,18 @@ async def _process_user_account_locked(db, cfg: dict):
                         {"$set": {"execution_timing": timing}})
             except Exception as e:  # noqa: BLE001
                 logger.warning("execution timing failed (fail-open): %s", e)
+        # Floor-based downscales return 0.0 when a trim leaves less than the
+        # broker minimum — never round back UP into unapproved risk.
+        if effective_lot < 0.01 - 1e-9:
+            logger.info("Trade skipped user=%s sym=%s: risk trims left %.4f "
+                        "lots (< 0.01 minimum) via %s", user_id, sym,
+                        effective_lot, sizing_method)
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="info",
+                reason=(f"Risk trims reduced size below the 0.01 lot minimum "
+                        f"({sizing_method}) — trade skipped."),
+                signal=signal)
+            continue
         from versioning import version_stamp
         trade_doc = await engine.execute(
             user_id=user_id,
@@ -2413,6 +2474,13 @@ async def _process_user_account_locked(db, cfg: dict):
                 "sl_pips": signal.get("sl_pips"),
                 "tp_pips": signal.get("tp_pips"),
                 "risk_pct_cap": signal.get("risk_pct_cap"),
+                # risk_budget charges each trade by its stored risk_pct /
+                # strategy_class — without them every trade is billed at
+                # the 0.5% fallback under "trend".
+                "risk_pct": (float(profile.get("risk_pct") or 0)
+                             or signal.get("risk_pct")),
+                "strategy_class": signal.get("strategy_class"),
+                "market_regime": signal.get("market_regime"),
                 "origin": "auto",
                 "scope": signal.get("scope"),
                 "trend_ride": signal.get("trend_ride"),

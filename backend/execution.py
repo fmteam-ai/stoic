@@ -64,6 +64,45 @@ def stamp_pamm_identity(trade_doc: dict, signal: dict) -> None:
         "pamm_risk_snapshot_id": ident.get("risk_snapshot_id")})
 
 
+def sl_tp_side_block(signal: dict) -> dict | None:
+    """Explicit SL/TP side check. BUY needs sl < entry < tp, SELL needs
+    tp < entry < sl (each leg checked only when > 0). A wrong-side stop is
+    either an instant stop-out or no stop at all — never send it."""
+    action = (signal.get("action") or "").upper()
+    try:
+        entry = float(signal.get("entry_price") or 0)
+        sl = float(signal.get("stop_loss") or 0)
+        tp = float(signal.get("take_profit") or 0)
+    except (TypeError, ValueError):
+        return {"blocked": "invalid_geometry", "reason": "non-numeric price"}
+    if action not in ("BUY", "SELL") or entry <= 0:
+        return None
+    bad = []
+    if action == "BUY":
+        if sl > 0 and not sl < entry:
+            bad.append(f"BUY stop_loss {sl} must be below entry {entry}")
+        if tp > 0 and not tp > entry:
+            bad.append(f"BUY take_profit {tp} must be above entry {entry}")
+    else:
+        if sl > 0 and not sl > entry:
+            bad.append(f"SELL stop_loss {sl} must be above entry {entry}")
+        if tp > 0 and not tp < entry:
+            bad.append(f"SELL take_profit {tp} must be below entry {entry}")
+    if bad:
+        return {"blocked": "invalid_sl_tp_side", "reason": "; ".join(bad)}
+    return None
+
+
+def _parse_hb_age_sec(hb) -> float:
+    """Seconds since `hb` (ISO string or datetime). Naive values are UTC.
+    Raises TypeError/ValueError when unparseable."""
+    ts = hb if isinstance(hb, datetime) else datetime.fromisoformat(
+        str(hb).replace("Z", "+00:00"))
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - ts).total_seconds()
+
+
 class ExecutionEngine(ABC):
     @abstractmethod
     async def execute(self, *, user_id, account, signal,
@@ -104,6 +143,13 @@ class MT5BridgeEngine(ExecutionEngine):
             return {"blocked": "unauthorized_execution_path",
                     "reason": _refusal}
         db = get_db()
+
+        _geo_block = sl_tp_side_block(signal)
+        if _geo_block:
+            logger.warning("MT5 execute blocked by SL/TP side check user=%s "
+                           "sym=%s: %s", user_id, signal.get("symbol"),
+                           _geo_block.get("reason"))
+            return _geo_block
 
         # FINAL ENTITLEMENT CHECK (iter-122 Phase 2) — the dispatcher never
         # trusts upstream gates; plan authority is re-verified per trade.
@@ -175,14 +221,16 @@ class MT5BridgeEngine(ExecutionEngine):
                 hb = fresh.get("last_heartbeat")
                 if hb:
                     try:
-                        age = (datetime.now(timezone.utc)
-                               - datetime.fromisoformat(str(hb))).total_seconds()
-                        if age > float(os.environ.get(
-                                "EXEC_MAX_HEARTBEAT_AGE_SEC", "120")):
-                            return {"blocked": "stale_heartbeat",
-                                    "heartbeat_age_sec": int(age)}
+                        age = _parse_hb_age_sec(hb)
                     except (TypeError, ValueError):
-                        pass
+                        # FAIL CLOSED: an unparseable heartbeat means we can't
+                        # prove the terminal is alive.
+                        return {"blocked": "heartbeat_unparseable",
+                                "last_heartbeat": str(hb)}
+                    if age > float(os.environ.get(
+                            "EXEC_MAX_HEARTBEAT_AGE_SEC", "120")):
+                        return {"blocked": "stale_heartbeat",
+                                "heartbeat_age_sec": int(age)}
                 if not (fresh.get("equity") or fresh.get("balance")):
                     return {"blocked": "equity_unknown"}
                 account = {**account, **fresh}
@@ -197,6 +245,12 @@ class MT5BridgeEngine(ExecutionEngine):
                 px = float((q or {}).get("price") or 0)
             except Exception:
                 px = 0.0
+            if px <= 0:
+                # FAIL CLOSED: without a live quote the freshness/deviation
+                # preflight cannot run.
+                logger.warning("MT5 execute blocked: no live quote user=%s "
+                               "sym=%s", user_id, signal.get("symbol"))
+                return {"blocked": "quote_unavailable"}
             entry0 = float(signal.get("entry_price") or 0)
             sl0 = float(signal.get("stop_loss") or 0)
             if px > 0 and entry0 > 0 and sl0 > 0:
@@ -297,8 +351,15 @@ class MT5BridgeEngine(ExecutionEngine):
                         "reasons": gate.get("reasons")}
             if gate.get("reduce_factor") and signal.get("lot_size"):
                 _orig_lot = float(signal["lot_size"])
-                signal["lot_size"] = max(
-                    0.01, round(_orig_lot * float(gate["reduce_factor"]), 2))
+                from risk import scale_lot
+                _red = scale_lot(_orig_lot, float(gate["reduce_factor"]))
+                if _red <= 0:
+                    # Floor-based reduce left less than the broker minimum —
+                    # block instead of rounding back UP to 0.01.
+                    return {"blocked": "trading_authority_reduce_below_min_lot",
+                            "authority_level": gate.get("level"),
+                            "reasons": gate.get("reasons")}
+                signal["lot_size"] = _red
                 signal["_authority_reduced"] = True
                 logger.warning(
                     "TRADING AUTHORITY REDUCED — lot %s → %s user=%s sym=%s",

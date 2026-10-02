@@ -110,7 +110,14 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
                 update["close_reason"] = t.get("close_reason") or _infer_close_reason(t, live_price)
             else:
                 update["pnl_unknown"] = True
-        await db.trades.update_one({"_id": t["_id"]}, {"$set": update})
+        # Status guard: only close a row that is STILL open/pending — a
+        # concurrent EA close report (exact P&L) must never be overwritten
+        # by this estimated reconciliation.
+        res = await db.trades.update_one(
+            {"_id": t["_id"], "status": {"$in": ["open", "pending"]}},
+            {"$set": update})
+        if getattr(res, "matched_count", 1) == 0:
+            continue
         closed.append(str(t["_id"]))
 
         # WS push so the UI refreshes immediately
