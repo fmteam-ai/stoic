@@ -7,7 +7,6 @@ scale. Per-headline scores are recency-weighted (12h half-life) into one net
 score. `news_gate` vetoes trades against strongly-opposing news (|net| ≥ 2).
 Cached 45 min per asset; every failure returns None (fail-open)."""
 import json
-import math
 import logging
 import os
 import re
@@ -15,9 +14,6 @@ import time
 from datetime import datetime, timezone
 
 import httpx
-from pydantic import BaseModel, Field
-
-import llm_client
 
 logger = logging.getLogger(__name__)
 
@@ -170,9 +166,6 @@ def _recency_weight(published_at: str, now: datetime) -> float:
     return 0.5 ** (age_h / RECENCY_HALF_LIFE_H)
 
 
-MIN_CORROBORATING_SOURCES = 2
-
-
 def _label(net: float) -> str:
     if net >= 2.0:
         return "strongly_bullish"
@@ -199,13 +192,6 @@ def aggregate_scores(items: list, now: datetime | None = None) -> dict | None:
         wsum += w
         ssum += w * s
     net = round(max(-3.0, min(3.0, ssum / wsum)), 2) if wsum > 0 else 0.0
-    # Corroboration: a directional read must come from >= 2 independent
-    # sources. One feed (or one injected headline) can at most register as
-    # neutral, so it can neither veto entries nor lift confidence.
-    sources = {str(it.get("source") or "").strip().lower()
-               for it in scored if abs(float(it["score"])) >= 0.5}
-    if len(sources) < MIN_CORROBORATING_SOURCES:
-        net = round(max(-0.7, min(0.7, net)), 2)
     drivers = sorted(scored, key=lambda x: abs(x["score"]), reverse=True)[:3]
     return {"net": net, "label": _label(net), "headlines": len(scored),
             "drivers": [{"title": d["title"][:120], "source": d.get("source", ""),
@@ -223,55 +209,32 @@ def _parse_array(text: str) -> list:
         return []
 
 
-class HeadlineScore(BaseModel):
-    i: int
-    score: float            # -3..+3; non-finite rows dropped below
-    why: str = ""
-
-
-class HeadlineScores(BaseModel):
-    """Structured outputs need a top-level object — the per-headline array
-    is wrapped in ``scores``."""
-    scores: list[HeadlineScore] = Field(default_factory=list)
-
-
-_SYSTEM = ("You are a senior macro strategist at a bullion desk. "
-           "You read central-bank statements, FOMC minutes, CPI and "
-           "NFP prints for their asset-specific price impact.")
-
-
 async def _score_headlines(base: str, heads: list) -> list:
     ctx = ASSET_CONTEXT.get(base, base)
+    numbered = "\n".join(f"{i}. [{h['source']}] {h['title']}"
+                         for i, h in enumerate(heads))
     prompt = (
         f"For EACH numbered headline below, answer: how bullish is this "
         f"specifically for {ctx}?\n"
         f"Score each from -3 (extremely bearish) to +3 (extremely bullish), "
         f"0 = irrelevant/no impact. Half-points allowed.\n"
-        f"Return one entry per headline in `scores`: i = the headline index, "
-        f"score = the float score, why = max 10 words.")
-    res = await llm_client.complete(
-        feature="news_understanding", system=_SYSTEM, user=prompt,
-        untrusted=[f"{i}. [{h['source']}] {h['title']}" for i, h in enumerate(heads)],
-        schema=HeadlineScores, max_tokens=1500)
-    if not res.ok:
-        # Fail-open: no scores → aggregate_scores([]) → None → no gate/bias.
-        return []
-    rows = [r.model_dump() for r in res.data.scores]
+        f'Respond ONLY with a JSON array: [{{"i": <index>, "score": <float>, '
+        f'"why": "<max 10 words>"}}, ...] — one entry per headline.\n\n{numbered}')
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    chat = LlmChat(
+        api_key=os.environ["EMERGENT_LLM_KEY"],
+        session_id=f"news-ai-{base}-{int(time.time())}",
+        system_message=("You are a senior macro strategist at a bullion desk. "
+                        "You read central-bank statements, FOMC minutes, CPI and "
+                        "NFP prints for their asset-specific price impact. "
+                        "Respond only with JSON."),
+    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    raw = await chat.send_message(UserMessage(text=prompt))
     out = []
-    seen: set[int] = set()
-    for row in rows:
+    for row in _parse_array(str(raw)):
         try:
-            i = int(row["i"])
-            # Reject negative / out-of-range / repeated indices — otherwise a
-            # single headline can be counted many times (heads[-1] is valid
-            # Python) and dominate the recency-weighted net.
-            if i < 0 or i >= len(heads) or i in seen:
-                continue
-            score = float(row["score"])
-            if not math.isfinite(score):
-                continue
-            seen.add(i)
-            out.append({**heads[i], "score": score,
+            h = heads[int(row["i"])]
+            out.append({**h, "score": float(row["score"]),
                         "why": str(row.get("why") or "")[:80]})
         except (KeyError, TypeError, ValueError, IndexError):
             continue

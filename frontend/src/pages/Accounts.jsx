@@ -11,7 +11,7 @@ import MultiAccountOverview from "@/components/MultiAccountOverview";
 // Used in the download URL so the filename changes per release (e.g.
 // `EmergentTradingBridge_v1.35.mq5`) — defeats aggressive browser caching
 // of the prior .mq5, which otherwise re-downloads stale source.
-const LATEST_EA_VERSION = "1.58";
+const LATEST_EA_VERSION = "1.57";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning } from "lucide-react";
 const Warning = AlertTriangle;
@@ -185,30 +185,11 @@ export default function Accounts() {
 
     const rotate = async (id) => {
         if (!window.confirm("Rotate the bridge token? The old token keeps working for 15 minutes so a live EA can switch over.")) return;
-        // Audit v2 P2-01 — accounts without 2FA/passkey must re-enter their
-        // password (backend answers 401/403 {code:"password_required"}).
-        // MFA accounts go through the step-up interceptor in lib/api.js.
-        let body = {};
-        for (let attempt = 0; attempt < 4; attempt += 1) {
-            try {
-                const { data } = await api.post(`/accounts/${id}/rotate-token`, body);
-                setRevealedTokens(prev => ({ ...prev, [id]: data.bridge_token }));
-                setMsg("New bridge token generated — it is shown ONCE below. Copy it into the EA now; it will be masked afterwards.");
-                return;
-            } catch (e) {
-                const st = e?.response?.status;
-                const detail = e?.response?.data?.detail;
-                if ((st === 401 || st === 403) && detail?.code === "password_required" && attempt < 3) {
-                    const pw = window.prompt(
-                        `${detail?.message || "Enter your current password to rotate the bridge token."}\n\nCurrent password:`);
-                    if (!pw) return;                       // user cancelled
-                    body = { current_password: pw };
-                    continue;
-                }
-                setErr(formatApiError(e));
-                return;
-            }
-        }
+        try {
+            const { data } = await api.post(`/accounts/${id}/rotate-token`);
+            setRevealedTokens(prev => ({ ...prev, [id]: data.bridge_token }));
+            setMsg("New bridge token generated — it is shown ONCE below. Copy it into the EA now; it will be masked afterwards.");
+        } catch (e) { setErr(formatApiError(e)); }
     };
 
     const revokeToken = async (id) => {

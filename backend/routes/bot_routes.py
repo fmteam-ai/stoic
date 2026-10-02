@@ -295,7 +295,7 @@ async def mtf_confluence_report(symbol: str = "XAUUSD", user=Depends(get_current
         live = float(quote.get("price") or 0)
     except Exception:
         live = 0.0
-    report = await fetch_mtf_confluence(symbol, live, user_id=user["id"])
+    report = await fetch_mtf_confluence(symbol, live)
     if not report:
         return {"available": False, "symbol": symbol,
                 "note": "M15 stream missing or stale (EA offline?)"}
@@ -1681,7 +1681,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.58"
+    LATEST_EA = "1.57"
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:

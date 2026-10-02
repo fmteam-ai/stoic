@@ -339,13 +339,10 @@ async def claim_pairing_code(db, code: str, terminal: dict) -> dict:
         raise ValueError("account no longer exists")
     # rotate bridge credential — strict single-writer
     new_token = f"tok_{secrets.token_urlsafe(32)}"
-    from auth import bridge_token_fields
     await db.accounts.update_one(
         {"_id": acc["_id"]},
-        {"$set": {**bridge_token_fields(new_token),
-                  "bridge_token_rotated_at": now.isoformat()},
-         "$unset": {"bridge_token": "", "bridge_token_prev": "",
-                    "bridge_token_prev_hash": ""}})
+        {"$set": {"bridge_token": new_token,
+                  "bridge_token_rotated_at": now.isoformat()}})
     installation_id = f"inst_{uuid.uuid4().hex[:12]}"
     await db.installations.insert_one({
         "installation_id": installation_id,

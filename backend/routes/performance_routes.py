@@ -24,15 +24,13 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             {"user_id": user_id, "status": {"$ne": "deleted"}},
             {"label": 1, "broker": 1, "mode": 1, "account_type": 1,
              "broker_server": 1, "server": 1, "broker_environment": 1,
-             "last_heartbeat": 1, "last_reconciled_at": 1, "reconciliation_seq": 1,
-             "trading_enabled": 1}):
+             "last_heartbeat": 1, "last_reconciled_at": 1, "reconciliation_seq": 1}):
         accounts[str(a["_id"])] = a
 
     per = {}
     daily = {}
     total = {"net": 0.0, "wins": 0, "losses": 0, "deals": 0,
              "first": None, "last": None}
-    last_trade_at = None   # display only — NEVER a freshness input (audit v2)
     async for d in db.broker_deals.find(
             {"user_id": user_id},
             {"account_id": 1, "deal_time": 1, "profit": 1, "commission": 1,
@@ -45,7 +43,6 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             day = datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
         except (TypeError, ValueError, OSError):
             continue
-        last_trade_at = datetime.fromtimestamp(int(ts), tz=timezone.utc)
         aid = d.get("account_id")
         p = per.setdefault(aid, {"net": 0.0, "wins": 0, "losses": 0,
                                  "deals": 0, "first": None, "last": None})
@@ -120,35 +117,32 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
     }
 
     from chart_provenance import build as provenance
-    # audit r29 P2-01 / audit v2 — as_of is the OLDEST of the authoritative
-    # watermarks: oldest account reconciliation · freshest heartbeat. It is
-    # NEVER keyed on the last trade time: a quiet but fully reconciled,
-    # heartbeating account is fresh. The broker statement coverage end is
-    # judged by coverage_report (STATEMENT_COVERAGE_STALE semantics, its own
-    # tolerance) and blocks sharing when stale. last_trade_at is display-only.
+    # audit r29 P2-01 — as_of is the OLDEST of the authoritative watermarks the series depends on
+    # (last broker deal · freshest reconciliation · freshest heartbeat), never response time.
     recon_marks, recon_ids = [], []
     for a in accounts.values():
         if a.get("last_reconciled_at"):
             try:
-                rm = datetime.fromisoformat(str(a["last_reconciled_at"]).replace("Z", "+00:00"))
-                recon_marks.append(rm if rm.tzinfo else rm.replace(tzinfo=timezone.utc))
+                recon_marks.append(datetime.fromisoformat(str(a["last_reconciled_at"]).replace("Z", "+00:00")))
                 recon_ids.append(f"{str(a['_id'])[-6:]}:{int(a.get('reconciliation_seq') or 0)}")
             except ValueError:
                 pass
-    marks = [m for m in (min(recon_marks) if recon_marks else None,
+    last_deal = None
+    if curve:
+        try:
+            last_deal = datetime.fromisoformat(curve[-1]["date"]).replace(tzinfo=timezone.utc)
+        except (KeyError, ValueError):
+            last_deal = None
+    marks = [m for m in (last_deal, min(recon_marks) if recon_marks else None,
                          (now - timedelta(seconds=hb_age)) if hb_age is not None else None) if m]
     watermark = min(marks) if marks else None
-    coverage = await _statement_coverage(db, user_id, accounts, now)
     prov = provenance(provider="broker_deals", source_kind="broker_reconciled", points=curve[-365:],
                       time_key="date", expected_interval_s=86400, as_of=watermark,
-                      as_of_from_points=False,
                       reconciliation_id=("recon:" + ",".join(sorted(recon_ids))) if recon_ids else None,
                       cache_status="live" if recon_marks else "unreconciled",
                       note="broker-confirmed deals only; estimated/unknown outcomes excluded")
-    if watermark is None or not recon_marks or coverage["stale"]:
+    if watermark is None or not recon_marks:
         prov["stale"] = True
-    prov["last_trade_at"] = last_trade_at.isoformat() if last_trade_at else None
-    prov["statement_coverage"] = coverage
     prov["share_allowed"] = not prov["stale"]
     return {"generated_at": now.isoformat(),
             "overall": _stats(total),
@@ -157,38 +151,7 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             "accounts": account_rows,
             "integrity": integrity,
             "share_allowed": prov["share_allowed"],
-            "last_trade_at": prov["last_trade_at"],
             "provenance": prov}
-
-
-async def _statement_coverage(db, user_id: str, accounts: dict, now: datetime) -> dict:
-    """Broker statement coverage end per enabled account (audit v2). Accounts
-    with no statement ledger yet are reported (``missing``) but do not mark the
-    display series stale — the attestation gate refuses them separately
-    (STATEMENT_LEDGER_MISSING). An account whose RECONCILED coverage is stale
-    (STATEMENT_COVERAGE_STALE) does; a ledger read failure fails closed."""
-    out = {"coverage_end": None, "stale": False, "stale_accounts": [], "missing": []}
-    try:
-        from broker_statement_ledger import coverage_report
-        ends = []
-        for aid, a in accounts.items():
-            if a.get("trading_enabled") is not True:
-                continue
-            rows = await db.reconciliation_ledger.find(
-                {"user_id": user_id, "account_id": aid}).to_list(1000)
-            if not rows:
-                out["missing"].append(aid[-6:])
-                continue
-            cov = coverage_report(rows, now)
-            if cov["intervals"]:
-                ends.append(cov["intervals"][-1]["to"])
-            if "STATEMENT_COVERAGE_STALE" in cov["reasons"] or not cov["intervals"]:
-                out["stale"] = True
-                out["stale_accounts"].append(aid[-6:])
-        out["coverage_end"] = min(ends) if ends else None
-    except Exception as e:  # noqa: BLE001 — fail closed
-        out.update(stale=True, error=str(e)[:200])
-    return out
 
 
 ATTESTATION_POLICY_VERSION = "attest-v2"
@@ -213,9 +176,8 @@ async def _attestation_gate(db, user_id: str) -> list:
     PROHIBITED while P&L is UNRECONCILED, position truth is not FRESH on an
     enabled account, the dataset includes synthetic/test accounts, any
     enabled account is not classified LIVE (DEMO/PAPER/UNKNOWN rows never
-    back a live-performance claim), no broker deals exist, or an enabled
-    account's broker reconciliation watermark (last_reconciled_at) is
-    missing or older than the max data age. Trade recency is NOT a gate."""
+    back a live-performance claim), no broker deals exist, or the newest
+    broker deal is older than the max data age."""
     reasons = []
     try:
         from routes.trade_routes import trade_stats
@@ -250,27 +212,23 @@ async def _attestation_gate(db, user_id: str) -> list:
     if envs - {"LIVE"}:
         reasons.append("NON_LIVE_ENVIRONMENT:" + ",".join(
             sorted(envs - {"LIVE"})))
-    # audit v2 — freshness is the RECONCILIATION watermark, not trade
-    # activity: a quiet account that keeps reconciling stays attestable. A
-    # missing/stale/unparseable last_reconciled_at on an enabled account
-    # fails closed. Statement coverage staleness comes from ledger_gate
-    # (STATEMENT_COVERAGE_STALE).
     newest = await db.broker_deals.find_one(
         {"user_id": user_id}, {"deal_time": 1}, sort=[("deal_time", -1)])
     if not newest:
         reasons.append("NO_BROKER_DEALS")
-    now = datetime.now(timezone.utc)
-    async for a in db.accounts.find(
-            {"user_id": user_id, "trading_enabled": True,
-             "status": {"$ne": "deleted"}}, {"last_reconciled_at": 1}):
+    else:
         try:
-            rt = datetime.fromisoformat(
-                str(a["last_reconciled_at"]).replace("Z", "+00:00"))
-            if rt.tzinfo is None:
-                rt = rt.replace(tzinfo=timezone.utc)
-            if (now - rt).total_seconds() > ATTESTATION_MAX_DATA_AGE_S:
+            dt = newest["deal_time"]
+            if isinstance(dt, (int, float)):
+                dt = datetime.fromtimestamp(int(dt), tz=timezone.utc)
+            elif isinstance(dt, str):
+                dt = datetime.fromisoformat(dt.replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            age = (datetime.now(timezone.utc) - dt).total_seconds()
+            if age > ATTESTATION_MAX_DATA_AGE_S:
                 reasons.append("BROKER_DATA_STALE")
-        except Exception:  # noqa: BLE001 — missing/unparseable = not fresh
+        except Exception:  # noqa: BLE001 — unparseable = not fresh
             reasons.append("BROKER_DATA_AGE_UNKNOWN")
     # round 13 P2-05 — the books must equal the SIGNED broker statement to the cent
     try:
@@ -290,7 +248,7 @@ async def _attach_attestation(db, user_id: str, payload: dict) -> dict:
             "reasons": blockers,
             "note": "Attestation withheld — a signed performance claim "
                     "requires reconciled P&L, FRESH position truth, "
-                    "LIVE-classified accounts only, fresh broker reconciliation and "
+                    "LIVE-classified accounts only, fresh broker deals and "
                     "a dataset free of synthetic/test accounts."}
     else:
         from broker_statement_ledger import ledger_snapshot

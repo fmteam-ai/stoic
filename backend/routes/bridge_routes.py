@@ -17,32 +17,6 @@ from intelligence_counters import increment as inc_intel_counter
 from trade_reconciler import reconcile_account, reconcile_user
 from silent_failures import record_swallow
 
-_TERMINAL_TRADE_STATES = ("closed", "cancelled", "rejected", "error", "failed")
-
-
-async def _release_exposure(db, trade: dict | None) -> None:
-    """impr-wiring — free the trade's atomic exposure reservation (slot +
-    stop risk) once its status became terminal. Idempotent, never raises;
-    a miss is healed by the next rebuild_reservations tick."""
-    if not trade:
-        return
-    try:
-        from execution_authority import release_reservation
-        await release_reservation(db, trade)
-    except Exception as _sw:  # noqa: BLE001 — advisory, rebuild heals
-        record_swallow("bridge", "release_reservation", _sw)
-
-
-def _write_matched(res) -> bool:
-    """True when an update actually hit a document (test doubles without
-    counters are treated as matched)."""
-    for attr in ("matched_count", "modified_count"):
-        v = getattr(res, attr, None)
-        if isinstance(v, int):
-            return v > 0
-    return True
-
-
 async def _bridge_ip_throttle(request: Request) -> None:
     """r22: per-IP volume guard on the unauthenticated bridge surface (token
     guessing / probing). Generous enough for a VPS running many terminals."""
@@ -56,38 +30,15 @@ router = APIRouter(prefix="/bridge", tags=["bridge"], dependencies=[Depends(_bri
 
 
 async def _account_by_token(token: str) -> dict:
-    """impr-auth — bridge tokens are looked up by sha256 (`bridge_token_hash`).
-    Transitional plaintext fallback (BRIDGE_TOKEN_PLAINTEXT_FALLBACK, default
-    on, one release) keeps EAs working mid-migration and lazily back-fills
-    the hash. A hash whose doc still carries a DIFFERENT plaintext is stale
-    (a legacy writer rotated only the plaintext) and is never honoured."""
-    from auth import bridge_plaintext_fallback_enabled, hash_bridge_token
-    if not token:
-        raise HTTPException(status_code=401, detail="Invalid bridge token")
     db = get_db()
-    digest = hash_bridge_token(token)
-    fallback = bridge_plaintext_fallback_enabled()
-    acc = await db.accounts.find_one({"bridge_token_hash": digest})
-    if acc and acc.get("bridge_token") and acc["bridge_token"] != token:
-        acc = None                                   # stale hash
-    if acc is None and fallback:
-        acc = await db.accounts.find_one({"bridge_token": token})
-        if acc:
-            try:
-                await db.accounts.update_one(
-                    {"_id": acc["_id"]},
-                    {"$set": {"bridge_token_hash": digest,
-                              "bridge_token_last4": token[-4:]}})
-            except DuplicateKeyError:
-                pass
+    acc = await db.accounts.find_one({"bridge_token": token})
     if acc:
         # First use of a rotated token retires the old one immediately —
         # no need to keep the grace window open once the EA switched over.
-        if acc.get("bridge_token_prev") or acc.get("bridge_token_prev_hash"):
+        if acc.get("bridge_token_prev"):
             await db.accounts.update_one(
                 {"_id": acc["_id"]},
                 {"$unset": {"bridge_token_prev": "",
-                            "bridge_token_prev_hash": "",
                             "bridge_token_prev_expires": ""}})
         # audit F-05 — last-used tracking (throttled to ~1/min)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -102,12 +53,8 @@ async def _account_by_token(token: str) -> dict:
     # EA keeps reporting while the operator swaps the new token in.
     now = datetime.now(timezone.utc).isoformat()
     acc = await db.accounts.find_one(
-        {"bridge_token_prev_hash": digest,
+        {"bridge_token_prev": token,
          "bridge_token_prev_expires": {"$gt": now}})
-    if not acc and fallback:
-        acc = await db.accounts.find_one(
-            {"bridge_token_prev": token,
-             "bridge_token_prev_expires": {"$gt": now}})
     if not acc:
         raise HTTPException(status_code=401, detail="Invalid bridge token")
     return acc
@@ -400,26 +347,19 @@ async def heartbeat(payload: BridgeHeartbeat):
         # is stale → use the count as ground truth and let reconcile close
         # the leftovers in DB. (When positions reports MORE we keep the
         # tickets list — safer to under-close than to over-close.)
-        # FAIL SAFE: a count/ticket disagreement means this heartbeat's
-        # position view is untrustworthy. Previously tickets were forced to
-        # [] and reconciled — marking LIVE trades closed in the DB (they then
-        # run unmanaged at the broker). Skip ticket-level reconciliation for
-        # this heartbeat instead; the next consistent heartbeat (or a
-        # deliberate Force Sync) reconciles.
         ea_positions_count = payload.open_positions
-        ticket_count_mismatch = (ea_positions_count is not None
-                                 and ea_positions_count < len(tickets))
-        if ticket_count_mismatch:
+        if (ea_positions_count is not None
+                and ea_positions_count < len(tickets)):
             logger.warning(
-                "EA ticket-count mismatch: positions=%s but %s tickets reported "
-                "for account=%s — skipping reconciliation for this heartbeat "
-                "(not closing any trades). User should upgrade EA to v1.26 for "
-                "OnTradeTransaction + history sweep.",
+                "EA stale-tickets detected: positions=%s but %s tickets reported "
+                "for account=%s. Treating tickets as []; user should upgrade EA "
+                "to v1.26 for OnTradeTransaction + history sweep.",
                 ea_positions_count, len(tickets), str(acc["_id"]),
             )
-        else:
-            set_doc["open_tickets"] = tickets
-            set_doc["open_tickets_updated_at"] = now_iso
+            tickets = []  # force orphan sweep; revive sweep also skipped below
+
+        set_doc["open_tickets"] = tickets
+        set_doc["open_tickets_updated_at"] = now_iso
 
         # TICKET-LEVEL AUTO-REVIVE: if STOIC has closed a trade but the
         # broker is still reporting its ticket as open, STOIC was wrong.
@@ -431,7 +371,7 @@ async def heartbeat(payload: BridgeHeartbeat):
         #
         # Skip when tickets is empty after stale detection — otherwise we
         # would loop-revive trades the broker has actually closed.
-        if tickets and not ticket_count_mismatch:
+        if tickets:
             revive_candidates = await db.trades.find({
                 "account_id": str(acc["_id"]),
                 "mt5_ticket": {"$in": tickets},
@@ -460,15 +400,9 @@ async def heartbeat(payload: BridgeHeartbeat):
                 )
 
         # Auto-reconcile on every heartbeat — closes orphans within ~5s of EA tick.
-        if ticket_count_mismatch:
-            reconcile_summary = {"skipped": "ticket_count_mismatch",
-                                 "closed_count": 0,
-                                 "open_positions": ea_positions_count,
-                                 "open_tickets_reported": len(tickets)}
-        else:
-            reconcile_summary = await reconcile_account(
-                str(acc["_id"]), tickets, source="heartbeat",
-            )
+        reconcile_summary = await reconcile_account(
+            str(acc["_id"]), tickets, source="heartbeat",
+        )
 
     # iter-46 · Auto-heal: if closed trades carry estimated/unknown P&L, queue
     # a deep history sync so the EA re-pushes exact broker figures. Throttled
@@ -824,9 +758,6 @@ class BridgeTicks(BaseModel):
     bridge_token: str
     symbol: str
     sent_at_ms: int | None = None
-    # EA v1.58+ — the EA's own UTC wall clock at send (TimeGMT-based,
-    # sub-second refined from GetTickCount64). Absent on older EAs.
-    sent_gmt_ms: int | None = None
     ticks: list = []
 
 
@@ -910,13 +841,7 @@ async def receive_ticks(payload: BridgeTicks):
         await runner.restore_risk(db)
         from scalp.model import load_persisted
         await load_persisted(db, runner.model_key())
-    if payload.sent_gmt_ms:
-        out = await runner.ingest(db, account, payload.ticks or [],
-                                  payload.sent_at_ms,
-                                  sent_gmt_ms=payload.sent_gmt_ms)
-    else:   # pre-1.58 EA — legacy freshness math, unchanged call shape
-        out = await runner.ingest(db, account, payload.ticks or [],
-                                  payload.sent_at_ms)
+    out = await runner.ingest(db, account, payload.ticks or [], payload.sent_at_ms)
     await _record_tick_ingress(db, str(account["_id"]), base, "ok", None,
                                len(payload.ticks or []))
     return {"status": "ok", **out}
@@ -958,142 +883,6 @@ async def receive_dom(payload: BridgeDom):
     return {"status": "ok", "stored": len(bids) + len(asks)}
 
 
-def _max_pending_open_age_s() -> float:
-    try:
-        return float(os.environ.get("MAX_PENDING_OPEN_AGE_S", "120"))
-    except ValueError:
-        return 120.0
-
-
-def _stale_pending_open_cutoff_iso() -> str:
-    return (datetime.now(timezone.utc)
-            - timedelta(seconds=_max_pending_open_age_s())).isoformat()
-
-
-# STOIC EA MagicNumber default — trades opened by the bot carry it.
-_STOIC_MAGIC = 901234
-
-
-def _manage_external(t: dict) -> bool:
-    """EA v1.58 ownership fence: the EA refuses to close / modify a position
-    whose POSITION_MAGIC != its MagicNumber unless the command says
-    manage_external=true. Positions STOIC adopted from the broker (manual
-    MT5 trades, other EAs, heartbeat-snapshot backfills, external-deal
-    inserts) are flagged so their existing management keeps working. Sending
-    true for a bot-owned trade is harmless (the flag only relaxes the fence)."""
-    if t.get("external_open"):
-        return True
-    if str(t.get("origin") or "") in ("other_ea", "external"):
-        return True
-    magic = t.get("magic_number")
-    if magic is not None:
-        try:
-            return int(magic) != _STOIC_MAGIC
-        except (TypeError, ValueError):
-            return True
-    return False
-
-
-def _max_entry_deviation_pips() -> float:
-    try:
-        return max(0.0, float(os.environ.get("EXEC_MAX_ENTRY_DEVIATION_PIPS", "10")))
-    except ValueError:
-        return 10.0
-
-
-def _max_entry_deviation_sl_frac() -> float:
-    try:
-        return max(0.0, float(os.environ.get("EXEC_MAX_ENTRY_DEVIATION_SL_FRAC", "0.5")))
-    except ValueError:
-        return 0.5
-
-
-def _open_exec_contract(t: dict, acc: dict | None) -> dict:
-    """EA v1.58 execution contract for NEW-position commands only:
-      expires_at_ms        opened_at + MAX_PENDING_OPEN_AGE_S (epoch ms, UTC)
-      max_deviation_price  max(EXEC_MAX_ENTRY_DEVIATION_PIPS in price,
-                               EXEC_MAX_ENTRY_DEVIATION_SL_FRAC × |entry − SL|)
-      max_deviation_points the same distance in broker points (when the EA
-                           has reported symbol_specs.point for the symbol)
-    The EA refuses (reports failed) past expiry or when the live executable
-    price is further than the deviation from entry_price. Older EAs ignore
-    the unknown keys."""
-    from pip_utils import pips_to_price
-    out: dict = {}
-    opened = t.get("opened_at")
-    if opened:
-        try:
-            dt = (opened if isinstance(opened, datetime)
-                  else datetime.fromisoformat(str(opened)))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            out["expires_at_ms"] = int(
-                (dt.timestamp() + _max_pending_open_age_s()) * 1000)
-        except (TypeError, ValueError):
-            pass
-    sym = t.get("symbol") or ""
-    dev = pips_to_price(sym, _max_entry_deviation_pips())
-    try:
-        entry = float(t.get("entry_price") or 0)
-        sl = float(t.get("stop_loss") or 0)
-    except (TypeError, ValueError):
-        entry = sl = 0.0
-    if entry > 0 and sl > 0:
-        dev = max(dev, _max_entry_deviation_sl_frac() * abs(entry - sl))
-    if dev > 0 and entry > 0:
-        # never below 1e-4 so the JSON float is never exponent-formatted
-        out["max_deviation_price"] = round(max(dev, 0.0001), 8)
-        specs = (acc or {}).get("symbol_specs") or {}
-        spec = specs.get(base_symbol(sym)) or specs.get(str(sym).upper()) or {}
-        try:
-            point = float(spec.get("point") or 0) if isinstance(spec, dict) else 0.0
-        except (TypeError, ValueError):
-            point = 0.0
-        if point > 0:
-            out["max_deviation_points"] = int(round(dev / point))
-    return out
-
-
-async def _cancel_stale_pending_opens(db, account_id: str, stale_cutoff: str) -> int:
-    """Cancel never-dispatched NEW-position orders older than the max
-    pending age. Orders already dispatched (the EA may have filled them
-    without reporting) are NOT cancelled — they are only excluded from
-    re-dispatch so a late /bridge/report can still attach the ticket."""
-    now_iso = datetime.now(timezone.utc).isoformat()
-    import uuid as _uuid
-    cancel_tag = f"stale:{_uuid.uuid4().hex[:12]}"
-    res = await db.trades.update_many(
-        {"account_id": account_id, "status": "pending",
-         "mt5_ticket": None,
-         "close_requested": {"$ne": True},
-         "opened_at": {"$lt": stale_cutoff},
-         "$or": [{"_dispatched_at": {"$exists": False}},
-                 {"_dispatched_at": None}]},
-        {"$set": {"status": "cancelled",
-                  "close_reason": "stale_pending",
-                  "error": "stale_pending",
-                  "submission_state": "cancelled_stale",
-                  "_stale_cancel_tag": cancel_tag,
-                  "closed_at": now_iso}})
-    n = int(getattr(res, "modified_count", 0) or 0)
-    if n:
-        # release exactly the docs THIS update_many cancelled (tagged)
-        try:
-            rows = await db.trades.find(
-                {"_stale_cancel_tag": cancel_tag},
-                {"_id": 1, "account_id": 1, "user_id": 1,
-                 "exposure_reservation": 1}).to_list(length=None)
-        except Exception as _sw:  # noqa: BLE001 — rebuild heals a miss
-            record_swallow("bridge", "stale_cancel_release_fetch", _sw)
-            rows = []
-        for row in rows or []:
-            await _release_exposure(db, row)
-        logger.warning("Cancelled %d stale pending open order(s) for account=%s "
-                       "(older than %.0fs — not executing at market on a stale "
-                       "signal)", n, account_id, _max_pending_open_age_s())
-    return n
-
-
 @router.post("/poll-trades")
 async def poll_trades(payload: PollRequest):
     db = get_db()
@@ -1114,12 +903,6 @@ async def poll_trades(payload: PollRequest):
     # never lands), the lock auto-expires and the trade gets re-dispatched.
     DISPATCH_LOCK_SEC = 30
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=DISPATCH_LOCK_SEC)).isoformat()
-    # STALE-OPEN GUARD: a NEW-position order queued long ago (EA offline,
-    # reconnects hours later) must never be executed at market on a stale
-    # signal. Only applies to opens (no ticket, no close command) — close /
-    # modify commands on live tickets are always dispatched.
-    stale_open_cutoff = _stale_pending_open_cutoff_iso()
-    await _cancel_stale_pending_opens(db, str(acc["_id"]), stale_open_cutoff)
     out = []
     # Loop up to 20 times, each iteration atomically claims one pending doc.
     for _ in range(20):
@@ -1127,17 +910,10 @@ async def poll_trades(payload: PollRequest):
             {
                 "account_id": str(acc["_id"]),
                 "status": "pending",
-                "$and": [
-                    {"$or": [
-                        {"_dispatched_at": {"$exists": False}},
-                        {"_dispatched_at": None},
-                        {"_dispatched_at": {"$lt": cutoff}},
-                    ]},
-                    {"$or": [
-                        {"mt5_ticket": {"$ne": None}},
-                        {"close_requested": {"$eq": True}},  # read filter
-                        {"opened_at": {"$gte": stale_open_cutoff}},
-                    ]},
+                "$or": [
+                    {"_dispatched_at": {"$exists": False}},
+                    {"_dispatched_at": None},
+                    {"_dispatched_at": {"$lt": cutoff}},
                 ],
             },
             {"$set": {"_dispatched_at": datetime.now(timezone.utc).isoformat(),
@@ -1170,14 +946,12 @@ async def poll_trades(payload: PollRequest):
             stale = ((not lease_live) or ep != cur_epoch
                      or ep < int((owner or {}).get("max_order_epoch") or 0))
             if stale:
-                _cres = await db.trades.update_one(
+                await db.trades.update_one(
                     {"_id": t["_id"]},
                     {"$set": {"status": "cancelled",
                               "error": "stale_scalp_lease_epoch",
                               "close_reason": "stale_scalp_lease_epoch",
                               "closed_at": now_iso}})
-                if _write_matched(_cres):
-                    await _release_exposure(db, t)
                 logger.warning(
                     "rejected stale-epoch scalp order trade=%s epoch=%d "
                     "(owner epoch=%d, lease_live=%s)",
@@ -1192,7 +966,7 @@ async def poll_trades(payload: PollRequest):
             await order_state.apply(db, str(t["_id"]),
                                     order_state.EA_CLAIMED,
                                     f"claim:{str(t['_id'])}")
-        item = {
+        out.append({
             "trade_id": str(t["_id"]),
             "symbol": t["symbol"],
             "action": t["action"],
@@ -1204,13 +978,7 @@ async def poll_trades(payload: PollRequest):
             "close_idem_key": t.get("close_idem_key"),
             "close_seq": t.get("close_seq", 0),
             "mt5_ticket": t.get("mt5_ticket"),
-        }
-        if not t.get("mt5_ticket") and not t.get("close_requested"):
-            # EA v1.58 execution contract — NEW-position commands only.
-            item.update(_open_exec_contract(t, acc))
-        elif _manage_external(t):
-            item["manage_external"] = True
-        out.append(item)
+        })
 
     # 1b. OPEN positions with an outstanding close command that uses the
     # trades-block close path (no FULL_CLOSE modification queued): manual ×
@@ -1223,19 +991,15 @@ async def poll_trades(payload: PollRequest):
         "$or": [{"pending_modification": None}, {"pending_modification": {"$exists": False}},
                 {"pending_modification.type": {"$ne": "FULL_CLOSE"}}],
     }, {"symbol": 1, "action": 1, "lot_size": 1, "entry_price": 1, "stop_loss": 1, "take_profit": 1,
-        "close_idem_key": 1, "close_seq": 1, "mt5_ticket": 1,
-        "external_open": 1, "origin": 1, "magic_number": 1})
+        "close_idem_key": 1, "close_seq": 1, "mt5_ticket": 1})
     for t in await close_cursor.to_list(length=50):
-        item = {
+        out.append({
             "trade_id": str(t["_id"]), "symbol": t["symbol"], "action": t.get("action"),
             "lot_size": t.get("lot_size"), "entry_price": t.get("entry_price"),
             "stop_loss": t.get("stop_loss"), "take_profit": t.get("take_profit"),
             "close_requested": bool(t.get("close_requested")), "close_idem_key": t.get("close_idem_key"),
             "close_seq": t.get("close_seq", 0), "mt5_ticket": t.get("mt5_ticket"),
-        }
-        if _manage_external(t):
-            item["manage_external"] = True
-        out.append(item)
+        })
 
     # 2. Open trades with pending modifications (break-even / partial-close / trailing)
     mod_cursor = db.trades.find({
@@ -1259,8 +1023,6 @@ async def poll_trades(payload: PollRequest):
             # audit r4 P0 · EA v1.50 command fence: immutable intent + seq
             "intent_id": m.get("intent_id"),
             "seq": m.get("seq"),
-            # EA v1.58 ownership fence — adopted external positions only
-            **({"manage_external": True} if _manage_external(t) else {}),
         })
 
     resp = {"trades": out, "modifications": modifications}
@@ -1882,10 +1644,7 @@ async def report_trade(payload: BridgeTradeReport):
                     close_reason = "take_profit" if profit_dir else "stop_loss"
             update["close_reason"] = close_reason
 
-    _rres = await db.trades.update_one({"_id": ObjectId(payload.trade_id)},
-                                       {"$set": update})
-    if payload.status in _TERMINAL_TRADE_STATES and _write_matched(_rres):
-        await _release_exposure(db, trade)
+    await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
     # Scalp fast-path reconciliation (EA v1.44). /bridge/report is the
     # OPERATIONAL acknowledgement path only: it feeds fill confirmation and
     # frees the position slot. Financial reconciliation (P&L, commission,
@@ -2433,10 +2192,6 @@ async def external_deal(payload: BridgeExternalDeal):
         if close_ack:
             update["close_command"] = close_ack
         await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
-        # Broker-side closes (SL/TP hit, manual close in the terminal) arrive
-        # here — free the trade's exposure hold. Idempotent, so the
-        # confirm-only path (already released via /report) is harmless.
-        await _release_exposure(db, existing)
         tid = str(existing["_id"])
         # Scalp fast-path AUTHORITATIVE financial reconciliation (round 5
         # item 1 / round 6 durable state): SIGNED profit/commission/swap +

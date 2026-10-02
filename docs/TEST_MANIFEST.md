@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 993 |
+| unit | pure logic, no external I/O | every CI job | 647 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3806 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3804 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 5010 tests across 504 files.**
+**Total: 4662 tests across 480 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -33,7 +33,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter105_liquidity_map.py` | http-live | 13 |
 | `backend/tests/test_iter105_shadow_readiness.py` | http-live | 7 |
 | `backend/tests/test_iter105_shadow_readiness_http.py` | http-live | 6 |
-| `backend/tests/test_iter106_news_understanding.py` | http-live | 14 |
+| `backend/tests/test_iter106_news_understanding.py` | http-live | 12 |
 | `backend/tests/test_iter106_phase2.py` | http-live | 5 |
 | `backend/tests/test_iter107_calendar_intel.py` | http-live | 13 |
 | `backend/tests/test_iter108_ml_ensemble.py` | http-live | 7 |
@@ -475,31 +475,12 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/scalp/test_scalp_unit.py` | unit | 162 |
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
 | `backend/tests/unit/test_admin_integrations.py` | unit | 6 |
-| `backend/tests/unit/test_audit_v2_auth_bridge_plaintext.py` | unit | 9 |
-| `backend/tests/unit/test_audit_v2_auth_bridge_rotate.py` | unit | 6 |
-| `backend/tests/unit/test_audit_v2_auth_refresh.py` | unit | 11 |
-| `backend/tests/unit/test_audit_v2_auth_rotate_bypass.py` | unit | 2 |
-| `backend/tests/unit/test_audit_v2_billing_recovery.py` | unit | 15 |
-| `backend/tests/unit/test_audit_v2_demo_lease.py` | unit | 6 |
-| `backend/tests/unit/test_audit_v2_ops_perf_freshness.py` | unit | 10 |
-| `backend/tests/unit/test_audit_v2_ops_vault_ack.py` | unit | 8 |
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
 | `backend/tests/unit/test_forecast_status.py` | unit | 3 |
 | `backend/tests/unit/test_host_migrator.py` | unit | 17 |
-| `backend/tests/unit/test_impr_auth_hardening.py` | unit | 19 |
-| `backend/tests/unit/test_impr_crypto_lifecycle.py` | unit | 27 |
-| `backend/tests/unit/test_impr_ea_contract.py` | unit | 16 |
-| `backend/tests/unit/test_impr_llm_client.py` | unit | 27 |
-| `backend/tests/unit/test_impr_ops_hardening.py` | unit | 20 |
-| `backend/tests/unit/test_impr_risk_fail_closed.py` | unit | 13 |
-| `backend/tests/unit/test_impr_risk_reservations.py` | unit | 19 |
-| `backend/tests/unit/test_impr_risk_specs.py` | unit | 16 |
-| `backend/tests/unit/test_impr_uncertainty_models.py` | unit | 24 |
-| `backend/tests/unit/test_impr_validation_framework.py` | unit | 23 |
-| `backend/tests/unit/test_impr_wiring_release.py` | unit | 16 |
 | `backend/tests/unit/test_install_report_healthwatch.py` | unit | 3 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
 | `backend/tests/unit/test_public_status_bounded.py` | unit | 2 |
@@ -510,11 +491,6 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_r28_chart_provenance.py` | unit | 2 |
 | `backend/tests/unit/test_r30_ea_release_chain.py` | unit | 4 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
-| `backend/tests/unit/test_review_exec_fixes.py` | unit | 23 |
-| `backend/tests/unit/test_review_lease_keeper.py` | unit | 2 |
-| `backend/tests/unit/test_review_llm_and_calibration.py` | unit | 10 |
-| `backend/tests/unit/test_review_quant_fixes.py` | unit | 9 |
-| `backend/tests/unit/test_review_sec_fixes.py` | unit | 15 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 24 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |

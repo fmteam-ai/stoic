@@ -17,13 +17,11 @@ The app-side half is already implemented in code (iter-155):
 - Session idle timeout (`SESSION_IDLE_TIMEOUT_MINUTES`) + new-IP login
   notification emails
 - Refresh-token rotation with reuse detection, plus a concurrent-refresh grace
-  window (`REFRESH_REUSE_GRACE_SECONDS`, default 10): a consumed token
-  re-presented inside the window gets `409 refresh_superseded` (no new token,
-  no family revocation) so a racing tab simply keeps the cookie its sibling
-  just received; the frontend also serialises refreshes across tabs with
-  `navigator.locks`. Re-presenting after the window revokes the whole family.
-  Consumption is atomic (`find_one_and_update`), so parallel refreshes mint
-  exactly one live successor.
+  window (`REFRESH_REUSE_GRACE_SECONDS`, default 60): two tabs whose access
+  tokens expire together no longer trip "reuse detected" and log the user out;
+  a token with a different hash, or re-presented after the window, still
+  revokes the whole family. Consumption is atomic (`find_one_and_update`), so
+  parallel refreshes mint exactly one live successor.
 - Existing layers: JWT cookies, per-endpoint app rate limits, step-up MFA,
   HMAC-signed host-agent commands, Ed25519-signed artifacts, audit chain
 

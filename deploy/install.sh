@@ -144,8 +144,6 @@ STEP_UP_BYPASS_TOKEN=
 KEY_VAULT_MASTER=
 BACKGROUND_WORKERS_IN_PROCESS=
 METRICS_TOKEN=
-OPS_DEPLOY_TOKEN=
-OPS_ALLOW_METRICS_TOKEN_FOR_DEPLOY=
 WS_ALLOW_QUERY_TOKEN=
 EOF
 }
@@ -171,10 +169,9 @@ if [ ! -d secrets ]; then
   gen > secrets/jwt_secret
   gen > secrets/key_vault_master
   gen > secrets/metrics_token
-  gen > secrets/ops_deploy_token     # mutating ops (deploy tooling) — distinct from metrics_token
   chmod 600 secrets/*
   echo "   generated mongo_root_password, mongo_app_password, mongo_url,"
-  echo "   jwt_secret, key_vault_master, metrics_token, ops_deploy_token (mode 600)."
+  echo "   jwt_secret, key_vault_master, metrics_token (mode 600)."
 else
   echo "-- ./secrets exists — leaving untouched"
 fi

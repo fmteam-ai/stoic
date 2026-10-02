@@ -3,8 +3,7 @@
 Composes the evolution record from the sources that already govern change:
 governed_changes (who approved what), auto_guards (loss-advisor auto
 measures), improvement_proposals (research lab), tuning_proposals (nightly
-Bayesian tuner: GP fitted on the first 70% of bars, judged on the held-out
-last 30% net of costs, plus DSR/PBO selection-bias checks) — and attaches per-strategy-version realized performance
+walk-forward tuner) — and attaches per-strategy-version realized performance
 from version-stamped closed trades, so configuration drift is impossible.
 """
 from datetime import datetime
@@ -17,24 +16,6 @@ def _iso(v) -> str | None:
     if isinstance(v, datetime):
         return v.isoformat()
     return str(v) if v else None
-
-
-def tuning_why(tp: dict) -> str:
-    """Honest label for a tuning proposal: in-sample vs out-of-sample."""
-    is_imp = tp.get("improvement")
-    if tp.get("oos_improvement") is None:
-        # legacy proposals (pre-validation framework) were in-sample only
-        return (f"in-sample score gain {is_imp} on the same bars it was "
-                f"optimised on (no out-of-sample check, frictionless)")
-    dsr = (tp.get("dsr") or {}).get("dsr")
-    pbo = (tp.get("pbo") or {}).get("pbo")
-    gate = tp.get("gate") or {}
-    verdict = ("" if not gate else
-               " — gate passed" if gate.get("accepted") else
-               f" — gate failed: {', '.join(gate.get('failed') or [])}")
-    return (f"in-sample score gain {is_imp}; held-out OOS "
-            f"{tp.get('oos_improvement'):+}R net of costs, DSR {dsr}, "
-            f"PBO {pbo}{verdict}")[:200]
 
 
 async def lineage(db, user_id: str) -> dict:
@@ -74,10 +55,9 @@ async def lineage(db, user_id: str) -> dict:
         events.append({
             "ts": _iso(tp.get("created_at")), "kind": "tuning",
             "what": f"{tp.get('engine')} params v{tp.get('version')}",
-            "why": tuning_why(tp),
+            "why": f"walk-forward improvement {tp.get('improvement')}",
             "who": "nightly tuner", "status": tp.get("status"),
-            # "helped" = held-out evidence only; in-sample gains never count
-            "helped": tp.get("oos_improvement")})
+            "helped": tp.get("improvement")})
     events = [e for e in events if e["ts"]]
     events.sort(key=lambda e: str(e["ts"]), reverse=True)
 

@@ -167,11 +167,7 @@ class TestStopToleranceAndVolumeSteps:                        # items 8 + 9
         body = _ea()[_ea().index("void ApplyPartialClose("):]
         assert "SYMBOL_VOLUME_STEP" in body
         assert "SYMBOL_VOLUME_MIN" in body
-        # v1.58: volume is floored to the broker step (never rounded up)
-        assert "close_vol = NormalizeLot(symbol, close_vol);" in body
-        ea = _ea()
-        nl = ea[ea.index("double NormalizeLot("):]
-        assert "MathFloor(v / step + 1e-7) * step" in nl[:600]
+        assert "MathFloor(close_vol / step + 0.5) * step" in body
         assert "close_volume_below_min" in body
         assert "NormalizeDouble(close_vol, 2)" not in body
 

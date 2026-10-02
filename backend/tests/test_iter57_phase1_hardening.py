@@ -186,7 +186,7 @@ class TestRefreshRotation:
         assert new_refresh and new_refresh != old_refresh, "refresh token was not rotated"
         new_csrf = r1.cookies.get("csrf_token") or csrf_a
 
-        # REPLAY old refresh inside the grace window → 409 refresh_superseded (no mint)
+        # REPLAY old refresh → should be 401
         hdrs2 = {"X-CSRF-Token": csrf_a}
         if BYPASS:
             hdrs2["X-RateLimit-Bypass"] = BYPASS
@@ -197,24 +197,23 @@ class TestRefreshRotation:
             timeout=10,
         )
         # Concurrent-refresh grace (second tab re-presenting the token the first tab just
-        # consumed): inside REFRESH_REUSE_GRACE_SECONDS the server answers 409
-        # refresh_superseded WITHOUT minting a session or setting cookies (audit v2
-        # P1-01) — the user is NOT logged out and the replayer gains nothing.
-        assert r2.status_code == 409, f"same-token re-present inside grace must be 409 refresh_superseded, got {r2.status_code}: {r2.text}"
-        assert "refresh_superseded" in r2.text
-        assert not r2.cookies.get("refresh_token"), "a superseded refresh must not set cookies"
+        # consumed): inside REFRESH_REUSE_GRACE_SECONDS the chain continues instead of
+        # revoking the family — the user is NOT logged out.
+        assert r2.status_code == 200, f"same-token re-present inside grace should continue the chain, got {r2.status_code}: {r2.text}"
+        newest = r2.cookies.get("refresh_token")
+        assert newest and newest not in (old_refresh, new_refresh)
 
-        # the successor minted by r1 is still the live head
+        # the intermediate successor was consumed by the grace continuation; the NEWEST head still works
         hdrs3 = {"X-CSRF-Token": new_csrf}
         if BYPASS:
             hdrs3["X-RateLimit-Bypass"] = BYPASS
         r3 = requests.post(
             f"{API}/auth/refresh",
-            cookies={"refresh_token": new_refresh, "csrf_token": new_csrf},
+            cookies={"refresh_token": newest, "csrf_token": new_csrf},
             headers=hdrs3,
             timeout=10,
         )
-        assert r3.status_code == 200, f"R1 must stay valid, got {r3.status_code}: {r3.text}"
+        assert r3.status_code == 200, f"newest head must stay valid, got {r3.status_code}: {r3.text}"
 
         # a FORGED/stolen token for a consumed jti is a genuine replay → 401 (family revoked)
         r4 = requests.post(

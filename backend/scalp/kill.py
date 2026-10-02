@@ -9,12 +9,6 @@ MAX_CLOCK_DRIFT_MS = 15_000   # residual after TZ snap: broker clock error
                               # + transport; real staleness is guarded by
                               # quote_age/DATA_STALE — small-broker clocks
                               # are routinely seconds off true UTC.
-# EA v1.58+ sends sent_gmt_ms (EA wall clock, UTC) alongside sent_at_ms
-# (newest tick BROKER time). The drift sample then excludes transport and
-# only carries broker clock error + newest-tick age at send, so the
-# residual allowance is tightened to ~2s. Pre-1.58 EAs keep 15s.
-MAX_CLOCK_DRIFT_GMT_MS = 2_000
-MAX_EA_CLOCK_SKEW_MS = 2_000  # EA clock ahead of server by more → untrusted
 TZ_SNAP_MS = 1_800_000        # broker clocks sit on 30-min timezone boundaries
 MAX_REJECT_RATE = 0.30
 SLIPPAGE_ANOMALY_MULT = 3.0
@@ -28,13 +22,6 @@ def clock_drift_residual_ms(offset_ms: float) -> float:
     nearest 30-minute boundary and judge only the residual — genuine clock
     drift / transport skew shows up there."""
     return float(offset_ms - round(offset_ms / TZ_SNAP_MS) * TZ_SNAP_MS)
-
-
-def drift_limit_ms(state) -> int:
-    """Residual drift allowance: tight when the EA reports its own UTC
-    send time (sent_gmt_ms), legacy 15s otherwise."""
-    return (MAX_CLOCK_DRIFT_GMT_MS if getattr(state, "gmt_clock", False)
-            else MAX_CLOCK_DRIFT_MS)
 
 
 def evaluate(state, cfg, data_quality: dict | None = None) -> dict:
@@ -54,12 +41,11 @@ def evaluate(state, cfg, data_quality: dict | None = None) -> dict:
             # unusable broker clock halts VISIBLY instead of silently
             # failing the freshness gate.
             drift_residual = state.last_batch_residual_ms
-        limit = drift_limit_ms(state)
-        if abs(drift_residual) > limit:
+        if abs(drift_residual) > MAX_CLOCK_DRIFT_MS:
             reasons.append(
                 "clock drift excessive "
                 f"(residual {abs(drift_residual) / 1000:.1f}s > "
-                f"{limit / 1000:.0f}s — broker clock error or "
+                f"{MAX_CLOCK_DRIFT_MS / 1000:.0f}s — broker clock error or "
                 "transport delay)")
     # Phase E — the session data-quality score gates NEW entries: a POOR
     # feed (invalid ticks, gaps, spread anomalies) cannot be traded on.

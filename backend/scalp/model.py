@@ -13,7 +13,6 @@ profitability-based deployment gates (review items 2/3/4/12).
 - Artifacts EXPIRE after 7 days; predict_p also refuses out-of-distribution
   feature vectors (|z| > 6) — both fall back to the deterministic baseline.
 """
-import asyncio
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -185,40 +184,8 @@ def _rolling_positive_ratio(X, y, res, net, tgt, stp, cost, n, ts=None) -> float
     return round(float(np.mean(ratios)), 2) if len(ratios) >= 2 else None
 
 
-# Single-flight per model key: concurrent retrain requests for the same key
-# (API route, engine auto-retrain, scheduled maintenance) join the in-flight
-# run instead of training twice. Keyed by (event loop, model key).
-_inflight: dict = {}
-
-
 async def retrain(db, symbol: str, broker: str = "any",
                   account_type: str = "any") -> dict:
-    """Single-flight wrapper around _retrain_once (see its docstring). A
-    caller arriving while the same model key is training awaits that run and
-    receives its result with "coalesced": True."""
-    key = make_key(broker, account_type, symbol)
-    loop = asyncio.get_running_loop()
-    slot = (id(loop), key)
-    running = _inflight.get(slot)
-    if running is not None and not running.done():
-        out = await asyncio.shield(running)
-        return {**out, "coalesced": True}
-    task = loop.create_task(_retrain_once(db, symbol, broker, account_type),
-                            name=f"scalp-retrain:{key}")
-    _inflight[slot] = task
-    task.add_done_callback(
-        lambda t: _inflight.pop(slot, None) if _inflight.get(slot) is t else None)
-    return await asyncio.shield(task)
-
-
-def retrain_in_progress(symbol: str, broker: str = "any",
-                        account_type: str = "any") -> bool:
-    key = make_key(broker, account_type, symbol)
-    return any(k == key and not t.done() for (_l, k), t in _inflight.items())
-
-
-async def _retrain_once(db, symbol: str, broker: str = "any",
-                        account_type: str = "any") -> dict:
     """Option C design (review): train 50% | calibrate 20% | evaluate 30%.
     The DEPLOYED artifact is the 50%-trained base model WITH its own Platt
     calibrator — the model is NEVER retrained after calibration, so the
@@ -237,31 +204,6 @@ async def _retrain_once(db, symbol: str, broker: str = "any",
         q, {"features": 1, "outcome": 1, "ts_ms": 1, "forecast": 1,
             "cost_pips": 1, "feature_schema_version": 1}).sort("ts_ms", 1)
     docs = await cur.to_list(20_000)
-    # CPU-bound fit/calibration/bootstrap runs in a worker thread — never on
-    # the event loop (a 20k-row retrain blocked the API for seconds).
-    result, artifact = await asyncio.to_thread(
-        _train_from_docs, docs, key, symbol, broker, account_type)
-    if artifact is None:
-        return result
-    await db.scalp_models.update_one({"model_key": key}, {"$set": artifact},
-                                     upsert=True)
-    # selection-bias audit trail: EVERY candidate is kept, rejected included
-    await db.scalp_model_history.insert_one(dict(artifact))
-    if artifact["usable"]:
-        _active[key] = _to_runtime(artifact)
-    else:
-        _active.pop(key, None)
-    logger.info("scalp model %s n=%d auc=%.3f brier=%.4f/%.4f netexp=%s usable=%s",
-                key, artifact["n_samples"], artifact["oos_auc"], artifact["brier"],
-                artifact["brier_baseline"], artifact["oos_net_expectancy_pips"],
-                artifact["usable"])
-    return result
-
-
-def _train_from_docs(docs: list, key: str, symbol: str, broker: str,
-                     account_type: str):
-    """Pure CPU part of the retrain (numpy) — runs in a worker thread.
-    Returns (result_dict, artifact_or_None)."""
     X, res, net, tgt, stp, cost, ts = [], [], [], [], [], [], []
     for d in docs:
         # feature contract: only train on decisions produced under the
@@ -290,7 +232,7 @@ def _train_from_docs(docs: list, key: str, symbol: str, broker: str,
     n_dir = int(dir_mask.sum())
     if n_dir < MIN_SAMPLES or len(set(y[dir_mask].tolist())) < 2:
         return {"trained": False, "model_key": key, "n": n, "n_directional": n_dir,
-                "reason": f"insufficient directional samples ({n_dir}/{MIN_SAMPLES})"}, None
+                "reason": f"insufficient directional samples ({n_dir}/{MIN_SAMPLES})"}
 
     # ---- chronological split over the FULL timeline (purged + embargoed) ----
     i_cal = max(50, int(n * 0.5))
@@ -303,7 +245,7 @@ def _train_from_docs(docs: list, key: str, symbol: str, broker: str,
     if (len(set(y[m_train].tolist())) < 2 or m_cal.sum() < 30
             or m_evald.sum() < 30):
         return {"trained": False, "model_key": key, "n": n, "n_directional": n_dir,
-                "reason": "insufficient class balance / cal / eval windows"}, None
+                "reason": "insufficient class balance / cal / eval windows"}
 
     # deployed base model = 50% train block; calibrator fit on ITS outputs
     w, mu, sd = _fit(X[m_train], y[m_train])
@@ -379,17 +321,26 @@ def _train_from_docs(docs: list, key: str, symbol: str, broker: str,
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "expires_at": expires,
     }
-    result = {"trained": True, "model_key": key, "n": n, "n_directional": n_dir,
-              "oos_auc": oos_auc,
-              "brier": b_model, "brier_baseline": b_base, "ece": ece_v,
-              "oos_net_expectancy_pips": oos_net_exp,
-              "net_expectancy_lower_bound_pips": net_exp_lb,
-              "stressed_net_expectancy_pips": stressed_exp,
-              "stressed_lower_bound_pips": stressed_lb,
-              "rolling_positive_ratio": rolling_ratio,
-              "selected_eval_trades": int(sel.sum()),
-              "profitable_windows_ratio": prof_ratio, "usable": usable}
-    return result, artifact
+    await db.scalp_models.update_one({"model_key": key}, {"$set": artifact},
+                                     upsert=True)
+    # selection-bias audit trail: EVERY candidate is kept, rejected included
+    await db.scalp_model_history.insert_one(dict(artifact))
+    if usable:
+        _active[key] = _to_runtime(artifact)
+    else:
+        _active.pop(key, None)
+    logger.info("scalp model %s n=%d auc=%.3f brier=%.4f/%.4f netexp=%s usable=%s",
+                key, n, oos_auc, b_model, b_base, oos_net_exp, usable)
+    return {"trained": True, "model_key": key, "n": n, "n_directional": n_dir,
+            "oos_auc": oos_auc,
+            "brier": b_model, "brier_baseline": b_base, "ece": ece_v,
+            "oos_net_expectancy_pips": oos_net_exp,
+            "net_expectancy_lower_bound_pips": net_exp_lb,
+            "stressed_net_expectancy_pips": stressed_exp,
+            "stressed_lower_bound_pips": stressed_lb,
+            "rolling_positive_ratio": rolling_ratio,
+            "selected_eval_trades": int(sel.sum()),
+            "profitable_windows_ratio": prof_ratio, "usable": usable}
 
 
 def _to_runtime(artifact: dict) -> dict:

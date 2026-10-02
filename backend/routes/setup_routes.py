@@ -242,24 +242,6 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
                   "expires_at": now + timedelta(seconds=LEASE_SECONDS)}},
         upsert=True)
 
-    # Bridge tokens are stored only as sha256, so the installer gets a FRESH
-    # token (shown once). This installation already took over the
-    # execution lease above; the previous token keeps a 15-min grace so a
-    # running EA can be swapped without a gap.
-    from auth import bridge_token_fields, generate_bridge_token, hash_bridge_token
-    new_bridge_token = generate_bridge_token()
-    prev_hash = account.get("bridge_token_hash") or (
-        hash_bridge_token(account["bridge_token"])
-        if account.get("bridge_token") else None)
-    await db.accounts.update_one(
-        {"_id": account["_id"]},
-        {"$set": {**bridge_token_fields(new_bridge_token),
-                  "bridge_token_prev_hash": prev_hash,
-                  "bridge_token_prev_expires":
-                      (now + timedelta(minutes=15)).isoformat(),
-                  "bridge_token_rotated_at": now.isoformat()},
-         "$unset": {"bridge_token": "", "bridge_token_prev": ""}})
-
     backend_base = os.environ.get(
         "PUBLIC_BACKEND_URL"
     ) or os.environ.get("REACT_APP_BACKEND_URL")
@@ -270,7 +252,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
     backend_base = backend_base.rstrip("/")
 
     return {
-        "bridge_token": new_bridge_token,
+        "bridge_token": account.get("bridge_token"),
         "installation_id": installation_id,
         "account_label": account.get("label"),
         "broker": account.get("broker"),
@@ -278,7 +260,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "server_url": backend_base,
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
-        "ea_latest_version": "1.58",
+        "ea_latest_version": "1.57",
         # r26 P1-02 — device key enrolled with THIS pairing (None when the installer sent none)
         "device_key_id": (device_key or {}).get("key_id"),
         "attestation_challenge_url": f"{backend_base}/api/infra/attestation/challenge",

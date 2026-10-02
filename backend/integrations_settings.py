@@ -28,11 +28,10 @@ REGISTRY = {
     "RESEND_API_KEY": ("email", True, "Resend API key (re_…)"),
     "SENDER_EMAIL": ("email", False, "From address on a verified Resend domain"),
     "SENDER_NAME": ("email", False, "Display name on outgoing e-mail"),
-    "ANTHROPIC_API_KEY": ("ai", True, "Anthropic API key — official SDK backend (Co-Pilot, Risk Commander, AI agents)"),
-    "EMERGENT_LLM_KEY": ("ai", True, "Emergent Universal Key — legacy LLM backend fallback"),
+    "EMERGENT_LLM_KEY": ("ai", True, "Emergent Universal Key (Co-Pilot, Risk Commander, AI agents)"),
 }
 PROVIDERS = {
-    "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Claude)"}
+    "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Emergent)"}
 _AAD = b"stoic-secrets-vault-v1"
 DECRYPT_FAILURES: list[str] = []   # keys whose sealed value could not be unsealed at boot (master-key mismatch)
 
@@ -154,49 +153,17 @@ async def rewrap_all(db, actor: dict) -> dict:
 
 
 async def rewrap_readiness(db) -> dict:
-    """Latest rewrap manifest must be complete and every LIVE worker must have
-    acknowledged (booted on) the manifest's target key id.
-
-    Fail-closed (audit v2): only non-expired leases count; a live lease with a
-    missing/None/different ``vault_key_id`` is unacknowledged; zero live
-    leases while a manifest exists is NOT ok ("no live workers have
-    acknowledged"). In-process mode (BACKGROUND_WORKERS_IN_PROCESS=true) uses
-    the SAME lease names and the same workers.base._try_acquire path (which
-    writes ``vault_key_id``), so API-hosted leases are judged identically."""
+    """Latest rewrap manifest must be complete and every worker must have booted on the current key id."""
     m = await db.secrets_rewrap_manifests.find_one({}, sort=[("started_at", -1)])
     if not m:
         return {"ok": True, "detail": "no rewrap in progress"}
-    now = datetime.now(timezone.utc)
-    leases = await db.worker_leases.find(
-        {}, {"_id": 1, "vault_key_id": 1, "expires_at": 1, "holder": 1}).to_list(200)
-
-    def _live(a) -> bool:
-        exp = a.get("expires_at")
-        if not isinstance(exp, datetime):   # legacy ISO strings / missing → stealable, not live
-            return False
-        if exp.tzinfo is None:
-            exp = exp.replace(tzinfo=timezone.utc)
-        return exp > now
-
-    live = [a for a in leases if _live(a)]
-    target = m.get("to_key_id")
-    stale = [str(a["_id"]) for a in live if a.get("vault_key_id") and a["vault_key_id"] != target]
-    unacked = [str(a["_id"]) for a in live if not a.get("vault_key_id")]
-    in_process = (os.environ.get("BACKGROUND_WORKERS_IN_PROCESS") or "").lower() == "true"
-    no_live = not live
-    ok = m["status"] == "complete" and not stale and not unacked and not no_live
-    if ok:
-        detail = "rewrap complete, all live workers acknowledged"
-    elif m["status"] == "complete" and no_live:
-        detail = "no live workers have acknowledged the rewrap target key"
-    else:
-        detail = (f"rewrap {m['status']}; failed={len(m.get('failed', []))}; "
-                  f"workers on old key={len(stale)}; unacknowledged={len(unacked)}"
-                  + ("; no live workers have acknowledged" if no_live else ""))
+    acks = await db.worker_leases.find({}, {"_id": 1, "vault_key_id": 1}).to_list(50)
+    stale = [str(a["_id"]) for a in acks if a.get("vault_key_id") and a["vault_key_id"] != m["to_key_id"]]
+    ok = m["status"] == "complete" and not stale
     return {"ok": ok, "manifest_id": m["_id"], "status": m["status"], "failed": m.get("failed", []),
-            "workers_on_old_key": stale, "unacknowledged": unacked + stale,
-            "workers_missing_ack": unacked, "live_workers": [str(a["_id"]) for a in live],
-            "workers_in_process": in_process, "detail": detail}
+            "workers_on_old_key": stale,
+            "detail": "rewrap complete, all workers acknowledged" if ok else
+                      f"rewrap {m['status']}; failed={len(m.get('failed', []))}; workers on old key={len(stale)}"}
 
 
 def master_key_id() -> str:
@@ -354,8 +321,7 @@ async def test_provider(db, provider: str, actor: dict) -> dict:
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "detail": f"Cloudflare unreachable: {type(e).__name__}"}
     if provider == "ai":
-        from llm_client import backend as _llm_backend, is_configured as _llm_configured
-        if not _llm_configured():
-            return {"ok": False, "detail": "no LLM key configured (ANTHROPIC_API_KEY or EMERGENT_LLM_KEY)"}
-        return {"ok": True, "detail": f"{_llm_backend()} backend configured — ask the Co-Pilot a question to exercise it"}
+        if not os.environ.get("EMERGENT_LLM_KEY"):
+            return {"ok": False, "detail": "EMERGENT_LLM_KEY not configured"}
+        return {"ok": True, "detail": "key present — ask the Co-Pilot a question to exercise it"}
     raise ValueError("unknown provider")

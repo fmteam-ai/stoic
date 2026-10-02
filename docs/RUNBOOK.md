@@ -15,13 +15,6 @@
 
 ## Monitoring
 - Prometheus scrape: `GET /api/metrics` with header `X-Metrics-Token: $METRICS_TOKEN`.
-- Token split (O8): `METRICS_TOKEN` is **read-only** (metrics + GET `/api/ops/*`).
-  Mutating machine calls (POST `/api/ops/*`, e.g. release promote/rollback,
-  drills, alert ack, validation evidence) need
-  `X-Ops-Deploy-Token: $(cat secrets/ops_deploy_token)` (`deploy/lib.sh`
-  → `ops_deploy_token`). Rollout: run `deploy/update.sh` (generates the secret),
-  switch external tooling, keep `OPS_ALLOW_METRICS_TOKEN_FOR_DEPLOY` unset.
-  Human admins need role admin **with TOTP MFA** (plus step-up where noted).
   Key series: `stoic_unprotected_open`, `stoic_unresolved_submissions`,
   `stoic_outbox_pending`, `stoic_ea_heartbeat_age_seconds`, `stoic_worker_lease_alive`,
   `stoic_mongo_latency_ms`, `stoic_ws_clients`.

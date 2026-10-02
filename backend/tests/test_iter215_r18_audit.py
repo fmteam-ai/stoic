@@ -2,11 +2,11 @@
 Iter-215 / Round-18 security audit verification (READ-ONLY on preview).
 
 Covers:
-  - GET /api/health → status ok, ea_version == '1.58'
+  - GET /api/health → status ok, ea_version == '1.57'
   - GET /api/status → overall + trading.readiness (dominant_code present) + 6 components
   - GET /api/authority/decision (admin) → 200 with state, dominant_code, blockers list
   - GET /api/accounts (admin) → for each account report ea_version + trading_enabled;
-      any live-mode trading_enabled account with ea_version < 1.58 must produce an EA
+      any live-mode trading_enabled account with ea_version < 1.57 must produce an EA
       blocker (EA_CAPABILITY_BELOW_MIN or EA_VERSION_UNKNOWN) in the authority decision.
   - GET /api/nl/triggers → 200
   - GET /api/ops/deploy-watch → 200 (observe status; do NOT cancel).
@@ -58,7 +58,7 @@ def test_health_ea_157():
     assert r.status_code == 200
     j = r.json()
     assert j.get("status") in ("ok", "healthy"), j
-    assert j.get("ea_version") == "1.58", j
+    assert j.get("ea_version") == "1.57", j
 
 
 def test_status_shape_and_dominant_code():
@@ -110,7 +110,7 @@ def test_accounts_ea_capability_blocker(admin_session):
                 live_unknown = True
             else:
                 vt = _ver_tuple(ver)
-                min_vt = _ver_tuple("1.58")
+                min_vt = _ver_tuple("1.57")
                 if vt is not None and min_vt is not None and vt < min_vt:
                     live_below_min = True
 
@@ -125,7 +125,7 @@ def test_accounts_ea_capability_blocker(admin_session):
 
     if live_below_min:
         assert "EA_CAPABILITY_BELOW_MIN" in codes, (
-            f"live account below 1.58 present but EA_CAPABILITY_BELOW_MIN missing: {codes}"
+            f"live account below 1.57 present but EA_CAPABILITY_BELOW_MIN missing: {codes}"
         )
     if live_unknown:
         assert ("EA_VERSION_UNKNOWN" in codes

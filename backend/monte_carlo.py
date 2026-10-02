@@ -1,7 +1,6 @@
 """iter-112 · Monte Carlo Trade Simulation — simulate before you enter.
 
-Before any entry, 10,000 future price paths are simulated by (stationary
-block, Politis-Romano — see bootstrap_indices) bootstrap-
+Before any entry, 10,000 future price paths are simulated by bootstrap-
 resampling the symbol's actual M15 bar dynamics (close-change + wick sizes —
 preserves fat tails, volatility and drift; no Gaussian assumption). Each
 path runs until SL hit, TP hit, or the horizon expires (same-bar collisions
@@ -11,7 +10,6 @@ Outputs: P(TP first) · P(SL first) · P(timeout) · EV in R · max-drawdown
 distribution · median bars to resolution.
 `mc_gate`: enter ONLY if expected value is positive."""
 import logging
-import os as _os
 
 import numpy as np
 
@@ -35,45 +33,6 @@ MC_EV_TOLERANCE_R = 0.02      # iter-141 · enforce only below −0.02R net (cos
                               # near-misses within 0.02R, zero trades)
 
 
-# Resampling scheme. "block" = stationary block bootstrap (Politis & Romano
-# 1994): blocks of consecutive historical bars with geometric lengths of
-# mean MC_MEAN_BLOCK, wrapped circularly — keeps volatility clustering (a
-# big bar tends to be followed by big bars), which fattens the tails of the
-# path maximum/minimum and therefore P(SL first) in volatile regimes.
-# "iid" = the original per-bar bootstrap (pre-upgrade behaviour).
-MC_BOOTSTRAP = _os.environ.get("MC_BOOTSTRAP", "block").lower()
-MC_MEAN_BLOCK = float(_os.environ.get("MC_MEAN_BLOCK", "8"))
-# Block resampling needs history much longer than the horizon: with only
-# ~2 horizons of bars the circular block bootstrap mostly replays the one
-# observed path (a near "bridge" with understated excursions). Below this
-# ratio we fall back to IID and say so in the output.
-MC_BLOCK_MIN_HIST_RATIO = float(_os.environ.get("MC_BLOCK_MIN_HIST_RATIO",
-                                                "4"))
-
-
-def bootstrap_indices(n_hist: int, n_paths: int, horizon: int, rng,
-                      method: str = "block",
-                      mean_block: float = MC_MEAN_BLOCK) -> np.ndarray:
-    """(horizon, n_paths) matrix of indices into the calibration arrays.
-
-    method="iid": independent uniform draws each step.
-    method="block": stationary bootstrap — each step starts a fresh block
-    with probability 1/mean_block, otherwise continues the current block at
-    the next historical bar (circular wrap)."""
-    if method == "iid" or n_hist < 2 or mean_block <= 1:
-        return rng.integers(0, n_hist, (horizon, n_paths))
-    p_new = 1.0 / float(mean_block)
-    out = np.empty((horizon, n_paths), dtype=np.int64)
-    cur = rng.integers(0, n_hist, n_paths)
-    out[0] = cur
-    for step in range(1, horizon):
-        restart = rng.random(n_paths) < p_new
-        fresh = rng.integers(0, n_hist, n_paths)
-        cur = np.where(restart, fresh, (cur + 1) % n_hist)
-        out[step] = cur
-    return out
-
-
 def calibrate(bars):
     dcs, uws, dws = [], [], []
     for i in range(1, len(bars)):
@@ -86,12 +45,7 @@ def calibrate(bars):
 
 def simulate_trade(action, entry, sl, tp, bars,
                    n_paths=DEFAULT_PATHS, horizon=DEFAULT_HORIZON,
-                   seed=None, cost_price: float = 0.0,
-                   bootstrap: str | None = None,
-                   mean_block: float | None = None) -> dict | None:
-    """Monte Carlo P(TP before SL). `bootstrap` = "block" (default,
-    stationary block bootstrap) | "iid" (legacy per-bar resampling);
-    `mean_block` = expected block length in bars (default MC_MEAN_BLOCK)."""
+                   seed=None, cost_price: float = 0.0) -> dict | None:
     if action not in ("BUY", "SELL") or not entry or not sl or not tp:
         return None
     if not bars or len(bars) < MIN_BARS:
@@ -104,15 +58,6 @@ def simulate_trade(action, entry, sl, tp, bars,
     n_hist = len(dcs)
     rng = np.random.default_rng(seed)
     is_buy = action == "BUY"
-    method = (bootstrap or MC_BOOTSTRAP or "block").lower()
-    if method not in ("block", "iid"):
-        method = "block"
-    mb = float(mean_block if mean_block is not None else MC_MEAN_BLOCK)
-    block_fallback = None
-    if method == "block" and n_hist < MC_BLOCK_MIN_HIST_RATIO * horizon:
-        block_fallback = (f"history {n_hist} bars < "
-                          f"{MC_BLOCK_MIN_HIST_RATIO:g}× horizon — IID")
-        method = "iid"
 
     # iter-135 · measure recent drift vs the full calibration window. The
     # bootstrap already carries the FULL-sample mean drift (≈0 over weeks);
@@ -140,14 +85,8 @@ def simulate_trade(action, entry, sl, tp, bars,
     worst = np.zeros(n_paths)                       # adverse excursion ($)
     exit_step = np.full(n_paths, horizon, dtype=np.int32)
 
-    # IID draws stay per-step so seeded results are bit-identical to the
-    # pre-upgrade simulator; block indices are generated up front.
-    idx_all = (bootstrap_indices(n_hist, n_paths, horizon, rng,
-                                 method="block", mean_block=mb)
-               if method == "block" else None)
     for step in range(horizon):
-        idx = (idx_all[step] if idx_all is not None
-               else rng.integers(0, n_hist, n_paths))
+        idx = rng.integers(0, n_hist, n_paths)
         step_drift = (excess_drift * (0.5 ** (step / DRIFT_HALF_LIFE))
                       if excess_drift else 0.0)
         new = price + dcs[idx] + step_drift
@@ -197,9 +136,7 @@ def simulate_trade(action, entry, sl, tp, bars,
             "trend": trend, "trend_aligned": trend_aligned,
             "max_dd_r_median": round(float(np.median(dd_r)), 2),
             "max_dd_r_p95": round(float(np.quantile(dd_r, 0.95)), 2),
-            "median_bars_to_exit": int(np.median(exit_step)),
-            "bootstrap": method, "bootstrap_fallback": block_fallback,
-            "mean_block": (round(mb, 2) if method == "block" else None)}
+            "median_bars_to_exit": int(np.median(exit_step))}
 
 
 # Typical all-in round-trip cost (spread + slippage buffer) in PRICE units.

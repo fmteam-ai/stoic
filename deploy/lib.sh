@@ -31,20 +31,18 @@ app_env() {
 #   order_auth_secret / ledger_anchor_key : signing keys distinct from JWT (boot rule)
 #   secrets_master_key                    : dedicated integrations-vault key (audit r28 P2-02);
 #                                           legacy JWT-derived records are migrated at boot
-#   ops_deploy_token                      : machine credential for MUTATING /api/ops/* calls —
-#                                           METRICS_TOKEN is read-only (scrape + readiness)
 ensure_release_secrets() {
   [ -d secrets ] || return 0
   local f
   # create with mode 0600 from the start (no umask window), regenerate zero-byte leftovers
-  for f in order_auth_secret ledger_anchor_key ops_deploy_token; do
+  for f in order_auth_secret ledger_anchor_key; do
     [ -s "secrets/${f}" ] || { (umask 077; python3 -c "import secrets;print(secrets.token_urlsafe(32))" > "secrets/${f}"); echo "   generated ${f}"; }
   done
   [ -s secrets/secrets_master_key ] || {
     (umask 077; python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/secrets_master_key)
     echo "   generated secrets_master_key (dedicated vault key — sealed integration secrets migrate at boot)"
   }
-  chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/secrets_master_key secrets/ops_deploy_token
+  chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/secrets_master_key
 }
 
 # After a failed `compose up`, an app container CREATED BY THIS PASS that exited
@@ -103,16 +101,6 @@ metrics_token() {
   if [ -f secrets/metrics_token ]; then t=$(cat secrets/metrics_token 2>/dev/null || true)
   else t=$( { grep -E '^METRICS_TOKEN=' backend/.env 2>/dev/null || true; } | cut -d= -f2- | tr -d '"'); fi
   [ -n "${t}" ] || { echo "ERROR: metrics token missing (secrets/metrics_token or METRICS_TOKEN in backend/.env)" >&2; return 1; }
-  printf '%s' "${t}"
-}
-
-# Deploy token for MUTATING ops calls (release promote/rollback, drills, alert
-# ack …). METRICS_TOKEN is read-only since the O8 split — never use it here.
-ops_deploy_token() {
-  local t=""
-  if [ -f secrets/ops_deploy_token ]; then t=$(cat secrets/ops_deploy_token 2>/dev/null || true)
-  else t=$( { grep -E '^OPS_DEPLOY_TOKEN=' backend/.env 2>/dev/null || true; } | cut -d= -f2- | tr -d '"'); fi
-  [ -n "${t}" ] || { echo "ERROR: ops deploy token missing (secrets/ops_deploy_token or OPS_DEPLOY_TOKEN in backend/.env)" >&2; return 1; }
   printf '%s' "${t}"
 }
 

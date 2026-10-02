@@ -42,11 +42,7 @@ async def create_anchor(db) -> dict | None:
     body = {"seq": head["seq"], "entry_hash": head["entry_hash"],
             "collection": CHAIN_COLLECTION, "anchored_at": _now().isoformat()}
     from release_signing import KEY_ID, public_key_b64, sign_hex
-    import asyncio
-    # sign_hex may POST to the external signer (sync requests) — keep it off
-    # the event loop so a slow signer can't stall bridge/API traffic.
-    sig = await asyncio.to_thread(sign_hex, _canon(body).encode())
-    doc = {**body, "signature": sig,
+    doc = {**body, "signature": sign_hex(_canon(body).encode()),
            "key_id": KEY_ID, "public_key_b64": public_key_b64()}
     await db.audit_anchors.insert_one(dict(doc))
     await _push_external(doc)

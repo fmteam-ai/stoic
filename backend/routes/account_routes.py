@@ -4,8 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 from pydantic import BaseModel, Field
 
-from auth import (get_current_user, generate_bridge_token, verify_password,
-                  bridge_token_fields, strip_bridge_token_fields)
+from auth import get_current_user, generate_bridge_token, verify_password
 from database import get_db
 from state_contract import HEARTBEAT_FRESH_S
 from models import AccountCreate, AccountCredsUpdate
@@ -60,11 +59,8 @@ def _serialize(doc: dict) -> dict:
     doc["has_master_password"] = bool(creds.get("master"))
     # SEC hardening — the bridge token is a secret; never bulk-return it.
     # The owner fetches it on demand via GET /{id}/bridge-token.
-    # Audit v2 P2-02 — no bridge_token* field (plaintext, hash, prev, last4,
-    # stamps) ever leaves in an account listing/export.
-    has_token = bool(doc.get("bridge_token") or doc.get("bridge_token_hash"))
-    strip_bridge_token_fields(doc)
-    doc["has_bridge_token"] = has_token
+    doc["has_bridge_token"] = bool(doc.pop("bridge_token", None))
+    doc.pop("bridge_token_prev", None)
     return doc
 
 
@@ -564,8 +560,7 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
                                    else None),
         "base_currency": payload.base_currency,
         "mode": payload.mode,
-        # Only the sha256 is stored; the plaintext is issued via rotate-token.
-        **bridge_token_fields(generate_bridge_token()),
+        "bridge_token": generate_bridge_token(),  # unused for paper but harmless
         "status": "connected" if is_paper else "disconnected",
         # P0 (release review): enablement is ALWAYS an explicit boolean —
         # new accounts start OFF until the owner turns trading on.
@@ -806,95 +801,23 @@ async def trust_terminal(account_id: str, request: Request,
 
 
 @router.post("/{account_id}/rotate-token")
-async def rotate_token(account_id: str, request: Request,
-                       user=Depends(get_current_user)):
+async def rotate_token(account_id: str, user=Depends(get_current_user)):
     db = get_db()
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
-    # A stolen session must not be able to mint itself a valid EA credential.
-    # Users with MFA prove a fresh factor (step-up); users without MFA must
-    # re-enter their current password (audit v2 P2-01 — a session alone is
-    # not enough). Rotation stays available as the remedy for a leaked token.
-    from step_up import require_step_up, audit_event
-    from webauthn_mfa import has_passkey
-    full = await db.users.find_one({"_id": parse_object_id(user["id"], "User")},
-                                   {"two_factor_enabled": 1, "password_hash": 1})
-    if (full or {}).get("two_factor_enabled") or await has_passkey(db, user["id"]):
-        await require_step_up(db, user, request, "bridge_token_rotate")
-        method = "step_up"
-    else:
-        try:
-            body = await request.json()
-        except Exception:
-            body = None
-        password = (body or {}).get("current_password") if isinstance(body, dict) else None
-        method = await _require_rotate_password(db, user["id"], full or {}, password,
-                                                request)
-    from auth import hash_bridge_token
     new_token = generate_bridge_token()
     grace_until = (datetime.now(timezone.utc)
                    + timedelta(minutes=15)).isoformat()
-    prev_hash = acc.get("bridge_token_hash") or (
-        hash_bridge_token(acc["bridge_token"]) if acc.get("bridge_token") else None)
     await db.accounts.update_one(
         {"_id": acc["_id"]},
-        {"$set": {**bridge_token_fields(new_token),
-                  "bridge_token_prev_hash": prev_hash,
+        {"$set": {"bridge_token": new_token,
+                  "bridge_token_prev": acc.get("bridge_token"),
                   "bridge_token_prev_expires": grace_until,
-                  "status": "disconnected"},
-         "$unset": {"bridge_token": "", "bridge_token_prev": ""}},
+                  "status": "disconnected"}},
     )
-    await audit_event(db, user["id"], "bridge_token_rotated",
-                      {"account_id": account_id, "method": method,
-                       "prev_token_grace_until": grace_until},
-                      request, step_up=(method == "step_up"))
     return {"bridge_token": new_token, "prev_token_grace_until": grace_until}
-
-
-BRIDGE_ROTATE_SCOPE = "bridge_rotate"
-
-
-def _test_bypass_ok(request) -> bool:
-    """Same server-side test bypass as step_up.require_step_up (refused in
-    production): lets the live HTTP suites rotate without a password."""
-    import secrets as _secrets
-    from app_env import bypass_token, is_production
-    expected = bypass_token("STEP_UP_BYPASS_TOKEN")
-    got = (getattr(request, "headers", {}) or {}).get("X-Step-Up-Bypass") or ""
-    return bool(expected and got and not is_production()
-                and _secrets.compare_digest(expected, got))
-
-
-async def _require_rotate_password(db, user_id: str, full: dict,
-                                   password: str | None, request=None) -> str:
-    """Audit v2 P2-01 — password re-auth for bridge-token rotation by users
-    without MFA. Failure lockout 5 / 10 min (same helpers as /auth/step-up
-    and the 2FA-enrol re-auth). Returns the audit `method` label.
-    Passwordless (OAuth-only) accounts have nothing stronger to check."""
-    if not full.get("password_hash"):
-        return "session_passwordless"
-    if request is not None and _test_bypass_ok(request):
-        return "test_bypass"
-    from security import check_failure_limit, record_failure, clear_failures
-    await check_failure_limit(db, BRIDGE_ROTATE_SCOPE, user_id, 5, 600,
-                              "Too many failed password attempts. "
-                              "Try again in a few minutes.")
-    if not password or not isinstance(password, str) \
-            or not verify_password(password, full["password_hash"]):
-        if password:
-            await record_failure(db, BRIDGE_ROTATE_SCOPE, user_id, 600)
-            from step_up import audit_event
-            await audit_event(db, user_id, "bridge_token_rotate_failed",
-                              {"reason": "bad_password"})
-        raise HTTPException(status_code=401, detail={
-            "code": "password_required",
-            "message": ("Enter your current password to rotate the bridge "
-                        "token." if not password else
-                        "Current password is incorrect.")})
-    await clear_failures(db, BRIDGE_ROTATE_SCOPE, user_id)
-    return "password"
 
 
 @router.post("/{account_id}/request-sync")
@@ -988,15 +911,12 @@ async def get_bridge_token(account_id: str, user=Depends(get_current_user)):
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"),
          "user_id": user["id"]},
-        {"bridge_token": 1, "bridge_token_hash": 1, "bridge_token_last4": 1,
-         "bridge_last_used_at": 1})
+        {"bridge_token": 1, "bridge_last_used_at": 1})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     tok = acc.get("bridge_token") or ""
-    last4 = acc.get("bridge_token_last4") or tok[-4:]
-    has = bool(tok or acc.get("bridge_token_hash"))
-    return {"bridge_token_masked": (f"••••••••••••{last4}" if has else ""),
-            "has_bridge_token": has,
+    return {"bridge_token_masked": (f"••••••••••••{tok[-4:]}" if tok else ""),
+            "has_bridge_token": bool(tok),
             "last_used_at": acc.get("bridge_last_used_at"),
             "note": "Full token is shown only once at creation/rotation. "
                     "Rotate to get a new one (15-min grace for the old)."}
@@ -1016,8 +936,6 @@ async def revoke_bridge_token(account_id: str,
     await db.accounts.update_one(
         {"_id": acc["_id"]},
         {"$unset": {"bridge_token": "", "bridge_token_prev": "",
-                    "bridge_token_hash": "", "bridge_token_prev_hash": "",
-                    "bridge_token_last4": "",
                     "bridge_token_prev_expires": ""},
          "$set": {"bridge_token_revoked_at":
                   datetime.now(timezone.utc).isoformat()}})
@@ -1533,8 +1451,8 @@ async def accounts_certification(user=Depends(get_current_user)):
              "value": v or "—", "ok": bool(v) and v == LATEST_EA,
              "hint": f"latest is {LATEST_EA}"},
             {"key": "bridge_paired", "label": "Bridge paired",
-             "value": "yes" if (a.get("bridge_token") or a.get("bridge_token_hash")) else "no",
-             "ok": bool(a.get("bridge_token") or a.get("bridge_token_hash"))},
+             "value": "yes" if a.get("bridge_token") else "no",
+             "ok": bool(a.get("bridge_token"))},
             {"key": "heartbeat", "label": "EA heartbeat",
              "value": f"{int(hb_age)}s ago" if hb_age is not None else "never",
              "ok": hb_age is not None and hb_age < HEARTBEAT_FRESH_S},

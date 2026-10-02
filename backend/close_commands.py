@@ -200,26 +200,9 @@ async def _acknowledge_close(db, trade, *, broker_deal_id, occurred_at, result, 
 
 
 async def cancel_pending(db, query: dict, *, reason: str, actor: str, session=None, stamp: dict | None = None) -> int:
-    """Pending ORDERS are cancelled, never position-closed.
-
-    impr-wiring — each cancelled row is tagged so exactly the documents THIS
-    call cancelled have their exposure reservation released (idempotent,
-    never raises; rebuild_reservations heals any miss)."""
-    tag = f"cp:{uuid.uuid4().hex[:12]}"
+    """Pending ORDERS are cancelled, never position-closed."""
     res = await db.trades.update_many(
         {**query, "status": "pending"},
         {"$set": {"status": "cancelled", "close_reason": reason, "cancelled_by": actor,
-                  "closed_at": _now(), "_cancel_tag": tag, **(stamp or {})}}, session=session)
-    n = res.modified_count
-    if n:
-        try:
-            from execution_authority import release_reservation
-            rows = await db.trades.find(
-                {"_cancel_tag": tag},
-                {"_id": 1, "account_id": 1, "user_id": 1, "exposure_reservation": 1},
-                session=session).to_list(length=None)
-            for row in rows or []:
-                await release_reservation(db, row)
-        except Exception as e:  # noqa: BLE001 — advisory, rebuild heals
-            log.warning("cancel_pending: exposure release failed: %s", e)
-    return n
+                  "closed_at": _now(), **(stamp or {})}}, session=session)
+    return res.modified_count

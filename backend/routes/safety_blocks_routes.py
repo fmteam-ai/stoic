@@ -7,7 +7,7 @@ where the bot is aggressive enough to make money but the guardian isn't
 constantly slapping it down.
 """
 from datetime import datetime, timezone, timedelta
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from auth import get_current_user
 from database import get_db
@@ -268,9 +268,10 @@ async def get_suggestion(days: int = Query(7, ge=1, le=90),
     top = rows[0]
     reason = top["_id"]["reason"]
     scope_account_id = top["_id"].get("acct")
-    from routes.bot_routes import _config_filter
-    cfg = await db.bot_configs.find_one(
-        _config_filter(user["id"], scope_account_id)) or {}
+    cfg_q = {"user_id": user["id"]}
+    if scope_account_id:
+        cfg_q["account_id"] = scope_account_id
+    cfg = await db.bot_configs.find_one(cfg_q) or {}
     sug = _suggest_for(reason, cfg)
     if not sug:
         return {"has_suggestion": False, "top_reason": reason,
@@ -286,61 +287,19 @@ async def get_suggestion(days: int = Query(7, ge=1, le=90),
     }
 
 
-_SUGGESTION_RISK_LEVELS = ("low", "medium", "high", "extreme")   # models.RiskLevel
-
-
-def _validate_suggestion_patch(patch: dict) -> dict:
-    """Review-sec fix: type/range-validate the client-supplied patch (keys
-    alone were filtered before). Mirrors models.BotConfigUpdate bounds.
-    Raises 400 on any invalid value; returns the coerced patch."""
-    allowed = {"risk_level", "max_concurrent_trades", "max_lot_size", "active"}
-    out = {}
-    for k, v in patch.items():
-        if k not in allowed:
-            continue
-        if k == "risk_level":
-            if not isinstance(v, str) or v.lower() not in _SUGGESTION_RISK_LEVELS:
-                raise HTTPException(status_code=400, detail="invalid risk_level")
-            out[k] = v.lower()
-        elif k == "max_concurrent_trades":
-            if isinstance(v, bool) or not isinstance(v, int) or not 1 <= v <= 10:
-                raise HTTPException(status_code=400,
-                                    detail="max_concurrent_trades must be an integer 1..10")
-            out[k] = v
-        elif k == "max_lot_size":
-            if isinstance(v, bool) or not isinstance(v, (int, float)):
-                raise HTTPException(status_code=400, detail="max_lot_size must be a number")
-            fv = float(v)
-            if not (0 < fv <= 100):    # NaN fails both comparisons
-                raise HTTPException(status_code=400,
-                                    detail="max_lot_size must be > 0 and <= 100")
-            out[k] = fv
-        elif k == "active":
-            if not isinstance(v, bool):
-                raise HTTPException(status_code=400, detail="active must be a boolean")
-            out[k] = v
-    return out
-
-
 @router.post("/apply-suggestion")
-async def apply_suggestion(payload: dict, request: Request,
-                           user=Depends(get_current_user)):
+async def apply_suggestion(payload: dict, user=Depends(get_current_user)):
     """Apply the suggested config patch. Body: { patch: dict, scope_account_id?: str }.
 
-    Values are type/range validated; anything that activates the bot or
-    raises risk on a live context goes through the SAME readiness + step-up
-    gate as PUT /bot/config. Without scope_account_id the user's DEFAULT
-    config (account_id null/absent) is targeted — never an arbitrary doc.
+    Server re-derives the current top suggestion to ensure the client isn't
+    submitting a stale patch — if the suggestion has changed, returns 409.
     """
     patch = payload.get("patch")
-    scope_account_id = payload.get("scope_account_id") or None
+    scope_account_id = payload.get("scope_account_id")
     if not patch or not isinstance(patch, dict):
         raise HTTPException(status_code=400, detail="patch (dict) required")
-    if scope_account_id is not None and not isinstance(scope_account_id, str):
-        raise HTTPException(status_code=400, detail="invalid scope_account_id")
 
     db = get_db()
-    owns = None
     if scope_account_id:
         acct_oid = parse_object_id(scope_account_id, "Account")
         owns = await db.accounts.find_one({
@@ -349,39 +308,18 @@ async def apply_suggestion(payload: dict, request: Request,
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
 
-    from routes.bot_routes import (_activation_readiness, _config_filter,
-                                   _is_risk_raise, _live_context)
-    cfg_q = _config_filter(user["id"], scope_account_id)
+    cfg_q = {"user_id": user["id"]}
+    if scope_account_id:
+        cfg_q["account_id"] = scope_account_id
     cfg = await db.bot_configs.find_one(cfg_q)
     if not cfg:
         raise HTTPException(status_code=404, detail="Bot config not found")
-    # Pin the write to the exact doc we evaluated.
-    cfg_q = {"_id": cfg["_id"]}
 
-    safe_patch = _validate_suggestion_patch(patch)
+    # Sanitize allowed keys — only these may be modified via the suggestion
+    allowed = {"risk_level", "max_concurrent_trades", "max_lot_size", "active"}
+    safe_patch = {k: v for k, v in patch.items() if k in allowed}
     if not safe_patch:
         raise HTTPException(status_code=400, detail="No allowed fields in patch")
-
-    wants_activation = safe_patch.get("active") is True and not cfg.get("active")
-    if wants_activation and owns is not None:
-        problems = await _activation_readiness(db, owns)
-        if problems:
-            raise HTTPException(status_code=409, detail={
-                "code": "activation_not_ready",
-                "message": "Live activation blocked — fix these first:",
-                "problems": problems})
-    risk_raise = _is_risk_raise(safe_patch, cfg)
-    if (wants_activation or risk_raise) and await _live_context(
-            db, user["id"], scope_account_id, owns):
-        from step_up import audit_event, require_step_up
-        action = "live_activation" if wants_activation else "risk_raise"
-        await require_step_up(db, user, request, action)
-        await audit_event(db, user["id"], action,
-                          {"account_id": scope_account_id,
-                           "via": "safety_blocks_apply_suggestion",
-                           "fields": sorted(safe_patch.keys())},
-                          request, step_up=True)
-
     safe_patch["updated_at"] = datetime.now(timezone.utc).isoformat()
     safe_patch["last_suggestion_applied_at"] = datetime.now(timezone.utc).isoformat()
 

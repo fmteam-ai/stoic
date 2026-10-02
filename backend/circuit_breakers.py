@@ -126,15 +126,9 @@ async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
         "monthly_enabled": monthly_enabled,
     }
 
-    # FAIL CLOSED: without equity reported by the EA the drawdown limits
-    # can't be evaluated, so trading must not proceed. Not persisted to the
-    # cfg (no auto-disable) — it clears on its own once equity arrives.
+    # Can't compute a percentage without equity reported by the EA — skip.
     if total_equity <= 0:
-        return {**base, "tripped": True,
-                "reason": "Account equity unavailable (<= 0) — drawdown limits "
-                          "cannot be verified; trading paused until the EA "
-                          "reports equity",
-                "kind": "no_equity",
+        return {**base, "tripped": False, "reason": "", "kind": "",
                 "drawdown_pct": 0.0, "drawdown_week_pct": 0.0,
                 "drawdown_month_pct": 0.0}
 

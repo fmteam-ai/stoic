@@ -265,7 +265,6 @@ async def capital_capable(db) -> bool:
         return True
     bound = {"status": {"$ne": "deleted"}, "$or": [
         {"bridge_token": {"$exists": True, "$nin": [None, ""]}},
-        {"bridge_token_hash": {"$exists": True, "$nin": [None, ""]}},
         {"last_heartbeat": {"$exists": True, "$nin": [None, ""]}},
         {"broker_password_enc": {"$exists": True, "$nin": [None, ""]}},
         {"mt5_password_enc": {"$exists": True, "$nin": [None, ""]}}]}

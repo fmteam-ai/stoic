@@ -13,7 +13,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from bson import ObjectId
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user
 from database import get_db
@@ -292,8 +292,7 @@ async def onboarding_state(user=Depends(get_current_user)):
 
 
 @router.put("/onboarding")
-async def onboarding_update(payload: dict, request: Request,
-                            user=Depends(get_current_user)):
+async def onboarding_update(payload: dict, user=Depends(get_current_user)):
     db = get_db()
     update = {}
     status = payload.get("status")
@@ -311,24 +310,13 @@ async def onboarding_update(payload: dict, request: Request,
         update["onboarding.step"] = step
     risk = payload.get("risk_level")
     if risk is not None:
-        if not isinstance(risk, str) or risk not in VALID_RISK:
+        if risk not in VALID_RISK:
             raise HTTPException(status_code=400, detail="invalid risk_level")
         update["onboarding.risk_level"] = risk
         # Apply to the user's default bot config (created at registration).
-        # Review-sec fix: a risk RAISE on a live context goes through the
-        # same step-up gate as PUT /bot/config.
-        from routes.bot_routes import _config_filter, _is_risk_raise, _live_context
-        cfg_q = _config_filter(user["id"], None)
-        cur_cfg = await db.bot_configs.find_one(cfg_q)
-        if (_is_risk_raise({"risk_level": risk}, cur_cfg)
-                and await _live_context(db, user["id"], None)):
-            from step_up import audit_event, require_step_up
-            await require_step_up(db, user, request, "risk_raise")
-            await audit_event(db, user["id"], "risk_raise",
-                              {"account_id": None, "via": "onboarding",
-                               "fields": ["risk_level"]},
-                              request, step_up=True)
-        await db.bot_configs.update_one(cfg_q, {"$set": {"risk_level": risk}})
+        await db.bot_configs.update_one(
+            {"user_id": user["id"], "account_id": None},
+            {"$set": {"risk_level": risk}})
     if not update:
         raise HTTPException(status_code=400, detail="nothing to update")
     await db.users.update_one({"_id": ObjectId(user["id"])},

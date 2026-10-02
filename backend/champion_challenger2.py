@@ -259,11 +259,7 @@ async def qualify(db, user_id: str, model_id: str) -> dict:
             feats = precompute_features(bars)
             st = new_replay_state()
             st["_r_log"] = []
-            # Qualification is judged net of spread/slippage/commission —
-            # the same cost model the tuner and shadow lab use.
-            from validation import resolve_costs
-            replay(m["engine"], bars, feats, m["params"], state=st,
-                   costs=resolve_costs(m.get("symbol")))
+            replay(m["engine"], bars, feats, m["params"], state=st)
             rs = [x["r"] for x in st["_r_log"]]
             if len(rs) < MIN_TRADES:
                 return {"qualified": None, "advisory": True,

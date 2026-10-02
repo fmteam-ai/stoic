@@ -176,7 +176,8 @@ def evaluate_trade(trade, sig, bars) -> dict:
 
 async def _lesson_llm(trade, ev) -> str | None:
     """Claude one-liner: why was I wrong? (losses only)"""
-    import llm_client
+    import os
+    from emergentintegrations.llm.chat import LlmChat, UserMessage
     ctx = (f"Trade: {trade.get('action')} {trade.get('symbol')} closed at "
            f"{ev.get('realized_r')}R. Entry quality {ev['entry_quality']}/100, "
            f"exit {ev['exit_quality']}/100, MFE {ev.get('mfe_r')}R, MAE "
@@ -184,17 +185,15 @@ async def _lesson_llm(trade, ev) -> str | None:
            f"{ev['stopped_then_reversed']}, regime {ev.get('regime')}, "
            f"volatility {ev['volatility']}, mistakes: "
            f"{', '.join(ev['mistakes']) or 'none flagged'}.")
-    res = await llm_client.complete(
-        feature="self_evaluation",
-        system=("You are a trading coach reviewing a losing trade. Answer "
-                "'why was I wrong?' in ONE sentence, ≤25 words, specific and "
-                "actionable."),
-        user=ctx, max_tokens=200,
-        usage_meta={"user_id": trade.get("user_id"), "trade_id": str(trade.get("_id"))})
-    if not res.ok:
-        # Caller treats an exception as "no lesson" (unchanged failure path).
-        raise RuntimeError(res.error)
-    return res.text.strip()[:300]
+    chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"],
+                   session_id=f"selfeval-{trade.get('_id')}",
+                   system_message=("You are a trading coach reviewing a losing "
+                                   "trade. Answer 'why was I wrong?' in ONE "
+                                   "sentence, ≤25 words, specific and "
+                                   "actionable.")).with_model(
+        "anthropic", "claude-sonnet-4-5-20250929")
+    out = await chat.send_message(UserMessage(text=ctx))
+    return str(out).strip()[:300]
 
 
 def compute_adjustments(evals: list) -> dict:

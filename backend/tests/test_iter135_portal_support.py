@@ -4,7 +4,6 @@ import asyncio
 import os
 import sys
 from datetime import datetime, timezone
-from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -171,7 +170,7 @@ def test_onboarding_state_and_risk_apply():
         _run(_cfg())
 
         ob2 = _run(onboarding_update({"step": 2, "risk_level": "high"},
-                                     MagicMock(), user=user))
+                                     user=user))
         assert ob2["step"] == 2 and ob2["risk_level"] == "high"
 
         async def _check():
@@ -180,11 +179,11 @@ def test_onboarding_state_and_risk_apply():
             return cfg["risk_level"]
         assert _run(_check()) == "high"
 
-        ob3 = _run(onboarding_update({"status": "done"}, MagicMock(), user=user))
+        ob3 = _run(onboarding_update({"status": "done"}, user=user))
         assert ob3["status"] == "done"
 
         with pytest.raises(HTTPException):
-            _run(onboarding_update({"status": "weird"}, MagicMock(), user=user))
+            _run(onboarding_update({"status": "weird"}, user=user))
     finally:
         async def _clean():
             await db.bot_configs.delete_many({"user_id": user["id"]})

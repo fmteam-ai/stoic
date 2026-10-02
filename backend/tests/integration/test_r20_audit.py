@@ -85,7 +85,7 @@ def test_heartbeat_reports_binary_hash_and_fingerprint_tracks_ea_inputs(world):
     acc = _run(db.accounts.insert_one({"user_id": uid, "trading_enabled": True, "mode": "live", "ea_version": "1.56",
                                        "status": "active"})).inserted_id
     f1 = _run(inventory_fingerprint(db, uid))
-    _run(db.accounts.update_one({"_id": acc}, {"$set": {"ea_version": "1.58"}}))
+    _run(db.accounts.update_one({"_id": acc}, {"$set": {"ea_version": "1.57"}}))
     f2 = _run(inventory_fingerprint(db, uid))
     _run(db.accounts.update_one({"_id": acc}, {"$set": {"ea_binary_sha256": "c" * 64}}))
     f3 = _run(inventory_fingerprint(db, uid))

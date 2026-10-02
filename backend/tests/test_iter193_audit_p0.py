@@ -171,17 +171,10 @@ def test_attestation_gate_populations():
                                   "broker_server": "QABroker-Live"}}})
         assert gate() is None
 
-        # a quiet account (old newest deal) that is still reconciled is NOT
-        # stale (audit v2 P2-03) …
+        # newest deal older than 6h → stale
         db.broker_deals.update_many(
             {"user_id": uid},
             {"$set": {"deal_time": int(time.time()) - 7 * 3600}})
-        assert gate() is None
-        # … but reconciliation older than 6h is
-        from datetime import datetime, timedelta, timezone
-        db.accounts.update_many({"user_id": uid}, {"$set": {
-            "last_reconciled_at": (datetime.now(timezone.utc)
-                                   - timedelta(hours=7)).isoformat()}})
         b = gate()
         assert b and "BROKER_DATA_STALE" in b["reasons"]
     finally:

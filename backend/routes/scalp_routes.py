@@ -671,31 +671,15 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
     }
 
 
-RETRAIN_RATE_MAX = 6            # per admin, per hour (Mongo-backed, all replicas)
-RETRAIN_RATE_WINDOW_SEC = 3600
-
-
 @router.post("/retrain")
-async def retrain(request: Request, symbol: str = "EURUSD", account_id: str = None,
+async def retrain(symbol: str = "EURUSD", account_id: str = None,
                   user=Depends(get_current_user)):
-    """Manual model retrain — admin only (role + TOTP MFA), rate limited,
-    single-flight per model key (a concurrent request for the same key joins
-    the running fit), CPU work off the event loop (scalp.model)."""
-    from auth import require_admin
-    require_admin(user)
-    from security import rate_limit
     from scalp.model import retrain as do_retrain
     db = get_db()
-    await rate_limit(db, "scalp_retrain", user["id"], RETRAIN_RATE_MAX,
-                     RETRAIN_RATE_WINDOW_SEC,
-                     message="Retrain limit reached — try again later.",
-                     request=request)
     broker, account_type = "any", "any"
     if account_id:
-        # verified admin: any account may scope the model key (broker |
-        # account_type | symbol — models are not per-user)
-        acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")},
-                                         {"broker": 1, "account_type": 1})
+        acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"),
+                                          "user_id": user["id"]})
         if acc:
             broker = str(acc.get("broker") or "any")
             account_type = str(acc.get("account_type") or "any")

@@ -6,7 +6,6 @@
 6dec49e10b7d2a10e0fd697ae2179cb260218a67:test_reports/iteration_57.json:generic-api-key:59
 e6f305fa5e43054bbd5e1ccac0fd236f1060910e:test_reports/iteration_74.json:generic-api-key:27
 # False positives — dummy/test fixture values and docs placeholders:
-6852815bbc28489dd879987030ad17f02a69ca67:backend/tests/unit/test_audit_v2_ops_vault_ack.py:generic-api-key:13
 60f6e7871bd4df1f4501222241a6e5f165b7b0d6:test_reports/iteration_73.json:generic-api-key:2
 07ef2eeaa27dc7fd710da354fba16cbb31b81cb6:frontend/src/pages/EnterpriseApi.jsx:curl-auth-header:237
 07ef2eeaa27dc7fd710da354fba16cbb31b81cb6:frontend/src/pages/EnterpriseApi.jsx:curl-auth-header:238

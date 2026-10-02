@@ -1,6 +1,4 @@
 # STOIC backend — reproducible build (FastAPI + workers)
-# Base images are tag-pinned; scripts/pin_image_digests.sh rewrites them to
-# tag@sha256 (needs registry access) — CI reports unpinned images.
 FROM python:3.11-slim
 
 WORKDIR /app/backend
