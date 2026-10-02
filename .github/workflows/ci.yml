@@ -366,6 +366,10 @@ jobs:
           export JWT_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
           export KEY_VAULT_MASTER=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
           export METRICS_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
+          # The UI suite logs in as a freshly seeded admin with no TOTP; ops
+          # endpoints require admin MFA, so use the documented CI escape hatch
+          # (server.py refuses it when APP_ENV=production).
+          export ADMIN_MFA_ENFORCED=false
           nohup python -m uvicorn server:app --host 127.0.0.1 --port 8001 > /tmp/backend.log 2>&1 &
       - name: Build and serve frontend (production build)
         run: |
