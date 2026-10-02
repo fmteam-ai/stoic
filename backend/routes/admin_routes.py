@@ -312,6 +312,16 @@ async def _set_user_status(db, *, user_id: str, new_status: str, reason: str,
 
     # Side effects: stop the bot for this user
     if new_status in ("suspended", "terminated"):
+        # impr-auth — cut every credential immediately: refresh sessions,
+        # live access tokens (tokens_valid_after watermark) and API keys.
+        # Unsuspending does NOT resurrect them (user signs in again and
+        # mints new keys).
+        from security import revoke_all_user_sessions
+        await revoke_all_user_sessions(db, user_id, f"admin_{new_status}")
+        await db.api_keys.update_many(
+            {"user_id": user_id, "revoked_at": None},
+            {"$set": {"revoked_at": now,
+                      "revoked_reason": f"user_{new_status}"}})
         await db.bot_configs.update_many(
             {"user_id": user_id, "active": True},
             {"$set": {

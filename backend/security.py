@@ -228,13 +228,16 @@ async def consume_and_rotate(db, payload: dict, presented_token: str,
                              _trusted: bool = False) -> dict | None:
     """Validates + rotates a session-tracked refresh token.
 
-    Returns new claims on success, None on legacy tokens (no jti — accepted
-    once for migration), and raises 401 on revoked/reused tokens. REUSE of
-    an already-consumed token revokes the ENTIRE family (stolen-token
-    replay defense)."""
+    Returns new claims on success and raises 401 on legacy (no jti),
+    revoked or reused tokens. REUSE of an already-consumed token revokes the
+    ENTIRE family (stolen-token replay defense)."""
     jti = payload.get("jti")
     if not jti:
-        return None                        # legacy pre-rotation token
+        # impr-auth — legacy pre-rotation refresh tokens are no longer
+        # migrated into a session: they are untracked/unrevocable, so a
+        # stolen copy would outlive every revocation. Force a re-login.
+        raise HTTPException(status_code=401, detail="Legacy refresh token — "
+                                                    "please sign in again")
     sess = await db.auth_sessions.find_one({"jti": jti})
     if sess is None or sess.get("revoked"):
         raise HTTPException(status_code=401, detail="Session revoked")
@@ -338,12 +341,18 @@ async def revoke_family(db, family: str, reason: str) -> int:
     return res.modified_count
 
 
-async def revoke_all_user_sessions(db, user_id: str, reason: str) -> int:
-    """Password change / reset / 2FA reset / suspension → every session dies."""
+async def revoke_all_user_sessions(db, user_id: str, reason: str,
+                                   revoke_access: bool = True) -> int:
+    """Password change / reset / 2FA reset / suspension → every session dies.
+    impr-auth — also stamps users.tokens_valid_after so already-issued
+    ACCESS tokens die immediately instead of living out their 30 min."""
     res = await db.auth_sessions.update_many(
         {"user_id": user_id, "revoked": False},
         {"$set": {"revoked": True, "revoked_reason": reason,
                   "revoked_at": datetime.now(timezone.utc).isoformat()}})
+    if revoke_access:
+        from auth import revoke_user_access_tokens
+        await revoke_user_access_tokens(db, user_id)
     return res.modified_count
 
 

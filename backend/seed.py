@@ -226,7 +226,23 @@ async def ensure_indexes():
     db = get_db()
     await invalidate_legacy_plaintext_tokens()
     await db.users.create_index("email", unique=True)
-    await db.accounts.create_index("bridge_token", unique=True)
+    # Bridge tokens are stored as sha256 (`bridge_token_hash`). The legacy
+    # unique index on plaintext `bridge_token` is NOT sparse, so once new
+    # accounts stop writing the plaintext every doc without it collides on
+    # null — replace it with a partial index before any insert can hit it.
+    try:
+        info = await db.accounts.index_information()
+        legacy = info.get("bridge_token_1")
+        if legacy and not legacy.get("partialFilterExpression"):
+            await db.accounts.drop_index("bridge_token_1")
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("seed").warning("bridge_token index migration: %s", e)
+    await db.accounts.create_index(
+        "bridge_token", unique=True, name="bridge_token_1",
+        partialFilterExpression={"bridge_token": {"$type": "string"}})
+    await db.accounts.create_index(
+        "bridge_token_hash", unique=True, name="bridge_token_hash_1",
+        partialFilterExpression={"bridge_token_hash": {"$type": "string"}})
     await db.accounts.create_index("user_id")
     # ops collections — BSON-date native (TTL prunes acked alerts after 30d)
     await db.ops_alerts.create_index([("dedup_key", 1), ("acked_at", 1)])
@@ -299,6 +315,11 @@ async def ensure_indexes():
                                             ("updated_at", -1)])
     await db.trades.create_index([("user_id", 1), ("base_symbol", 1),
                                   ("status", 1)])
+    # Crypto lifecycle sweep (open/pending exchange trades) + protective
+    # order audit trail.
+    await db.trades.create_index([("broker_kind", 1), ("status", 1)])
+    await db.trades.create_index("client_order_id", sparse=True)
+    await db.crypto_protection_audit.create_index([("trade_id", 1), ("at", -1)])
     # bot_configs is now keyed by (user_id, account_id). account_id=None marks
     # the user's default profile; other docs are per-account overrides.
     # Drop the old unique(user_id) index if it exists, then create the composite.

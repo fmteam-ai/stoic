@@ -59,7 +59,8 @@ SAFER_BOOL = {
 }
 
 # never bot-changeable, even with approval queued
-FORBIDDEN_FIELDS = {"bridge_token", "broker", "mode", "account_type",
+FORBIDDEN_FIELDS = {"bridge_token", "bridge_token_hash",
+                    "bridge_token_prev_hash", "broker", "mode", "account_type",
                     "user_id", "account_id"}
 
 # operational mode ranks — lower = safer (autopilot #15)

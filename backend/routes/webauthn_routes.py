@@ -54,8 +54,9 @@ async def _require_enrolment_proof(db, user: dict, request: Request,
       token is required (existing require_step_up semantics; the frontend's
       step-up interceptor prompts + retries automatically). A token minted by
       an EXISTING passkey proves possession of an already-enrolled factor, so
-      this is not circular. Action reuses "api_key_create" (minting a new
-      credential) since step_up.py is not extended here.
+      this is not circular. impr-auth — dedicated "passkey_enroll" action;
+      when the user has TOTP the token MUST have been minted with TOTP (a
+      passkey alone cannot enrol further passkeys for a TOTP user).
     - No MFA factor yet (first factor) → the current password must be
       supplied in the payload and is verified with auth.verify_password."""
     from bson import ObjectId
@@ -63,15 +64,20 @@ async def _require_enrolment_proof(db, user: dict, request: Request,
                                    {"two_factor_enabled": 1,
                                     "password_hash": 1}) or {}
     from webauthn_mfa import has_passkey
-    if full.get("two_factor_enabled") or await has_passkey(db, user["id"]):
+    if full.get("two_factor_enabled"):
         from step_up import require_step_up
-        await require_step_up(db, user, request, "api_key_create")
+        await require_step_up(db, user, request, "passkey_enroll",
+                              required_method="totp")
+        return
+    if await has_passkey(db, user["id"]):
+        from step_up import require_step_up
+        await require_step_up(db, user, request, "passkey_enroll")
         return
     if not full.get("password_hash"):
         # Passwordless (OAuth-only) account with no factor: nothing stronger
         # than the session exists to check — require TOTP enrolment first.
         raise HTTPException(status_code=403, detail={
-            "code": "mfa_enrollment_required", "action": "api_key_create",
+            "code": "mfa_enrollment_required", "action": "passkey_enroll",
             "message": "Enable authenticator-app 2FA before adding a passkey."})
     from auth import verify_password
     pw = str((payload or {}).get("current_password") or "")
@@ -83,6 +89,13 @@ async def _require_enrolment_proof(db, user: dict, request: Request,
             "code": "password_required",
             "message": "Current password is required to add a passkey."})
     await clear_failures(db, "passkey_enrol", user["id"])
+
+
+async def _has_totp(db, user: dict) -> bool:
+    from bson import ObjectId
+    full = await db.users.find_one({"_id": ObjectId(user["id"])},
+                                   {"two_factor_enabled": 1}) or {}
+    return bool(full.get("two_factor_enabled"))
 
 
 @router.get("/credentials")
@@ -148,6 +161,11 @@ async def step_up_begin(payload: dict, request: Request,
     if action not in STEP_UP_ACTIONS:
         raise HTTPException(status_code=400,
                             detail=f"Unknown step-up action: {action}")
+    if action == "passkey_enroll" and await _has_totp(get_db(), user):
+        raise HTTPException(status_code=400, detail={
+            "code": "totp_required", "action": action,
+            "message": "Adding a passkey requires your authenticator-app "
+                       "code, not a passkey."})
     from webauthn_mfa import begin_step_up
     try:
         return await begin_step_up(get_db(), user, _origin(request, payload),
@@ -181,7 +199,8 @@ async def step_up_complete(payload: dict, request: Request,
         raise HTTPException(status_code=401,
                             detail="Passkey verification failed")
     await clear_failures(db, "webauthn_stepup", user["id"])
-    result = await issue_step_up_token(db, user["id"], action)
+    result = await issue_step_up_token(db, user["id"], action,
+                                       method="webauthn")
     await audit_event(db, user["id"], "step_up_verified",
                       {"action": action, "method": "webauthn"},
                       request, step_up=True)

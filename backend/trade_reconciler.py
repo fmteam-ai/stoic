@@ -262,6 +262,10 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
                 "account_id": str(acc["_id"]),
                 "status": {"$in": ["pending", "open"]},
                 "mt5_ticket": None,
+                # Crypto trades never carry an MT5 ticket — their exchange
+                # positions are reconciled by crypto_lifecycle; reaping them
+                # here would orphan a live, protected exchange position.
+                "broker_kind": {"$ne": "binance"},
             })
             cancelled = []
             now_iso = datetime.now(timezone.utc).isoformat()

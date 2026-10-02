@@ -252,11 +252,57 @@ class CCXTClient:
     async def fetch_ticker(self, symbol: str) -> dict:
         return await self.exchange.fetch_ticker(symbol)
 
-    async def fetch_order(self, order_id: str, symbol: str) -> dict:
-        return await self.exchange.fetch_order(order_id, symbol)
+    async def fetch_order(self, order_id: str, symbol: str,
+                          params: Optional[dict] = None) -> dict:
+        # `params` carries venue flags such as {"trigger": True} for OKX /
+        # KuCoin conditional (algo / stop) orders.
+        return await self.exchange.fetch_order(order_id, symbol, dict(params or {}))
+
+    async def fetch_order_by_client_id(self, client_order_id: str, symbol: str,
+                                       params: Optional[dict] = None) -> dict:
+        """Look an order up by OUR deterministic clientOrderId — used to
+        resolve a submission whose response was lost (post-dispatch
+        uncertainty). ccxt maps the unified `clientOrderId` param to
+        origClientOrderId (Binance) / clOrdId|algoClOrdId (OKX) /
+        clientOid (KuCoin)."""
+        p = {"clientOrderId": client_order_id}
+        p.update(params or {})
+        return await self.exchange.fetch_order(None, symbol, p)
 
     async def fetch_open_orders(self, symbol: str) -> list:
         return await self.exchange.fetch_open_orders(symbol)
+
+    # ------- market metadata (best effort; never raises) -------
+    async def load_markets(self) -> None:
+        try:
+            await self.exchange.load_markets()
+        except Exception as e:  # noqa: BLE001 — precision is best-effort
+            logger.warning("load_markets failed: %s", e)
+
+    def _market(self, symbol: str) -> Optional[dict]:
+        try:
+            m = self.exchange.market(symbol)
+            return m if isinstance(m, dict) else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def is_contract(self, symbol: str) -> bool:
+        m = self._market(symbol)
+        return bool(m and m.get("contract") is True)
+
+    def amount_to_precision(self, symbol: str, amount: float) -> float:
+        """Exchange lot-step rounding (ccxt TRUNCATEs, never rounds up —
+        a protective sell can never exceed the held balance)."""
+        try:
+            return float(self.exchange.amount_to_precision(symbol, amount))
+        except Exception:  # noqa: BLE001 — markets not loaded / mock
+            return float(amount)
+
+    def price_to_precision(self, symbol: str, price: float) -> float:
+        try:
+            return float(self.exchange.price_to_precision(symbol, price))
+        except Exception:  # noqa: BLE001
+            return float(price)
 
     # ------- write -------
     def _assert_orders_allowed(self) -> None:
@@ -285,8 +331,121 @@ class CCXTClient:
             symbol, "limit", side.lower(), amount, price,
             self._order_params(client_order_id))
 
-    async def cancel_order(self, order_id: str, symbol: str) -> dict:
-        return await self.exchange.cancel_order(order_id, symbol)
+    async def cancel_order(self, order_id: str, symbol: str,
+                           params: Optional[dict] = None) -> dict:
+        return await self.exchange.cancel_order(order_id, symbol, dict(params or {}))
+
+    # ------- protective orders (see crypto_bridge/protective.py) -------
+    async def create_stop_loss_order(self, symbol: str, side: str, amount: float,
+                                     stop_price: float,
+                                     client_order_id: Optional[str] = None,
+                                     reduce_only: bool = False) -> dict:
+        """Exchange-side STOP-MARKET exit via the ccxt unified
+        `stopLossPrice` param (Binance spot → STOP_LOSS, Binance perps →
+        STOP_MARKET, OKX → conditional algo, KuCoin → stop=loss, Kraken →
+        stop-loss)."""
+        self._assert_orders_allowed()
+        params = self._order_params(client_order_id)
+        params["stopLossPrice"] = stop_price
+        if reduce_only:
+            params["reduceOnly"] = True
+        return await self.exchange.create_order(
+            symbol, "market", side.lower(), amount, None, params)
+
+    async def create_take_profit_limit_order(self, symbol: str, side: str,
+                                             amount: float, price: float,
+                                             client_order_id: Optional[str] = None,
+                                             reduce_only: bool = False) -> dict:
+        """Resting LIMIT exit at the take-profit price."""
+        self._assert_orders_allowed()
+        params = self._order_params(client_order_id)
+        if reduce_only:
+            params["reduceOnly"] = True
+        return await self.exchange.create_order(
+            symbol, "limit", side.lower(), amount, price, params)
+
+    async def create_binance_spot_oco(self, symbol: str, side: str, amount: float,
+                                      stop_price: float, take_profit: float, *,
+                                      list_client_order_id: str,
+                                      sl_client_order_id: str,
+                                      tp_client_order_id: str) -> dict:
+        """Binance spot native OCO (POST /api/v3/orderList/oco — ccxt has no
+        unified OCO, so this uses the implicit endpoint). One leg filling
+        makes the exchange expire the other.
+
+        SELL (protects a long):  above = LIMIT_MAKER @ TP, below = STOP_LOSS @ SL
+        BUY  (protects a short): above = STOP_LOSS @ SL,  below = TAKE_PROFIT @ TP
+
+        Returns {"list_id", "sl": {id, clientOrderId}, "tp": {...}, "raw"}."""
+        self._assert_orders_allowed()
+        ex = self.exchange
+        market_id = symbol.replace("/", "")
+        try:
+            market_id = ex.market_id(symbol)
+        except Exception:  # noqa: BLE001 — markets not loaded / mock
+            pass
+        def _s(fn, v):
+            try:
+                out = fn(symbol, v)
+                if isinstance(out, str):
+                    return out
+            except Exception:  # noqa: BLE001 — markets not loaded / mock
+                pass
+            return repr(float(v))
+        sp = _s(ex.price_to_precision, stop_price)
+        tp = _s(ex.price_to_precision, take_profit)
+        req = {
+            "symbol": market_id,
+            "side": side.upper(),
+            "quantity": _s(ex.amount_to_precision, amount),
+            "listClientOrderId": list_client_order_id,
+            "newOrderRespType": "FULL",
+        }
+        if side.lower() == "sell":
+            req.update({"aboveType": "LIMIT_MAKER", "abovePrice": tp,
+                        "aboveClientOrderId": tp_client_order_id,
+                        "belowType": "STOP_LOSS", "belowStopPrice": sp,
+                        "belowClientOrderId": sl_client_order_id})
+        else:
+            req.update({"aboveType": "STOP_LOSS", "aboveStopPrice": sp,
+                        "aboveClientOrderId": sl_client_order_id,
+                        "belowType": "TAKE_PROFIT", "belowStopPrice": tp,
+                        "belowClientOrderId": tp_client_order_id})
+        raw = await ex.private_post_orderlist_oco(req)
+        legs = {}
+        for rep in (raw or {}).get("orderReports") or (raw or {}).get("orders") or []:
+            cid = str(rep.get("clientOrderId") or "")
+            leg = {"id": str(rep.get("orderId") or ""), "clientOrderId": cid}
+            if cid == sl_client_order_id:
+                legs["sl"] = leg
+            elif cid == tp_client_order_id:
+                legs["tp"] = leg
+        if "sl" not in legs:
+            raise RuntimeError(f"OCO response missing stop-loss leg: {str(raw)[:200]}")
+        return {"list_id": str((raw or {}).get("orderListId") or ""),
+                "sl": legs["sl"], "tp": legs.get("tp"), "raw": raw}
+
+    async def create_okx_algo_oco(self, symbol: str, side: str, amount: float,
+                                  stop_price: float, take_profit: float,
+                                  client_order_id: Optional[str] = None) -> dict:
+        """OKX native algo OCO: ccxt turns stopLossPrice + takeProfitPrice on
+        one createOrder into ordType='oco' (privatePostTradeOrderAlgo)."""
+        self._assert_orders_allowed()
+        params = self._order_params(client_order_id)
+        params.update({"stopLossPrice": stop_price, "takeProfitPrice": take_profit})
+        return await self.exchange.create_order(
+            symbol, "market", side.lower(), amount, None, params)
+
+    async def close_position_market(self, symbol: str, side: str, amount: float,
+                                    client_order_id: Optional[str] = None,
+                                    reduce_only: bool = False) -> dict:
+        """Emergency flatten — market order on the EXIT side."""
+        self._assert_orders_allowed()
+        params = self._order_params(client_order_id)
+        if reduce_only:
+            params["reduceOnly"] = True
+        return await self.exchange.create_order(
+            symbol, "market", side.lower(), amount, None, params)
 
 
 # Backwards-compat alias — old code calls BinanceClient(account).

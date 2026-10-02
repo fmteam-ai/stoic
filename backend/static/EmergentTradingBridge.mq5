@@ -264,16 +264,36 @@
 //|         it is neither the chart symbol nor in TrackedSymbols      |
 //|         (fixes permanent 'insufficient M15 history' when scalping |
 //|         EURUSD from a GOLD/other-symbol chart).                   |
+//| v1.58 (pending version bump) — execution & transport hardening:   |
+//|         (a) Ownership fence: FULL_CLOSE / close_requested /       |
+//|             MODIFY_SL / PARTIAL_CLOSE refuse positions whose      |
+//|             POSITION_MAGIC != MagicNumber unless the command      |
+//|             carries "manage_external":true (adopted trades).      |
+//|         (b) Prices round to SYMBOL_TRADE_TICK_SIZE; lots round    |
+//|             DOWN to SYMBOL_VOLUME_STEP and clamp to min/max.      |
+//|         (c) Execution contract: OPEN commands may carry           |
+//|             expires_at_ms + max_deviation_points/_price; the EA   |
+//|             refuses expired or off-price opens (backward          |
+//|             compatible: absent fields = old behaviour).           |
+//|         (d) Crash recovery: send time + order ticket journaled;   |
+//|             symbol/side/volume profile matches only when unique   |
+//|             and within 10 s of the journaled send time.           |
+//|         (e) Network: WebRequest timeout input (3000 ms), HTTP     |
+//|             2xx checks, failure backoff for non-critical feeds,   |
+//|             tick / deal-sweep watermarks advance only on 2xx.     |
+//|         (f) Tick batches carry sent_gmt_ms (EA UTC clock) so the  |
+//|             server measures transport directly.                   |
+//|         (g) Broker D1 bars (200) pushed hourly via /candles.      |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.57"
+#property version   "1.58"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.57"
+#define EA_CLIENT_VERSION "1.58"
 
 input string ServerUrl              = "https://stoic-trading-bot.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -307,7 +327,36 @@ input bool   TickStreamEnabled      = true;
 input string TickStreamSymbol       = "EURUSD";
 input int    TickBatchMs            = 1000;
 
+// EA v1.58 · Network hardening. WebRequest timeout per call; after
+// NetFailThreshold consecutive transport failures (WebRequest -1 or HTTP
+// 5xx) NON-critical feeds (DOM, candles, D1, ticks, history sweep) pause for
+// NetBackoffSeconds. Poll / heartbeat / reports are NEVER skipped.
+input int    HttpTimeoutMs          = 3000;
+input int    NetFailThreshold       = 3;
+input int    NetBackoffSeconds      = 30;
+
+// EA v1.58 · Broker-native D1 bars for the server's daily history.
+input bool   BrokerD1Enabled        = true;
+input int    BrokerD1Seconds        = 3600;
+input int    BrokerD1Bars           = 200;
+
+// EA v1.58 · Crash-recovery profile match window around the journaled
+// OrderSend time (seconds).
+input int    RecoveryMatchWindowSec = 10;
+
 datetime _last_slow_run        = 0;
+// v1.58 — network state. _last_http_status is the HTTP status of the most
+// recent HttpPost (-1 = transport failure, 0 = skipped by backoff).
+int      _last_http_status     = 0;
+int      _net_fail_streak      = 0;
+ulong    _net_backoff_until    = 0;        // GetTickCount64() ms; 0 = none
+ulong    _last_net_warn        = 0;
+// v1.58 — GmtNowMs() offset estimator bounds (see GmtNowMs).
+long     _gmt_c_lo             = 0;
+long     _gmt_c_hi             = 0;
+bool     _gmt_c_set            = false;
+// v1.58 — manage_external flag of the command currently being executed.
+bool     _cmd_manage_external  = false;
 ulong    _last_tick_msc        = 0;
 string   _tick_symbol          = "";       // v1.46: broker-resolved stream symbol
 datetime _last_tick_warn       = 0;        // v1.46: throttle diagnostics
@@ -338,6 +387,7 @@ void TickStreamWarn(string msg) {
 }
 
 datetime _last_candles_sent    = 0;
+datetime _last_d1_sent         = 0;        // v1.58: broker D1 feed throttle
 datetime _last_dom_sent        = 0;
 bool     _dom_subscribed       = false;
 datetime lastPoll              = 0;
@@ -669,15 +719,26 @@ long FindPositionByComment(string trade_id) {
 
 // v1.52 — netting-aware trade → position resolution. Comment scan first
 // (hedging fast path), then order/deal HISTORY by magic + trade_id comment
-// + symbol + side + volume inside the execution window; returns the deal's
-// POSITION_ID (0 if unresolvable).
+// + journaled order ticket; returns the deal's POSITION_ID (0 if
+// unresolvable).
+// v1.58 — the weak symbol/side/volume "profile" match is accepted ONLY when
+// exactly ONE such deal exists within RecoveryMatchWindowSec of the
+// journaled OrderSend time (STOIC.W.<trade_id>, broker server time). No
+// journaled send time → no profile matching (never guess).
 ulong FindPositionForTrade(string trade_id, string symbol, string action,
                            double lot) {
    long by_comment = FindPositionByComment(trade_id);
    if (by_comment > 0 && PositionSelectByTicket((ulong)by_comment))
       return (ulong)PositionGetInteger(POSITION_IDENTIFIER);
    if (!HistorySelect(TimeCurrent() - 7200, TimeCurrent() + 60)) return 0;
-   long want_type = (action == "BUY") ? DEAL_TYPE_BUY : DEAL_TYPE_SELL;
+   long  want_type  = (action == "BUY") ? DEAL_TYPE_BUY : DEAL_TYPE_SELL;
+   ulong order_tk   = JGetTicket("K", trade_id);
+   long  sent_at    = (long)JGet("W", trade_id);
+   long  win        = (RecoveryMatchWindowSec > 0) ? RecoveryMatchWindowSec : 10;
+   int   profile_n  = 0;
+   ulong profile_pos = 0;
+   // the order went out with the broker-NORMALISED lot (v1.58 round-down)
+   double sent_lot  = (symbol != "") ? NormalizeLot(symbol, lot) : 0;
    for (int i = HistoryDealsTotal() - 1; i >= 0; i--) {
       ulong dtk = HistoryDealGetTicket(i);
       if (dtk == 0) continue;
@@ -686,13 +747,27 @@ ulong FindPositionForTrade(string trade_id, string symbol, string action,
       if (entry != DEAL_ENTRY_IN && entry != DEAL_ENTRY_INOUT) continue;
       bool comment_hit = (StringFind(
          HistoryDealGetString(dtk, DEAL_COMMENT), trade_id) >= 0);
-      bool profile_hit = (symbol != ""
-         && HistoryDealGetString(dtk, DEAL_SYMBOL) == symbol
-         && HistoryDealGetInteger(dtk, DEAL_TYPE) == want_type
-         && MathAbs(HistoryDealGetDouble(dtk, DEAL_VOLUME) - lot) < 1e-8);
-      if (comment_hit || profile_hit)
+      bool order_hit = (order_tk > 0 &&
+         (ulong)HistoryDealGetInteger(dtk, DEAL_ORDER) == order_tk);
+      if (comment_hit || order_hit)
          return (ulong)HistoryDealGetInteger(dtk, DEAL_POSITION_ID);
+      if (sent_at <= 0 || symbol == "") continue;
+      long dtime = (long)HistoryDealGetInteger(dtk, DEAL_TIME);
+      bool profile_hit = (HistoryDealGetString(dtk, DEAL_SYMBOL) == symbol
+         && HistoryDealGetInteger(dtk, DEAL_TYPE) == want_type
+         && (MathAbs(HistoryDealGetDouble(dtk, DEAL_VOLUME) - lot) < 1e-8
+             || (sent_lot > 0
+                 && MathAbs(HistoryDealGetDouble(dtk, DEAL_VOLUME) - sent_lot) < 1e-8))
+         && MathAbs((double)(dtime - sent_at)) <= (double)win);
+      if (profile_hit) {
+         profile_n++;
+         profile_pos = (ulong)HistoryDealGetInteger(dtk, DEAL_POSITION_ID);
+      }
    }
+   if (profile_n == 1) return profile_pos;
+   if (profile_n > 1)
+      Print("STOIC v1.58: ambiguous recovery profile match trade=", trade_id,
+            " candidates=", profile_n, " — refusing to guess");
    return 0;
 }
 
@@ -725,6 +800,7 @@ void AckMissingPosition(string trade_id, string mod_type, long ticket,
 }
 
 void OnTimer() {
+   GmtNowMs();   // v1.58 — sample the UTC sub-second phase every fire
    // EA v1.44 — fast lane: stream ticks every timer fire when enabled.
    if (TickStreamEnabled) SendTicks();
    // Slow lane: heartbeat / polls / feeds keep their PollSeconds cadence.
@@ -732,19 +808,29 @@ void OnTimer() {
    _last_slow_run = TimeCurrent();
    SendHeartbeat();
    PollPendingTrades();
+   // v1.58 — non-critical feeds pause while the network is backing off;
+   // their throttles are NOT advanced so they run as soon as it recovers.
+   if (NetBackoffActive()) return;
    // EA v1.42 — M15 candle feed for the Market Structure agent.
    if (TimeCurrent() - _last_candles_sent >= CandlesSeconds) {
       SendCandles();
       _last_candles_sent = TimeCurrent();
    }
+   // EA v1.58 — broker D1 bars (at most once per BrokerD1Seconds).
+   if (BrokerD1Enabled && !NetBackoffActive()
+       && (_last_d1_sent == 0 || TimeCurrent() - _last_d1_sent >= BrokerD1Seconds)) {
+      if (SendD1Candles()) _last_d1_sent = TimeCurrent();
+   }
    // EA v1.43 — Depth of Market feed for the Liquidity Mapping agent.
-   if (_dom_subscribed && TimeCurrent() - _last_dom_sent >= DomSeconds) {
+   if (_dom_subscribed && !NetBackoffActive()
+       && TimeCurrent() - _last_dom_sent >= DomSeconds) {
       SendDom();
       _last_dom_sent = TimeCurrent();
    }
    // Autonomous history sweep — at most once every HistorySweepSeconds so
    // we don't bombard the server with redundant /external-deal calls.
-   if (TimeCurrent() - lastHistorySweep >= HistorySweepSeconds) {
+   if (!NetBackoffActive()
+       && TimeCurrent() - lastHistorySweep >= HistorySweepSeconds) {
       SweepDealHistory();
       lastHistorySweep = TimeCurrent();
    }
@@ -758,9 +844,16 @@ void OnTimer() {
 //| regardless of which chart the EA is attached to.                  |
 //+------------------------------------------------------------------+
 void SendCandlesFor(string sym) {
+   SendRatesFor(sym, PERIOD_M15, 96, "M15", 10);
+}
+
+// v1.58 — shared CopyRates → /api/bridge/candles emitter (M15 + D1).
+// Returns true only on an HTTP 2xx (non-critical post: skipped in backoff).
+bool SendRatesFor(string sym, ENUM_TIMEFRAMES tf, int count, string tf_name,
+                  int min_bars) {
    MqlRates rates[];
-   int n = CopyRates(sym, PERIOD_M15, 0, 96, rates);
-   if (n < 10) return;
+   int n = CopyRates(sym, tf, 0, count, rates);
+   if (n < min_bars) return false;
    string bars = "[";
    for (int i = 0; i < n; i++) {
       if (i > 0) bars += ",";
@@ -771,9 +864,40 @@ void SendCandlesFor(string sym) {
    }
    bars += "]";
    string body = StringFormat(
-      "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M15\",\"bars\":%s}",
-      EffectiveToken, sym, bars);
-   HttpPost(ServerUrl + "/api/bridge/candles", body);
+      "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"%s\",\"bars\":%s}",
+      EffectiveToken, sym, tf_name, bars);
+   HttpPost(ServerUrl + "/api/bridge/candles", body, false);
+   return HttpOk();
+}
+
+// v1.58 — broker-native daily bars (BrokerD1Bars × D1) for the chart
+// symbol, the tick-stream symbol and every TrackedSymbols entry, so the
+// server's daily history is the broker's own OHLC instead of ECB fixings /
+// futures proxies. Returns true when every send got a 2xx.
+bool SendD1Candles() {
+   int want = (BrokerD1Bars > 10) ? BrokerD1Bars : 200;
+   bool all_ok = SendRatesFor(_Symbol, PERIOD_D1, want, "D1", 20);
+   string sent = "," + _Symbol + ",";
+   if (TickStreamEnabled) {
+      string ts = (StringLen(_tick_symbol) > 0)
+                  ? _tick_symbol : ResolveTickSymbol(TickStreamSymbol);
+      if (StringFind(sent, "," + ts + ",") < 0) {
+         sent += ts + ",";
+         if (!SendRatesFor(ts, PERIOD_D1, want, "D1", 20)) all_ok = false;
+      }
+   }
+   string list = TrackedSymbols;
+   StringReplace(list, " ", "");
+   string parts[];
+   int k = StringSplit(list, ',', parts);
+   for (int i = 0; i < k; i++) {
+      if (StringLen(parts[i]) == 0) continue;
+      string resolved = ResolveTickSymbol(parts[i]);
+      if (StringFind(sent, "," + resolved + ",") >= 0) continue;
+      sent += resolved + ",";
+      if (!SendRatesFor(resolved, PERIOD_D1, want, "D1", 20)) all_ok = false;
+   }
+   return all_ok;
 }
 
 void SendCandles() {
@@ -833,7 +957,7 @@ void SendDom() {
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"bids\":[%s],\"asks\":[%s]}",
       EffectiveToken, _Symbol, bids, asks);
-   HttpPost(ServerUrl + "/api/bridge/dom", body);
+   HttpPost(ServerUrl + "/api/bridge/dom", body, false);   // v1.58 non-critical
 }
 
 //+------------------------------------------------------------------+
@@ -956,7 +1080,17 @@ void SweepDealHistory() {
          entry_str, symbol, action,
          volume, price, profit, commission, swap, deal_time, magic);
 
-      HttpPost(ServerUrl + "/api/bridge/external-deal", body);
+      HttpPost(ServerUrl + "/api/bridge/external-deal", body, false);
+      if (!HttpOk()) {
+         // v1.58 — never advance past an undelivered deal: stop here and
+         // keep the watermark strictly BEFORE it (same-second deals are
+         // re-pushed next sweep; the server dedupes on deal_id).
+         if ((datetime)(deal_time - 1) < new_watermark)
+            new_watermark = (datetime)(deal_time - 1);
+         Print("STOIC v1.58: history sweep stopped — deal ", deal_id,
+               " not acknowledged (HTTP ", _last_http_status, ")");
+         break;
+      }
       pushed++;
       if ((datetime)deal_time > new_watermark) new_watermark = (datetime)deal_time;
    }
@@ -1004,9 +1138,16 @@ void SendTicks() {
       return;
    }
    int start = MathMax(0, n - 120);   // cap batch size
+   // v1.58 — sent_gmt_ms: the EA's OWN UTC wall clock at send (see
+   // GmtNowMs; precision reported in sent_gmt_prec_ms). sent_at_ms stays
+   // the newest tick's BROKER time for older servers.
+   long gmt_ms = GmtNowMs();
    string body = "{\"bridge_token\":\"" + EffectiveToken +
                  "\",\"symbol\":\"" + _tick_symbol +
-                 "\",\"sent_at_ms\":" + (string)now_msc + ",\"ticks\":[";
+                 "\",\"sent_at_ms\":" + (string)now_msc +
+                 ",\"sent_gmt_ms\":" + (string)gmt_ms +
+                 ",\"sent_gmt_prec_ms\":" + (string)GmtPrecisionMs() +
+                 ",\"ticks\":[";
    for (int i = start; i < n; i++) {
       if (i > start) body += ",";
       body += "{\"tm\":" + (string)ticks[i].time_msc +
@@ -1014,22 +1155,90 @@ void SendTicks() {
               ",\"a\":" + DoubleToString(ticks[i].ask, 5) + "}";
    }
    body += "]}";
-   _last_tick_msc = (ulong)ticks[n - 1].time_msc;
-   HttpPost(ServerUrl + "/api/bridge/ticks", body);
+   HttpPost(ServerUrl + "/api/bridge/ticks", body, false);
+   // v1.58 — advance the tick watermark ONLY after a 2xx: an undelivered
+   // batch is re-sent (the server drops duplicates by tick time).
+   if (HttpOk()) _last_tick_msc = (ulong)ticks[n - 1].time_msc;
 }
 
 //+------------------------------------------------------------------+
-string HttpPost(string url, string body) {
+bool HttpOk() { return (_last_http_status >= 200 && _last_http_status <= 299); }
+
+bool NetBackoffActive() {
+   return (_net_backoff_until > 0 && GetTickCount64() < _net_backoff_until);
+}
+
+void NetFailure(string url, int status) {
+   _net_fail_streak++;
+   int thr = (NetFailThreshold > 0) ? NetFailThreshold : 3;
+   if (_net_fail_streak >= thr) {
+      int secs = (NetBackoffSeconds > 0) ? NetBackoffSeconds : 30;
+      _net_backoff_until = GetTickCount64() + (ulong)secs * 1000;
+      if (GetTickCount64() - _last_net_warn > 60000) {
+         _last_net_warn = GetTickCount64();
+         Print("STOIC v1.58: ", _net_fail_streak, " consecutive network failures (last HTTP ",
+               status, " ", url, ") — pausing non-critical feeds for ", secs, "s");
+      }
+   }
+}
+
+// `critical` = poll / heartbeat / reports / acks: ALWAYS attempted.
+// Non-critical feeds (DOM, candles, D1, ticks, history sweep) are skipped
+// while the failure backoff is active. Returns the response body ONLY for
+// HTTP 2xx (callers must not parse error bodies); "" otherwise.
+string HttpPost(string url, string body, bool critical = true) {
+   _last_http_status = 0;
+   if (!critical && NetBackoffActive()) return "";
    char post[]; char result[]; string headers;
    StringToCharArray(body, post, 0, StringLen(body), CP_UTF8);
    string req_headers = "Content-Type: application/json\r\n";
+   int timeout_ms = (HttpTimeoutMs >= 500) ? HttpTimeoutMs : 500;
    ResetLastError();
-   int res = WebRequest("POST", url, req_headers, 10000, post, result, headers);
+   int res = WebRequest("POST", url, req_headers, timeout_ms, post, result, headers);
+   _last_http_status = res;
    if (res == -1) {
       Print("WebRequest error: ", GetLastError(), " (Add ", url, " to allowed URLs)");
+      NetFailure(url, res);
       return "";
    }
+   if (res < 200 || res > 299) {
+      // 5xx = server/transport trouble → counts toward backoff; 4xx is a
+      // request-level rejection (auth, validation) and does not.
+      if (res >= 500) NetFailure(url, res);
+      else _net_fail_streak = 0;
+      Print("STOIC v1.58: HTTP ", res, " from ", url);
+      return "";
+   }
+   _net_fail_streak = 0;
+   _net_backoff_until = 0;
    return CharArrayToString(result, 0, ArraySize(result), CP_UTF8);
+}
+
+// v1.58 — EA UTC wall clock in ms. TimeGMT() only has 1 s resolution, so the
+// sub-second phase is estimated against the monotonic GetTickCount64():
+// every observation of TimeGMT() bounds the constant offset C in
+// utc_ms = tick64 + C to [g*1000 - tc, g*1000 + 999 - tc]; the running
+// intersection of those bounds converges to a few ms as calls land at
+// different sub-second phases. If the bounds ever conflict (NTP step,
+// manual clock change) the estimator resets. Precision = half the bound
+// width (<= 500 ms right after a reset).
+long GmtNowMs() {
+   long tc = (long)GetTickCount64();
+   long g  = (long)TimeGMT();
+   long lo = g * 1000 - tc;
+   long hi = g * 1000 + 999 - tc;
+   if (!_gmt_c_set || lo > _gmt_c_hi || hi < _gmt_c_lo) {
+      _gmt_c_lo = lo; _gmt_c_hi = hi; _gmt_c_set = true;
+   } else {
+      if (lo > _gmt_c_lo) _gmt_c_lo = lo;
+      if (hi < _gmt_c_hi) _gmt_c_hi = hi;
+   }
+   return tc + (_gmt_c_lo + _gmt_c_hi) / 2;
+}
+
+long GmtPrecisionMs() {
+   if (!_gmt_c_set) return 500;
+   return (_gmt_c_hi - _gmt_c_lo + 1) / 2;
 }
 
 // Pip size lookup (must mirror backend pip_utils.PIP_SIZE for XAU/BTC/JPY)
@@ -1488,6 +1697,19 @@ void ParseTradesBlock(string resp) {
       long   nl_seq  = (long)ExtractDouble(section, "\"close_seq\":", t_end);
       int    seq_pos = StringFind(section, "\"close_seq\":", t_end);
       if (seq_pos < 0 || seq_pos > brace_pos) nl_seq = 0;
+      // v1.58 — every new key is read ONLY inside this object (an absent
+      // key must never pick up the NEXT object's value). Absent keys keep
+      // the pre-1.58 behaviour.
+      bool   manage_ext = KeyTrueInObject(section, "\"manage_external\":true",
+                                          t_end, brace_pos);
+      long   expires_ms = (long)ExtractDoubleInObject(section,
+                              "\"expires_at_ms\":", t_end, brace_pos);
+      double entry_ref  = ExtractDoubleInObject(section, "\"entry_price\":",
+                                                t_end, brace_pos);
+      double dev_price  = ExtractDoubleInObject(section,
+                              "\"max_deviation_price\":", t_end, brace_pos);
+      long   dev_points = (long)ExtractDoubleInObject(section,
+                              "\"max_deviation_points\":", t_end, brace_pos);
 
       if (close_req && ticket > 0) {
          if (!NlCloseAdmitted(trade_id, nl_key, nl_seq)) {
@@ -1495,11 +1717,14 @@ void ParseTradesBlock(string resp) {
             if (idx <= 0) break;
             continue;
          }
+         _cmd_manage_external = manage_ext;   // v1.58 — per-command flag
          ClosePosition(trade_id, ticket);
+         _cmd_manage_external = false;
          if (StringLen(nl_key) > 0 && IntentDone("close-" + trade_id))
             GlobalVariableSet(JKey("I", "nlkey-" + nl_key), 1);
       } else if (ticket == 0) {
-         ExecuteTrade(trade_id, symbol, action, lot, sl, tp);
+         ExecuteTrade(trade_id, symbol, action, lot, sl, tp,
+                      expires_ms, entry_ref, dev_price, dev_points);
       }
 
       idx = brace_pos + 1;
@@ -1560,6 +1785,9 @@ void ParseModificationsBlock(string resp) {
       double new_vol  = ExtractDouble(obj, "\"new_volume\":", 0);
       string intent   = ExtractString(obj, "\"intent_id\":\"", 0);
       long   seq      = (long)ExtractDouble(obj, "\"seq\":", 0);
+      // v1.58 — ownership-fence override for adopted external positions;
+      // read by the Apply* functions via _cmd_manage_external.
+      _cmd_manage_external = (StringFind(obj, "\"manage_external\":true") >= 0);
 
       if (StringLen(intent) > 0 && IntentDone(intent)) {
          // v1.50 fence — already executed: replay the JOURNALED outcome
@@ -1605,9 +1833,11 @@ void ParseModificationsBlock(string resp) {
          ApplyFullClose(trade_id, ticket, intent, seq);
       }
 
+      _cmd_manage_external = false;
       idx = brace_pos + 1;
       if (idx <= 0) break;
    }
+   _cmd_manage_external = false;
 }
 
 string ExtractString(string src, string key, int from_pos) {
@@ -1617,6 +1847,21 @@ string ExtractString(string src, string key, int from_pos) {
    int e = StringFind(src, "\"", s);
    if (e < 0) return "";
    return StringSubstr(src, s, e - s);
+}
+
+// v1.58 — object-bounded extraction: 0 when the key is absent between
+// from_pos and end_pos (the object's closing brace).
+double ExtractDoubleInObject(string src, string key, int from_pos, int end_pos) {
+   int s = StringFind(src, key, from_pos);
+   if (s < 0 || (end_pos > 0 && s > end_pos)) return 0;
+   string v = StringSubstr(src, s + StringLen(key), 4);
+   if (StringFind(v, "null") == 0) return 0;
+   return ExtractDouble(src, key, from_pos);
+}
+
+bool KeyTrueInObject(string src, string key_true, int from_pos, int end_pos) {
+   int s = StringFind(src, key_true, from_pos);
+   return (s >= 0 && (end_pos <= 0 || s < end_pos));
 }
 
 double ExtractDouble(string src, string key, int from_pos) {
@@ -1641,6 +1886,40 @@ double ExtractDouble(string src, string key, int from_pos) {
 //| MT5 rule: for a BUY position both SL and TP are compared against  |
 //| Bid; for a SELL position against Ask.                             |
 //+------------------------------------------------------------------+
+// v1.58 — broker price grid: SYMBOL_TRADE_TICK_SIZE (falls back to
+// SYMBOL_POINT when the broker reports no tick size). Index/metal CFDs
+// often trade on a 0.25 / 0.05 grid that NormalizeDouble(digits) alone
+// does not respect (retcode 10015 INVALID_PRICE / 10016 INVALID_STOPS).
+double PriceTickSize(string sym) {
+   double ts = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
+   if (ts <= 0) ts = SymbolInfoDouble(sym, SYMBOL_POINT);
+   return ts;
+}
+
+double NormalizePrice(string sym, double p) {
+   if (p <= 0) return 0;
+   int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
+   double ts     = PriceTickSize(sym);
+   if (ts > 0) p = MathRound(p / ts) * ts;
+   return NormalizeDouble(p, digits);
+}
+
+// v1.58 — broker lot grid: round DOWN to SYMBOL_VOLUME_STEP (small epsilon
+// absorbs float error, e.g. 0.3/0.1 = 2.9999999996), clamp to VOLUME_MAX.
+// Returns 0 when the result is below SYMBOL_VOLUME_MIN (caller refuses).
+double NormalizeLot(string sym, double lot) {
+   double step = SymbolInfoDouble(sym, SYMBOL_VOLUME_STEP);
+   double vmin = SymbolInfoDouble(sym, SYMBOL_VOLUME_MIN);
+   double vmax = SymbolInfoDouble(sym, SYMBOL_VOLUME_MAX);
+   double v = lot;
+   if (vmax > 0 && v > vmax) v = vmax;
+   if (step > 0) v = MathFloor(v / step + 1e-7) * step;
+   v = NormalizeDouble(v, 8);
+   if (v <= 0) return 0;
+   if (vmin > 0 && v < vmin - 1e-10) return 0;
+   return v;
+}
+
 void ClampStops(string sym, int side, double &sl, double &tp, int extra_mult) {
    int    digits = (int)SymbolInfoInteger(sym, SYMBOL_DIGITS);
    double point  = SymbolInfoDouble(sym, SYMBOL_POINT);
@@ -1663,8 +1942,22 @@ void ClampStops(string sym, int side, double &sl, double &tp, int extra_mult) {
       if (sl > 0 && sl < ask + min_dist) sl = ask + min_dist;
       if (tp > 0 && tp > ask - min_dist) tp = ask - min_dist;
    }
-   sl = (sl > 0) ? NormalizeDouble(sl, digits) : 0;
-   tp = (tp > 0) ? NormalizeDouble(tp, digits) : 0;
+   // v1.58 — snap to the broker TICK grid; if rounding pulled a stop back
+   // inside the minimum distance, step one tick further from price.
+   double ts = PriceTickSize(sym);
+   sl = (sl > 0) ? NormalizePrice(sym, sl) : 0;
+   tp = (tp > 0) ? NormalizePrice(sym, tp) : 0;
+   if (ts > 0) {
+      if (side > 0) {
+         if (sl > 0 && sl > bid - min_dist) sl = NormalizeDouble(sl - ts, digits);
+         if (tp > 0 && tp < bid + min_dist) tp = NormalizeDouble(tp + ts, digits);
+      } else {
+         if (sl > 0 && sl < ask + min_dist) sl = NormalizeDouble(sl + ts, digits);
+         if (tp > 0 && tp > ask - min_dist) tp = NormalizeDouble(tp - ts, digits);
+      }
+   }
+   if (sl < 0) sl = 0;
+   if (tp < 0) tp = 0;
 }
 
 // v1.50 — one JSON emitter for every open-order report (normal + replay).
@@ -1730,7 +2023,14 @@ bool PreflightOk(MqlTradeRequest &req, string &perr) {
    return false;
 }
 
-void ExecuteTrade(string trade_id, string symbol, string action, double lot, double sl, double tp) {
+// v1.58 — execution contract (all optional; 0 = absent = pre-1.58
+// behaviour): exp_ms = expires_at_ms (UTC epoch ms) — refuse when the EA's
+// UTC clock is past it; entry_ref + dev_pts / dev_px (max_deviation_points
+// / max_deviation_price) — refuse when the
+// live executable price is further than the deviation from the signal
+// entry. Checked ONLY before a FIRST send (journal replays never refuse).
+void ExecuteTrade(string trade_id, string symbol, string action, double lot, double sl, double tp,
+                  long exp_ms = 0, double entry_ref = 0, double dev_px = 0, long dev_pts = 0) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
 
    // v1.50 — durable intent journal: a redispatched trade_id returns the
@@ -1805,20 +2105,18 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
 
    // v1.51 — normalise the lot against the BROKER's volume constraints
    // (min / max / step); a lot below the broker minimum is terminal.
+   // v1.58 — rounds DOWN to the step (never more risk than sized).
    double vol_step = SymbolInfoDouble(broker_symbol, SYMBOL_VOLUME_STEP);
    double vol_min  = SymbolInfoDouble(broker_symbol, SYMBOL_VOLUME_MIN);
    double vol_max  = SymbolInfoDouble(broker_symbol, SYMBOL_VOLUME_MAX);
-   double norm_lot = lot;
-   if (vol_step > 0) norm_lot = MathFloor(norm_lot / vol_step + 0.5) * vol_step;
-   if (vol_max > 0 && norm_lot > vol_max) norm_lot = vol_max;
-   norm_lot = NormalizeDouble(norm_lot, 8);
-   if (norm_lot < vol_min || norm_lot <= 0) {
+   double norm_lot = NormalizeLot(broker_symbol, lot);   // floor(step), clamp max
+   if (norm_lot <= 0) {
       JSet("T", trade_id, JR_FAILED);
       SendOpenReport(trade_id, 0, "failed", 0, 0,
                      StringFormat("volume_below_broker_min:%.4f<%.4f",
-                                  norm_lot, vol_min), 0, 0, 0, false);
+                                  lot, vol_min), 0, 0, 0, false);
       Print("STOIC v1.51: lot ", lot, " below broker minimum ", vol_min,
-            " on ", broker_symbol, " — terminal reject");
+            " (max ", vol_max, ") on ", broker_symbol, " — terminal reject");
       return;
    }
 
@@ -1832,6 +2130,40 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
 
    double price = (action == "BUY") ? SymbolInfoDouble(broker_symbol, SYMBOL_ASK)
                                     : SymbolInfoDouble(broker_symbol, SYMBOL_BID);
+   price = NormalizePrice(broker_symbol, price);   // v1.58 — tick grid
+
+   // v1.58 — execution contract: expiry + max entry deviation. Terminal
+   // refusals (journal FAILED → redispatch replays the failure, never sends).
+   if (exp_ms > 0) {
+      long now_gmt_ms = GmtNowMs();
+      if (now_gmt_ms > exp_ms) {
+         JSet("T", trade_id, JR_FAILED);
+         SendOpenReport(trade_id, 0, "failed", 0, price,
+                        StringFormat("command_expired:now=%I64d>expires=%I64d",
+                                     now_gmt_ms, exp_ms),
+                        sl, 0, 0, false);
+         Print("STOIC v1.58: REFUSED expired open trade=", trade_id,
+               " late by ", now_gmt_ms - exp_ms, " ms");
+         return;
+      }
+   }
+   double dev_limit = 0;
+   if (dev_pts > 0)
+      dev_limit = (double)dev_pts * SymbolInfoDouble(broker_symbol, SYMBOL_POINT);
+   else if (dev_px > 0)
+      dev_limit = dev_px;
+   if (dev_limit > 0 && entry_ref > 0 && price > 0
+       && MathAbs(price - entry_ref) > dev_limit) {
+      JSet("T", trade_id, JR_FAILED);
+      SendOpenReport(trade_id, 0, "failed", 0, price,
+                     StringFormat("price_deviation_exceeded:live=%.5f:entry=%.5f:max=%.5f",
+                                  price, entry_ref, dev_limit),
+                     sl, 0, 0, false);
+      Print("STOIC v1.58: REFUSED open trade=", trade_id, " live ", price,
+            " vs entry ", entry_ref, " deviation > ", dev_limit);
+      return;
+   }
+
    req.price = price;
    int side = (action == "BUY") ? 1 : -1;
    // v1.38 — clamp to broker stop rules + normalise with the TRADED
@@ -1861,8 +2193,15 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
       return;
    }
 
+   // v1.58 — journal the broker-server send time BEFORE OrderSend: crash
+   // recovery accepts a symbol/side/volume profile match only when unique
+   // and within RecoveryMatchWindowSec of it.
+   JSet("W", trade_id, (double)TimeTradeServer());
    JSet("T", trade_id, JR_ORDER_SENT);   // v1.50 — journal BEFORE OrderSend
    bool ok = OrderSend(req, res);
+   // v1.58 — journal the ORDER ticket the instant the broker returns it so
+   // recovery can match deals by DEAL_ORDER instead of by profile.
+   if (res.order > 0) JSetTicket("K", trade_id, res.order);
 
    // v1.38 — if the broker still says INVALID_STOPS (price moved between
    // clamp and send, or stricter internal rules), refresh the price and
@@ -1872,8 +2211,9 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
             " sl=", adj_sl, " tp=", adj_tp, " — retrying with widened stops");
       adj_sl = sl; adj_tp = tp;
       ClampStops(broker_symbol, side, adj_sl, adj_tp, 2);
-      req.price = (action == "BUY") ? SymbolInfoDouble(broker_symbol, SYMBOL_ASK)
-                                    : SymbolInfoDouble(broker_symbol, SYMBOL_BID);
+      req.price = NormalizePrice(broker_symbol,
+                     (action == "BUY") ? SymbolInfoDouble(broker_symbol, SYMBOL_ASK)
+                                       : SymbolInfoDouble(broker_symbol, SYMBOL_BID));
       req.sl = adj_sl;
       req.tp = adj_tp;
       ZeroMemory(res);
@@ -1890,7 +2230,9 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
                         sl, adj_sl, 0, false);
          return;
       }
+      JSet("W", trade_id, (double)TimeTradeServer());
       ok = OrderSend(req, res);
+      if (res.order > 0) JSetTicket("K", trade_id, res.order);
    }
 
    // v1.52 — verify the ACTUAL broker outcome, never the retcode alone.
@@ -1973,6 +2315,32 @@ void ExecuteTrade(string trade_id, string symbol, string action, double lot, dou
    if (opened) JSet("T", trade_id, JR_ACK_SENT);
 }
 
+// v1.58 — ownership fence. The SELECTED position must carry our
+// MagicNumber unless the server explicitly marked the command as managing
+// an adopted external position (manage_external=true: manual MT5 trades,
+// other EAs). Returns true when the command may proceed.
+// The per-command manage_external flag is carried in _cmd_manage_external
+// (set by the poll parsers immediately around each call, reset after) so
+// the fenced Apply*/ClosePosition signatures stay unchanged.
+bool OwnershipOk(bool manage_external, long &pos_magic) {
+   pos_magic = PositionGetInteger(POSITION_MAGIC);
+   if (manage_external) return true;
+   return (pos_magic == (long)MagicNumber);
+}
+
+// v1.58 — structured TERMINAL refusal ack for a foreign position (the
+// server consumes the command and records mod_terminal_error).
+void AckForeignPosition(string trade_id, string mod_type, long ticket,
+                        string intent, long pos_magic) {
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"%s\",\"success\":false,\"terminal\":true,\"intent_id\":\"%s\",\"error\":\"foreign_position_magic:%I64d\"}",
+      EffectiveToken, trade_id, mod_type, intent, pos_magic);
+   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   Print("STOIC v1.58: REFUSED ", mod_type, " on ticket=", ticket,
+         " — position magic ", pos_magic, " != ", MagicNumber,
+         " and command lacks manage_external");
+}
+
 // ----- v1.40: FULL_CLOSE — close the entire position by ticket -----
 // Fired by the server's modification queue for slippage veto,
 // auto-deleverage and reconciler force-closes. Acks via modification-ack;
@@ -1987,6 +2355,11 @@ void ApplyFullClose(string trade_id, long ticket, string intent = "", long seq =
          EffectiveToken, trade_id, intent);
       HttpPost(ServerUrl + "/api/bridge/modification-ack", gone);
       MarkIntentDone(intent, seq, trade_id);
+      return;
+   }
+   long pos_magic = 0;
+   if (!OwnershipOk(_cmd_manage_external, pos_magic)) {
+      AckForeignPosition(trade_id, "FULL_CLOSE", ticket, intent, pos_magic);
       return;
    }
    string symbol = PositionGetString(POSITION_SYMBOL);
@@ -2004,10 +2377,10 @@ void ApplyFullClose(string trade_id, long ticket, string intent = "", long seq =
    req.type_filling = PickFillingMode(symbol);
    if (type == POSITION_TYPE_BUY) {
       req.type  = ORDER_TYPE_SELL;
-      req.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+      req.price = NormalizePrice(symbol, SymbolInfoDouble(symbol, SYMBOL_BID));
    } else {
       req.type  = ORDER_TYPE_BUY;
-      req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      req.price = NormalizePrice(symbol, SymbolInfoDouble(symbol, SYMBOL_ASK));
    }
    // v1.51 — broker-native preflight; a failed check acks retryable so
    // the server re-dispatches instead of burning a broker request.
@@ -2058,6 +2431,17 @@ void ClosePosition(string trade_id, long ticket) {
       return;
    }
    if (!PositionSelectByTicket(ticket)) return;   // heartbeat/ghost reconciler owns absent-position truth
+   // v1.58 — ownership fence. Same refusal channel as this path's other
+   // refusals (EOD / preflight): logged, nothing sent, nothing journaled;
+   // the server keeps the close pending until it re-sends with
+   // manage_external for an adopted position.
+   long pos_magic = 0;
+   if (!OwnershipOk(_cmd_manage_external, pos_magic)) {
+      Print("STOIC v1.58: REFUSED close_requested trade=", trade_id,
+            " ticket=", ticket, " — position magic ", pos_magic, " != ",
+            MagicNumber, " and command lacks manage_external");
+      return;
+   }
    string symbol = PositionGetString(POSITION_SYMBOL);
    double vol    = PositionGetDouble(POSITION_VOLUME);
    double pnl    = PositionGetDouble(POSITION_PROFIT);   // capture BEFORE close
@@ -2074,10 +2458,10 @@ void ClosePosition(string trade_id, long ticket) {
    req.type_filling = PickFillingMode(symbol);
    if (type == POSITION_TYPE_BUY) {
       req.type  = ORDER_TYPE_SELL;
-      req.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+      req.price = NormalizePrice(symbol, SymbolInfoDouble(symbol, SYMBOL_BID));
    } else {
       req.type  = ORDER_TYPE_BUY;
-      req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      req.price = NormalizePrice(symbol, SymbolInfoDouble(symbol, SYMBOL_ASK));
    }
    // v1.51 — broker-native preflight; on failure just return — the server
    // keeps re-dispatching close_requested until the position is verified gone.
@@ -2110,6 +2494,11 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
    if (!PositionSelectByTicket(ticket)) {
       // v1.50 — terminal vs retryable, decided from broker history
       AckMissingPosition(trade_id, "MODIFY_SL", ticket, intent);
+      return;
+   }
+   long pos_magic = 0;
+   if (!OwnershipOk(_cmd_manage_external, pos_magic)) {
+      AckForeignPosition(trade_id, "MODIFY_SL", ticket, intent, pos_magic);
       return;
    }
    string symbol = PositionGetString(POSITION_SYMBOL);
@@ -2188,16 +2577,22 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
       AckMissingPosition(trade_id, "PARTIAL_CLOSE", ticket, intent);
       return;
    }
+   long pos_magic = 0;
+   if (!OwnershipOk(_cmd_manage_external, pos_magic)) {
+      AckForeignPosition(trade_id, "PARTIAL_CLOSE", ticket, intent, pos_magic);
+      return;
+   }
    string symbol = PositionGetString(POSITION_SYMBOL);
    double current_vol = PositionGetDouble(POSITION_VOLUME);
    double close_vol = current_vol - new_vol;
    // v1.50 — normalise against the BROKER's volume constraints, not a
    // hardcoded 2-decimal lot step.
+   // v1.58 — round DOWN to the volume step (never close more than asked),
+   // clamp to VOLUME_MAX; 0 = below VOLUME_MIN → terminal refusal.
    double step = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
    double minv = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
-   if (step > 0) close_vol = MathFloor(close_vol / step + 0.5) * step;
-   close_vol = NormalizeDouble(close_vol, 8);
-   if (close_vol < minv || close_vol <= 0) {
+   close_vol = NormalizeLot(symbol, close_vol);
+   if (close_vol <= 0 || close_vol < minv) {
       // nothing executable at this broker's volume rules — terminal
       string tiny = StringFormat(
          "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":false,\"terminal\":true,\"intent_id\":\"%s\",\"error\":\"close_volume_below_min\"}",
@@ -2220,10 +2615,10 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
    req.type_filling = PickFillingMode(symbol);
    if (type == POSITION_TYPE_BUY) {
       req.type  = ORDER_TYPE_SELL;
-      req.price = SymbolInfoDouble(symbol, SYMBOL_BID);
+      req.price = NormalizePrice(symbol, SymbolInfoDouble(symbol, SYMBOL_BID));
    } else {
       req.type  = ORDER_TYPE_BUY;
-      req.price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      req.price = NormalizePrice(symbol, SymbolInfoDouble(symbol, SYMBOL_ASK));
    }
 
    // v1.51 — broker-native preflight (volume + margin re-validated by
