@@ -25,6 +25,7 @@ echo "== host-namespace merged mounts: $(grep -c '/var/lib/docker/overlay2/[^ ]*
 echo "== detachable orphan copies (layer owned by no container, not a shared peer, not under the docker root): ${TOTAL}"
 printf '%s\n' "${LIST}" | awk 'NF==2 { split($2, a, "/"); tree = (a[2] == "home" ? "/" a[2] "/" a[3] "/" a[4] : "/" a[2]); c[tree]++; l[$1]=1 }
   END { for (t in c) printf "   %-40s ×%d\n", t, c[t]; n = 0; for (k in l) n++; printf "   distinct dead layers: %d\n", n }' | sort
+[ "${TOTAL}" -le 20 ] && printf '%s\n' "${LIST}" | awk 'NF==2 {print "   " $2}'
 [ "${TOTAL}" = 0 ] && { echo "== nothing to detach"; exit 0; }
 if [ "${APPLY}" != 1 ]; then echo "== dry run — re-run with --apply (umount -l of the paths above only)"; exit 0; fi
 
