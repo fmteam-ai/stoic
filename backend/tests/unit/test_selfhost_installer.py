@@ -444,3 +444,15 @@ def test_virtfs_orphan_copy_sweep_is_docker_scoped(tmp_path):
     assert "--apply" in s and "dry run" in s and "orphan_merged_copies" in s and "detach_orphan_copies" in s
     assert os.stat(os.path.join(ROOT, "deploy", "docker-orphan-mounts.sh")).st_mode & stat.S_IXUSR
     assert "docker-orphan-mounts.sh" in _read("deploy", "doctor.sh") and "VirtFS" in _read("docs", "DEPLOYMENT.md")
+
+
+def test_frontend_csp_allows_cloudflare_turnstile():
+    """Turnstile loads api.js from challenges.cloudflare.com and renders in an iframe from the same
+    origin — a script-src 'self'-only CSP makes the login page lock itself ("challenge could not load")."""
+    csp = next(l for l in _read("deploy", "nginx.conf").splitlines() if "Content-Security-Policy" in l)
+    directives = {d.strip().split(" ")[0]: d.strip() for d in csp.split('"')[1].split(";") if d.strip()}
+    assert "https://challenges.cloudflare.com" in directives["script-src"]
+    assert "https://challenges.cloudflare.com" in directives["frame-src"]
+    assert "https://challenges.cloudflare.com" in directives["connect-src"]
+    assert "'unsafe-inline'" not in directives["script-src"] and "'unsafe-eval'" not in directives["script-src"]
+    assert directives["frame-ancestors"] == "frame-ancestors 'none'"

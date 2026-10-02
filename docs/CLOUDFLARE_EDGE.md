@@ -7,7 +7,10 @@ otherwise; where a paid feature exists, the free-tier alternative is given.
 
 The app-side half is already implemented in code (iter-155):
 - Turnstile verification on login / register / password-reset (admin toggle:
-  `/admin/users` → "Cloudflare Turnstile", API `/api/admin/settings/turnstile`)
+  `/admin/users` → "Cloudflare Turnstile", API `/api/admin/settings/turnstile`).
+  The frontend CSP (`deploy/nginx.conf`) must allow `https://challenges.cloudflare.com`
+  in `script-src`, `frame-src` and `connect-src` — otherwise the widget shows
+  "challenge could not load" and sign-in stays locked.
 - Security headers on all API responses (HSTS, CSP, XFO, Referrer-Policy,
   Permissions-Policy, COOP/CORP)
 - `CF-Connecting-IP` support (`TRUST_CF_CONNECTING_IP=true` in prod env)
