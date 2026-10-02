@@ -32,10 +32,15 @@ export const InventoryGoLivePanel = () => {
     }, []);
     useEffect(() => { load(); }, [load]);
 
+    const [lastError, setLastError] = useState("");
     const run = async (key, fn, okMsg) => {
-        setBusy(key);
+        setBusy(key); setLastError("");
         try { await fn(); toast.success(okMsg); await load(); }
-        catch (err) { toast.error(formatApiError(err)); }
+        catch (err) {
+            const d = err?.response?.data?.detail;
+            const msg = d?.errors ? `${d.code}: ${d.errors.join("; ")}` : formatApiError(err);
+            setLastError(msg); toast.error(msg);
+        }
         finally { setBusy(""); }
     };
 
@@ -63,7 +68,7 @@ export const InventoryGoLivePanel = () => {
                 <div>
                     <div className="font-mono text-xs text-white/50 uppercase tracking-wider mb-2">violations</div>
                     {violations.length === 0 ? <div className="text-emerald-300 text-sm">none</div> : (
-                        <ul data-testid="inventory-violations" className="space-y-1 text-sm text-[#FF3B30]">{violations.map((v) => <li key={v}>· {v}</li>)}</ul>
+                        <ul data-testid="inventory-violations" className="space-y-1 text-sm text-[#FF3B30]">{violations.map((v, i) => <li key={`${i}-${v}`}>· {v}</li>)}</ul>
                     )}
                 </div>
             </div>
@@ -94,6 +99,10 @@ export const InventoryGoLivePanel = () => {
                     {pend.expectation_pending ? (
                         <div data-testid="expectation-pending" className="text-xs text-[#FFB000] font-mono">pending {pend.expectation_pending.accounts}/{pend.expectation_pending.enabled}/{pend.expectation_pending.bots} proposed by {pend.expectation_pending.proposed_by} — a DIFFERENT admin must approve</div>
                     ) : null}
+                    {exp.bots !== "" && exp.enabled !== "" && exp.bots !== exp.enabled && (
+                        <div data-testid="expectation-precheck" className="text-xs text-[#FFB000] font-mono">policy: bots must equal enabled (one bot per enabled account)</div>
+                    )}
+                    {lastError && <div data-testid="golive-last-error" className="text-xs text-[#FF3B30] font-mono">{lastError}</div>}
                     <div className="flex gap-2">
                         <Button size="sm" data-testid="expectation-propose" disabled={!!busy || !exp.accounts || !exp.enabled || !exp.bots}
                             onClick={() => run("prop", () => api.post("/authority/inventory/expectation", { accounts: +exp.accounts, enabled: +exp.enabled, bots: +exp.bots }), "expectation proposed — second admin must approve")}>

@@ -1,0 +1,34 @@
+{
+  "summary": "Tested Inventory & Go-Live Gate panel (backend + frontend). Backend: all 9 HTTP tests in new test_iter_golive_inventory_http.py pass (inventory/pending shape+403, DELETE orphan-bot success/409/404/403, 4-eyes expectation propose+same-admin-rejected+different-admin-approve, promote_admin.py exit codes 1/2). Frontend: panel renders at /admin/brokers with all testids present (inventory-golive-panel, inventory-gate-status GATE FAIL, inventory-count-accounts, inventory-count-bots, inventory-expected, inventory-hash, inventory-admin-count, expectation inputs, expectation-fill-current, expectation-propose, expectation-approve, hash-propose, hash-confirm, inventory-orphans, 50 orphan-bot-delete-* rows). Fill-current enables Propose; expectation-approve disabled (no pending); hash-propose disabled (violations present) with 'requires zero violations above' hint; two-admin preview shows admin_count>=2 so second-admin-hint hidden. One React warning noted — duplicate key in violations list.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "InventoryGoLivePanel.jsx violations list", "issue": "React 'Encountered two children with the same key' warning — violations.map uses key={v} but preview data has ~60 identical strings ('R9-LIVE: enabled account/bot relation broken (account_enabled=True, bot_enabled=False)') producing duplicate keys. Harmless rendering-wise but spams console. Fix: use key={`${i}-${v}`}.", "selector": "[data-testid=inventory-violations] li", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter_golive_inventory_http.py",
+    "/app/test_reports/pytest/golive_inventory.xml"
+  ],
+  "action_items": [
+    "LOW: InventoryGoLivePanel.jsx — change violations list key from `key={v}` to `key={`${i}-${v}`}` (or dedupe) to silence duplicate-key console warnings when the same violation repeats across many accounts.",
+    "NOTE: `use current` button fills bots field with 0 when there are 0 enabled bots. The Propose button then enables (string '0' is truthy to the `!exp.bots` guard) but backend returns 400 expectation_invalid 'bots must equal enabled'. Consider surfacing the server message or client-side pre-check so admins don't need to open a devtools tab to see why propose failed."
+  ],
+  "critical_code_review_comments": [
+    "InventoryGoLivePanel.jsx line 66: `violations.map((v) => <li key={v}>)` produces duplicate React keys for repeated violation strings (preview reproduces this ~60x on load). Low-impact but noisy.",
+    "InventoryGoLivePanel.jsx: expectation-propose enablement checks only `!exp.accounts || !exp.enabled || !exp.bots` so a leading-zero value is valid client-side but may fail the server's accounts/enabled/bots>=0 and bots==enabled invariants. Consider mirroring the server validation in the dialog so the toast error is actionable.",
+    "promote_admin.py docstring mentions `docker compose exec -T backend` which does not match this preview container (service runs via supervisor). Harmless but misleading."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter_golive_inventory_http.py (new)"
+  ],
+  "success_rate": {"backend": "100% (9/9)", "frontend": "100% of testable surfaces (panel + testids + enable/disable state)"},
+  "test_credentials": "admin@trading.bot and admin@stoicaibot.com — both from TEST_ADMIN_PASSWORD / ADMIN_PASSWORD in backend/.env.",
+  "seed_data_creation": "Transient per test only. test_iter_golive_inventory_http.py seeds bot_configs docs (ObjectId per test) and deletes them in finally. test_expectation_4eyes_flow snapshots & restores platform_state inventory_expectation + inventory_expectation_pending. A test user `test_golive_user_<id>@example.com` is created in users and deleted after the module. No persistent data remains.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "New file /app/backend/tests/test_iter_golive_inventory_http.py — add it to the manifest for rc_lock refresh. 9/9 pass in ~6s. Covers Inventory Go-Live Gate HTTP surface. Preview Mongo contains ~13k orphan bot_configs (expected test pollution — do NOT mass-delete). Frontend panel verified end-to-end via playwright except: did not click an orphan-delete button in UI to avoid triggering step-up MFA modal and because backend delete flow is already covered by pytest. AccountEnvironmentsPanel attest dialog was NOT re-tested (covered by iteration 219 — no changes requested there). admin_count>=2 in preview so the second-admin-hint banner is hidden; this means `promoted_admin` has already been applied — no need to re-run promote_admin.py.",
+  "rca of the issue": "N/A — all required functionality present and working. Only cosmetic React console warning (duplicate list key) in InventoryGoLivePanel violations rendering."
+}
