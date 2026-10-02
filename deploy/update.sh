@@ -185,12 +185,15 @@ printf '%s' "${BODY}" | ONBOARDING="${ONBOARDING}" python3 -c '
 import json, os, sys
 d = json.load(sys.stdin); c = d.get("checks") or {}
 pending = sorted(k for k, v in c.items() if isinstance(v, dict) and v.get("ok") is False)
-state = "release_ready" if d.get("ready") else ("onboarding_close_only" if os.environ["ONBOARDING"] == "1" else "release_gates_pending")
-json.dump({"deployment_state": state, "readiness_policy": "onboarding-close-only" if os.environ["ONBOARDING"] == "1" else "release-ready",
-           "release_ready": bool(d.get("ready")), "pending_gates": pending,
-           "trading_posture": "OPEN" if d.get("ready") else "CLOSE_ONLY"}, open("deploy/releases/deployment_state.json", "w"), sort_keys=True, indent=1)
-print(f"   deployment state: {state} · trading posture: {'OPEN' if d.get('ready') else 'CLOSE_ONLY'}" + (f" · pending gates: {', '.join(pending)}" if pending else ""))
-' 2>/dev/null || true
+onb = os.environ["ONBOARDING"] == "1"
+state = "release_ready" if d.get("ready") else ("onboarding_close_only" if onb else "release_gates_pending")
+posture = "OPEN" if d.get("ready") else "CLOSE_ONLY"
+json.dump({"deployment_state": state, "readiness_policy": "onboarding-close-only" if onb else "release-ready",
+           "release_ready": bool(d.get("ready")), "pending_gates": pending, "trading_posture": posture},
+          open("deploy/releases/deployment_state.json", "w"), sort_keys=True, indent=1)
+tail = (" · pending gates: " + ", ".join(pending)) if pending else ""
+print("   deployment state: " + state + " · trading posture: " + posture + tail)
+' || echo "!! could not record deploy/releases/deployment_state.json"
 
 echo "   API + frontend + full topology verified on $(git rev-parse --short HEAD)"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-from=$(git rev-parse --short "${PREV}")$([ "${ONBOARDING}" = 1 ] && echo ' policy=onboarding-close-only')" >> deploy/releases.log
