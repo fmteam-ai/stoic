@@ -4,6 +4,10 @@ Security model:
   - Each user has a unique `webhook_secret` (32 chars URL-safe) generated on activation.
   - Telegram is configured (setWebhook) to POST to /api/telegram/webhook/{secret}.
   - The webhook handler:
+      0. Requires the X-Telegram-Bot-Api-Secret-Token header (set via
+         setWebhook's secret_token) to match the stored per-user
+         `webhook_header_secret` (hmac.compare_digest). Path secret AND
+         header must both match.
       1. Looks up the user by webhook_secret.
       2. Verifies the incoming message.chat.id matches the user's configured chat_id.
          (Prevents impersonation if the secret URL ever leaks.)
@@ -11,6 +15,7 @@ Security model:
 
   - Activation/deactivation requires JWT auth via /api/notifications/telegram/* — never via webhook.
 """
+import hmac
 import os
 import secrets
 import logging
@@ -183,10 +188,42 @@ async def _cmd_balance(token, chat_id, user_id) -> None:
     await _send_reply(token, chat_id, "\n".join(lines))
 
 
+async def _run_refusal(db, user_id: str) -> Optional[str]:
+    """Review-sec fix: /run is a chat-only path with no step-up MFA, so it may
+    only activate bots that cannot touch live capital, and never for a
+    suspended/terminated user. Returns a MarkdownV2 refusal or None."""
+    try:
+        udoc = await db.users.find_one({"_id": ObjectId(user_id)}, {"status": 1})
+    except Exception:
+        udoc = None
+    if not udoc:
+        return "*⛔ Not allowed*\n\nAccount not found\\."
+    ustatus = udoc.get("status") or "active"
+    if ustatus in ("suspended", "terminated"):
+        return f"*⛔ Not allowed*\n\nYour account is {_esc(ustatus)}\\. Bots cannot be started\\."
+    from routes.bot_routes import _live_context
+    async for cfg in db.bot_configs.find({"user_id": user_id}, {"account_id": 1}):
+        try:
+            live = await _live_context(db, user_id, cfg.get("account_id"))
+        except Exception:
+            live = True     # fail closed on a malformed account reference
+        if live:
+            return ("*🔐 Live activation needs the dashboard*\n\n"
+                    "At least one bot is linked to a live account\\. For your "
+                    "security, live trading can only be activated from the "
+                    "dashboard with a fresh 2FA \\(step\\-up\\) check\\. "
+                    "/stop, /panic and /close keep working here\\.")
+    return None
+
+
 async def _cmd_run(token, chat_id, user_id) -> None:
     db = get_db()
-    # Broadcast: turn ON every bot the user owns. Telegram has no concept
-    # of "which account" — the safe default is to control all of them.
+    refusal = await _run_refusal(db, user_id)
+    if refusal:
+        await _send_reply(token, chat_id, refusal)
+        return
+    # Broadcast: turn ON every bot the user owns (all non-live, checked
+    # above). Telegram has no concept of "which account".
     res = await db.bot_configs.update_many(
         {"user_id": user_id},
         {"$set": {"active": True, "updated_at": datetime.now(timezone.utc).isoformat()}},
@@ -294,6 +331,30 @@ async def _dispatch_command(token, chat_id, user_id, text: str) -> None:
 
 # ---------- Webhook endpoint ----------
 
+TELEGRAM_SECRET_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+
+
+def _header_secret_ok(user_doc: dict, request: Request) -> bool:
+    """Telegram echoes setWebhook's `secret_token` in this header on every
+    delivery. Required in addition to the URL path secret (which can leak via
+    proxy/access logs) for every webhook registered with one.
+
+    Legacy webhooks (registered before the header secret existed) are still
+    accepted on the path secret alone so existing users don't silently lose
+    /panic and /close; re-enabling the webhook upgrades them. Risk-raising
+    commands (/run) are gated separately and never rely on this check."""
+    expected = str((user_doc or {}).get("webhook_header_secret") or "")
+    got = request.headers.get(TELEGRAM_SECRET_HEADER) or ""
+    if not expected:
+        logger.warning("telegram webhook for user %s has no header secret "
+                       "(legacy registration) — re-enable to upgrade",
+                       (user_doc or {}).get("id") or (user_doc or {}).get("_id"))
+        return True
+    if not got:
+        return False
+    return hmac.compare_digest(expected.encode(), got.encode())
+
+
 @router.post("/incoming/{secret}")
 async def telegram_webhook(secret: str, request: Request):
     """Receive an Update from Telegram. Best-effort: always return 200 so Telegram doesn't retry."""
@@ -301,6 +362,9 @@ async def telegram_webhook(secret: str, request: Request):
         user_doc = await _load_user_by_secret(secret)
         if not user_doc:
             return {"ok": True}  # silently ignore unknown secret
+        if not _header_secret_ok(user_doc, request):
+            logger.warning("telegram webhook: secret-token header missing/mismatch")
+            return {"ok": True}
         if not user_doc.get("telegram_bot_token") or not user_doc.get("telegram_chat_id"):
             return {"ok": True}
 
@@ -351,6 +415,9 @@ async def enable_webhook(payload: WebhookEnableRequest, user=Depends(get_current
         raise HTTPException(status_code=500, detail="Could not decrypt bot token")
 
     new_secret = secrets.token_urlsafe(32)
+    # Separate header secret (Telegram allows [A-Za-z0-9_-], 1..256 chars —
+    # token_urlsafe's alphabet) so a leaked URL alone is not enough.
+    header_secret = secrets.token_urlsafe(32)
     base = payload.base_url.rstrip("/")
     webhook_url = f"{base}/api/telegram/incoming/{new_secret}"
 
@@ -358,7 +425,8 @@ async def enable_webhook(payload: WebhookEnableRequest, user=Depends(get_current
         try:
             r = await client.post(
                 f"{TELEGRAM_API}/bot{token}/setWebhook",
-                json={"url": webhook_url, "allowed_updates": ["message"]},
+                json={"url": webhook_url, "allowed_updates": ["message"],
+                      "secret_token": header_secret},
             )
         except httpx.HTTPError as e:
             from errors import api_error
@@ -374,6 +442,7 @@ async def enable_webhook(payload: WebhookEnableRequest, user=Depends(get_current
         {"user_id": user["id"]},
         {"$set": {
             "webhook_secret": new_secret,
+            "webhook_header_secret": header_secret,
             "webhook_url": webhook_url,
             "webhook_enabled_at": datetime.now(timezone.utc).isoformat(),
         }},
@@ -399,7 +468,8 @@ async def disable_webhook(user=Depends(get_current_user)):
                 pass  # best-effort
     await db.notifications.update_one(
         {"user_id": user["id"]},
-        {"$unset": {"webhook_secret": "", "webhook_url": "", "webhook_enabled_at": ""}},
+        {"$unset": {"webhook_secret": "", "webhook_header_secret": "",
+                    "webhook_url": "", "webhook_enabled_at": ""}},
     )
     return {"ok": True}
 

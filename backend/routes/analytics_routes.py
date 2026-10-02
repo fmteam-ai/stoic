@@ -1,6 +1,6 @@
 """Analytics routes — performance attribution endpoints."""
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
 from analytics import compute_attribution, compute_sessions
@@ -331,7 +331,8 @@ async def suggest_session_action(user=Depends(get_current_user)):
 
 
 @router.post("/sessions/apply-action")
-async def apply_session_action(payload: dict, user=Depends(get_current_user)):
+async def apply_session_action(payload: dict, request: Request,
+                               user=Depends(get_current_user)):
     """Apply the suggested config tweak returned by `suggest-action`. Body:
         {field: "min_confidence_override", to: 70}
     Only writes the default bot_config (account_id=None). Per-account
@@ -341,12 +342,25 @@ async def apply_session_action(payload: dict, user=Depends(get_current_user)):
     field = payload.get("field")
     if field != "min_confidence_override":
         raise HTTPException(status_code=400, detail="Only min_confidence_override is supported")
-    try:
-        new_val = int(payload.get("to"))
-    except Exception:
+    to = payload.get("to")
+    if isinstance(to, bool) or not isinstance(to, int):
         raise HTTPException(status_code=400, detail="`to` must be an integer")
-    new_val = max(50, min(95, new_val))
+    new_val = max(50, min(95, to))   # clamp (suggest-action may propose <50)
     db = get_db()
+    # Review-sec fix: LOWERING the confidence floor loosens the bot — on a
+    # live context that is a risk raise and needs the same step-up as
+    # PUT /bot/config.
+    cur = await db.bot_configs.find_one({"user_id": user["id"], "account_id": None})
+    cur_min = int((cur or {}).get("min_confidence_override") or 0)
+    if cur_min and new_val < cur_min:
+        from routes.bot_routes import _live_context
+        if await _live_context(db, user["id"], None):
+            from step_up import audit_event, require_step_up
+            await require_step_up(db, user, request, "risk_raise")
+            await audit_event(db, user["id"], "risk_raise",
+                              {"account_id": None, "via": "session_apply_action",
+                               "fields": ["min_confidence_override"]},
+                              request, step_up=True)
     res = await db.bot_configs.update_one(
         {"user_id": user["id"], "account_id": None},
         {"$set": {"min_confidence_override": new_val,

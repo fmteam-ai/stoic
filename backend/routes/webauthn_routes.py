@@ -18,14 +18,71 @@ def _require_admin(user: dict) -> None:
 
 
 def _origin(request: Request, payload: dict | None = None) -> str:
-    """The browser's true origin. Client-declared (body) takes priority: the
-    edge proxy rewrites the Origin header in some deployments. Safe because
-    credentials are RP-scoped — a challenge minted for a foreign origin can
-    only ever create/assert credentials for THAT RP ID, never ours — and the
-    challenge pins rp_id+origin for the verify step."""
-    declared = str((payload or {}).get("origin") or "").strip()
-    return (declared or request.headers.get("origin")
-            or os.environ.get("WEBAUTHN_ORIGIN") or "").strip()
+    """The WebAuthn ceremony origin — derived from SERVER configuration only.
+
+    Review-sec fix: the client-declared ``origin`` body field is IGNORED
+    (``payload`` is accepted for signature compatibility only). Resolution:
+      1. WEBAUTHN_ORIGIN env (the pinned public URL) — authoritative.
+      2. The request Origin header, but only when it is in the configured
+         CORS allow-list (security._allowed_origins, production-filtered).
+      3. Non-production with no allow-list configured: a same-origin Origin
+         header (Origin host == Host header) — dev/preview convenience.
+    Anything else → "" so begin_* rejects with "invalid origin"."""
+    pinned = (os.environ.get("WEBAUTHN_ORIGIN") or "").strip().rstrip("/")
+    if pinned:
+        return pinned
+    hdr = (request.headers.get("origin") or "").strip().rstrip("/")
+    if not hdr:
+        return ""
+    from security import _allowed_origins
+    allowed = _allowed_origins()
+    if allowed:
+        return hdr if hdr in allowed else ""
+    from app_env import is_production
+    if is_production():
+        return ""
+    host = (request.headers.get("host") or "").strip().lower()
+    return hdr if host and hdr.split("://", 1)[-1].lower() == host else ""
+
+
+async def _require_enrolment_proof(db, user: dict, request: Request,
+                                   payload: dict | None) -> None:
+    """Review-sec fix: a session alone must not be able to enrol a passkey
+    (a passkey mints step-up tokens for every live-sensitive action).
+
+    - User already has an MFA factor (TOTP or a passkey) → a fresh step-up
+      token is required (existing require_step_up semantics; the frontend's
+      step-up interceptor prompts + retries automatically). A token minted by
+      an EXISTING passkey proves possession of an already-enrolled factor, so
+      this is not circular. Action reuses "api_key_create" (minting a new
+      credential) since step_up.py is not extended here.
+    - No MFA factor yet (first factor) → the current password must be
+      supplied in the payload and is verified with auth.verify_password."""
+    from bson import ObjectId
+    full = await db.users.find_one({"_id": ObjectId(user["id"])},
+                                   {"two_factor_enabled": 1,
+                                    "password_hash": 1}) or {}
+    from webauthn_mfa import has_passkey
+    if full.get("two_factor_enabled") or await has_passkey(db, user["id"]):
+        from step_up import require_step_up
+        await require_step_up(db, user, request, "api_key_create")
+        return
+    if not full.get("password_hash"):
+        # Passwordless (OAuth-only) account with no factor: nothing stronger
+        # than the session exists to check — require TOTP enrolment first.
+        raise HTTPException(status_code=403, detail={
+            "code": "mfa_enrollment_required", "action": "api_key_create",
+            "message": "Enable authenticator-app 2FA before adding a passkey."})
+    from auth import verify_password
+    pw = str((payload or {}).get("current_password") or "")
+    await check_failure_limit(db, "passkey_enrol", user["id"], 5, 600,
+                              "Too many failed attempts. Try again later.")
+    if not pw or not verify_password(pw, full["password_hash"]):
+        await record_failure(db, "passkey_enrol", user["id"], 600)
+        raise HTTPException(status_code=401, detail={
+            "code": "password_required",
+            "message": "Current password is required to add a passkey."})
+    await clear_failures(db, "passkey_enrol", user["id"])
 
 
 @router.get("/credentials")
@@ -39,9 +96,11 @@ async def my_passkeys(user=Depends(get_current_user)):
 async def register_begin(request: Request, payload: dict | None = None,
                          user=Depends(get_current_user)):
     _require_admin(user)
+    db = get_db()
+    await _require_enrolment_proof(db, user, request, payload)
     from webauthn_mfa import begin_registration
     try:
-        return await begin_registration(get_db(), user,
+        return await begin_registration(db, user,
                                         _origin(request, payload))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))  # deliberate ValueError message

@@ -43,6 +43,12 @@ from security import (
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
+# Review-sec fix: login runs bcrypt even for unknown emails / passwordless
+# accounts so response timing does not reveal whether an account exists.
+# Random throwaway password — no input can ever verify against it.
+import secrets as _secrets  # noqa: E402
+_DUMMY_BCRYPT_HASH = hash_password(_secrets.token_urlsafe(24))
+
 
 @router.get("/turnstile-config")
 async def turnstile_config():
@@ -214,7 +220,9 @@ async def login(payload: LoginRequest, request: Request, response: Response):
                               "Too many failed login attempts. "
                               "Try again in a few minutes.")
     user = await db.users.find_one({"email": email})
-    if not user or not verify_password(payload.password, user["password_hash"]):
+    stored_hash = (user or {}).get("password_hash") or _DUMMY_BCRYPT_HASH
+    password_ok = verify_password(payload.password, stored_hash)   # always pays bcrypt cost
+    if not user or not (user or {}).get("password_hash") or not password_ok:
         await record_failure(db, "login", f"{ip}:{email}", 600)
         raise HTTPException(status_code=401, detail="Invalid email or password")
 
@@ -732,13 +740,23 @@ async def two_fa_disable(payload: TOTPDisableRequest, user=Depends(get_current_u
     full = await db.users.find_one({"_id": ObjectId(user["id"])})
     if not full.get("two_factor_enabled"):
         raise HTTPException(status_code=400, detail="2FA is not enabled")
-    if not verify_password(payload.current_password, full["password_hash"]):
+    # Review-sec fix: same failed-attempt lockout as /step-up — otherwise a
+    # hijacked session could brute-force password+code to strip 2FA.
+    await check_failure_limit(db, "2fa_disable", user["id"], 5, 600,
+                              "Too many failed attempts. "
+                              "Try again in a few minutes.")
+    if not verify_password(payload.current_password,
+                           full.get("password_hash") or _DUMMY_BCRYPT_HASH) \
+            or not full.get("password_hash"):
+        await record_failure(db, "2fa_disable", user["id"], 600)
         raise HTTPException(status_code=401, detail="Current password is incorrect")
     if not await verify_code_once(db, user["id"], full.get("totp_secret") or "", payload.code):
         # Allow recovery-code fallback for disable
         consumed, _ = consume_recovery_code(full.get("recovery_codes") or [], payload.code)
         if not consumed:
+            await record_failure(db, "2fa_disable", user["id"], 600)
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
+    await clear_failures(db, "2fa_disable", user["id"])
     await db.users.update_one(
         {"_id": ObjectId(user["id"])},
         {
