@@ -9,6 +9,8 @@ import asyncio
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+from secrets_loader import resolve_file_secrets  # noqa: E402
+resolve_file_secrets()  # Docker-secret deployments: MONGO_URL_FILE → MONGO_URL etc.
 
 from motor.motor_asyncio import AsyncIOMotorClient  # noqa: E402
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: E402

@@ -28,6 +28,8 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
+from secrets_loader import resolve_file_secrets  # noqa: E402
+resolve_file_secrets()  # Docker-secret deployments: MONGO_URL_FILE → MONGO_URL etc.
 
 LEGACY_INDEX = "bridge_token_1"
 HASH_INDEX = "bridge_token_hash_1"
