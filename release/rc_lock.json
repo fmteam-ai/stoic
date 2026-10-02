@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-10-02T01:04:36.324600+00:00",
-  "git_commit": "254f5da27db8ca26401e5794a39c7bfd3c54b401",
-  "source_sha": "254f5da27db8ca26401e5794a39c7bfd3c54b401",
+  "captured_at": "2026-10-02T01:08:58.320618+00:00",
+  "git_commit": "2501cd36c4706f794db6f35423884ede44c767df",
+  "source_sha": "2501cd36c4706f794db6f35423884ede44c767df",
   "images": {
     "backend": null,
     "frontend": null
