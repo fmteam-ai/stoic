@@ -11,6 +11,7 @@ from step_up import require_step_up, audit_event
 from models import BotConfigUpdate, BotConfigOut
 from route_utils import parse_object_id
 from risk import get_profile, compute_lot_for_account
+from pip_utils import floor_to_lot_step
 from intelligence_counters import get_window_24h as intel_window_24h
 from strategy_presets import list_presets, get_preset
 
@@ -222,7 +223,7 @@ async def sizing_preview(
         absolute_lot = float(sized["lot_size"])
         if kelly_on and max_lot_cap > 0 and kelly_cap > 0:
             scale = min(kelly_f / kelly_cap, 1.0) if kelly_f > 0 else 0.0
-            scaled = max(round(max_lot_cap * scale, 2), 0.01)
+            scaled = max(floor_to_lot_step(max_lot_cap * scale), 0.01)
             effective = min(absolute_lot, scaled)
         else:
             effective = (min(absolute_lot, max_lot_cap)

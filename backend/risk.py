@@ -1,7 +1,7 @@
 """Risk management profiles + Kelly-modified dynamic position sizing."""
 from typing import Literal
 
-from pip_utils import price_to_pips, pip_value_usd_per_lot
+from pip_utils import price_to_pips, pip_value_usd_per_lot, floor_to_lot_step
 
 RiskLevel = Literal["low", "medium", "high", "extreme"]
 
@@ -59,7 +59,7 @@ def compute_position_size(equity: float, risk_pct: float, sl_pips: float,
         return 0.01
     risk_amount = equity * (risk_pct / 100.0)
     lots = risk_amount / (sl_pips * pip_value)
-    return max(round(lots, 2), 0.01)
+    return max(floor_to_lot_step(lots), 0.01)
 
 
 def compute_kelly_position_size(equity: float, confidence_pct: float, sl_pips: float,
@@ -85,7 +85,7 @@ def compute_kelly_position_size(equity: float, confidence_pct: float, sl_pips: f
     risk_amount = equity * (effective_risk_pct / 100.0)
     lots = risk_amount / (sl_pips * pip_value)
     return {
-        "lot_size": max(round(lots, 2), 0.01),
+        "lot_size": max(floor_to_lot_step(lots), 0.01),
         "risk_amount": round(risk_amount, 2),
         "kelly_f": round(f, 4),
         "effective_risk_pct": round(effective_risk_pct, 3),
@@ -174,7 +174,10 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         method = "fixed_fraction"
     risk_amount_usd = equity * (effective_risk_pct / 100.0)
     lots = risk_amount_usd / (sl_pips * pip_usd)
-    lot_size = max(round(lots, 2), 0.01)
+    # H4: floor to the broker step — round-half-up silently ADDED up to +33% risk
+    # (0.015 → 0.02). Below one step the broker minimum applies and is then
+    # verified against the budget (C5 below) exactly like before.
+    lot_size = max(floor_to_lot_step(lots), 0.01)
     # iter-144 C5 · verify the ACTUAL risk after broker-step rounding and the
     # 0.01 minimum. If the broker minimum forces materially more risk than
     # the budget (e.g. tiny equity, wide stop), REJECT instead of trading a

@@ -31,6 +31,7 @@ from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
 from risk import get_profile, compute_lot_for_account
+from pip_utils import floor_to_lot_step
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
@@ -1833,7 +1834,7 @@ async def _process_user_account_locked(db, cfg: dict):
         # When max_lot_size is 0 (unset), fall back to absolute Kelly sizing.
         if _kelly_on and max_lot_cap > 0 and kelly_cap > 0:
             conf_scale = min(kelly_f / kelly_cap, 1.0) if kelly_f > 0 else 0.0
-            scaled_lot = max(round(max_lot_cap * conf_scale, 2), 0.01)
+            scaled_lot = max(floor_to_lot_step(max_lot_cap * conf_scale), 0.01)
             # Pick the smaller of: absolute Kelly lot vs confidence-scaled cap.
             effective_lot = min(absolute_lot, scaled_lot)
             sizing_method = "max_cap_kelly_scaled"
@@ -1848,7 +1849,7 @@ async def _process_user_account_locked(db, cfg: dict):
         _md_mult = float((signal.get("meta_decision") or {})
                          .get("risk_multiplier") or 1.0)
         if 0 < _md_mult < 1.0:
-            effective_lot = max(0.01, round(effective_lot * _md_mult, 2))
+            effective_lot = max(0.01, floor_to_lot_step(effective_lot * _md_mult))
             sizing_method = f"{sizing_method}+meta_x{_md_mult}"
         # Portfolio Risk Brain — marginal contribution to the WHOLE
         # portfolio (correlated cluster / currency factor / stress), never
@@ -1909,7 +1910,7 @@ async def _process_user_account_locked(db, cfg: dict):
                                error=str(e))
                 except Exception:  # noqa: BLE001
                     pass
-                effective_lot = max(0.01, round(effective_lot * 0.5, 2))
+                effective_lot = max(0.01, floor_to_lot_step(effective_lot * 0.5))
                 sizing_method = f"{sizing_method}+degraded_portfolio_x0.5"
 
         # Pre-Trade Digital Twin (v60) — simulate before committing
@@ -1989,7 +1990,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 corr_kelly_scale = float(ck.get("scale") or 1.0)
                 corr_kelly_info = ck
                 if corr_kelly_scale < 1.0:
-                    trimmed = max(round(effective_lot * corr_kelly_scale, 2), 0.01)
+                    trimmed = max(floor_to_lot_step(effective_lot * corr_kelly_scale), 0.01)
                     logger.info(
                         "Correlation-Kelly trim acct=%s sym=%s lot=%s × scale=%.3f → %s · %s",
                         cfg_account_id or "default", sym, effective_lot,
@@ -2007,7 +2008,7 @@ async def _process_user_account_locked(db, cfg: dict):
             * float(signal.get("prob_lot_scale") or 1.0) \
             * float(signal.get("news_size_scale") or 1.0)
         if _rl_scale < 1.0:
-            effective_lot = max(round(effective_lot * _rl_scale, 2), 0.01)
+            effective_lot = max(floor_to_lot_step(effective_lot * _rl_scale), 0.01)
             sizing_method = sizing_method + "+rl_scale"
             if signal.get("news_size_scale"):
                 sizing_method = sizing_method + "+narrative"
@@ -2022,7 +2023,7 @@ async def _process_user_account_locked(db, cfg: dict):
             await db.signals.update_one(
                 {"_id": result.inserted_id}, {"$set": {"allocator": alloc}})
             if alloc.get("mode") == "enforce" and float(alloc.get("weight") or 1.0) < 1.0:
-                effective_lot = max(round(effective_lot * float(alloc["weight"]), 2), 0.01)
+                effective_lot = max(floor_to_lot_step(effective_lot * float(alloc["weight"])), 0.01)
                 sizing_method = sizing_method + "+allocator"
                 logger.info("RL allocator trim ×%.2f scope=%s user=%s: %s",
                             alloc["weight"], signal.get("scope"), user_id,
@@ -2053,7 +2054,7 @@ async def _process_user_account_locked(db, cfg: dict):
                     continue
                 if rev["scale"] < 1.0:
                     effective_lot = max(
-                        round(effective_lot * rev["scale"], 2), 0.01)
+                        floor_to_lot_step(effective_lot * rev["scale"]), 0.01)
                     sizing_method = sizing_method + "+risk_engine"
                     logger.info(
                         "Risk engine trim ×%.3f user=%s sym=%s: %s",
@@ -2341,7 +2342,7 @@ async def _process_user_account_locked(db, cfg: dict):
             await inc_intel_counter(user_id, f"mode_intercept_{_mg['mode']}")
             continue
         if _mg.get("lot_scale", 1.0) < 1.0:
-            effective_lot = max(0.01, round(effective_lot * _mg["lot_scale"], 2))
+            effective_lot = max(0.01, floor_to_lot_step(effective_lot * _mg["lot_scale"]))
             signal["operational_mode"] = _mg["mode"]
 
         engine = engine_for_account(target_account)
@@ -2373,7 +2374,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 _pm = float(_plan.get("risk_multiplier") or 1.0)
                 if 0 < _pm < 1.0:
                     effective_lot = max(0.01,
-                                        round(effective_lot * _pm, 2))
+                                        floor_to_lot_step(effective_lot * _pm))
             except Exception as e:  # noqa: BLE001
                 logger.warning("execution alpha failed (fail-open): %s",
                                e)

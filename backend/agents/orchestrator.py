@@ -26,6 +26,7 @@ import uuid
 from datetime import datetime, timezone
 
 from database import get_db
+from pip_utils import floor_to_lot_step
 from agents.research_agent import ResearchAgent
 from agents.technical_agent import TechnicalAnalysisAgent
 from agents.macro_agent import MacroAnalysisAgent
@@ -174,7 +175,7 @@ class Orchestrator:
                 try:
                     cur = float(signal.get("lot_size") or 0)
                     if cur > 0.01:
-                        signal["lot_size"] = max(round(cur * 0.5, 2), 0.01)
+                        signal["lot_size"] = max(floor_to_lot_step(cur * 0.5), 0.01)
                         signal["allocator_fallback"] = (
                             f"allocator error ({type(e).__name__}) — "
                             f"conservative half-size {cur} → {signal['lot_size']}")

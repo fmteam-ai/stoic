@@ -1668,3 +1668,9 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - `learned_meta.py`: `predict_p_win` uses `platt_is_valid` so `calibrated` reflects reality.
 - Tests: 5 new direction tests in `tests/test_iter52_drift_and_calibration.py` (identity, monotone, small-n never anti-rank, legacy ignored, predict_p_win legacy path). TEST_MANIFEST + rc_lock regenerated.
 - Not touched: `scalp/model.py` Platt (already correct convention); `calibration.py` (empirical reliability table, no inversion).
+
+## 2026-10-02 — Roadmap step 2 / H3-H5: position sizing correctness
+- H3 `pip_utils.py`: any XXXJPY pair (incl. suffixed CADJPY.fx / NZDJPY-ECN) → pip 0.01 (`JPY_PIP`) and ≈$6.50/pip/lot (`JPY_PIP_VALUE_USD`, fixed approximation per operator); `base_symbol` resolves any CCY/CCY pair; strict lookup returns the JPY value too (crosses like EURGBP still None/fail-closed). Previously unlisted JPY crosses used 0.0001 → stop in "pips" 100× too large → lots 100× too small, or with $10/pip default, wrong budget.
+- H4 `floor_to_lot_step()`: lot rounding floors to 0.01 step (0.015→0.01, was 0.02 = +33% risk). Applied to `risk.compute_lot_for_account` (authoritative), legacy `compute_position_size`/`compute_kelly_position_size`, and all 12 scale-down sites (bot_runner ×9, execution reduce_factor, bot_routes, agents/orchestrator) so safety reductions are never rounded back up.
+- H5 `risk_engine._notional` → `instruments.notional_usd` (FX = lot×100k×price; USD-base = lot×100k). Leverage cap and event-exposure cap now see real FX exposure (was understated ~100,000×). Expect more `trim`/`block` on FX for small accounts — intended.
+- Tests: `tests/unit/test_step2_position_sizing.py` (20 tests). 106 sizing/risk tests green; full-suite failure set identical with/without change (32 pre-existing env failures). Manifest + rc_lock regenerated.

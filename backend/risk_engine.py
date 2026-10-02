@@ -38,8 +38,10 @@ def _trades_weekends(symbol) -> bool:
 
 
 def _notional(symbol: str, lot: float, price: float) -> float:
-    base = (symbol or "").upper()
-    return float(lot) * float(price) * (100 if "XAU" in base else 1)
+    # H5: the old `lot × price × (100 if XAU)` heuristic understated FX by ~100,000×,
+    # so leverage/event-exposure caps never saw an FX position. Canonical registry now.
+    from instruments import notional_usd
+    return notional_usd(symbol, lot, price)
 
 
 def leverage_check(equity, symbol, lot, price, bars, uncertainty,

@@ -11,6 +11,7 @@ from abc import ABC, abstractmethod
 
 from database import get_db
 from market import get_quote
+from pip_utils import floor_to_lot_step
 from safety_guardian import audit_pre_trade
 from order_authorization import authorize_order
 from ws_manager import manager as ws_manager
@@ -298,7 +299,7 @@ class MT5BridgeEngine(ExecutionEngine):
             if gate.get("reduce_factor") and signal.get("lot_size"):
                 _orig_lot = float(signal["lot_size"])
                 signal["lot_size"] = max(
-                    0.01, round(_orig_lot * float(gate["reduce_factor"]), 2))
+                    0.01, floor_to_lot_step(_orig_lot * float(gate["reduce_factor"])))
                 signal["_authority_reduced"] = True
                 logger.warning(
                     "TRADING AUTHORITY REDUCED — lot %s → %s user=%s sym=%s",

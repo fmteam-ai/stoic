@@ -29,6 +29,10 @@ PIP_SIZE = {
     # Default below is for 4-digit FX majors
 }
 DEFAULT_PIP = 0.0001
+JPY_PIP = 0.01                 # H3: all XXXJPY quotes are 2-decimal
+JPY_PIP_VALUE_USD = 6.50       # ≈ 1000 / USDJPY — fixed approximation (operator choice, step 2)
+_CCY = {"USD", "EUR", "GBP", "JPY", "CHF", "AUD", "NZD", "CAD", "SGD",
+        "SEK", "NOK", "ZAR", "MXN", "PLN", "TRY", "HKD", "CNH"}
 
 # USD value of 1 pip per 1.00 STANDARD lot, by symbol. Used by risk sizing to
 # translate a USD risk budget into an MT5 lot quantity.
@@ -83,6 +87,10 @@ SYMBOL_ALIASES = {
 }
 
 
+def _is_ccy_pair(s: str) -> bool:
+    return len(s) == 6 and s.isalpha() and s[:3] in _CCY and s[3:] in _CCY
+
+
 def base_symbol(symbol: Optional[str]) -> str:
     """Resolve broker-suffixed/aliased tickers (XAUUSD.fx, GOLD#, XAUUSD-ECN)
     to the STOIC base symbol. Without this, pip math on a suffixed gold
@@ -99,14 +107,28 @@ def base_symbol(symbol: Optional[str]) -> str:
     for fx in FX_MAJOR_BASES:
         if s.startswith(fx):
             return fx
+    if _is_ccy_pair(s[:6]):          # H3: any CCY/CCY pair incl. suffixed JPY crosses (CADJPY.fx)
+        return s[:6]
     return s
 
 
+def is_jpy_pair(symbol: Optional[str]) -> bool:
+    base = base_symbol(symbol)
+    return _is_ccy_pair(base) and base.endswith("JPY")
+
+
 def pip_size(symbol: Optional[str]) -> float:
-    """Return the pip size for a symbol (broker-suffix aware)."""
+    """Return the pip size for a symbol (broker-suffix aware).
+    H3: every XXXJPY pair is a 2-decimal quote → pip 0.01 (was 0.0001 = 100× too
+    small for any JPY cross missing from the explicit table)."""
     if not symbol:
         return DEFAULT_PIP
-    return PIP_SIZE.get(base_symbol(symbol), DEFAULT_PIP)
+    base = base_symbol(symbol)
+    if base in PIP_SIZE:
+        return PIP_SIZE[base]
+    if is_jpy_pair(base):
+        return JPY_PIP
+    return DEFAULT_PIP
 
 
 def pips_to_price(symbol: Optional[str], pips: float) -> float:
@@ -132,6 +154,8 @@ def pip_value_usd_per_lot_strict(symbol: Optional[str]) -> Optional[float]:
     base = base_symbol(symbol)
     if base in PIP_VALUE_USD_PER_STANDARD_LOT:
         return PIP_VALUE_USD_PER_STANDARD_LOT[base]
+    if is_jpy_pair(base):
+        return JPY_PIP_VALUE_USD
     if len(base) == 6 and base.endswith("USD") and base.isalpha():
         return DEFAULT_PIP_VALUE_USD
     return None
@@ -146,7 +170,21 @@ def pip_value_usd_per_lot(symbol: Optional[str], account_type: Optional[str] = N
     a USD risk budget into an MT5 lot quantity.
     """
     sym = (symbol or "").upper()
-    base = PIP_VALUE_USD_PER_STANDARD_LOT.get(base_symbol(sym), DEFAULT_PIP_VALUE_USD)
+    base_sym = base_symbol(sym)
+    base = PIP_VALUE_USD_PER_STANDARD_LOT.get(base_sym)
+    if base is None:
+        base = JPY_PIP_VALUE_USD if is_jpy_pair(base_sym) else DEFAULT_PIP_VALUE_USD
     atype = (account_type or "standard").lower()
     mult = ACCOUNT_TYPE_LOT_MULTIPLIER.get(atype, 1.0)
     return base * mult
+
+
+def floor_to_lot_step(lots: float, step: float = 0.01) -> float:
+    """H4: broker-step rounding must never ADD risk — floor, never round half-up
+    (0.015 → 0.01, not 0.02 = +33%). Returns 0.0 below one step; callers decide
+    whether the broker minimum is acceptable against the risk budget."""
+    lots = float(lots or 0)
+    if lots <= 0 or step <= 0:
+        return 0.0
+    import math
+    return round(math.floor(lots / step + 1e-9) * step, 8)
