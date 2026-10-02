@@ -128,8 +128,10 @@ def test_ea_capability_gate_numeric_versions_and_hash(monkeypatch):
     # P1-03: local compile stays demo-only — but ONLY an admin-attested DEMO skips the binary proof
     # (security audit: a live account must not self-label demo). Capability floor applies to all.
     from broker_env import attestation_identity
-    demo = {"ea_version": "1.58", "account_type": "demo"}
-    att = {"environment": "DEMO", "approved_by": "admin@example.com", "at": "2026-01-01T00:00:00+00:00",
+    # audit v2 P1-04: DEMO is a lease — fresh heartbeat + recent approval
+    _now = datetime.now(timezone.utc).isoformat()
+    demo = {"ea_version": "1.58", "account_type": "demo", "last_heartbeat": _now}
+    att = {"environment": "DEMO", "approved_by": "admin@example.com", "at": _now,
            "identity_hash": attestation_identity(demo),       # r28 P1-01: bound to the identity digest
            "proof": {"verifier": "ea_heartbeat", "proof_id": "p"}}   # r29 P1-02: independent demo evidence
     assert live_gate(demo)["code"] == "EA_DEMO_UNATTESTED"

@@ -9,9 +9,10 @@ Endpoints (admin-only)
 GET  /api/admin/export-state
         Returns a single JSON blob containing the admin's:
           - user doc (sans password_hash — preserved separately on the target)
-          - accounts (incl. bridge_token + vault-encrypted creds — necessary
-            so the EA on the user's VPS continues to authenticate without
-            re-rotation. Safe because the same MONGO_URL'd vault key is in
+          - accounts (incl. the bridge-token SHA-256 hash + vault-encrypted
+            creds — necessary so the EA on the user's VPS continues to
+            authenticate without re-rotation; plaintext tokens are never
+            exported). Safe because the same MONGO_URL'd vault key is in
             use on both sides; if not, the operator can rotate after import).
           - bot_configs
           - user_presets
@@ -89,6 +90,22 @@ def _restore_oid(value: Any) -> Any:
     return value
 
 
+def _hash_only_bridge_tokens(doc: dict) -> dict:
+    """Export carries bridge-token HASHES only (audit v2 P2-02): the EA keeps
+    authenticating on the target (lookup is by sha256) but no usable token
+    leaves the server. Legacy plaintext is converted to its hash first."""
+    from auth import hash_bridge_token
+    d = dict(doc)
+    for plain, hashed in (("bridge_token", "bridge_token_hash"),
+                          ("bridge_token_prev", "bridge_token_prev_hash")):
+        tok = d.pop(plain, None)
+        if isinstance(tok, str) and tok and not d.get(hashed):
+            d[hashed] = hash_bridge_token(tok)
+            if plain == "bridge_token":
+                d.setdefault("bridge_token_last4", tok[-4:])
+    return d
+
+
 # ─── Export ─────────────────────────────────────────────────────────────
 @router.get("/admin/export-state")
 async def export_state(user=Depends(get_current_user)):
@@ -113,6 +130,8 @@ async def export_state(user=Depends(get_current_user)):
 
     for coll in EXPORT_COLLECTIONS:
         docs = await db[coll].find({"user_id": uid}).to_list(length=10_000)
+        if coll == "accounts":
+            docs = [_hash_only_bridge_tokens(d) for d in docs]
         serialised = [_stringify_oids(d) for d in docs]
         payload["collections"][coll] = serialised
         payload["counts"][coll] = len(serialised)

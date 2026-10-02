@@ -22,6 +22,7 @@ Feature gates query via `subscription_service.get_user_tier(user_id)` →
 `entitlements.enforce_mode_ceiling` at mode-promotion time — Autonomous Live
 additionally requires broker certification via the promotion gate.
 """
+import re
 from dataclasses import dataclass
 from typing import Optional
 
@@ -285,17 +286,50 @@ def _build_plans() -> dict[str, Plan]:
 PLANS = _build_plans()
 
 
-def pricing_snapshot(plan: "Plan") -> dict:
+CHECKOUT_KEY_BUCKET_SECONDS = 600          # audit v2 — one checkout intent per 10-minute window
+_CLIENT_IDEM_KEY_RE = re.compile(r"^[A-Za-z0-9_\-.:]{8,128}$")
+
+
+def checkout_idempotency_key(user_id: str, plan: "Plan", pricing_version, *,
+                             client_key: Optional[str] = None, now: Optional[float] = None,
+                             attempt: int = 0) -> str:
+    """audit v2 billing — DETERMINISTIC key per checkout intent (was uuid4 per request,
+    so a client/network retry produced a second Stripe session).
+
+    * client-supplied `Idempotency-Key` header (validated; namespaced by user so two
+      users can never collide on the same opaque client value), else
+    * sha256(user_id, tier, interval, pricing_version, 10-minute bucket).
+    `attempt` > 0 derives a fresh key in the same bucket once the previous intent is
+    terminal (paid/expired) so a deliberate re-purchase is not blocked.
+    Raises ValueError for a malformed client key."""
+    import hashlib
+    import time as _time
+    if client_key is not None:
+        client_key = str(client_key).strip()
+        if not _CLIENT_IDEM_KEY_RE.match(client_key):
+            raise ValueError("Idempotency-Key must be 8-128 chars of [A-Za-z0-9_-.:]")
+        raw = f"client|{user_id}|{client_key}"
+    else:
+        bucket = int((now if now is not None else _time.time()) // CHECKOUT_KEY_BUCKET_SECONDS)
+        raw = f"derived|{user_id}|{plan.tier}|{plan.duration_months}|{pricing_version}|{bucket}"
+    if attempt:
+        raw += f"|{int(attempt)}"
+    return "ck_" + hashlib.sha256(raw.encode()).hexdigest()
+
+
+def pricing_snapshot(plan: "Plan", idempotency_key: Optional[str] = None) -> dict:
     """audit r29 P1-01 — ONE immutable snapshot taken right after ensure_fresh():
     everything a checkout quotes, records, returns and later fulfils reads from
-    this dict only, never from module globals after the first external await."""
+    this dict only, never from module globals after the first external await.
+    `idempotency_key` should come from checkout_idempotency_key(); the uuid4
+    fallback exists only for legacy callers."""
     import uuid
     return {
         "plan_id": plan.id, "tier": plan.tier, "duration_months": plan.duration_months,
         "amount_minor": plan.amount_cents, "amount_usd": plan.amount_usd, "currency": CURRENCY,
         "pricing_version": PRICING_VERSION, "tier_base_cents": dict(TIER_BASE_CENTS),
         "discount_pct": plan.discount_pct, "public": plan.to_public(),
-        "idempotency_key": uuid.uuid4().hex,
+        "idempotency_key": idempotency_key or uuid.uuid4().hex,
     }
 
 

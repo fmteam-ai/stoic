@@ -83,6 +83,8 @@ def seed_attestation_eligible_user(email: str) -> requests.Session:
         "trading_enabled": True, "status": "connected",
         "bridge_token": f"qa_bt_{uid[-8:]}",
         "last_heartbeat": now.isoformat(), "open_positions": 0,
+        # audit v2 P2-03: attestation freshness = reconciliation age, not deal age
+        "last_reconciled_at": now.isoformat(),
         "balance": 10000.0, "equity": 10000.0,
         "verified_identity": {"account_number": "9" + uid[-6:],
                               "broker_server": "QABroker-Live",

@@ -67,9 +67,10 @@ export const AccountEnvironmentsPanel = () => {
                                         {r.attested_by ? `${r.attested_by} · ${(r.attested_at || "").slice(0, 10)}` : "—"}
                                         {r.verifier === "admin_override" && <span data-testid={`account-env-override-${r.account_id}`} className="block text-[#FF3B30] font-bold">ADMIN OVERRIDE — server not demo-named</span>}
                                         {r.attestation_state === "invalidated" && <span data-testid={`account-env-invalidated-${r.account_id}`} className="block text-[#FFB000]">INVALIDATED — bound identity changed (broker/server/number/terminal/credentials)</span>}
+                                        {r.attestation_state === "lapsed" && <span data-testid={`account-env-lapsed-${r.account_id}`} className="block text-[#FFB000]">LAPSED — stale terminal heartbeat or expired approval (treated as LIVE until proven again)</span>}
                                     </td>
                                     <td className="px-4 py-2.5 text-right">
-                                        {r.attestation_state === "invalidated" ? (
+                                        {(r.attestation_state === "invalidated" || r.attestation_state === "lapsed") ? (
                                             <span className="inline-flex items-center gap-3">
                                                 <button data-testid={`account-env-reattest-${r.account_id}`} onClick={() => setTarget({ ...r, next: "DEMO" })} className="text-[#00FF41] font-mono text-[10px] inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5" /> RE-ATTEST</button>
                                                 <button data-testid={`account-env-revoke-${r.account_id}`} onClick={() => setTarget({ ...r, next: "LIVE" })} className="text-[#FF3B30] font-mono text-[10px] inline-flex items-center gap-1"><ShieldOff className="w-3.5 h-3.5" /> REVOKE</button>

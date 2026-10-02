@@ -185,11 +185,30 @@ export default function Accounts() {
 
     const rotate = async (id) => {
         if (!window.confirm("Rotate the bridge token? The old token keeps working for 15 minutes so a live EA can switch over.")) return;
-        try {
-            const { data } = await api.post(`/accounts/${id}/rotate-token`);
-            setRevealedTokens(prev => ({ ...prev, [id]: data.bridge_token }));
-            setMsg("New bridge token generated — it is shown ONCE below. Copy it into the EA now; it will be masked afterwards.");
-        } catch (e) { setErr(formatApiError(e)); }
+        // Audit v2 P2-01 — accounts without 2FA/passkey must re-enter their
+        // password (backend answers 401/403 {code:"password_required"}).
+        // MFA accounts go through the step-up interceptor in lib/api.js.
+        let body = {};
+        for (let attempt = 0; attempt < 4; attempt += 1) {
+            try {
+                const { data } = await api.post(`/accounts/${id}/rotate-token`, body);
+                setRevealedTokens(prev => ({ ...prev, [id]: data.bridge_token }));
+                setMsg("New bridge token generated — it is shown ONCE below. Copy it into the EA now; it will be masked afterwards.");
+                return;
+            } catch (e) {
+                const st = e?.response?.status;
+                const detail = e?.response?.data?.detail;
+                if ((st === 401 || st === 403) && detail?.code === "password_required" && attempt < 3) {
+                    const pw = window.prompt(
+                        `${detail?.message || "Enter your current password to rotate the bridge token."}\n\nCurrent password:`);
+                    if (!pw) return;                       // user cancelled
+                    body = { current_password: pw };
+                    continue;
+                }
+                setErr(formatApiError(e));
+                return;
+            }
+        }
     };
 
     const revokeToken = async (id) => {

@@ -134,6 +134,7 @@ async def _attestation_gate_scenario():
              "mode": "live", "trading_enabled": True,
              "broker_server": "ICMarkets-Live01", "open_positions": 0,
              "last_heartbeat": (now - timedelta(seconds=5)).isoformat(),
+             "last_reconciled_at": (now - timedelta(minutes=1)).isoformat(),
              "verified_identity": {"broker_server": "ICMarkets-Live01"}})
         await db.broker_deals.insert_one(
             {"user_id": "clean_user", "deal_id": 1, "account_id": "x",

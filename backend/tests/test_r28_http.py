@@ -216,5 +216,5 @@ def test_accounts_serializer_fields(admin_session):
     for a in accts[:5]:
         assert "environment" in a
         assert "environment_attested" in a and isinstance(a["environment_attested"], bool)
-        assert a.get("environment_attestation_state") in ("none", "valid", "invalidated")
+        assert a.get("environment_attestation_state") in ("none", "valid", "invalidated", "lapsed")
         assert "environment_attestation" not in a

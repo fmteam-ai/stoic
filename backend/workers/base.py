@@ -69,7 +69,10 @@ def _vault_key_id() -> str | None:
     try:
         from integrations_settings import master_key_id
         return master_key_id()
-    except Exception:  # noqa: BLE001
+    except Exception as e:  # noqa: BLE001
+        # None is recorded as an UNACKNOWLEDGED lease — rewrap_readiness fails
+        # closed on it, so a worker that cannot derive its key id blocks readiness.
+        logger.warning("worker cannot derive vault key id (lease left unacknowledged): %s", e)
         return None
 
 
@@ -94,7 +97,9 @@ async def _try_acquire(db, name: str) -> bool:
         await db.worker_leases.insert_one(
             {"_id": name, "holder": HOLDER,
              "expires_at": now + timedelta(seconds=LEASE_TTL_SEC),
-             "renewed_at": now})
+             "renewed_at": now,
+             # audit v2: first-time acquire must acknowledge the vault key too
+             "vault_key_id": _vault_key_id()})
         return True
     except Exception:
         return False

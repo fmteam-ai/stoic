@@ -342,7 +342,8 @@ async def _call_emergent(*, feature, model, system, messages, schema,
         chat = chat_cls(api_key=key,
                         session_id=f"{feature}-{uuid.uuid4().hex[:8]}",
                         system_message=sys_text,
-                        ).with_model(llm_models.PROVIDER, model)
+                        ).with_model(llm_models.PROVIDER,
+                                     llm_models.emergent_model_id(model))
         raw = await chat.send_message(message_cls(text=user_text))
     except asyncio.TimeoutError:
         raise

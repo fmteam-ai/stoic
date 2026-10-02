@@ -41,7 +41,9 @@ def test_attestation_is_void_when_any_bound_identity_field_changes():
     from broker_env import attestation_identity, attestation_state, attested_environment
     from ea_capabilities import live_gate
     acc = {**_demo_acc("u"), "_id": ObjectId()}
-    att = {"environment": "DEMO", "approved_by": "adm@example.com", "at": "2026-01-01T00:00:00+00:00",
+    # approval time is "now": the DEMO lease also expires (audit v2 P1-04)
+    att = {"environment": "DEMO", "approved_by": "adm@example.com",
+           "at": datetime.now(timezone.utc).isoformat(),
            "identity_hash": attestation_identity(acc), "proof": {"verifier": "ea_heartbeat", "proof_id": "p"}}
     bound = {**acc, "environment_attestation": att}
     assert attested_environment(bound) == "DEMO" and attestation_state(bound) == "valid" and live_gate(bound) is None
