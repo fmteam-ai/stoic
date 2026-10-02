@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 950 |
+| unit | pure logic, no external I/O | every CI job | 993 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3806 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4967 tests across 499 files.**
+**Total: 5010 tests across 504 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -475,6 +475,11 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/scalp/test_scalp_unit.py` | unit | 162 |
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
 | `backend/tests/unit/test_admin_integrations.py` | unit | 6 |
+| `backend/tests/unit/test_audit_v2_auth_bridge_plaintext.py` | unit | 9 |
+| `backend/tests/unit/test_audit_v2_auth_bridge_rotate.py` | unit | 6 |
+| `backend/tests/unit/test_audit_v2_auth_refresh.py` | unit | 11 |
+| `backend/tests/unit/test_audit_v2_auth_rotate_bypass.py` | unit | 2 |
+| `backend/tests/unit/test_audit_v2_billing_recovery.py` | unit | 15 |
 | `backend/tests/unit/test_audit_v2_demo_lease.py` | unit | 6 |
 | `backend/tests/unit/test_audit_v2_ops_perf_freshness.py` | unit | 10 |
 | `backend/tests/unit/test_audit_v2_ops_vault_ack.py` | unit | 8 |
