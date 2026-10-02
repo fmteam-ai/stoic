@@ -315,7 +315,9 @@ async def test_emergent_fallback_text_mode_json(fake_emergent, _env):
                           history=[{"role": "user", "content": "earlier"}])
     assert res.ok and res.backend == "emergent" and res.data.score == 0.2
     chat = _FakeChat.seen[0]
-    assert (chat.provider, chat.model) == ("anthropic", "claude-haiku-4-5")
+    # Emergent's universal key expects Haiku's dated id (confirmed with
+    # Emergent); the Anthropic API path keeps the plain alias.
+    assert (chat.provider, chat.model) == ("anthropic", "claude-haiku-4-5-20251001")
     assert "JSON schema" in chat.system_message
     assert llm_models.UNTRUSTED_PREAMBLE in chat.system_message
     assert "<untrusted_data>" in chat.text and "earlier" in chat.text
@@ -506,3 +508,12 @@ async def test_real_sdk_serialises_request_through_mock_transport(monkeypatch, _
     assert body["output_config"]["format"]["type"] == "json_schema"
     assert body["system"][0]["cache_control"] == {"type": "ephemeral"}
     assert "temperature" not in body and sent["headers"]["x-api-key"] == "sk-test"
+
+
+def test_emergent_model_ids_and_dated_pricing():
+    assert llm_models.emergent_model_id("claude-haiku-4-5") == "claude-haiku-4-5-20251001"
+    for m in ("claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"):
+        assert llm_models.emergent_model_id(m) == m
+    # a dated id is priced like its alias (not the generic fallback)
+    assert (llm_models.estimate_cost_usd("claude-haiku-4-5-20251001", 1_000_000, 0)
+            == llm_models.estimate_cost_usd("claude-haiku-4-5", 1_000_000, 0) == 1.0)

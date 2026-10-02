@@ -62,12 +62,32 @@ PRICES_PER_MTOK: dict[str, tuple[float, float]] = {
 }
 
 
+# Model ids the Emergent universal key expects when they differ from the
+# Anthropic API alias (confirmed against Emergent's model list, 2026-10).
+EMERGENT_MODEL_IDS: dict[str, str] = {
+    "claude-haiku-4-5": "claude-haiku-4-5-20251001",
+}
+
+
+def emergent_model_id(model: str) -> str:
+    """Model id to send through the Emergent wrapper."""
+    return EMERGENT_MODEL_IDS.get(model, model)
+
+
+def _price_key(model: str) -> str:
+    """Price-table key: exact id, else the id without a -YYYYMMDD suffix."""
+    import re
+    if model in PRICES_PER_MTOK:
+        return model
+    return re.sub(r"-\d{8}$", "", model or "")
+
+
 def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int,
                       cache_write_tokens: int = 0,
                       cache_read_tokens: int = 0) -> float:
     """List-price estimate. Cache writes bill at 1.25x input (5-minute TTL),
     cache reads at 0.1x input; ``input_tokens`` is the uncached remainder."""
-    pin, pout = PRICES_PER_MTOK.get(model, (3.0, 15.0))
+    pin, pout = PRICES_PER_MTOK.get(_price_key(model), (3.0, 15.0))
     billed_in = (input_tokens + 1.25 * cache_write_tokens
                  + 0.1 * cache_read_tokens)
     return round(billed_in / 1e6 * pin + output_tokens / 1e6 * pout, 6)
