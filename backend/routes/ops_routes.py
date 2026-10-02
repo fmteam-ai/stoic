@@ -354,6 +354,13 @@ async def release_readiness(request: Request):
         checks["secrets_rewrap"] = await rewrap_readiness(db)
     except Exception as e:  # noqa: BLE001
         checks["secrets_vault"] = {"ok": False, "detail": f"vault state unavailable: {e}"}
+    # audit v2 P2-02 — BLOCKER while any account still stores a plaintext bridge token
+    try:
+        from auth import bridge_plaintext_readiness
+        checks["bridge_token_plaintext"] = await bridge_plaintext_readiness(db)
+    except Exception as e:  # noqa: BLE001
+        checks["bridge_token_plaintext"] = {"ok": False, "severity": "blocker",
+                                            "detail": f"bridge token state unavailable: {e}"}
     # AT-15 rollback drill hook — can ONLY force a failure (fail-closed), never a pass.
     if os.environ.get("STOIC_DRILL_FORCE_READINESS_FAIL") == "1":
         checks["drill_forced_failure"] = {"ok": False,

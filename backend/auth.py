@@ -245,3 +245,52 @@ def bridge_plaintext_fallback_enabled() -> bool:
     has run everywhere."""
     return (os.environ.get("BRIDGE_TOKEN_PLAINTEXT_FALLBACK", "true")
             .strip().lower() not in ("0", "false", "no", "off"))
+
+
+# Audit v2 P2-02 — a stored plaintext bridge token (legacy field) is a live
+# EA credential readable by anyone with DB / backup / export access.
+BRIDGE_PLAINTEXT_QUERY = {"$or": [
+    {"bridge_token": {"$type": "string", "$ne": ""}},
+    {"bridge_token_prev": {"$type": "string", "$ne": ""}}]}
+BRIDGE_PLAINTEXT_REMEDIATION = "python -m migrations.hash_bridge_tokens"
+_fallback_recommendation_logged = False
+
+
+async def bridge_plaintext_readiness(db) -> dict:
+    """Release-readiness item: BLOCKER while any account still holds a
+    plaintext `bridge_token` / `bridge_token_prev` string. When none remain
+    in production with the transitional fallback still on, logs a one-time
+    warning recommending BRIDGE_TOKEN_PLAINTEXT_FALLBACK=false (the fallback
+    stays default-on: disabling it before the migration would disconnect
+    every EA)."""
+    global _fallback_recommendation_logged
+    count = await db.accounts.count_documents(BRIDGE_PLAINTEXT_QUERY)
+    fallback = bridge_plaintext_fallback_enabled()
+    out = {"ok": count == 0,
+           "severity": "blocker" if count else "info",
+           "plaintext_accounts": count,
+           "plaintext_fallback_enabled": fallback,
+           "remediation": BRIDGE_PLAINTEXT_REMEDIATION if count else None,
+           "note": (f"{count} account(s) still store a PLAINTEXT bridge token — run "
+                    f"`{BRIDGE_PLAINTEXT_REMEDIATION}` before release" if count else None)}
+    from app_env import is_production
+    if count == 0 and fallback and is_production():
+        out["recommendation"] = ("No plaintext bridge tokens remain — set "
+                                 "BRIDGE_TOKEN_PLAINTEXT_FALLBACK=false")
+        if not _fallback_recommendation_logged:
+            _fallback_recommendation_logged = True
+            import logging
+            logging.getLogger(__name__).warning(
+                "No plaintext bridge tokens remain in production — set "
+                "BRIDGE_TOKEN_PLAINTEXT_FALLBACK=false to retire the "
+                "transitional plaintext lookup.")
+    return out
+
+
+def strip_bridge_token_fields(doc: dict) -> dict:
+    """Audit v2 P2-02 — removes EVERY `bridge_token*` key (plaintext, prev,
+    hashes, last4, grace/revocation stamps) from an account document in place
+    before it leaves the API (account listings / exports). Returns the doc."""
+    for k in [k for k in doc if isinstance(k, str) and k.startswith("bridge_token")]:
+        doc.pop(k, None)
+    return doc
