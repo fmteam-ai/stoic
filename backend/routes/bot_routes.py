@@ -971,16 +971,16 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
     lock_q = {"user_id": user["id"], "authority_lock.reason": "panic"}
     if owns:
         lock_q["_id"] = owns["_id"]
-    locked_accounts = await db.accounts.find(lock_q, {"authority_lock": 1, "mode": 1, "broker_environment": 1,
-                                                       "account_type": 1, "broker_server": 1, "server": 1}
-                                             ).to_list(length=50)
+    locked_accounts = await db.accounts.find(lock_q).to_list(length=50)
     if any((a.get("authority_lock") or {}).get("scope") == "platform" for a in locked_accounts):
         raise HTTPException(status_code=409, detail={
             "code": "panic_admin_lock",
             "message": "An admin-wide PANIC lock is active on this account — only an admin can release it."})
     panic_locked = bool(locked_accounts)
-    from broker_env import broker_environment
-    demo_only = bool(locked_accounts) and all(broker_environment(a) != "LIVE" for a in locked_accounts)
+    # SEC-001: server-authoritative classification only — user-writable account_type /
+    # server name / broker_environment never downgrade an account to DEMO on their own.
+    from broker_env import attested_environment
+    demo_only = bool(locked_accounts) and all(attested_environment(a) != "LIVE" for a in locked_accounts)
     live_ctx = await _live_context(db, user["id"], account_id, owns)
     if live_ctx or panic_locked:
         # Staged-rollout gate (advisory unless STAGE_ENFORCEMENT=true)

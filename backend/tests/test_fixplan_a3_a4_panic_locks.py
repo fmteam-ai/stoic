@@ -235,13 +235,25 @@ def test_a4_panic_lock_scope_follows_query(db, seeded, monkeypatch):
 
 
 def test_a4_demo_user_without_mfa_restarts_without_step_up(db, seeded, monkeypatch):
-    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {"account_type": "demo"}})
+    # PAPER mode is server-authoritative non-live (no broker at all)
+    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {"mode": "paper"}})
     _lock(db, seeded, scope="user")
     calls = []
     with patch("webauthn_mfa.has_passkey", AsyncMock(return_value=False)):
         out = _start(seeded, monkeypatch, step_up_calls=calls)
     assert out["active"] is True and calls == []
     assert "authority_lock" not in db.accounts.find_one({"_id": seeded["acc_oid"]})
+
+
+def test_a4_sec001_user_set_demo_label_never_skips_step_up(db, seeded, monkeypatch):
+    # SEC-001: account_type / server name / broker_environment are user-writable → still LIVE
+    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {
+        "account_type": "demo", "broker_environment": "DEMO", "server": "Broker-Demo"}})
+    _lock(db, seeded, scope="user")
+    calls = []
+    with patch("webauthn_mfa.has_passkey", AsyncMock(return_value=False)):
+        _start(seeded, monkeypatch, step_up_calls=calls)
+    assert calls == ["panic_release"]
 
 
 def test_a4_live_user_without_mfa_still_needs_step_up(db, seeded, monkeypatch):
@@ -310,3 +322,18 @@ def test_a4_exact_out_deal_after_reconciler_close_adds_banked_tp1(db, seeded, mo
     row = db.trades.find_one({"_id": tid})
     assert row["status"] == "closed" and row["pnl"] == 52.0
     assert row["pnl_banked_partial"] == 40.0 and row["pnl_final_leg"] == 12.0
+
+
+def test_a4_telegram_panic_uses_the_same_brake(db, seeded, monkeypatch):
+    import routes.telegram_routes as tg
+    import routes.panic_routes as pr
+    monkeypatch.setattr(pr.ws_manager, "broadcast", AsyncMock())
+    sent = []
+
+    async def _reply(token, chat_id, text):
+        sent.append(text)
+    monkeypatch.setattr(tg, "_send_reply", _reply)
+    _arun(tg._cmd_panic("tok", 1, seeded["user_id"]))
+    acc = db.accounts.find_one({"_id": seeded["acc_oid"]})
+    assert acc["trading_authority"] == "LOCKED" and acc["authority_lock"]["scope"] == "user"
+    assert "accounts LOCKED" in sent[-1]

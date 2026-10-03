@@ -225,26 +225,17 @@ async def _cmd_stop(token, chat_id, user_id) -> None:
 
 
 async def _cmd_panic(token, chat_id, user_id) -> None:
-    """Same logic as /api/panic but invoked from telegram (no http call needed)."""
-    db = get_db()
-    # Stop ALL bots (broadcast — PANIC's whole purpose is "stop everything")
-    bot_res = await db.bot_configs.update_many(
-        {"user_id": user_id}, {"$set": {"active": False}}
-    )
-    # Cancel pending trades
-    cancel_res = await db.trades.update_many(
-        {"user_id": user_id, "status": "pending"},
-        {"$set": {"status": "cancelled", "closed_at": datetime.now(timezone.utc).isoformat(),
-                  "close_reason": "panic"}},
-    )
-    # Mark open for close
-    from close_commands import request_close
-    close_res = await request_close(db, {"user_id": user_id}, reason="panic", actor=f"telegram:{user_id}")
+    """Same brake as /api/panic — one code path (locks the accounts, halts scalp,
+    cancels pending, requests closes, emits outbox/audit)."""
+    from routes.panic_routes import _disable_all_bots_and_close_trades
+    res = await _disable_all_bots_and_close_trades({"user_id": user_id}, broadcast_user_id=user_id)
     text = (
-        "*🚨 PANIC ENGAGED*\n\n"
-        f"All {bot_res.modified_count} bot{'s' if bot_res.modified_count != 1 else ''} stopped\\.\n"
-        f"Cancelled pending: `{cancel_res.modified_count}`\n"
-        f"Marked open for close: `{close_res['trades_marked_for_close']}`"
+        "*🚨 PANIC ENGAGED — accounts LOCKED*\n\n"
+        f"Bots stopped: `{res['bots_disabled']}` · scalp runners: `{res['scalp_runners_disabled']}`\n"
+        f"Accounts locked: `{res['accounts_locked']}`\n"
+        f"Cancelled pending: `{res['trades_cancelled']}`\n"
+        f"Marked open for close: `{res['open_trades_marked_for_close']}`\n\n"
+        "Release from the dashboard \\(Bot Config → Start, step\\-up required\\)\\."
     )
     await _send_reply(token, chat_id, text)
 
