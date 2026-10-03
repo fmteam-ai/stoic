@@ -62,7 +62,7 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
     # A5 — a user's PANIC never rewrites an admin-wide (platform) lock as their own
     lock_q = dict(query)
     if lock["scope"] == "user":
-        lock_q["authority_lock.scope"] = {"$ne": "platform"}
+        lock_q["$nor"] = [PLATFORM_LOCK_MATCH]
     acct_result = await db.accounts.update_many(
         lock_q, {"$set": {"trading_authority": "LOCKED", "authority_lock": lock}}, session=session,
     )
@@ -159,12 +159,21 @@ async def panic_user(request: Request, user=Depends(get_current_user)):
 
 
 @router.post("/admin/panic")
-async def panic_global(user=Depends(get_current_user)):
+async def panic_global(request: Request, user=Depends(get_current_user)):
     """Global panic — every user's bot down. Admin role only."""
     from auth import require_admin
     require_admin(user)
     reset_rate_limiter()  # clear all rate-limit buckets
-    return await _disable_all_bots_and_close_trades({})
+    result = await _disable_all_bots_and_close_trades({})
+    await audit_event(get_db(), user["id"], "panic_triggered_global", result, request)
+    return result
+
+
+# A platform (admin-wide) lock: explicit scope, or a legacy lock without scope stamped by "admin".
+PLATFORM_LOCK_MATCH = {"authority_lock.reason": "panic",
+                       "$or": [{"authority_lock.scope": "platform"},
+                               {"authority_lock.scope": {"$exists": False}, "authority_lock.by": "admin"}]}
+USER_LOCK_MATCH = {"authority_lock.reason": "panic", "$nor": [PLATFORM_LOCK_MATCH]}
 
 
 async def release_panic_locks(db, query: dict, *, actor: str, via: str) -> int:
@@ -174,6 +183,9 @@ async def release_panic_locks(db, query: dict, *, actor: str, via: str) -> int:
         {"$unset": {"trading_authority": "", "authority_lock": ""},
          "$set": {"authority_lock_released": {
              "at": datetime.now(timezone.utc).isoformat(), "by": actor, "via": via}}})
+    if res.modified_count:
+        from canonical_decision import bump_authority_version
+        await bump_authority_version(db, f"panic_release:{via}", user_id=actor)
     return res.modified_count
 
 
@@ -185,7 +197,8 @@ async def panic_release_global(request: Request, user=Depends(get_current_user))
     require_admin(user)
     db = get_db()
     await require_step_up(db, user, request, "panic_release")
-    n = await release_panic_locks(db, {}, actor=user["id"], via="admin_panic_release")
+    # G6 — releases the ADMIN-WIDE lock only; a user's own PANIC stays theirs to release
+    n = await release_panic_locks(db, PLATFORM_LOCK_MATCH, actor=user["id"], via="admin_panic_release")
     await audit_event(db, user["id"], "panic_release_global", {"accounts_unlocked": n}, request, step_up=True)
     return {"accounts_unlocked": n}
 

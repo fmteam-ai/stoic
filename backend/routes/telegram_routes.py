@@ -228,7 +228,9 @@ async def _cmd_panic(token, chat_id, user_id) -> None:
     """Same brake as /api/panic — one code path (locks the accounts, halts scalp,
     cancels pending, requests closes, emits outbox/audit)."""
     from routes.panic_routes import _disable_all_bots_and_close_trades
+    from step_up import audit_event
     res = await _disable_all_bots_and_close_trades({"user_id": user_id}, broadcast_user_id=user_id)
+    await audit_event(get_db(), user_id, "panic_triggered", {**res, "via": "telegram", "chat_id": chat_id}, None)
     text = (
         "*🚨 PANIC ENGAGED — accounts LOCKED*\n\n"
         f"Bots stopped: `{res['bots_disabled']}` · scalp runners: `{res['scalp_runners_disabled']}`\n"

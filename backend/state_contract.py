@@ -178,7 +178,8 @@ async def contract(db, user_id: str) -> dict:
         truth = account_truth(a, open_local)
         cfg = cfgs.get(aid) or global_cfg
         bot_on = bool(cfg.get("active"))
-        tripped = bool(cfg.get("tripped_at"))
+        # N13 — a PANIC lock on the account reads as tripped, whatever `active` says
+        tripped = bool(cfg.get("tripped_at")) or (a.get("authority_lock") or {}).get("reason") == "panic"
         mode = str(cfg.get("operational_mode") or "observe")
         eff = effective_state(bot_enabled=bot_on, tripped=tripped,
                               truth=truth, operational_mode=mode)

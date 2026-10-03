@@ -21,13 +21,29 @@ from pymongo import MongoClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import importlib.util as _ilu
-_spec = _ilu.spec_from_file_location(
-    "_tests_root_conftest",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "conftest.py"))
-_mod = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-_arun = _mod.run_async   # root conftest's shared loop (never a closed per-file loop)
+import asyncio as _asyncio
+
+
+def _arun(coro):
+    """Run on the loop the root conftest installed for this test (asyncio.get_event_loop()),
+    recreating it if a previous suite closed it, and never reuse a motor client bound to
+    another loop. Works stand-alone and inside mixed runs."""
+    import database as _dbmod
+    try:
+        loop = _asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None or loop.is_closed():
+        loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+    import sys as _sys
+    for _m in [_dbmod] + [m for n, m in list(_sys.modules.items())
+                          if (n == "database" or n.endswith(".database")) and hasattr(m, "_client")]:
+        c = getattr(_m, "_client", None)
+        if c is not None and c.get_io_loop() is not loop:
+            _m._client = None
+            _m._db = None
+    return loop.run_until_complete(coro)
 
 TAG = "_test_fixplan_a2"
 
@@ -108,35 +124,31 @@ def test_b3_a3_dispatched_order_expires_from_handover_never_sent_from_creation(d
     assert not ({str(silent), str(never_sent)} & dispatched)
 
 
-def test_b3_duplicate_tickets_block_unique_index_and_are_listed(db, seeded):
-    from seed import duplicate_tickets, ensure_unique_ticket_index, UNIQUE_TICKET_INDEX, UNIQUE_TICKET_FILTER
+def test_b3_duplicate_tickets_block_unique_index_and_are_listed(db, seeded, monkeypatch):
+    """G5 — never drops/rebuilds the live index: the refuse path runs against a fake db."""
+    import seed
+    from unittest.mock import MagicMock, AsyncMock
     from database import get_db
-    if UNIQUE_TICKET_INDEX in db.trades.index_information():
-        db.trades.drop_index(UNIQUE_TICKET_INDEX)      # exercise the pre-check path from scratch
-    a = _pending(db, seeded, status="open", mt5_ticket=990001)
-    b = _pending(db, seeded, status="pending", mt5_ticket=990001)
-    _pending(db, seeded, status="closed", mt5_ticket=990001)   # A3: closed rows never count
-    dups = _arun(duplicate_tickets(get_db()))
-    hit = [d for d in dups if d["mt5_ticket"] == 990001 and d["account_id"] == seeded["account_id"]]
-    assert hit and set(hit[0]["trade_ids"]) == {str(a), str(b)} and hit[0]["count"] == 2
-    out = _arun(ensure_unique_ticket_index(get_db()))
-    assert out["created"] is False and out["duplicates"]
-    db.trades.delete_one({"_id": b})
-    out = _arun(ensure_unique_ticket_index(get_db()))
-    remaining = _arun(duplicate_tickets(get_db()))
-    assert out["created"] == (not remaining)
-    if out["created"]:
-        info = db.trades.index_information()[UNIQUE_TICKET_INDEX]
-        assert info["unique"] is True and info["partialFilterExpression"] == UNIQUE_TICKET_FILTER
-        _pending(db, seeded)                      # null tickets exempt
-        _pending(db, seeded, mt5_ticket=0)
-        _pending(db, seeded, status="closed", mt5_ticket=990001)   # closed re-use allowed
-        # A3 netting: same position ticket, distinct entry legs coexist while open
-        _pending(db, seeded, status="open", mt5_ticket=990002, position_leg=1)
-        _pending(db, seeded, status="open", mt5_ticket=990002, position_leg=2)
-        from pymongo.errors import DuplicateKeyError
-        with pytest.raises(DuplicateKeyError):
-            _pending(db, seeded, status="open", mt5_ticket=990001)
+    # live DB: the seeded account has no duplicate live rows; closed rows never count
+    _pending(db, seeded, status="closed", mt5_ticket=990001)
+    _pending(db, seeded, status="closed", mt5_ticket=990001)
+    assert not [d for d in _arun(seed.duplicate_tickets(get_db())) if d["account_id"] == seeded["account_id"]]
+    # fake DB without the index + duplicates reported → refused, listed, nothing created
+    fake = MagicMock()
+    fake.trades.index_information = AsyncMock(return_value={})
+    fake.trades.create_index = AsyncMock()
+    dups = [{"account_id": "a", "mt5_ticket": 1, "position_leg": None, "count": 2, "trade_ids": ["x", "y"]}]
+    monkeypatch.setattr(seed, "duplicate_tickets", AsyncMock(return_value=dups))
+    out = _arun(seed.ensure_unique_ticket_index(fake))
+    assert out["created"] is False and out["duplicates"] == dups
+    fake.trades.create_index.assert_not_awaited()
+    # no duplicates → created with the live-only partial filter and the leg key
+    monkeypatch.setattr(seed, "duplicate_tickets", AsyncMock(return_value=[]))
+    out = _arun(seed.ensure_unique_ticket_index(fake))
+    assert out["created"] is True
+    kw = fake.trades.create_index.await_args.kwargs
+    assert kw["unique"] is True and kw["partialFilterExpression"] == seed.UNIQUE_TICKET_FILTER
+    assert fake.trades.create_index.await_args.args[0] == seed.UNIQUE_TICKET_KEYS
 
 
 # ------------------------------------------------------------------ B4

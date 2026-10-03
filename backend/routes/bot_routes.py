@@ -972,15 +972,29 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
     if owns:
         lock_q["_id"] = owns["_id"]
     locked_accounts = await db.accounts.find(lock_q).to_list(length=50)
-    if any((a.get("authority_lock") or {}).get("scope") == "platform" for a in locked_accounts):
+    def _is_platform_lock(a: dict) -> bool:
+        lk = a.get("authority_lock") or {}
+        return lk.get("scope") == "platform" or (not lk.get("scope") and lk.get("by") == "admin")
+    if any(_is_platform_lock(a) for a in locked_accounts):
         raise HTTPException(status_code=409, detail={
             "code": "panic_admin_lock",
             "message": "An admin-wide PANIC lock is active on this account — only an admin can release it."})
     panic_locked = bool(locked_accounts)
     # SEC-001: server-authoritative classification only — user-writable account_type /
     # server name / broker_environment never downgrade an account to DEMO on their own.
-    from broker_env import attested_environment
-    demo_only = bool(locked_accounts) and all(attested_environment(a) != "LIVE" for a in locked_accounts)
+    from broker_env import attested_environment, demo_proof
+
+    def _non_live(a: dict) -> bool:
+        # PAPER / admin-attested DEMO, or the EA's own fresh demo proof (terminal identity,
+        # reported server + login match, demo-named server) — never a user-typed label alone
+        return attested_environment(a) != "LIVE" or bool(demo_proof(a).get("ok"))
+    # G4 — judge EVERY account the start touches (default scope = all of them), not only
+    # the locked ones: an unlocked LIVE account in scope keeps the step-up mandatory.
+    scope_q = {"user_id": user["id"]}
+    if owns:
+        scope_q["_id"] = owns["_id"]
+    scope_accounts = await db.accounts.find(scope_q).to_list(length=100)
+    demo_only = bool(locked_accounts) and all(_non_live(a) for a in scope_accounts)
     live_ctx = await _live_context(db, user["id"], account_id, owns)
     if live_ctx or panic_locked:
         # Staged-rollout gate (advisory unless STAGE_ENFORCEMENT=true)
@@ -1001,7 +1015,8 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
                           request, step_up=not skip_step_up)
     if panic_locked:
         from routes.panic_routes import release_panic_locks
-        await release_panic_locks(db, {**lock_q, "authority_lock.scope": {"$ne": "platform"}},
+        from routes.panic_routes import PLATFORM_LOCK_MATCH
+        await release_panic_locks(db, {**lock_q, "$nor": [PLATFORM_LOCK_MATCH]},
                                   actor=user["id"], via="bot_start")
     await _get_or_create_config(db, user["id"], account_id)
     # CRITICAL: re-enabling a bot must clear the panic/circuit-breaker trip

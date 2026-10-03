@@ -69,7 +69,9 @@ async def account_domain(db, account: dict | None = None) -> dict:
         lock = account.get("authority_lock") or {}
         why = "account-level restriction"
         if lock.get("reason") == "panic":
-            why = "PANIC lock — release by starting the bot (step-up required)"
+            platform = lock.get("scope") == "platform" or (not lock.get("scope") and lock.get("by") == "admin")
+            why = ("admin-wide PANIC lock — only an admin can release it (Admin → Ops)" if platform
+                   else "PANIC lock — release by starting the bot (step-up required)")
         return {"level": lvl, "reason": why}
     return {"level": "FULL", "reason": "account unrestricted"}
 

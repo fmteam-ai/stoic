@@ -118,9 +118,9 @@ def why_this_size(trade: dict, signal: dict) -> dict:
         bits.append(f"adaptive sizing ×{ads['multiplier']}")
     if signal.get("corr_kelly_trim"):
         bits.append("trimmed for portfolio correlation")
-    if trade.get("original_lot_size") and \
-            trade["original_lot_size"] != trade.get("lot_size"):
-        bits.append(f"broker-adjusted from {trade['original_lot_size']} lots")
+    _req = trade.get("requested_lot_size") or trade.get("original_lot_size")
+    if _req and trade.get("lot_size") is not None and float(_req) != float(trade["lot_size"]):
+        bits.append(f"broker-adjusted from {_req} lots requested")
     return {"answer": "; ".join(bits),
             "evidence": {"risk_pct": rp, "lot_size": trade.get("lot_size"),
                          "risk_amount": signal.get("risk_amount"),

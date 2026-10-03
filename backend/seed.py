@@ -249,27 +249,35 @@ UNIQUE_TICKET_INDEX = "uniq_account_ticket"
 UNIQUE_TICKET_KEYS = [("account_id", 1), ("mt5_ticket", 1), ("position_leg", 1)]
 
 
-async def ensure_unique_ticket_index(db) -> dict:
-    """Fix plan A2/B3 + A3 — one broker ticket maps to ONE live (open/pending) trade row
-    per account (per entry leg on netting accounts). Closed/cancelled rows are exempt so
-    history can keep broker ticket re-use. Refused — loudly, listing the offenders — while
-    duplicates exist, so boot never fails on legacy data. A stale definition under the
-    same name (earlier key/filter) is dropped and rebuilt."""
+async def ensure_unique_ticket_index(db, *, rebuild: bool = False) -> dict:
+    """Fix plan A2/B3 + A3 + A5/N9 — one broker ticket maps to ONE live (open/pending)
+    trade row per account (per entry leg on netting accounts).
+    • index already present with the right definition → nothing to do (no duplicate scan)
+    • present with a STALE definition → reported, NOT dropped (operator: ops/ticket_duplicates.py
+      --build-index, which passes rebuild=True)
+    • missing → duplicate pre-check; refused loudly while duplicates exist."""
+    existing = (await db.trades.index_information()).get(UNIQUE_TICKET_INDEX)
+    if existing and existing.get("key") == UNIQUE_TICKET_KEYS \
+            and existing.get("partialFilterExpression") == UNIQUE_TICKET_FILTER:
+        return {"created": False, "present": True, "duplicates": []}
+    if existing and not rebuild:
+        _ticket_log.error("unique ticket index %s has a STALE definition (key=%s filter=%s) — "
+                          "run ops/ticket_duplicates.py --build-index to rebuild", UNIQUE_TICKET_INDEX,
+                          existing.get("key"), existing.get("partialFilterExpression"))
+        return {"created": False, "present": True, "stale": True, "duplicates": []}
     dups = await duplicate_tickets(db)
     if dups:
         _ticket_log.error("unique ticket index NOT built — %d duplicate (account, ticket) group(s): %s",
                           len(dups), dups)
-        return {"created": False, "duplicates": dups}
-    existing = (await db.trades.index_information()).get(UNIQUE_TICKET_INDEX)
-    if existing and (existing.get("key") != UNIQUE_TICKET_KEYS
-                     or existing.get("partialFilterExpression") != UNIQUE_TICKET_FILTER):
+        return {"created": False, "present": False, "duplicates": dups}
+    if existing:
         await db.trades.drop_index(UNIQUE_TICKET_INDEX)
-        _ticket_log.warning("unique ticket index %s had a stale definition — rebuilt", UNIQUE_TICKET_INDEX)
+        _ticket_log.warning("unique ticket index %s stale definition dropped for rebuild", UNIQUE_TICKET_INDEX)
     await db.trades.create_index(UNIQUE_TICKET_KEYS, name=UNIQUE_TICKET_INDEX, unique=True,
                                  partialFilterExpression=UNIQUE_TICKET_FILTER)
     _ticket_log.info("unique ticket index %s ready on trades(account_id, mt5_ticket, position_leg) "
                      "for open/pending rows", UNIQUE_TICKET_INDEX)
-    return {"created": True, "duplicates": []}
+    return {"created": True, "present": True, "duplicates": []}
 
 
 async def ensure_indexes():

@@ -78,15 +78,20 @@ async def main(mode: str, apply: bool, max_rows: int) -> int:
     from seed import duplicate_tickets, ensure_unique_ticket_index
     db = get_db()
     if mode == "--build-index":
-        out = await ensure_unique_ticket_index(db)
+        out = await ensure_unique_ticket_index(db, rebuild=True)
+        if out.get("present") and not out["created"]:
+            print("index already present with the current definition")
+            return 0
         print("index created" if out["created"] else f"REFUSED — {len(out['duplicates'])} duplicate group(s) remain")
         return 0 if out["created"] else 1
     groups = await duplicate_tickets(db, limit=500)
     if not groups:
         print("no duplicate live (account_id, mt5_ticket, leg) groups — index can be built")
         return 0
-    archived, planned = 0, 0
+    archived, planned, capped = 0, 0, False
     for g in groups:
+        if capped:
+            break
         q = {"account_id": g["account_id"], "mt5_ticket": g["mt5_ticket"], "status": {"$in": ["open", "pending"]}}
         if g.get("position_leg") is None:
             q["position_leg"] = None
@@ -108,6 +113,7 @@ async def main(mode: str, apply: bool, max_rows: int) -> int:
         for r in archive:
             if archived >= max_rows:
                 print(f"cap reached (--max {max_rows}) — re-run to continue")
+                capped = True
                 break
             doc = {**r, "archived_at": datetime.now(timezone.utc).isoformat(),
                    "archived_reason": "duplicate_ticket", "kept_trade_id": str(keep["_id"]),

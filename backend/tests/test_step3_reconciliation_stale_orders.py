@@ -15,13 +15,29 @@ from pymongo import MongoClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import importlib.util as _ilu
-_spec = _ilu.spec_from_file_location(
-    "_tests_root_conftest",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "conftest.py"))
-_mod = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-_arun = _mod.run_async   # root conftest's shared loop (never a closed per-file loop)
+import asyncio as _asyncio
+
+
+def _arun(coro):
+    """Run on the loop the root conftest installed for this test (asyncio.get_event_loop()),
+    recreating it if a previous suite closed it, and never reuse a motor client bound to
+    another loop. Works stand-alone and inside mixed runs."""
+    import database as _dbmod
+    try:
+        loop = _asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None or loop.is_closed():
+        loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+    import sys as _sys
+    for _m in [_dbmod] + [m for n, m in list(_sys.modules.items())
+                          if (n == "database" or n.endswith(".database")) and hasattr(m, "_client")]:
+        c = getattr(_m, "_client", None)
+        if c is not None and c.get_io_loop() is not loop:
+            _m._client = None
+            _m._db = None
+    return loop.run_until_complete(coro)
 
 TAG = "_test_step3"
 

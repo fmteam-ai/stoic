@@ -105,7 +105,16 @@ def _shared_loop():
 
 def run_async(coro):
     """Run a coroutine on the suite's shared loop (sync test helper)."""
-    return _shared_loop().run_until_complete(coro)
+    loop = _shared_loop()
+    try:  # a motor client bound to another (possibly closed) loop must never be reused here
+        import database as _dbmod
+        c = _dbmod._client
+        if c is not None and c.get_io_loop() is not loop:
+            _dbmod._client = None
+            _dbmod._db = None
+    except Exception:
+        pass
+    return loop.run_until_complete(coro)
 
 
 @pytest.fixture(autouse=True)

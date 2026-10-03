@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
+import { GlobalPanicCard } from "@/components/GlobalPanicCard";
 import { toast } from "sonner";
 import { Loader2, RefreshCw, Server, Plug, Cpu, AlertTriangle, Activity, Database, CreditCard, Users, ListOrdered, ShieldCheck, Receipt, FlaskConical, Play, TrendingDown, Gauge } from "lucide-react";
 
@@ -492,6 +493,8 @@ export default function AdminOps() {
                         <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /> REFRESH
                     </button>
                 } />
+
+            <div className="mb-4"><GlobalPanicCard onDone={() => load(true)} /></div>
 
             {/* Top strip */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-4" data-testid="ops-stat-strip">

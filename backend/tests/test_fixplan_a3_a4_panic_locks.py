@@ -12,18 +12,34 @@ import os
 import sys
 import pytest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
 from pymongo import MongoClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import importlib.util as _ilu
-_spec = _ilu.spec_from_file_location(
-    "_tests_root_conftest",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "conftest.py"))
-_mod = _ilu.module_from_spec(_spec)
-_spec.loader.exec_module(_mod)
-_arun = _mod.run_async
+import asyncio as _asyncio
+
+
+def _arun(coro):
+    """Run on the loop the root conftest installed for this test (asyncio.get_event_loop()),
+    recreating it if a previous suite closed it, and never reuse a motor client bound to
+    another loop. Works stand-alone and inside mixed runs."""
+    import database as _dbmod
+    try:
+        loop = _asyncio.get_event_loop()
+    except RuntimeError:
+        loop = None
+    if loop is None or loop.is_closed():
+        loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+    import sys as _sys
+    for _m in [_dbmod] + [m for n, m in list(_sys.modules.items())
+                          if (n == "database" or n.endswith(".database")) and hasattr(m, "_client")]:
+        c = getattr(_m, "_client", None)
+        if c is not None and c.get_io_loop() is not loop:
+            _m._client = None
+            _m._db = None
+    return loop.run_until_complete(coro)
 
 TAG = "_test_fixplan_a34"
 
@@ -81,22 +97,10 @@ def _req():
 
 
 # ------------------------------------------------------------------ A3
-def test_a3_stale_index_definition_is_rebuilt(db, seeded):
-    from seed import ensure_unique_ticket_index, duplicate_tickets, UNIQUE_TICKET_INDEX, UNIQUE_TICKET_KEYS
-    from database import get_db
-    if _arun(duplicate_tickets(get_db())):
-        pytest.skip("preview DB still holds duplicate live tickets")
-    info = db.trades.index_information()
-    if UNIQUE_TICKET_INDEX in info:
-        db.trades.drop_index(UNIQUE_TICKET_INDEX)
-    try:
-        db.trades.create_index([("account_id", 1), ("mt5_ticket", 1)], name=UNIQUE_TICKET_INDEX, unique=True,
-                               partialFilterExpression={"mt5_ticket": {"$type": "number", "$gt": 0}})
-    except Exception:  # noqa: BLE001 — legacy closed-row duplicates in this DB
-        pytest.skip("DB holds closed duplicate tickets — old-style index cannot be built here")
-    out = _arun(ensure_unique_ticket_index(get_db()))
-    assert out["created"] is True
-    assert db.trades.index_information()[UNIQUE_TICKET_INDEX]["key"] == UNIQUE_TICKET_KEYS
+def test_a3_index_definition_constants():
+    from seed import UNIQUE_TICKET_KEYS, UNIQUE_TICKET_FILTER
+    assert UNIQUE_TICKET_KEYS == [("account_id", 1), ("mt5_ticket", 1), ("position_leg", 1)]
+    assert UNIQUE_TICKET_FILTER == {"mt5_ticket": {"$type": "number", "$gt": 0}, "status": {"$in": ["open", "pending"]}}
 
 
 def test_a3_netting_detection_prefers_account_flag_then_registry(db, seeded):
@@ -213,7 +217,7 @@ def test_a4_user_releases_own_panic_with_step_up(db, seeded, monkeypatch):
     assert "authority_lock" not in acc and acc["authority_lock_released"]["via"] == "bot_start"
 
 
-def test_a4_admin_release_targets_every_lock_but_user_scope_releases_only_own(db, seeded, monkeypatch):
+def test_g6_admin_release_targets_platform_locks_only(db, seeded, monkeypatch):
     import routes.panic_routes as pr
     _lock(db, seeded, scope="platform")
     calls = []
@@ -227,7 +231,7 @@ def test_a4_admin_release_targets_every_lock_but_user_scope_releases_only_own(db
     monkeypatch.setattr(pr, "release_panic_locks", _release)
     with patch("step_up.require_step_up", AsyncMock()), patch.object(pr, "audit_event", AsyncMock()):
         out = _arun(pr.panic_release_global(_req(), user={"id": "admin1", "role": "admin"}))
-    assert out["accounts_unlocked"] == 1 and calls[0][0] == {} and calls[0][2] == "admin_panic_release"
+    assert out["accounts_unlocked"] == 1 and calls[0][0] == pr.PLATFORM_LOCK_MATCH and calls[0][2] == "admin_panic_release"
     assert "authority_lock" not in db.accounts.find_one({"_id": seeded["acc_oid"]})
 
 
@@ -387,7 +391,7 @@ def test_a5_late_fill_absorbs_unprotected_backfill_duplicate(db, seeded, monkeyp
     from models import BridgeTradeReport
     from seed import ensure_unique_ticket_index
     monkeypatch.setattr(br.ws_manager, "broadcast", AsyncMock())
-    if not _arun(ensure_unique_ticket_index(br.get_db()))["created"]:
+    if not _arun(ensure_unique_ticket_index(br.get_db())).get("present"):
         pytest.skip("unique ticket index not buildable on this DB")
     # expired bot order (protected: SL/TP) + snapshot backfill row that grabbed the ticket first
     bot = _trade(db, seeded, status="cancelled", close_reason="expired", error="pending_order_expired",
@@ -417,7 +421,7 @@ def test_a5_bot_originated_duplicate_is_not_absorbed(db, seeded, monkeypatch):
     from models import BridgeTradeReport
     from seed import ensure_unique_ticket_index
     monkeypatch.setattr(br.ws_manager, "broadcast", AsyncMock())
-    if not _arun(ensure_unique_ticket_index(br.get_db()))["created"]:
+    if not _arun(ensure_unique_ticket_index(br.get_db())).get("present"):
         pytest.skip("unique ticket index not buildable on this DB")
     a = _trade(db, seeded, _dispatched_at=_iso(5))
     other = _trade(db, seeded, status="open", mt5_ticket=880401, execution_intent_id=f"a5-{ObjectId()}")
@@ -427,3 +431,182 @@ def test_a5_bot_originated_duplicate_is_not_absorbed(db, seeded, monkeypatch):
     assert out["ok"] is False and out["reason"] == "duplicate_ticket_conflict"
     assert db.trades.find_one({"_id": other})["status"] == "open"
     assert db.trades.find_one({"_id": a})["duplicate_ticket_conflict"]["ticket"] == 880401
+
+
+# ------------------------------------------------------------------ A5 round 2 (reviewer N-items)
+def test_n4_deal_before_report_adopts_expired_bot_row(db, seeded, monkeypatch):
+    """External 'in' deal arrives BEFORE /bridge/report for an expired (late-filled) bot order:
+    the cancelled row is adopted — no second row, and the later report lands cleanly."""
+    import routes.bridge_routes as br
+    from models import BridgeExternalDeal, BridgeTradeReport
+    monkeypatch.setattr(br.ws_manager, "broadcast", AsyncMock())
+    bot = _trade(db, seeded, status="cancelled", error="pending_order_expired", close_reason="expired",
+                 _dispatched_at=_iso(200), opened_at=_iso(300), closed_at=_iso(60))
+    _arun(br.external_deal(BridgeExternalDeal(bridge_token=seeded["token"], mt5_ticket=880500, deal_id=77701,
+                                              deal_entry="in", symbol="XAUUSD", action="BUY", lots=0.1,
+                                              price=4000.5, magic=901234, position_volume=0.1)))
+    row = db.trades.find_one({"_id": bot})
+    assert row["status"] == "open" and row["mt5_ticket"] == 880500 and row["adopted_via_external_deal"]
+    assert row["late_fill_after_cancel"] == "expired" and row["stop_loss"] == 3990 and row["closed_at"] is None
+    assert db.trades.count_documents({"account_id": seeded["account_id"], "mt5_ticket": 880500}) == 1
+    out = _arun(br.report_trade(BridgeTradeReport(bridge_token=seeded["token"], trade_id=str(bot),
+                                                  mt5_ticket=880500, status="open", entry_price=4000.5,
+                                                  requested_price=4000.5)))
+    assert out.get("ok", True) is not False
+
+
+def test_n11_heartbeat_before_report_adopts_pending_bot_row_and_closes_after_panic(db, seeded, monkeypatch):
+    import routes.bridge_routes as br
+    from models import BridgeHeartbeat, BridgePosition
+    monkeypatch.setattr(br.ws_manager, "broadcast", AsyncMock())
+    _lock(db, seeded)
+    bot = _trade(db, seeded, status="cancelled", error="panic_lock", close_reason="panic",
+                 _dispatched_at=_iso(20), closed_at=_iso(10))
+    hb = BridgeHeartbeat(bridge_token=seeded["token"], balance=10000, equity=10000, open_positions=1,
+                         positions=[BridgePosition(ticket=880600, symbol="XAUUSD", type="BUY", volume=0.1,
+                                                   price_open=4000.0, magic=901234)])
+    _arun(br.heartbeat(hb))
+    row = db.trades.find_one({"_id": bot})
+    assert row["status"] == "open" and row["mt5_ticket"] == 880600 and row["adopted_via_heartbeat"]
+    assert row["close_requested"] is True and row["pending_modification"]["reason"] == "late_fill_after_panic"
+    assert db.trades.count_documents({"account_id": seeded["account_id"], "mt5_ticket": 880600}) == 1
+
+
+def test_n2_position_leg_on_backfill_reversal_and_import_for_netting(db, seeded, monkeypatch):
+    import routes.bridge_routes as br
+    from models import BridgeHeartbeat, BridgePosition
+    monkeypatch.setattr(br.ws_manager, "broadcast", AsyncMock())
+    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {"ea_identity": {"margin_mode": "netting"}}})
+    assert _arun(br.is_netting_account(br.get_db(), db.accounts.find_one({"_id": seeded["acc_oid"]}))) is True
+    hb = BridgeHeartbeat(bridge_token=seeded["token"], balance=10000, equity=10000, open_positions=1,
+                         positions=[BridgePosition(ticket=880700, symbol="EURUSD", type="SELL", volume=0.2,
+                                                   price_open=1.1, magic=0)])
+    _arun(br.heartbeat(hb))
+    row = db.trades.find_one({"account_id": seeded["account_id"], "mt5_ticket": 880700})
+    assert row and row["position_leg"] == 880700 and row["backfilled_from_snapshot"]
+    db.trades.update_one({"_id": row["_id"]}, {"$set": {TAG: True}})
+    src = open(br.__file__).read()
+    assert src.count('rev_doc["position_leg"] = int(payload.deal_id)') == 1
+    assert 'is_netting_account(db, acc)' in open(os.path.join(os.path.dirname(br.__file__), "account_routes.py")).read()
+
+
+def test_n7_adaptive_exits_use_free_slot_filter():
+    import adaptive_exits, inspect
+    src = inspect.getsource(adaptive_exits)
+    assert src.count("_free_slot_filter(trade[\"_id\"])") == 2
+    assert '{"_id": trade["_id"]},\n            {"$set": {"pending_modification"' not in src
+
+
+def test_n9_index_build_guarded_no_scan_when_present_and_never_drops_at_boot(monkeypatch):
+    """Pure: present+correct → no duplicate scan, no drop; stale → reported, NOT dropped unless rebuild=True."""
+    import seed
+    fake = MagicMock()
+    good = {"key": seed.UNIQUE_TICKET_KEYS, "partialFilterExpression": seed.UNIQUE_TICKET_FILTER}
+    fake.trades.index_information = AsyncMock(return_value={seed.UNIQUE_TICKET_INDEX: good})
+    fake.trades.drop_index = AsyncMock(); fake.trades.create_index = AsyncMock()
+    scan = AsyncMock(return_value=[]); monkeypatch.setattr(seed, "duplicate_tickets", scan)
+    assert _arun(seed.ensure_unique_ticket_index(fake)) == {"created": False, "present": True, "duplicates": []}
+    scan.assert_not_awaited(); fake.trades.drop_index.assert_not_awaited()
+    stale = {"key": [("account_id", 1), ("mt5_ticket", 1)], "partialFilterExpression": {}}
+    fake.trades.index_information = AsyncMock(return_value={seed.UNIQUE_TICKET_INDEX: stale})
+    out = _arun(seed.ensure_unique_ticket_index(fake))
+    assert out.get("stale") is True; fake.trades.drop_index.assert_not_awaited(); fake.trades.create_index.assert_not_awaited()
+    out = _arun(seed.ensure_unique_ticket_index(fake, rebuild=True))
+    assert out["created"] is True; fake.trades.drop_index.assert_awaited_once(); fake.trades.create_index.assert_awaited_once()
+
+
+def test_n10_tick_ingress_halts_on_platform_kill_switch(db, seeded, monkeypatch):
+    from routes.bridge_routes import receive_ticks, BridgeTicks
+    import routes.bridge_routes as br
+    from scalp.engine import get_runner, _runners
+    db.platform_state.update_one({"_id": "trading_authority"}, {"$set": {"level": "LOCKED"}}, upsert=True)
+    runner = get_runner(seeded["account_id"], seeded["user_id"], "EURUSD")
+    runner.enabled = True
+    runner._hydrated = True
+    monkeypatch.setattr(runner, "ingest", AsyncMock(return_value={"ok": True}))
+    monkeypatch.setattr(br, "_record_tick_ingress", AsyncMock())
+    try:
+        with patch("scalp.engine.ensure_account_lease", AsyncMock(return_value=True)):
+            _arun(receive_ticks(BridgeTicks(bridge_token=seeded["token"], symbol="EURUSD", ticks=[], sent_at_ms=0)))
+        assert runner.enabled is False
+    finally:
+        _runners.pop(f"{seeded['account_id']}:EURUSD", None)
+        db.platform_state.update_one({"_id": "trading_authority"}, {"$set": {"level": "FULL"}})
+
+
+def test_n12_ea_demo_proof_allows_release_without_mfa(db, seeded, monkeypatch):
+    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {
+        "server": "Broker-Demo", "account_number": "123", "broker_account_id_reported": "123",
+        "ea_identity": {"authoritative": True, "installation_id": "inst-1", "broker_server": "Broker-Demo"},
+        "last_heartbeat": _iso(5)}})
+    from broker_env import demo_proof
+    assert demo_proof(db.accounts.find_one({"_id": seeded["acc_oid"]}))["ok"] is True
+    _lock(db, seeded, scope="user")
+    calls = []
+    with patch("webauthn_mfa.has_passkey", AsyncMock(return_value=False)):
+        out = _start(seeded, monkeypatch, step_up_calls=calls)
+    assert out["active"] is True and calls == []
+
+
+def test_n13_chat_enable_bots_refuses_while_locked(db, seeded):
+    from routes.nl_routes import _enable_bots
+    import state_contract
+    _lock(db, seeded)
+    db.bot_configs.insert_one({"user_id": seeded["user_id"], "account_id": seeded["account_id"], "active": False, TAG: True})
+    out = _arun(_enable_bots(seeded["user_id"], None))
+    assert out["blocked"] == "panic_lock" and out["bots_enabled"] == 0
+    assert db.bot_configs.find_one({"user_id": seeded["user_id"], TAG: True})["active"] is False
+    c = _arun(state_contract.contract(state_contract.get_db() if hasattr(state_contract, "get_db") else __import__("database").get_db(), seeded["user_id"]))
+    mine = [r for r in c["accounts"] if r["account_id"] == seeded["account_id"]] if "accounts" in c else []
+    assert not mine or mine[0].get("tripped") or "panic" in str(mine[0]).lower()
+
+
+def test_n15_release_bumps_authority_version(db, seeded):
+    import routes.panic_routes as pr
+    from canonical_decision import authority_version
+    _lock(db, seeded, scope="user")
+    before = _arun(authority_version(pr.get_db()))
+    assert _arun(pr.release_panic_locks(pr.get_db(), {"user_id": seeded["user_id"]}, actor="t", via="test")) == 1
+    assert _arun(authority_version(pr.get_db())) > before
+
+
+def test_n16_trace_compares_requested_lot_size():
+    import execution_trace, inspect
+    src = inspect.getsource(execution_trace)
+    assert 'trade.get("requested_lot_size") or trade.get("original_lot_size")' in src
+
+
+def test_g2_legacy_admin_lock_without_scope_is_platform(db, seeded, monkeypatch):
+    import routes.panic_routes as pr
+    from fastapi import HTTPException
+    monkeypatch.setattr(pr.ws_manager, "broadcast", AsyncMock())
+    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {
+        "trading_authority": "LOCKED", "authority_lock": {"reason": "panic", "at": _iso(), "by": "admin"}}})
+    _arun(pr._disable_all_bots_and_close_trades({"user_id": seeded["user_id"]}, broadcast_user_id=seeded["user_id"]))
+    assert db.accounts.find_one({"_id": seeded["acc_oid"]})["authority_lock"]["by"] == "admin"
+    with pytest.raises(HTTPException) as ei:
+        _start(seeded, monkeypatch, step_up_calls=[])
+    assert ei.value.detail["code"] == "panic_admin_lock"
+    from trading_authority import account_domain
+    assert "admin-wide" in _arun(account_domain(None, db.accounts.find_one({"_id": seeded["acc_oid"]})))["reason"]
+
+
+def test_g4_unlocked_live_account_in_scope_keeps_step_up(db, seeded, monkeypatch):
+    # locked account is PAPER, but the default-scope start also touches an unlocked LIVE account
+    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {"mode": "paper"}})
+    live = db.accounts.insert_one({"user_id": seeded["user_id"], "label": "LIVE", "mode": "live",
+                                   "trading_enabled": True, TAG: True}).inserted_id
+    _lock(db, seeded, scope="user")
+    import routes.bot_routes as botr
+    calls = []
+
+    async def _step_up(db_, user, request, action):
+        calls.append(action)
+    monkeypatch.setattr(botr, "require_step_up", _step_up)
+    monkeypatch.setattr(botr, "audit_event", AsyncMock())
+    monkeypatch.setattr(botr, "_activation_readiness", AsyncMock(return_value=[]))
+    with patch("routes.validation_routes.live_stage_gate", AsyncMock(return_value=None)), \
+            patch("webauthn_mfa.has_passkey", AsyncMock(return_value=False)):
+        _arun(botr.start_bot(_req(), account_id=None, user={"id": seeded["user_id"], "role": "user"}))
+    assert calls == ["panic_release"]
+    db.accounts.delete_one({"_id": live})

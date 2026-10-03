@@ -873,7 +873,9 @@ async def import_positions(account_id: str, payload: ImportPositionsRequest,
         if exists:
             skipped.append(p.ticket)
             continue
+        from routes.bridge_routes import is_netting_account
         await db.trades.insert_one({
+            **({"position_leg": int(p.ticket)} if await is_netting_account(db, acc) else {}),
             "user_id": user["id"],
             "account_id": account_id,
             "symbol": p.symbol.upper(),

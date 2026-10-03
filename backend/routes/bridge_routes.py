@@ -60,6 +60,9 @@ async def _account_by_token(token: str) -> dict:
     return acc
 
 
+STOIC_MAGIC_HB = 901234
+
+
 def _backfill_doc(acc: dict, account_id: str, p, opened_iso: str) -> dict:
     return {
         "user_id": acc["user_id"],
@@ -655,8 +658,20 @@ async def heartbeat(payload: BridgeHeartbeat):
             # epoch seconds — labelling it UTC causes timestamp drift.
             # Use server-received UTC as the canonical opened_at instead.
             opened_iso = now_iso
+            netting = await is_netting_account(db, acc)
+            if p.magic == STOIC_MAGIC_HB:
+                sib = await find_adoptable_sibling(db, account_id, p.symbol, p.type)
+                if sib and await adopt_sibling(db, sib, ticket=p.ticket, price=p.price_open,
+                                               via="heartbeat", position_leg=(p.ticket if netting else None)):
+                    logger.warning("heartbeat: adopted fill ticket=%s into bot trade %s", p.ticket, sib["_id"])
+                    if sib.get("error") == "panic_lock" or panic_locked(acc):
+                        await close_late_fill_after_panic(db, sib["_id"], acc, "heartbeat")
+                    continue
+            doc = _backfill_doc(acc, account_id, p, opened_iso)
+            if netting:
+                doc["position_leg"] = int(p.ticket)
             try:
-                await db.trades.insert_one(_backfill_doc(acc, account_id, p, opened_iso))
+                await db.trades.insert_one(doc)
             except DuplicateKeyError:
                 # A2/B3 unique ticket index: a concurrent writer tracked it first
                 logger.info("backfill skipped — ticket %s already tracked", p.ticket)
@@ -718,7 +733,8 @@ _LOCKED_LEVELS = {"CLOSE_ONLY", "PAUSED", "EMERGENCY", "LOCKED"}
 async def is_netting_account(db, acc: dict) -> bool:
     """Fix plan A3 — netting accounts merge several of our fills into ONE broker
     position; the unique ticket key then needs the entry leg (deal id)."""
-    mode = str(acc.get("margin_mode") or acc.get("position_mode") or "").lower()
+    ident = acc.get("ea_identity") or {}
+    mode = str(acc.get("margin_mode") or ident.get("margin_mode") or acc.get("position_mode") or "").lower()
     if mode in ("netting", "hedging"):
         return mode == "netting"
     from broker_registry import capabilities_for
@@ -740,6 +756,38 @@ async def close_late_fill_after_panic(db, trade_id, acc: dict, source: str) -> N
         emergency=True)
     logger.warning("late fill after PANIC on account=%s trade=%s via %s — close requested (%s)",
                    str(acc["_id"]), str(trade_id), source, out.get("command_id"))
+
+
+async def find_adoptable_sibling(db, account_id: str, symbol: str, action: str,
+                                 *, max_age_min: int = 120):
+    """A5/N4/N11 — the bot row a broker fill belongs to when the deal/snapshot arrives
+    BEFORE /bridge/report: a dispatched STOIC order for the same symbol+side with no
+    ticket yet — pending, or cancelled by expiry/PANIC (late fill). Newest first."""
+    since = (datetime.now(timezone.utc) - timedelta(minutes=max_age_min)).isoformat()
+    q = {"account_id": account_id, "symbol": symbol, "action": action, "mt5_ticket": None,
+         "_dispatched_at": {"$nin": [None]}, "opened_at": {"$gte": since},
+         "$or": [{"status": "pending"},
+                 {"status": "cancelled", "error": {"$in": ["pending_order_expired", "panic_lock"]}},
+                 {"status": "cancelled", "error": {"$regex": "^authority_locked"}}]}
+    return await db.trades.find_one(q, sort=[("opened_at", -1)])
+
+
+async def adopt_sibling(db, sibling: dict, *, ticket: int, price: float, via: str,
+                        position_leg=None, extra: dict | None = None) -> bool:
+    """Land a broker fill on an adoptable bot row (SL/TP of the signal survive)."""
+    sets = {"mt5_ticket": int(ticket), "status": "open", "entry_price": float(price),
+            "closed_at": None, f"adopted_via_{via}": True,
+            "adopted_at": datetime.now(timezone.utc).isoformat(), **(extra or {})}
+    if sibling.get("status") == "cancelled":
+        sets["late_fill_after_cancel"] = sibling.get("close_reason") or sibling.get("error")
+    if position_leg is not None:
+        sets["position_leg"] = int(position_leg)
+    try:
+        res = await db.trades.update_one(
+            {"_id": sibling["_id"], "mt5_ticket": None, "status": sibling.get("status")}, {"$set": sets})
+    except DuplicateKeyError:
+        return False
+    return bool(res.modified_count)
 
 
 async def dispatch_lock_reason(db, acc: dict) -> str | None:
@@ -947,11 +995,11 @@ async def receive_ticks(payload: BridgeTicks):
         await load_persisted(db, runner.model_key())
     # Fix plan A2/B2 — an account lock (PANIC / quarantine / kill switch) halts
     # NEW scalp entries on whichever worker owns the runner; closes still flow.
-    if runner.enabled and (account.get("broker_account_mismatch")
-                           or str(account.get("trading_authority") or "FULL") in _LOCKED_LEVELS):
-        runner.enabled = False
-        logger.warning("scalp runner %s:%s disabled — account authority %s",
-                       str(account["_id"]), base, account.get("trading_authority"))
+    if runner.enabled:
+        _lock = await dispatch_lock_reason(db, account)   # account lock OR platform kill switch
+        if _lock:
+            runner.enabled = False
+            logger.warning("scalp runner %s:%s disabled — %s", str(account["_id"]), base, _lock)
     out = await runner.ingest(db, account, payload.ticks or [], payload.sent_at_ms)
     await _record_tick_ingress(db, str(account["_id"]), base, "ok", None,
                                len(payload.ticks or []))
@@ -2263,27 +2311,15 @@ async def external_deal(payload: BridgeExternalDeal):
         # normal SL/TP mechanism. Adopt any STOIC-owned pending sibling
         # instead of orphaning it, so the SL/TP set by the signal survive.
         if payload.magic == STOIC_MAGIC:
-            twelve_min_ago = (datetime.now(timezone.utc) - timedelta(minutes=12)).isoformat()
-            adopt_q = {
-                "account_id": account_id,
-                "symbol": payload.symbol,
-                "action": payload.action,
-                "status": "pending",
-                "mt5_ticket": None,
-                "opened_at": {"$gte": twelve_min_ago},
-            }
-            sibling = await db.trades.find_one(adopt_q, sort=[("opened_at", -1)])
-            if sibling:
-                await db.trades.update_one(
-                    {"_id": sibling["_id"]},
-                    {"$set": {
-                        "mt5_ticket": payload.mt5_ticket,
-                        "status": "open",
-                        "entry_price": payload.price,
-                        "adopted_via_external_deal": True,
-                        "adopted_at": datetime.now(timezone.utc).isoformat(),
-                    }},
-                )
+            sibling = await find_adoptable_sibling(db, account_id, payload.symbol, payload.action)
+            netting_acc = await is_netting_account(db, acc)
+            if sibling and await adopt_sibling(
+                    db, sibling, ticket=payload.mt5_ticket, price=payload.price, via="external_deal",
+                    position_leg=(int(payload.deal_id) if netting_acc else None),
+                    extra={"broker_deal_id": payload.deal_id}):
+                await _mark_deal_reconciled(db, payload.deal_id, account_id, note="adopted_sibling")
+                if sibling.get("error") == "panic_lock" or panic_locked(acc):
+                    await close_late_fill_after_panic(db, sibling["_id"], acc, "external_deal")
                 await ws_manager.broadcast(user_id, "trade_updated", {
                     "trade_id": str(sibling["_id"]),
                     "status": "open",
@@ -2526,6 +2562,8 @@ async def external_deal(payload: BridgeExternalDeal):
                 "protection_missing": True,
                 "protection_state": "PROTECTION_UNKNOWN",
             }
+            if await is_netting_account(db, acc):
+                rev_doc["position_leg"] = int(payload.deal_id)
             try:
                 rev = await db.trades.insert_one(rev_doc)
             except DuplicateKeyError:

@@ -441,6 +441,13 @@ async def _enable_bots(user_id, target, ctx=None):
     db = get_db()
     q = nx.target_filter(user_id, ctx, bot_query(user_id, target))
 
+    # N13 — a PANIC lock is released only via Bot Start (step-up); flipping
+    # `active` here would show ACTIVE while nothing can trade.
+    locked = await db.accounts.count_documents({"user_id": user_id, "authority_lock.reason": "panic"})
+    if locked:
+        return {"bots_enabled": 0, "blocked": "panic_lock",
+                "message": f"PANIC lock active on {locked} account(s) — release it from Bot Config → Start"}
+
     async def work(session):
         res = await db.bot_configs.update_many(q, {"$set": {
             "active": True, "updated_at": datetime.now(timezone.utc).isoformat(), **nx.effect_stamp(ctx)}},

@@ -226,8 +226,9 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
 
     act = fade_tighten(trade, feats, current, pips_up)
     if act:
+        from trade_manager import _free_slot_filter
         await db.trades.update_one(
-            {"_id": trade["_id"]},
+            _free_slot_filter(trade["_id"]),   # N7 — never overwrite an in-flight close/modification
             {"$set": {"pending_modification": {
                           "type": "MODIFY_SL", "new_sl": act["new_sl"],
                           "requested_at": now_iso},
@@ -246,8 +247,9 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
 
     act = resistance_derisk(trade, feats, current, pips_up)
     if act:
+        from trade_manager import _free_slot_filter
         await db.trades.update_one(
-            {"_id": trade["_id"]},
+            _free_slot_filter(trade["_id"]),   # N7 — never overwrite an in-flight close/modification
             {"$set": {"pending_modification": {
                           "type": "PARTIAL_CLOSE",
                           "new_volume": act["new_volume"],
