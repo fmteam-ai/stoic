@@ -138,8 +138,11 @@ def _extend_uvicorn_keepalive():
         # value is measured/overridable, never a proof of the 520 root cause.
         target = min(int(os.environ.get("UVICORN_KEEPALIVE_SECONDS", "75")), 300)
         for obj in gc.get_objects():
-            if isinstance(obj, uvicorn.Config) and \
-                    obj.timeout_keep_alive < target:
+            try:
+                is_cfg = isinstance(obj, uvicorn.Config)
+            except ReferenceError:   # dead weakref proxy in the gc list — skip, keep scanning
+                continue
+            if is_cfg and obj.timeout_keep_alive < target:
                 obj.timeout_keep_alive = target
                 logging.getLogger("server").info(
                     "uvicorn timeout_keep_alive raised to %ss", target)
