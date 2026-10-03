@@ -333,12 +333,25 @@ async def heartbeat(payload: BridgeHeartbeat):
                                 if getattr(p, "ticket", None) is not None]
 
     reconcile_summary = None
+    tickets = None
     if payload.open_tickets is not None:
         try:
             tickets = [int(t) for t in payload.open_tickets if t is not None]
         except (TypeError, ValueError):
-            tickets = []
+            # C3: a malformed ticket list is a GLITCH, not "zero positions" —
+            # never turn a parse failure into a full orphan sweep.
+            tickets = None
+            logger.warning("heartbeat open_tickets unparsable for account=%s — reconciliation skipped",
+                           str(acc["_id"]))
+        ea_positions_count = payload.open_positions
+        if tickets is not None and not tickets and (ea_positions_count or 0) > 0:
+            # C3: EA says N positions are open but sent no tickets — contradictory
+            # snapshot (partial payload / mid-refresh). Skip; next heartbeat decides.
+            logger.warning("heartbeat contradiction: positions=%s but tickets=[] for account=%s — "
+                           "reconciliation skipped", ea_positions_count, str(acc["_id"]))
+            tickets = None
 
+    if payload.open_tickets is not None and tickets is not None:
         # STALE-TICKET DETECTION: some EA builds (pre-v1.26) cache the tickets
         # array and never purge entries after MT5 closes them — heartbeats then
         # arrive with `open_positions=0` but `open_tickets=[4 dead ones]`.
@@ -350,14 +363,23 @@ async def heartbeat(payload: BridgeHeartbeat):
         ea_positions_count = payload.open_positions
         if (ea_positions_count is not None
                 and ea_positions_count < len(tickets)):
-            logger.warning(
-                "EA stale-tickets detected: positions=%s but %s tickets reported "
-                "for account=%s. Treating tickets as []; user should upgrade EA "
-                "to v1.26 for OnTradeTransaction + history sweep.",
-                ea_positions_count, len(tickets), str(acc["_id"]),
-            )
-            tickets = []  # force orphan sweep; revive sweep also skipped below
+            if ea_positions_count == 0:
+                logger.warning(
+                    "EA stale-tickets detected: positions=0 but %s tickets reported "
+                    "for account=%s. Treating tickets as []; user should upgrade EA "
+                    "to v1.26 for OnTradeTransaction + history sweep.",
+                    len(tickets), str(acc["_id"]),
+                )
+                tickets = []  # force orphan sweep; revive sweep also skipped below
+            else:
+                # C3: count says SOME are open but fewer than listed — we cannot tell
+                # which tickets are real. Sweeping all would close live positions.
+                logger.warning(
+                    "heartbeat contradiction: positions=%s < %s tickets for account=%s — "
+                    "reconciliation skipped", ea_positions_count, len(tickets), str(acc["_id"]))
+                tickets = None
 
+    if payload.open_tickets is not None and tickets is not None:
         set_doc["open_tickets"] = tickets
         set_doc["open_tickets_updated_at"] = now_iso
 
@@ -676,6 +698,10 @@ class PollRequest(BaseModel):
     bridge_token: str
 
 
+def _pending_order_ttl_seconds() -> int:
+    return max(30, int(os.environ.get("PENDING_ORDER_TTL_SECONDS") or 300))
+
+
 class BridgeCandles(BaseModel):
     bridge_token: str
     symbol: str
@@ -903,6 +929,39 @@ async def poll_trades(payload: PollRequest):
     # never lands), the lock auto-expires and the trade gets re-dispatched.
     DISPATCH_LOCK_SEC = 30
     cutoff = (datetime.now(timezone.utc) - timedelta(seconds=DISPATCH_LOCK_SEC)).isoformat()
+    # C4 (roadmap step 3): a NEW market order is only valid for PENDING_ORDER_TTL_SECONDS
+    # after it was created. When the terminal reconnects after an outage, hours-old
+    # orders must EXPIRE, not fill at whatever the price is now. Close requests and
+    # orders already holding a ticket are never expired (they are safety exits).
+    ttl_s = _pending_order_ttl_seconds()
+    expire_before = (datetime.now(timezone.utc) - timedelta(seconds=ttl_s)).isoformat()
+    expired_ids = []
+    stale_rows = await db.trades.find({
+        "account_id": str(acc["_id"]), "status": "pending",
+        "close_requested": {"$ne": True}, "mt5_ticket": None,
+        "opened_at": {"$lt": expire_before},
+    }, {"execution_intent_id": 1, "opened_at": 1, "symbol": 1, "user_id": 1}).to_list(length=50)
+    for stale in stale_rows:
+        res = await db.trades.update_one(
+            {"_id": stale["_id"], "status": "pending"},
+            {"$set": {"status": "cancelled", "error": "stale_order_expired",
+                      "close_reason": "stale_order_expired",
+                      "closed_at": datetime.now(timezone.utc).isoformat(),
+                      "expired_after_s": ttl_s}})
+        if not res.modified_count:
+            continue
+        expired_ids.append(str(stale["_id"]))
+        if stale.get("execution_intent_id"):
+            from execution_intents import transition as _intent_expire
+            await _intent_expire(db, stale["execution_intent_id"], "expired",
+                                 detail=f"not dispatched within {ttl_s}s (terminal offline)")
+        if stale.get("user_id"):
+            await ws_manager.broadcast(stale["user_id"], "trade_updated", {
+                "trade_id": str(stale["_id"]), "status": "cancelled",
+                "close_reason": "stale_order_expired"})
+    if expired_ids:
+        logger.warning("expired %d stale pending order(s) for account=%s (ttl=%ss): %s",
+                       len(expired_ids), str(acc["_id"]), ttl_s, expired_ids)
     out = []
     # Loop up to 20 times, each iteration atomically claims one pending doc.
     for _ in range(20):

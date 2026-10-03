@@ -16,6 +16,7 @@ Both are dangerous to leave hanging: anti-tilt counters miscount, drawdown
 caps misfire, manual close buttons get stuck.
 """
 from datetime import datetime, timezone
+import os
 from bson import ObjectId
 from database import get_db
 import logging
@@ -23,6 +24,14 @@ import logging
 logger = logging.getLogger("trade_reconciler")
 from ws_manager import manager as ws_manager
 from silent_failures import record_swallow
+
+
+def _miss_confirmations() -> int:
+    return max(1, int(os.environ.get("RECONCILE_MISS_CONFIRMATIONS") or 2))
+
+
+def _miss_min_seconds() -> float:
+    return max(0.0, float(os.environ.get("RECONCILE_MISS_MIN_SECONDS") or 10))
 
 
 def _infer_close_reason(t: dict, exit_price) -> str:
@@ -49,10 +58,18 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
     """Close any DB-open trade for `account_id` whose mt5_ticket is not in
     the EA's reported open list.
 
+    C3 (roadmap step 3): on the HEARTBEAT path a ticket must be missing from
+    RECONCILE_MISS_CONFIRMATIONS consecutive heartbeats (default 2) AND for at
+    least RECONCILE_MISS_MIN_SECONDS (default 10) before the trade is closed —
+    one glitchy/partial snapshot can no longer ghost-close a live position.
+    Operator-driven sources (manual / force sync) still close immediately.
+
     Returns a summary dict for logging / API response.
     """
     db = get_db()
     open_set = {int(t) for t in (open_tickets or []) if t is not None}
+    confirmations = _miss_confirmations() if source == "heartbeat" else 1
+    min_missing_s = _miss_min_seconds() if source == "heartbeat" else 0
 
     # GRACE WINDOW (iter-90): trades opened in the last 45 seconds are skipped.
     # The EA fills the order on broker, then sends a confirmation heartbeat —
@@ -77,12 +94,32 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
     candidates = await cursor.to_list(length=200)
 
     closed = []
-    now_iso = datetime.now(timezone.utc).isoformat()
+    deferred = []
+    now_dt = datetime.now(timezone.utc)
+    now_iso = now_dt.isoformat()
 
     for t in candidates:
         ticket = t.get("mt5_ticket")
-        if ticket is None or int(ticket) in open_set:
+        if ticket is None:
+            continue
+        if int(ticket) in open_set:
+            if t.get("reconcile_miss_streak"):          # seen again → the miss was a glitch
+                await db.trades.update_one({"_id": t["_id"]}, {"$unset": {
+                    "reconcile_miss_streak": "", "reconcile_first_missing_at": ""}})
             continue   # still open at the broker, skip
+
+        # C3: count consecutive misses before declaring the position gone.
+        streak = int(t.get("reconcile_miss_streak") or 0) + 1
+        first_missing = t.get("reconcile_first_missing_at") or now_iso
+        try:
+            missing_for = (now_dt - datetime.fromisoformat(first_missing)).total_seconds()
+        except ValueError:
+            missing_for, first_missing = 0.0, now_iso
+        if streak < confirmations or missing_for < min_missing_s:
+            await db.trades.update_one({"_id": t["_id"]}, {"$set": {
+                "reconcile_miss_streak": streak, "reconcile_first_missing_at": first_missing}})
+            deferred.append(str(t["_id"]))
+            continue
 
         # ORPHAN — broker says it's no longer open. Mark it closed.
         # We can't infer exit_price reliably here (no quote in heartbeat), so
@@ -95,6 +132,7 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
             "close_reason": t.get("close_reason") or f"broker_reconciled_{source}",
             "reconciled": True,
             "reconciled_at": now_iso,
+            "reconcile_missed_heartbeats": streak,
         }
         if t.get("exit_price") is None:
             # iter-45 · Use the last heartbeat-snapshot P&L/price as the
@@ -110,7 +148,8 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
                 update["close_reason"] = t.get("close_reason") or _infer_close_reason(t, live_price)
             else:
                 update["pnl_unknown"] = True
-        await db.trades.update_one({"_id": t["_id"]}, {"$set": update})
+        await db.trades.update_one({"_id": t["_id"]}, {"$set": update, "$unset": {
+            "reconcile_miss_streak": "", "reconcile_first_missing_at": ""}})
         closed.append(str(t["_id"]))
 
         # WS push so the UI refreshes immediately
@@ -138,6 +177,9 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
         "candidates_in_db": len(candidates),
         "closed_count": len(closed),
         "closed_trade_ids": closed,
+        "deferred_count": len(deferred),
+        "deferred_trade_ids": deferred,
+        "confirmations_required": confirmations,
         "source": source,
     }
 

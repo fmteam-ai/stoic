@@ -113,12 +113,19 @@ class TestStaleTicketsDetection:
             tids.append(r.inserted_id)
 
         # Buggy heartbeat: count=0 but tickets present
-        r = requests.post(f"{API}/bridge/heartbeat", json={
-            "bridge_token": fresh_account["bridge_token"],
-            "balance": 1000, "equity": 1000,
-            "open_positions": 0,
-            "open_tickets": tickets,
-        }, timeout=10)
+        hb = {"bridge_token": fresh_account["bridge_token"], "balance": 1000, "equity": 1000,
+              "open_positions": 0, "open_tickets": tickets}
+        r = requests.post(f"{API}/bridge/heartbeat", json=hb, timeout=10)
+        assert r.status_code == 200, r.text
+
+        # roadmap step 3 (C3): ONE missing heartbeat only arms the miss streak —
+        # the trade stays open until a second consecutive heartbeat confirms.
+        for tid in tids:
+            doc = mongo_db.trades.find_one({"_id": tid})
+            assert doc["status"] == "open" and doc.get("reconcile_miss_streak") == 1, doc
+        mongo_db.trades.update_many({"_id": {"$in": tids}}, {"$set": {
+            "reconcile_first_missing_at": (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()}})
+        r = requests.post(f"{API}/bridge/heartbeat", json=hb, timeout=10)
         assert r.status_code == 200, r.text
 
         # All 4 must now be closed
@@ -181,16 +188,18 @@ class TestStaleTicketsDetection:
         }).inserted_id
 
         # EA: positions=1, tickets=[700011001] — consistent
-        r = requests.post(f"{API}/bridge/heartbeat", json={
-            "bridge_token": fresh_account["bridge_token"],
-            "balance": 1000, "equity": 1000,
-            "open_positions": 1,
-            "open_tickets": [700011001],
-        }, timeout=10)
+        hb = {"bridge_token": fresh_account["bridge_token"], "balance": 1000, "equity": 1000,
+              "open_positions": 1, "open_tickets": [700011001]}
+        r = requests.post(f"{API}/bridge/heartbeat", json=hb, timeout=10)
         assert r.status_code == 200
 
-        # Ghost revived (broker has it open) — orphan closed (broker doesn't)
+        # Ghost revived immediately (broker has it open); orphan is only ARMED (C3)
         assert mongo_db.trades.find_one({"_id": ghost})["status"] == "open"
+        assert mongo_db.trades.find_one({"_id": orphan})["status"] == "open"
+        mongo_db.trades.update_one({"_id": orphan}, {"$set": {
+            "reconcile_first_missing_at": (datetime.now(timezone.utc) - timedelta(seconds=60)).isoformat()}})
+        r = requests.post(f"{API}/bridge/heartbeat", json=hb, timeout=10)
+        assert r.status_code == 200
         assert mongo_db.trades.find_one({"_id": orphan})["status"] == "closed"
 
 
