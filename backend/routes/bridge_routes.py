@@ -1029,7 +1029,9 @@ async def poll_trades(payload: PollRequest):
         "close_requested": {"$ne": True}, "mt5_ticket": None,
         "$or": [
             {"_dispatched_at": {"$in": [None]}, "opened_at": {"$lt": expire_before}},
-            {"_dispatched_at": {"$lt": expire_before}},
+            # A5 — anchored on the FIRST hand-over: 30s re-offers never reset the clock
+            {"_first_dispatched_at": {"$lt": expire_before}},
+            {"_first_dispatched_at": {"$in": [None]}, "_dispatched_at": {"$lt": expire_before}},
         ],
     }, {"execution_intent_id": 1, "opened_at": 1, "symbol": 1, "user_id": 1,
         "_dispatched_at": 1}).to_list(length=50)
@@ -1105,6 +1107,9 @@ async def poll_trades(payload: PollRequest):
                       "latency_trace.t7_ms": int(
                           datetime.now(timezone.utc).timestamp() * 1000),
                       "submission_state": "sent_to_terminal"},
+             # A5 — the expiry clock anchors on the FIRST hand-over; re-offers
+             # every 30s must not reset it ($min on ISO-8601 == chronological min)
+             "$min": {"_first_dispatched_at": datetime.now(timezone.utc).isoformat()},
              "$inc": {"_dispatch_count": 1}},
         )
         if not t:
@@ -1851,7 +1856,21 @@ async def report_trade(payload: BridgeTradeReport):
     if payload.status == "open" and trade.get("status") == "cancelled":
         update["late_fill_after_cancel"] = trade.get("close_reason") or trade.get("error")
         update["closed_at"] = None
-    await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    try:
+        await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    except DuplicateKeyError:
+        # A5 — the heartbeat snapshot / deal sweep tracked this ticket first as an
+        # UNPROTECTED backfill row (late fill after expiry/PANIC). Our row carries
+        # the SL/TP/intent: absorb the duplicate, then land the report.
+        absorbed = await _absorb_duplicate_ticket_row(db, str(acc["_id"]), payload.mt5_ticket,
+                                                      update.get("position_leg"), trade["_id"])
+        if not absorbed:
+            await db.trades.update_one({"_id": trade["_id"]}, {"$set": {
+                "duplicate_ticket_conflict": {"ticket": payload.mt5_ticket, "at": datetime.now(timezone.utc).isoformat()}}})
+            logger.error("report for trade=%s: ticket %s held by another bot-originated row — "
+                         "left for the reconciler", payload.trade_id, payload.mt5_ticket)
+            return {"ok": False, "reason": "duplicate_ticket_conflict", "trade_id": payload.trade_id}
+        await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
     if payload.status == "open" and (panic_locked(acc) or trade.get("error") == "panic_lock"):
         await close_late_fill_after_panic(db, trade["_id"], acc, "report")
     # Scalp fast-path reconciliation (EA v1.44). /bridge/report is the
@@ -2018,6 +2037,32 @@ async def _merge_duplicate_in_deal(db, account_id: str, payload, trade_doc: dict
         **({"$set": sets} if sets else {}),
         "$addToSet": {"merged_deal_ids": int(payload.deal_id)}})
     return str(existing["_id"])
+
+
+async def _absorb_duplicate_ticket_row(db, account_id: str, ticket, position_leg, keep_id) -> str | None:
+    """A5 — fold an unprotected snapshot/deal-sweep row for `ticket` into the bot's
+    protected row `keep_id`: the duplicate leaves the live set (status=superseded)
+    and its broker-live fields are carried over. Bot-originated rows are never absorbed."""
+    q = {"account_id": account_id, "mt5_ticket": ticket, "status": {"$in": ["open", "pending"]},
+         "_id": {"$ne": keep_id}}
+    if position_leg is not None:
+        q["position_leg"] = position_leg
+    dup = await db.trades.find_one(q)
+    if not dup:
+        return None
+    if dup.get("execution_intent_id") or (dup.get("origin") == "auto" and not dup.get("backfilled_from_snapshot")):
+        return None
+    now_iso = datetime.now(timezone.utc).isoformat()
+    await db.trades.update_one({"_id": dup["_id"], "status": {"$in": ["open", "pending"]}}, {"$set": {
+        "status": "superseded", "superseded_by": str(keep_id), "closed_at": now_iso,
+        "close_reason": "duplicate_absorbed"}})
+    carry = {k: dup[k] for k in ("live_pnl", "live_price", "position_volume", "live_snapshot_at")
+             if dup.get(k) is not None}
+    carry["absorbed_duplicate_id"] = str(dup["_id"])
+    await db.trades.update_one({"_id": keep_id}, {"$set": carry})
+    logger.warning("absorbed duplicate ticket row %s (origin=%s) into bot trade %s ticket=%s",
+                   str(dup["_id"]), dup.get("origin"), str(keep_id), ticket)
+    return str(dup["_id"])
 
 
 @router.post("/external-deal")

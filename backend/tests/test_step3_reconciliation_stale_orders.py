@@ -15,16 +15,13 @@ from pymongo import MongoClient
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-try:
-    from conftest import run_async as _arun  # noqa: E402
-except ImportError:  # pragma: no cover
-    import importlib.util as _ilu
-    _spec = _ilu.spec_from_file_location(
-        "_tests_root_conftest",
-        os.path.join(os.path.dirname(os.path.abspath(__file__)), "conftest.py"))
-    _mod = _ilu.module_from_spec(_spec)
-    _spec.loader.exec_module(_mod)
-    _arun = _mod.run_async
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location(
+    "_tests_root_conftest",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "conftest.py"))
+_mod = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+_arun = _mod.run_async   # root conftest's shared loop (never a closed per-file loop)
 
 TAG = "_test_step3"
 

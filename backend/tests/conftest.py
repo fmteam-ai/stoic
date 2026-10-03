@@ -23,6 +23,14 @@ try:
     load_dotenv(os.path.join(_BACKEND, ".env"))
 except ImportError:
     pass
+
+# A5 — the suites write to the database named in backend/.env (shared with the running
+# app). They must NEVER run against a production database: refuse outright.
+if os.environ.get("APP_ENV", "").strip().lower() in ("production", "prod") \
+        and os.environ.get("STOIC_TESTS_ALLOW_PRODUCTION_DB") != "1":
+    raise SystemExit("REFUSING to run the test-suite with APP_ENV=production — tests mutate the "
+                     "configured database (accounts, trades, bot_configs). Point MONGO_URL/DB_NAME at a "
+                     "scratch database or set STOIC_TESTS_ALLOW_PRODUCTION_DB=1 knowingly.")
 if not os.environ.get("REACT_APP_BACKEND_URL"):
     try:
         with open(os.path.join(os.path.dirname(_BACKEND), "frontend", ".env")) as _f:

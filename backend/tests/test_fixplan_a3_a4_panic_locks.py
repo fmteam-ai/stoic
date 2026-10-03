@@ -128,25 +128,24 @@ def test_a3_duplicate_in_deal_merges_into_existing_row(db, seeded):
     assert db.trades.find_one({"_id": tid})["merged_deal_ids"] == [55501]
 
 
-def test_a3_archive_plan_safety_checks():
+def test_a3_archive_plan_keeps_protected_row_and_archives_live_duplicate():
     from ops.ticket_duplicates import plan_group
-    old, new = _iso(7200), _iso(3600)
-    base = {"status": "closed", "pnl": 0.0, "closed_at": old}
-    keep, arch, why = plan_group([{**base, "_id": 1}, {**base, "_id": 2, "closed_at": new}])
+    old = _iso(7200)
+    bot = {"_id": 1, "status": "open", "opened_at": old, "execution_intent_id": "i1", "stop_loss": 3990}
+    backfill = {"_id": 2, "status": "open", "opened_at": old, "backfilled_from_snapshot": True}
+    keep, arch, why = plan_group([backfill, bot])
+    assert why is None and keep["_id"] == 1 and [r["_id"] for r in arch] == [2]
+    # pending + open duplicates (no intent on either): protected row wins, else newest
+    keep, arch, why = plan_group([{"_id": 1, "status": "pending", "opened_at": old},
+                                  {"_id": 2, "status": "open", "opened_at": _iso(3600), "stop_loss": 1}])
     assert why is None and keep["_id"] == 2 and [r["_id"] for r in arch] == [1]
-    # open row wins
-    keep, arch, why = plan_group([{**base, "_id": 1}, {"_id": 2, "status": "open", "opened_at": old}])
-    assert why is None and keep["_id"] == 2
-    # two opens → manual
-    assert plan_group([{"_id": 1, "status": "open", "opened_at": old},
-                       {"_id": 2, "status": "open", "opened_at": old}])[2]
-    # close in flight → manual
-    assert plan_group([{**base, "_id": 1}, {"_id": 2, "status": "open", "close_requested": True,
-                                            "opened_at": old}])[2]
+    # close / modification in flight → manual
+    assert plan_group([bot, {**backfill, "close_requested": True}])[2]
+    assert plan_group([bot, {**backfill, "pending_modification": {"type": "MODIFY_SL"}}])[2]
     # candidate carries P&L the kept row lacks → manual
-    assert "P&L" in plan_group([{**base, "_id": 1, "pnl": 12.5}, {**base, "_id": 2, "closed_at": new}])[2]
-    # recently written → manual
-    assert "minutes" in plan_group([{**base, "_id": 1, "closed_at": _iso(30)}, {**base, "_id": 2, "closed_at": _iso(10)}])[2]
+    assert "P&L" in plan_group([bot, {**backfill, "pnl": 12.5, "partial_closed": False}])[2]
+    # candidate created moments ago → manual (its report may still land)
+    assert "minutes" in plan_group([bot, {**backfill, "opened_at": _iso(30)}])[2]
 
 
 # ------------------------------------------------------------------ A4 · late fill after PANIC
@@ -214,13 +213,36 @@ def test_a4_user_releases_own_panic_with_step_up(db, seeded, monkeypatch):
     assert "authority_lock" not in acc and acc["authority_lock_released"]["via"] == "bot_start"
 
 
-def test_a4_admin_release_clears_platform_locks(db, seeded, monkeypatch):
+def test_a4_admin_release_targets_every_lock_but_user_scope_releases_only_own(db, seeded, monkeypatch):
     import routes.panic_routes as pr
     _lock(db, seeded, scope="platform")
+    calls = []
+
+    async def _release(db_, query, *, actor, via):
+        calls.append((query, actor, via))
+        # run it scoped to the test account only — never a global write on a shared DB
+        res = await db_.accounts.update_many({**query, "_id": seeded["acc_oid"], "authority_lock.reason": "panic"},
+                                             {"$unset": {"trading_authority": "", "authority_lock": ""}})
+        return res.modified_count
+    monkeypatch.setattr(pr, "release_panic_locks", _release)
     with patch("step_up.require_step_up", AsyncMock()), patch.object(pr, "audit_event", AsyncMock()):
         out = _arun(pr.panic_release_global(_req(), user={"id": "admin1", "role": "admin"}))
-    assert out["accounts_unlocked"] >= 1
+    assert out["accounts_unlocked"] == 1 and calls[0][0] == {} and calls[0][2] == "admin_panic_release"
     assert "authority_lock" not in db.accounts.find_one({"_id": seeded["acc_oid"]})
+
+
+def test_a5_user_panic_never_overwrites_admin_wide_lock(db, seeded, monkeypatch):
+    import routes.panic_routes as pr
+    monkeypatch.setattr(pr.ws_manager, "broadcast", AsyncMock())
+    _lock(db, seeded, scope="platform")
+    out = _arun(pr._disable_all_bots_and_close_trades({"user_id": seeded["user_id"]}, broadcast_user_id=seeded["user_id"]))
+    acc = db.accounts.find_one({"_id": seeded["acc_oid"]})
+    assert acc["authority_lock"]["scope"] == "platform" and out["accounts_locked"] == 0
+    # and Start still refuses
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as ei:
+        _start(seeded, monkeypatch, step_up_calls=[])
+    assert ei.value.detail["code"] == "panic_admin_lock"
 
 
 def test_a4_panic_lock_scope_follows_query(db, seeded, monkeypatch):
@@ -337,3 +359,71 @@ def test_a4_telegram_panic_uses_the_same_brake(db, seeded, monkeypatch):
     acc = db.accounts.find_one({"_id": seeded["acc_oid"]})
     assert acc["trading_authority"] == "LOCKED" and acc["authority_lock"]["scope"] == "user"
     assert "accounts LOCKED" in sent[-1]
+
+
+# ------------------------------------------------------------------ A5 · expiry & late-fill duplicates
+def test_a5_reoffers_do_not_reset_the_expiry_clock(db, seeded, monkeypatch):
+    """A dispatched-but-unconfirmed order is re-offered every 30s; the 120s expiry must count
+    from the FIRST hand-over, so it expires while the EA stays online."""
+    monkeypatch.setenv("PENDING_ORDER_TTL_SECONDS", "120")
+    from routes.bridge_routes import poll_trades, PollRequest
+    tid = _trade(db, seeded, opened_at=_iso(400), _dispatched_at=_iso(31), _first_dispatched_at=_iso(130),
+                 _dispatch_count=4)
+    fresh = _trade(db, seeded, opened_at=_iso(10))
+    resp = _arun(poll_trades(PollRequest(bridge_token=seeded["token"])))
+    ids = {t["trade_id"] for t in resp["trades"]}
+    row = db.trades.find_one({"_id": tid})
+    assert row["status"] == "cancelled" and row["expired_after_dispatch"] is True and str(tid) not in ids
+    # the fresh order is handed over and gets its first-dispatch anchor; a re-offer keeps it
+    f = db.trades.find_one({"_id": fresh})
+    assert str(fresh) in ids and f["_first_dispatched_at"]
+    db.trades.update_one({"_id": fresh}, {"$set": {"_dispatched_at": _iso(40)}})
+    _arun(poll_trades(PollRequest(bridge_token=seeded["token"])))
+    assert db.trades.find_one({"_id": fresh})["_first_dispatched_at"] == f["_first_dispatched_at"]
+
+
+def test_a5_late_fill_absorbs_unprotected_backfill_duplicate(db, seeded, monkeypatch):
+    import routes.bridge_routes as br
+    from models import BridgeTradeReport
+    from seed import ensure_unique_ticket_index
+    monkeypatch.setattr(br.ws_manager, "broadcast", AsyncMock())
+    if not _arun(ensure_unique_ticket_index(br.get_db()))["created"]:
+        pytest.skip("unique ticket index not buildable on this DB")
+    # expired bot order (protected: SL/TP) + snapshot backfill row that grabbed the ticket first
+    bot = _trade(db, seeded, status="cancelled", close_reason="expired", error="pending_order_expired",
+                 _dispatched_at=_iso(300), execution_intent_id=f"a5-{ObjectId()}")
+    dup = _trade(db, seeded, status="open", mt5_ticket=880400, stop_loss=0, take_profit=0,
+                 origin="auto", backfilled_from_snapshot=True, protection_missing=True,
+                 live_pnl=-3.2, live_price=3999.0)
+    out = _arun(br.report_trade(BridgeTradeReport(bridge_token=seeded["token"], trade_id=str(bot),
+                                                  mt5_ticket=880400, status="open", entry_price=4000.0,
+                                                  requested_price=4000.0)))
+    assert out.get("ok", True) is not False
+    b = db.trades.find_one({"_id": bot})
+    assert b["status"] == "open" and b["mt5_ticket"] == 880400 and b["stop_loss"] == 3990
+    assert b["absorbed_duplicate_id"] == str(dup) and b["live_pnl"] == -3.2
+    d = db.trades.find_one({"_id": dup})
+    assert d["status"] == "superseded" and d["superseded_by"] == str(bot) and d["close_reason"] == "duplicate_absorbed"
+    assert db.trades.count_documents({"account_id": seeded["account_id"], "mt5_ticket": 880400,
+                                      "status": {"$in": ["open", "pending"]}}) == 1
+    # a retry of the same report is idempotent (no DuplicateKeyError, no 500)
+    _arun(br.report_trade(BridgeTradeReport(bridge_token=seeded["token"], trade_id=str(bot),
+                                            mt5_ticket=880400, status="open", entry_price=4000.0,
+                                            requested_price=4000.0)))
+
+
+def test_a5_bot_originated_duplicate_is_not_absorbed(db, seeded, monkeypatch):
+    import routes.bridge_routes as br
+    from models import BridgeTradeReport
+    from seed import ensure_unique_ticket_index
+    monkeypatch.setattr(br.ws_manager, "broadcast", AsyncMock())
+    if not _arun(ensure_unique_ticket_index(br.get_db()))["created"]:
+        pytest.skip("unique ticket index not buildable on this DB")
+    a = _trade(db, seeded, _dispatched_at=_iso(5))
+    other = _trade(db, seeded, status="open", mt5_ticket=880401, execution_intent_id=f"a5-{ObjectId()}")
+    out = _arun(br.report_trade(BridgeTradeReport(bridge_token=seeded["token"], trade_id=str(a),
+                                                  mt5_ticket=880401, status="open", entry_price=4000.0,
+                                                  requested_price=4000.0)))
+    assert out["ok"] is False and out["reason"] == "duplicate_ticket_conflict"
+    assert db.trades.find_one({"_id": other})["status"] == "open"
+    assert db.trades.find_one({"_id": a})["duplicate_ticket_conflict"]["ticket"] == 880401

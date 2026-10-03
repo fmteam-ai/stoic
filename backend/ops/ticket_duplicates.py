@@ -9,10 +9,11 @@ The unique partial index `uniq_account_ticket` covers open/pending rows only and
 boot while duplicates exist (seed.ensure_unique_ticket_index logs them). `--archive` keeps ONE
 row per group and moves the rest to `trades_duplicates_archive` (reversible by hand).
 
-Safety checks (every one refuses the group → MANUAL):
-  * more than one OPEN row, or any row with a pending modification / close in flight
+Keep = the bot-originated / protected / partial-banked / richest row (see _rank). Safety checks
+(each refuses the group → MANUAL):
+  * any row with a pending modification / close in flight
   * a candidate carries realised P&L the kept row does not already hold
-  * a candidate was touched in the last 10 minutes (a live writer may still be on it)
+  * a candidate was CREATED in the last 10 minutes (its report may still be landing)
   * archive insert is verified before the source row is deleted; hard cap per run (--max)
 """
 import asyncio
@@ -29,31 +30,45 @@ except Exception:  # noqa: BLE001
 from secrets_loader import resolve_file_secrets  # noqa: E402
 resolve_file_secrets()
 
-RECENT_TOUCH_S = 600
+RECENT_CREATE_S = 600
 
 
 def _ts(row: dict) -> str:
     return str(row.get("updated_at") or row.get("closed_at") or row.get("opened_at") or "")
 
 
+def _rank(row: dict) -> tuple:
+    """Higher = better row to KEEP: bot-originated (intent/signal) > protected (SL) >
+    partial already banked > richer broker data > newest."""
+    return (
+        1 if row.get("execution_intent_id") or row.get("signal_id") else 0,
+        1 if (row.get("stop_loss") or 0) > 0 else 0,
+        1 if row.get("partial_closed") else 0,
+        1 if row.get("position_volume") is not None else 0,
+        str(row.get("opened_at") or ""),
+    )
+
+
 def plan_group(rows: list[dict], now: datetime | None = None) -> tuple[dict | None, list[dict], str | None]:
-    """(keep, archive, refusal_reason). Pure — unit-tested."""
+    """(keep, archive, refusal_reason) for one LIVE duplicate group (the index only covers
+    open/pending rows, so every group is live by definition). Pure — unit-tested.
+
+    A5 — refusals (→ MANUAL) are things an operator must look at, not the mere fact that
+    two rows are open: a close/modification in flight, realised P&L on a row we would drop,
+    or a row created in the last 10 minutes (a writer may still be landing its report)."""
     now = now or datetime.now(timezone.utc)
-    opens = [r for r in rows if r.get("status") in ("open", "pending")]
-    if len(opens) > 1:
-        return None, [], "more than one open/pending row"
     if any(r.get("pending_modification") or r.get("close_requested") for r in rows):
         return None, [], "modification or close in flight"
-    keep = opens[0] if opens else max(rows, key=_ts)
-    recent = (now - timedelta(seconds=RECENT_TOUCH_S)).isoformat()
+    keep = max(rows, key=_rank)
+    recent = (now - timedelta(seconds=RECENT_CREATE_S)).isoformat()
     archive = []
     for r in rows:
         if r["_id"] == keep["_id"]:
             continue
         if abs(float(r.get("pnl") or 0)) > 1e-9 and abs(float(r.get("pnl") or 0) - float(keep.get("pnl") or 0)) > 1e-9:
             return None, [], f"row {r['_id']} carries P&L {r.get('pnl')} not held by the kept row"
-        if _ts(r) >= recent:
-            return None, [], f"row {r['_id']} was written in the last {RECENT_TOUCH_S // 60} minutes"
+        if str(r.get("opened_at") or "") >= recent:
+            return None, [], f"row {r['_id']} was created in the last {RECENT_CREATE_S // 60} minutes"
         archive.append(r)
     return keep, archive, None
 
@@ -95,7 +110,8 @@ async def main(mode: str, apply: bool, max_rows: int) -> int:
                 print(f"cap reached (--max {max_rows}) — re-run to continue")
                 break
             doc = {**r, "archived_at": datetime.now(timezone.utc).isoformat(),
-                   "archived_reason": "duplicate_ticket", "kept_trade_id": str(keep["_id"])}
+                   "archived_reason": "duplicate_ticket", "kept_trade_id": str(keep["_id"]),
+                   "status_at_archive": r.get("status"), "status": "archived"}
             ins = await db.trades_duplicates_archive.insert_one(doc)
             if not await db.trades_duplicates_archive.find_one({"_id": ins.inserted_id}):
                 print(f"ABORT: archive copy of {r['_id']} not readable back — source row kept")

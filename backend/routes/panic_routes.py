@@ -59,8 +59,12 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
     # that user via /bot/start; an admin-wide PANIC (`platform`) only via /admin/panic/release.
     lock = {"reason": "panic", "at": now_iso, "by": broadcast_user_id or "admin",
             "scope": "user" if query.get("user_id") else "platform"}
+    # A5 — a user's PANIC never rewrites an admin-wide (platform) lock as their own
+    lock_q = dict(query)
+    if lock["scope"] == "user":
+        lock_q["authority_lock.scope"] = {"$ne": "platform"}
     acct_result = await db.accounts.update_many(
-        query, {"$set": {"trading_authority": "LOCKED", "authority_lock": lock}}, session=session,
+        lock_q, {"$set": {"trading_authority": "LOCKED", "authority_lock": lock}}, session=session,
     )
     halt_local_scalp_runners(query.get("user_id"))
     # Mark all pending trades cancelled

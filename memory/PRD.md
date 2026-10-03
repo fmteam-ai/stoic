@@ -3091,3 +3091,7 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Price-aware pip values, broker volume step/min from heartbeat specs, JPY-cross exposure fixed (≈150×), trims that fall under the broker minimum skip the trade, authority reductions floor, paper P&L in USD with single settlement. Details: memory/CHANGELOG.md. Tests `tests/test_fixplan_b1_sizing.py`; manifest + rc_lock refrozen.
 - Operator "Check after deploy": EURJPY/GBPJPY signal opens at normal lot (not 0.01); USDCHF lot ≈20% smaller for same risk %; a trim below min logs "below minimum" and skips; paper P&L plausible in dollars.
 - Next: Fix plan B2 (safety guards).
+
+## 2026-10-03 — Fix plan Step A5 (review fixes) — DONE, user verification pending
+- Fixed: dispatched orders expire 120s after FIRST hand-over (re-offers no longer reset it); late fill after expiry/PANIC absorbs the unprotected duplicate row instead of failing every retry; a user's PANIC can't overwrite an admin-wide lock; `--archive` archives live duplicates with safety rules; tests refuse APP_ENV=production and never run global panic/release. Details: memory/CHANGELOG.md.
+- Open: the reviewer's remaining items ("partly fixed 6 / not fixed 7 / 5 untouched files") are not itemised in the fix-plan PDF — need the list from the user.
