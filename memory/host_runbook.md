@@ -41,4 +41,6 @@ Standing rules from the operator. Read before giving ANY host command.
 - Content comparison trick: `git ls-tree -r <ref> -- <dir> | sort | sha256sum` on both sides.
 
 ## EA
-- Demo MT5 terminals must run EA v1.58 (download from Accounts → compile in MetaEditor → attach); otherwise CLOSE_ONLY.
+- Demo MT5 terminals must run the CURRENT EA (**v1.57** = `#property version` in backend/static/EmergentTradingBridge.mq5;
+  download from Accounts → compile in MetaEditor → attach). v1.58 does NOT exist yet — it is roadmap step 16
+  (deferred EA items B5 free margin / B9 spreads). Capability floor for every server feature is (1, 57).
