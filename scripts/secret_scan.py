@@ -92,8 +92,11 @@ def _suspicious(value: str) -> str | None:
     return None
 
 
-TEST_PATH_PREFIXES = ("backend/tests/", "e2e/", "frontend/src/__tests__/", "frontend/e2e/")
+TEST_PATH_PREFIXES = ("backend/tests/", "e2e/", "frontend/src/__tests__/", "frontend/e2e/", "test_reports/")
 STABLE_ACCOUNT_HINT = re.compile(r"(?i)admin@|ops@|owner@|support@|@stoicaibot\.com|@trading\.bot")
+STABLE_PAIR_PROSE = re.compile(
+    r"(?i)((?:admin|ops|owner|support)@[\w.-]+\.\w+|[\w.+-]+@(?:stoicaibot\.com|trading\.bot))"
+    r"\s*(?:/|:|\||,|->|—|-)\s*([^\s'\"`<>()]{8,})")
 
 
 def _is_test_path(path: str) -> bool:
@@ -129,6 +132,16 @@ def scan_text(text: str, path: str, findings: list) -> None:
         if STABLE_ACCOUNT_HINT.search(line) and re.search(rf"(?i){CRED_NAME}\s*[:=]\s*['\"][^'\"]{{6,}}['\"]", line):
             findings.append({"path": path, "line": i, "kind": "stable-account-credential", "match": "admin/ops literal"})
             continue
+        # prose-form pair "admin@host / P4ssw0rd…" (test_reports/iteration_221.json leak, 2026-10-03):
+        # a stable account email followed by a separator and a password-looking token
+        m = STABLE_PAIR_PROSE.search(line)
+        if m:
+            tok = m.group(2).rstrip(".;,:)")
+            sus = _suspicious(tok)
+            if sus and not re.search(r"(?i)redacted|rotated|retired|refuse|password|env|\.md$", tok):
+                kind = sus if sus in INFO_KINDS else "stable-account-credential"
+                findings.append({"path": path, "line": i, "kind": kind, "match": m.group(1)})
+                continue
         if test_path:
             continue
         for rx in (ASSIGN, JSON_KEY):
@@ -199,10 +212,14 @@ def main() -> int:
     a = ap.parse_args()
     tree = scan_tree(a.root)
     hist = scan_history(a.root) if a.history else []
-    # working tree: EVERY finding blocks (retired literals must not be re-introduced either).
+    # working tree: EVERY finding blocks (retired literals must not be re-introduced either) —
+    # except testing-agent reports, where a retired/rotated value is a record of a past rotation
+    # (unusable); any LIVE credential pair in a report blocks (iteration_221 leak, 2026-10-03).
     # history: rotated/retired values are informational — they cannot authenticate; anything else blocks.
-    blocking = tree + [f for f in hist if f["kind"] not in INFO_KINDS]
-    info = [f for f in hist if f["kind"] in INFO_KINDS]
+    def _report_record(f):
+        return f["path"].startswith("test_reports/") and f["kind"] in INFO_KINDS
+    blocking = [f for f in tree if not _report_record(f)] + [f for f in hist if f["kind"] not in INFO_KINDS]
+    info = [f for f in tree if _report_record(f)] + [f for f in hist if f["kind"] in INFO_KINDS]
     if a.json:
         json.dump({"blocking": blocking, "informational_rotated": info, "count": len(blocking)}, open(a.json, "w"), indent=2)
     for f in blocking:

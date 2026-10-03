@@ -26,7 +26,7 @@
     "/app/release/rc_lock.json (regenerated via freeze_rc_lock.py)"
   ],
   "success_rate": {"backend": "100% (79/79: 72 fixplan + 7 http integration)", "frontend": "100% (all testids present & interactive)"},
-  "test_credentials": "admin@stoicaibot.com / GmdRF2bcxTbiJLjhD14QuCSWsOjF#q (sourced from /app/memory/test_credentials.md)",
+  "test_credentials": "admin@stoicaibot.com / <redacted — rotated 2026-10-03> (sourced from /app/memory/test_credentials.md)",
   "seed_data_creation": "none; FE SET MODE smoke used existing account 6ac140fec1752ed8b3f19a29 and did not persist due to dev-mode csrf cross-origin limitation; pytest API test uses the same existing account and resets to auto on teardown",
   "retest_needed": false,
   "main_agent_can_self_test": true,
