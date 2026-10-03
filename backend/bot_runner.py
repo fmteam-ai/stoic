@@ -2062,7 +2062,13 @@ async def _process_user_account_locked(db, cfg: dict):
                         "; ".join(c["detail"] for c in rev["checks"]
                                   if c["status"] == "trim"))
             except Exception as e:  # noqa: BLE001
-                logger.warning("risk engine failed (fail-open): %s", e)
+                # C2 (roadmap step 4): a risk engine that cannot evaluate must
+                # BLOCK, not wave the trade through. Expect more SKIPs at first.
+                logger.error("risk engine failed — FAIL-CLOSED, trade skipped: %s", e)
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn",
+                                    reason=f"Risk engine unavailable (fail-closed): {e}")
+                await inc_intel_counter(user_id, "risk_engine_error_block")
+                continue
 
         # iter-58 · Pre-trade sector-cap fit. Prevents the bot from opening
         # trades that would immediately breach the per-account sector cap

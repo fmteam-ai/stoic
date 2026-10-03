@@ -1468,6 +1468,43 @@ async def execution_health(user=Depends(get_current_user)):
             "costs": costs}
 
 
+@router.get("/calibration-status")
+async def calibration_status(user=Depends(get_current_user)):
+    """Calibration Health card (roadmap C1 follow-up) — per model: is the Platt
+    calibration ACTIVE (standard sign), LEGACY-IGNORED (fitted under the inverted
+    convention, raw p used until refit) or PENDING (no fit / too few samples)."""
+    from probability_calibrator import platt_is_valid, PLATT_SIGN
+    db = get_db()
+    models = []
+    async for art in db.learned_meta_artifacts.find({}, {"key": 1, "label": 1, "backend": 1, "n_samples": 1,
+                                                          "trained_at": 1, "calibration": 1}):
+        cal = art.get("calibration") or {}
+        if not cal or cal.get("skipped"):
+            state, note = "pending", (cal.get("reason") if cal else "no calibration fitted yet")
+        elif platt_is_valid(cal):
+            state, note = "active", f"A={cal.get('A', 0):.3f} B={cal.get('B', 0):.3f}"
+        else:
+            state, note = "legacy_ignored", "fitted under the pre-C1 inverted convention — raw p used until the model worker refits"
+        models.append({"family": "learned_meta", "key": art.get("key"), "label": art.get("label"),
+                       "backend": art.get("backend"), "n_samples": art.get("n_samples"),
+                       "trained_at": art.get("trained_at"), "state": state, "note": note,
+                       "brier_raw": cal.get("brier_raw"), "brier_calibrated": cal.get("brier_calibrated"),
+                       "ece_raw": cal.get("ece_raw"), "ece_calibrated": cal.get("ece_calibrated")})
+    async for m in db.scalp_models.find({}, {"model_key": 1, "usable": 1, "platt_a": 1, "platt_b": 1,
+                                             "trained_at": 1, "n_train": 1, "brier": 1, "ece": 1}):
+        has = m.get("platt_a") is not None
+        models.append({"family": "scalp", "key": m.get("model_key"), "label": m.get("model_key"),
+                       "backend": "logreg", "n_samples": m.get("n_train"), "trained_at": m.get("trained_at"),
+                       "state": "active" if (has and m.get("usable")) else "pending",
+                       "note": (f"a={m.get('platt_a'):.3f} b={m.get('platt_b'):.3f}" if has else "no fit yet")
+                               + ("" if m.get("usable") else " · model not usable"),
+                       "brier_raw": None, "brier_calibrated": m.get("brier"), "ece_raw": None,
+                       "ece_calibrated": m.get("ece")})
+    counts = {s: sum(1 for x in models if x["state"] == s) for s in ("active", "legacy_ignored", "pending")}
+    return {"models": models, "counts": counts, "convention": PLATT_SIGN,
+            "checked_at": datetime.now(timezone.utc).isoformat()}
+
+
 @router.get("/forecast-status")
 async def forecast_status(user=Depends(get_current_user)):
     """Forecast Health card — is the Chronos forecaster actually running?

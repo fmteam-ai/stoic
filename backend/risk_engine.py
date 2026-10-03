@@ -303,7 +303,11 @@ async def risk_engine_evaluate(db, user_id, cfg, account, signal,
             budget_pct=float(cfg.get("cvar_budget_pct")
                              or DEF_CVAR_BUDGET_PCT)))
     except Exception as e:  # noqa: BLE001
-        logger.debug("cvar check skipped: %s", e)
+        # C2: an errored risk check is a BLOCK, not a silent skip
+        logger.error("cvar check errored — fail-closed: %s", e)
+        checks.append({"name": "cvar_budget", "status": "block", "scale": 0.0,
+                       "detail": f"CVaR budget check could not run ({type(e).__name__}: {e}) "
+                                 "— fail-closed, no new exposure"})
 
     blocked = next((c for c in checks if c["status"] == "block"), None)
     scale = 1.0

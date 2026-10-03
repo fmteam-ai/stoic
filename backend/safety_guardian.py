@@ -46,6 +46,32 @@ def _ok(name: str, value: float | str | None = None) -> dict:
     return {"name": name, "ok": True, "value": value}
 
 
+def sl_tp_side_violation(signal: dict) -> str | None:
+    """H6/H7 — return a reason when SL/TP sit on the wrong side of entry, else None.
+    BUY: SL < entry < TP.  SELL: TP < entry < SL.  Missing/zero TP is allowed
+    (SL-only trades); a missing SL is handled by the risk_inputs check."""
+    action = str(signal.get("action") or "").upper()
+    try:
+        entry = float(signal.get("entry_price") or 0)
+        sl = float(signal.get("stop_loss") or 0)
+        tp = float(signal.get("take_profit") or 0)
+    except (TypeError, ValueError):
+        return "entry/SL/TP not numeric"
+    if action not in ("BUY", "SELL") or entry <= 0:
+        return None
+    if action == "BUY":
+        if sl > 0 and sl >= entry:
+            return f"BUY stop-loss {sl} is not below entry {entry}"
+        if tp > 0 and tp <= entry:
+            return f"BUY take-profit {tp} is not above entry {entry}"
+    else:
+        if sl > 0 and sl <= entry:
+            return f"SELL stop-loss {sl} is not above entry {entry}"
+        if tp > 0 and tp >= entry:
+            return f"SELL take-profit {tp} is not below entry {entry}"
+    return None
+
+
 def _fail(name: str, reason: str, value: float | str | None = None) -> dict:
     return {"name": name, "ok": False, "reason": reason, "value": value}
 
@@ -79,11 +105,24 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
         "lot_size": float(signal.get("lot_size") or 0),
     }
 
+    # 0. H6/H7 (roadmap step 4): protective levels must sit on the correct side of
+    # entry — a BUY with SL above entry (or TP below) would be rejected or, worse,
+    # filled and stopped out instantly at the broker. Applies to EVERY mode.
+    side = sl_tp_side_violation(signal)
+    if side:
+        audit.append(_fail("sl_tp_side", side, f"entry={signal.get('entry_price')} "
+                           f"sl={signal.get('stop_loss')} tp={signal.get('take_profit')}"))
+        return {"ok": False, "blocked_by": "sl_tp_side", "audit": audit,
+                "evaluated_at": datetime.now(timezone.utc).isoformat(),
+                "context": context}
+    audit.append(_ok("sl_tp_side"))
+
     if not is_live:
         audit.append(_ok("paper_mode_bypass", value="paper account — no live caps applied"))
         return {"ok": True, "blocked_by": None, "audit": audit,
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),
                 "context": context}
+
 
     # 1. Equity must be positive & known
     if equity <= 0:
