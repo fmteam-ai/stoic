@@ -39,14 +39,21 @@ def kalman_smooth(
     initial_velocity : float
         Seed velocity (price units / step). 0 is fine for daily bars.
     """
-    p_list = [float(x) for x in prices if x is not None]
-    if not p_list:
+    # H8/H9 (roadmap step 6): keep the output INDEX-ALIGNED with the input.
+    # The old `[x for x in prices if x is not None]` silently dropped gaps, so
+    # every later element shifted left — backtests then read a FUTURE bar's
+    # k_velocity for the current bar (look-ahead leakage). Gaps are now
+    # skipped in the update step (predict-only) and flagged `imputed`.
+    raw = list(prices)
+    first = next((i for i, x in enumerate(raw) if x is not None), None)
+    if first is None:
         return []
+    p_list = [None if x is None else float(x) for x in raw]
     if len(p_list) == 1:
         return [{"price": p_list[0], "k_price": p_list[0], "k_velocity": 0.0}]
 
     # State vector [x, v] with covariance P (2x2 represented as 4 floats).
-    x = p_list[0]
+    x = p_list[first]
     v = float(initial_velocity)
     p_xx, p_xv, p_vv = 1.0, 0.0, 1.0   # symmetric
 
@@ -54,11 +61,11 @@ def kalman_smooth(
     Qv = float(process_var) * 10   # velocity allowed to drift faster
     R = float(measurement_var)      # measurement noise
 
-    out: list[dict] = [
-        {"price": p_list[0], "k_price": x, "k_velocity": v},
-    ]
+    out: list[dict] = [{"price": x, "k_price": x, "k_velocity": 0.0, "imputed": True}
+                       for _ in range(first)]
+    out.append({"price": p_list[first], "k_price": x, "k_velocity": v})
 
-    for i in range(1, len(p_list)):
+    for i in range(first + 1, len(p_list)):
         z = p_list[i]
         # ---- Predict ----
         x = x + v
@@ -67,6 +74,10 @@ def kalman_smooth(
         new_p_xv = p_xv + p_vv
         new_p_vv = p_vv + Qv
         p_xx, p_xv, p_vv = new_p_xx, new_p_xv, new_p_vv
+        if z is None:
+            # gap: no measurement — carry the prediction, keep alignment
+            out.append({"price": x, "k_price": x, "k_velocity": v, "imputed": True})
+            continue
 
         # ---- Update with measurement z (observes x only) ----
         # innovation

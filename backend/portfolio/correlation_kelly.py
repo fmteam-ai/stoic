@@ -35,6 +35,7 @@ import os
 from typing import Iterable
 
 from portfolio.var import _atr_pct, ES_MULT_95, UNKNOWN_RHO, corr_returns
+from pip_utils import base_symbol
 
 logger = logging.getLogger("portfolio.correlation-kelly")
 
@@ -88,7 +89,7 @@ async def compute_correlation_aware_scale(
         "cvar_scale": float,
       }
     """
-    new_sym = (new_symbol or "").upper()
+    new_sym = base_symbol(new_symbol)   # step 5: suffix-agnostic correlation bucket
     new_act = _normalize_action(new_action)
     cvar_target = float(cvar_target_pct if cvar_target_pct is not None else DEFAULT_CVAR_TARGET_PCT)
 
@@ -115,7 +116,7 @@ async def compute_correlation_aware_scale(
     same_direction_corr_sum = 0.0  # for the reason string only
     pair_count = 0
     for p in positions:
-        sym = (p.get("symbol") or "").upper()
+        sym = base_symbol(p.get("symbol"))
         act = _normalize_action(p.get("action"))
         notion = _notional_of(p)
         if notion <= 0 or not sym:
@@ -159,7 +160,7 @@ async def compute_correlation_aware_scale(
     rows: list[dict] = []
     seen_syms: set[str] = set()
     for p in positions:
-        sym = (p.get("symbol") or "").upper()
+        sym = base_symbol(p.get("symbol"))
         notion = _notional_of(p)
         if notion <= 0 or not sym:
             continue

@@ -179,6 +179,27 @@ def pip_value_usd_per_lot(symbol: Optional[str], account_type: Optional[str] = N
     return base * mult
 
 
+def symbol_match(symbol: Optional[str]) -> dict:
+    """Mongo clause matching every broker spelling of `symbol` (roadmap step 5 / H1-H2).
+
+    Trades are stored under the BROKER symbol (XAUUSD-ECN, XAUUSD.fx, GOLD#) while
+    the guards query the base (XAUUSD); exact equality silently missed them, so
+    anti-pyramid / trade-of-day / loss-streak limits did not see suffixed trades.
+    Matches base or any alias as a case-insensitive prefix (XAUUSD-ECN, XAUUSD.fx,
+    XAUUSDm, GOLD#) that is not immediately followed by a digit (US30 ≠ US300)."""
+    import re
+    base = base_symbol(symbol)
+    if not base:
+        return {"$in": [None, ""]}
+    variants = [base] + [a for a, b in SYMBOL_ALIASES.items() if b == base]
+    return {"$regex": "^(?:" + "|".join(re.escape(v) for v in variants) + ")(?![0-9])",
+            "$options": "i"}
+
+
+def same_symbol(a: Optional[str], b: Optional[str]) -> bool:
+    return bool(a) and bool(b) and base_symbol(a) == base_symbol(b)
+
+
 def floor_to_lot_step(lots: float, step: float = 0.01) -> float:
     """H4: broker-step rounding must never ADD risk — floor, never round half-up
     (0.015 → 0.01, not 0.02 = +33%). Returns 0.0 below one step; callers decide

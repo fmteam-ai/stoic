@@ -31,7 +31,7 @@ from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
 from risk import get_profile, compute_lot_for_account
-from pip_utils import floor_to_lot_step
+from pip_utils import floor_to_lot_step, symbol_match
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
@@ -92,7 +92,7 @@ async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int,
         return None
     q = {
         "user_id": user_id,
-        "symbol": symbol,
+        "symbol": symbol_match(symbol),   # step 5: broker-suffixed spellings
         "status": "closed",
         "origin": "auto",
         "close_reason": "stop_loss",
@@ -598,7 +598,7 @@ async def _process_user_account_locked(db, cfg: dict):
             day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             tod_q = {
                 "user_id": user_id,
-                "symbol": sym,
+                "symbol": symbol_match(sym),   # step 5: broker-suffixed spellings count too
                 "origin": "auto",
                 "created_at": {"$gte": day_start.isoformat()},
             }
@@ -1552,7 +1552,7 @@ async def _process_user_account_locked(db, cfg: dict):
         # direction pyramiding. Per-account scope to mirror inflight counting.
         pyramid_q = {
             "user_id": user_id,
-            "symbol": sym,
+            "symbol": symbol_match(sym),   # step 5: XAUUSD-ECN / XAUUSD.fx / GOLD# all match
             "action": signal["action"],
             "status": {"$in": ["pending", "open"]},
             "origin": "auto",
@@ -1576,7 +1576,7 @@ async def _process_user_account_locked(db, cfg: dict):
         LOSS_STREAK_COOLDOWN_HRS = 4
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=LOSS_STREAK_COOLDOWN_HRS)).isoformat()
         ls_q = {
-            "user_id": user_id, "symbol": sym, "action": signal["action"],
+            "user_id": user_id, "symbol": symbol_match(sym), "action": signal["action"],
             "status": "closed", "origin": "auto", "closed_at": {"$gte": cutoff},
         }
         if cfg.get("account_id"):

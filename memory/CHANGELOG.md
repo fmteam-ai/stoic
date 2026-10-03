@@ -1691,3 +1691,14 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 ## 2026-10-03 — Security audit #2: PASS
 - Verdict PASS (was CONDITIONAL PASS). No Critical/High/Medium. SEC-001 largely addressed already (uniform 403 + rate limits; narrow residual). H1–H4 remain open as operator-only P3 deploy-script hardening (not network-reachable).
 - New P3 fixed immediately: `GET /api/bot/calibration-status` now `require_admin` (model keys/sample counts are internal ops data); `CalibrationHealthCard` hides itself for non-admins (`data.detail`).
+
+## 2026-10-03 — Roadmap step 5 / H1-H2: broker symbol matching
+- Root cause: `execution.py` stores trades under the BROKER symbol (`XAUUSD-ECN`, `.fx`, `m`, `GOLD#`) while guards queried `{"symbol": sym}` with the base → anti-pyramid, trade-of-day cap, loss-streak breaker and SL-cooldown silently missed suffixed trades; portfolio VaR / correlation-Kelly treated `XAUUSD-ECN` and `XAUUSD` as uncorrelated buckets (ρ=0 instead of 1).
+- `pip_utils.symbol_match(sym)` → case-insensitive anchored regex over base + aliases, not followed by a digit (`US30`≠`US300`); `same_symbol(a,b)`. Applied in `bot_runner.py` (4 guards). `portfolio/var.py` + `portfolio/correlation_kelly.py` bucket by `base_symbol()`.
+- Tests: `tests/unit/test_step5_symbol_matching.py` (24). 82 sizing/portfolio/pyramid tests green. Manifest + rc_lock regenerated.
+
+## 2026-10-03 — Roadmap step 6 / H8-H10: signal data correctness
+- H8/H9 `kalman.py`: `kalman_smooth` dropped `None` prices → output shorter than input → `backtester/run.py` `by_idx` mapped bar i to a LATER bar's state (look-ahead leakage after any gap). Now index-aligned: gaps are predict-only steps flagged `imputed: True`; leading gaps padded. Causality test (future bars changed → past states unchanged) added.
+- H10 `routes/bridge_routes.py` `/bridge/candles`: `split_forming_bar()` drops the still-forming candle (t + tf > now) before merge/write; `candle_feed_health.forming_dropped` recorded; a payload containing only the forming bar returns ok/stored=0 instead of 422. Consumers (market structure / forecast / scalp features) now only ever see closed candles. `timeframe_seconds()` map M1…D1.
+- Reviewed, already correct: learned_meta chronological sort before walk-forward OOS; forward-only Kalman; alpha-clean gate.
+- Tests: `tests/unit/test_step6_signal_data.py` (9). 68 kalman/backtest/calibration tests green. Manifest + rc_lock regenerated.

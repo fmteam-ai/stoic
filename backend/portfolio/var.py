@@ -16,6 +16,7 @@ import logging
 from typing import Iterable
 
 from market import get_history, compute_indicators
+from pip_utils import base_symbol
 
 logger = logging.getLogger("portfolio.var")
 
@@ -147,7 +148,7 @@ async def calculate_var(
     rows: list[dict] = []
     symbols: list[str] = []
     for p in positions:
-        sym = (p.get("symbol") or "").upper()
+        sym = base_symbol(p.get("symbol"))   # step 5: XAUUSD-ECN and XAUUSD are ONE risk bucket
         if not sym:
             continue
         lot = float(p.get("lot_size") or 0)

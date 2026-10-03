@@ -709,6 +709,23 @@ class BridgeCandles(BaseModel):
     bars: list
 
 
+_TF_SECONDS = {"M1": 60, "M5": 300, "M15": 900, "M30": 1800, "H1": 3600, "H4": 14400, "D1": 86400}
+
+
+def timeframe_seconds(tf: str) -> int:
+    return _TF_SECONDS.get(str(tf or "").upper(), 900)
+
+
+def split_forming_bar(bars: list[dict], timeframe: str, now_ts: int) -> tuple[list[dict], int]:
+    """H10 (roadmap step 6): a bar whose close time (t + tf) is still in the future
+    is the CURRENTLY FORMING candle — its O/H/L/C keep changing until it closes.
+    Feeding it to the market-structure / forecast / scalp features as if it were
+    complete made signals flicker on partial data. Returns (closed_bars, dropped)."""
+    tf_s = timeframe_seconds(timeframe)
+    closed = [b for b in bars if int(b["t"]) + tf_s <= now_ts]
+    return closed, len(bars) - len(closed)
+
+
 @router.post("/candles")
 async def receive_candles(payload: BridgeCandles):
     """EA v1.42 — M15 candle feed for the Market Structure agent.
@@ -733,15 +750,20 @@ async def receive_candles(payload: BridgeCandles):
         except (KeyError, TypeError, ValueError):
             dropped += 1
             continue
+    bars, forming_dropped = split_forming_bar(
+        bars, payload.timeframe, int(datetime.now(timezone.utc).timestamp()))
     if not bars:
         await db.candle_feed_health.update_one(health_key, {"$set": {
             "last_received_at": now_iso, "source_symbol": payload.symbol,
             "account_id": str(account["_id"]),
             "bars_in_payload": len(payload.bars or []),
-            "valid_bars": 0, "dropped_bars": dropped,
-            "last_error": "all bars invalid", "last_write_ok": False,
+            "valid_bars": 0, "dropped_bars": dropped, "forming_dropped": forming_dropped,
+            "last_error": "all bars invalid" if not forming_dropped else "only the forming bar was sent",
+            "last_write_ok": False,
         }, "$inc": {"payloads_received": 1, "payloads_rejected": 1}},
             upsert=True)
+        if forming_dropped:
+            return {"status": "ok", "stored": 0, "forming_dropped": forming_dropped}
         raise HTTPException(status_code=422, detail="No valid bars")
     # iter-125 · Accumulate history server-side (EA only sends ~96 bars):
     # merge by timestamp, keep the newest 800 (8+ days of M15 → real 4H data).
@@ -772,7 +794,7 @@ async def receive_candles(payload: BridgeCandles):
             "last_received_at": now_iso, "source_symbol": payload.symbol,
             "account_id": str(account["_id"]),
             "bars_in_payload": len(payload.bars or []),
-            "valid_bars": len(bars), "dropped_bars": dropped,
+            "valid_bars": len(bars), "dropped_bars": dropped, "forming_dropped": forming_dropped,
             "last_bar_ts": last_bar_ts, "bar_lag_s": bar_lag_s,
             "stored_total": len(bars), "last_write_ok": write_ok,
             "last_error": None,

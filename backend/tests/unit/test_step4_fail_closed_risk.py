@@ -44,11 +44,17 @@ def _db():
 
 
 class _cursor:
-    def __init__(self, items): self._it = iter(items)
-    def __aiter__(self): return self
+    def __init__(self, items):
+        self._it = iter(items)
+
+    def __aiter__(self):
+        return self
+
     async def __anext__(self):
-        try: return next(self._it)
-        except StopIteration: raise StopAsyncIteration
+        try:
+            return next(self._it)
+        except StopIteration:
+            raise StopAsyncIteration
 
 
 @pytest.mark.asyncio
@@ -83,7 +89,8 @@ async def test_c2_cvar_error_blocks_instead_of_skipping(monkeypatch):
 
 
 def test_c2_bot_runner_risk_engine_is_fail_closed():
-    import inspect, bot_runner
+    import inspect
+    import bot_runner
     src = inspect.getsource(bot_runner)
     assert "risk engine failed (fail-open)" not in src
     assert "risk_engine_error_block" in src and "FAIL-CLOSED" in src
