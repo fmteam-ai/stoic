@@ -11,6 +11,10 @@ Standing rules from the operator. Read before giving ANY host command.
    confirming a fresh archive is present / was just written.
 3. Full deploy: `STOIC_READINESS_POLICY=onboarding-close-only ./deploy/update.sh` while operator gates are pending;
    drop the flag once all gates are green.
+4. **NEVER `git pull` in /opt/stoic before `update.sh`.** The script fetches + checks out `origin/main` itself and
+   compares with the commit it started from; a prior pull makes it print "already on … — nothing to publish" and
+   skip the build (happened 2026-10-03). Only `git fetch origin && git log --oneline -1 origin/main` to look.
+   Recovery: `git checkout --detach <previous-commit>` then re-run `update.sh`.
 
 ## Never run raw docker compose on this host
 - `docker compose up --force-recreate` → `overlay2 … device or resource busy` (VirtFS copies of /var/lib).
