@@ -36,7 +36,8 @@ if os.environ.get("APP_ENV", "").strip().lower() in ("production", "prod") \
                      "configured database (accounts, trades, bot_configs). Point MONGO_URL/DB_NAME at a "
                      "scratch database or set STOIC_TESTS_ALLOW_PRODUCTION_DB=1 knowingly.")
 _DB_NAME = os.environ.get("DB_NAME", "")
-if not _TEST_DB_PATTERN.search(_DB_NAME) and os.environ.get("STOIC_TESTS_ALLOW_DB_NAME") != "1":
+# No DB configured (CI unit lane: no MONGO_URL / DB_NAME) → nothing can be wiped, nothing to guard.
+if _DB_NAME and not _TEST_DB_PATTERN.search(_DB_NAME) and os.environ.get("STOIC_TESTS_ALLOW_DB_NAME") != "1":
     raise SystemExit(f"REFUSING to run the test-suite against DB_NAME={_DB_NAME!r} — it does not look like a "
                      "test database (expected a name containing test/ci/e2e/verify/scratch, e.g. "
                      "ai_trading_bot_test). Run with DB_NAME=<name>_test or set STOIC_TESTS_ALLOW_DB_NAME=1 knowingly.")
