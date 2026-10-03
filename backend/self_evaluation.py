@@ -15,6 +15,7 @@ new signal in bot_runner."""
 import logging
 import time
 from datetime import datetime, timedelta, timezone
+from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +192,7 @@ async def _lesson_llm(trade, ev) -> str | None:
                                    "trade. Answer 'why was I wrong?' in ONE "
                                    "sentence, ≤25 words, specific and "
                                    "actionable.")).with_model(
-        "anthropic", "claude-sonnet-4-5-20250929")
+        PROVIDER, model_for("analysis"))
     out = await chat.send_message(UserMessage(text=ctx))
     return str(out).strip()[:300]
 

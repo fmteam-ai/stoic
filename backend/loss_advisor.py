@@ -29,6 +29,7 @@ from bson import ObjectId
 from pip_utils import base_symbol
 from regime_adapter import velocity_veto
 from ws_manager import manager as ws_manager
+from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger("loss-advisor")
 
@@ -259,7 +260,7 @@ async def _claude_measures(payload: dict) -> dict:
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"loss-review-{uuid.uuid4().hex[:8]}",
             system_message=_ADVISOR_SYSTEM,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model(PROVIDER, model_for("analysis"))
         raw = str(await chat.send_message(UserMessage(text=json.dumps(payload, default=str)))).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")

@@ -39,6 +39,7 @@ import json
 import re
 import uuid
 import logging
+from llm_models import PROVIDER, model_for
 
 
 logger = logging.getLogger("strategy-code-generator")
@@ -169,7 +170,7 @@ async def generate_code(compiled: dict) -> dict:
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"strat-code-{uuid.uuid4().hex[:8]}",
         system_message=SYSTEM_PROMPT,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    ).with_model(PROVIDER, model_for("deep"))
 
     user_msg = ("Expand this compiled strategy into the full DSL + "
                 "pseudocode per the system schema:\n\n"

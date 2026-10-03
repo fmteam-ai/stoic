@@ -7,6 +7,7 @@ import os
 import time
 
 import httpx
+from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ async def get_fed_tone() -> dict | None:
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"fed-tone-{int(now)}",
             system_message="You are a monetary policy analyst. Respond only with JSON.",
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model(PROVIDER, model_for("fast"))
         raw = await chat.send_message(UserMessage(text=prompt))
         txt = str(raw).strip()
         if txt.startswith("```"):

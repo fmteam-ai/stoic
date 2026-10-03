@@ -35,6 +35,7 @@ from mtf_intraday import fetch_mtf_confluence
 from strategy_engines import (resolve_engine, run_engine, ENGINE_LABELS,
                               MTF_MODE_BY_ENGINE, SCALP_ENGINES, SCALP_RISK_PCT_CAP)
 from pip_utils import pips_to_price, price_to_pips
+from llm_models import PROVIDER, model_for
 
 # --- Execution geometry tunables ---
 ATR_SL_MULTIPLIER = float(os.environ.get("ATR_SL_MULTIPLIER", "1.5"))
@@ -439,7 +440,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
                 api_key=os.environ["EMERGENT_LLM_KEY"],
                 session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
                 system_message=NARRATOR_PROMPT,
-            ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+            ).with_model(PROVIDER, model_for("analysis"))
             narration = await chat.send_message(UserMessage(text=json.dumps({
                 "confirmed_setup": {"direction": action, "cascade": mtf_conf},
                 "market_context": json.loads(user_text),

@@ -355,9 +355,12 @@ async def _check_ea_config(db, user_id: str) -> dict:
     # API keys
     has_claude = bool(os.environ.get("EMERGENT_LLM_KEY"))
     if has_claude:
-        checks.append(_mk("Claude (Emergent LLM key)", "pass", "Configured"))
+        from llm_models import describe as _llm_describe
+        tiers = _llm_describe()["tiers"]
+        summary = " · ".join(f"{t}={v['model']}{'*' if v['overridden'] else ''}" for t, v in tiers.items())
+        checks.append(_mk("Claude LLM", "pass", f"Configured (emergent backend) · {summary}"))
     else:
-        checks.append(_mk("Claude (Emergent LLM key)", "fail",
+        checks.append(_mk("Claude LLM", "fail",
                           "Missing EMERGENT_LLM_KEY — AI signals disabled.",
                           fix_label="Add EMERGENT_LLM_KEY in backend/.env"))
 

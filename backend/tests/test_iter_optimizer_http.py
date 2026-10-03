@@ -193,7 +193,8 @@ class TestOptimizerFullReport:
             assert rec.get("status") == "pending"
             assert rec.get("id")
             assert rec.get("type") in ("config_change", "preset_switch", "pause_bot")
-        assert data.get("model_used") in ("claude-fable-5", "claude-opus-4-8")
+        from llm_models import optimizer_candidates
+        assert data.get("model_used") in {m for _, m in optimizer_candidates()}
 
     def test_cached_within_5min(self, session, test_account):
         if not getattr(TestOptimizerFullReport, "report", None):

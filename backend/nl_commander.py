@@ -16,6 +16,7 @@ import os
 import json
 import uuid
 import re
+from llm_models import PROVIDER, model_for
 
 
 # --- Strategy Builder -------------------------------------------------------
@@ -93,7 +94,7 @@ async def build_strategy(prompt: str) -> dict:
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"strategy-{uuid.uuid4().hex[:8]}",
         system_message=STRATEGY_BUILDER_SYSTEM,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    ).with_model(PROVIDER, model_for("analysis"))
 
     response = await chat.send_message(UserMessage(text=prompt))
     parsed = _parse_json(str(response))
@@ -107,7 +108,7 @@ async def interpret_command(prompt: str) -> dict:
         api_key=os.environ["EMERGENT_LLM_KEY"],
         session_id=f"command-{uuid.uuid4().hex[:8]}",
         system_message=COMMAND_INTERPRETER_SYSTEM,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    ).with_model(PROVIDER, model_for("analysis"))
 
     response = await chat.send_message(UserMessage(text=prompt))
     parsed = _parse_json(str(response))

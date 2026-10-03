@@ -1702,3 +1702,10 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - H10 `routes/bridge_routes.py` `/bridge/candles`: `split_forming_bar()` drops the still-forming candle (t + tf > now) before merge/write; `candle_feed_health.forming_dropped` recorded; a payload containing only the forming bar returns ok/stored=0 instead of 422. Consumers (market structure / forecast / scalp features) now only ever see closed candles. `timeframe_seconds()` map M1…D1.
 - Reviewed, already correct: learned_meta chronological sort before walk-forward OOS; forward-only Kalman; alpha-clean gate.
 - Tests: `tests/unit/test_step6_signal_data.py` (9). 68 kalman/backtest/calibration tests green. Manifest + rc_lock regenerated.
+
+## 2026-10-03 — Roadmap step 7: central model settings (`backend/llm_models.py`)
+- Single source of truth: tiers fast=`claude-haiku-4-5-20251001`, analysis=`claude-sonnet-5-5`, deep=`claude-opus-5-5`, ai_optimizer=`claude-fable-5-1` → fallback `claude-opus-5-5`; env overrides `LLM_MODEL_<TIER>` read at call time; `model_for()`, `optimizer_candidates()`, `describe()`.
+- 17 call sites rewired to `.with_model(PROVIDER, model_for(tier))`: fast → news, news_understanding, fed_tone, journal card (+usage log); analysis → copilot, insights, ai_signals, loss_advisor, loss_postmortem, bot_doctor, nl_commander ×2, self_evaluation; deep → strategy_code_generator, research hypothesis; optimizer → `optimizer_candidates()`.
+- Diagnostics check renamed "Claude LLM" → "Configured (emergent backend) · fast=… · analysis=…" (`*` marks env override). `.env.example` documents the 5 overrides. `test_iter_optimizer_http` asserts against `optimizer_candidates()`.
+- Guard: `tests/unit/test_llm_models_single_source.py` fails CI if any non-test file hard-codes a model identifier or calls `with_model` without `model_for`.
+- NOT done (operator's PR #17 had it, reverted): `llm_client.py` ANTHROPIC_API_KEY/LLM_BACKEND switch and `llm_usage` logging for every feature — calls still go through emergentintegrations LlmChat with EMERGENT_LLM_KEY.

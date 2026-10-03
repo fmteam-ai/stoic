@@ -12,6 +12,7 @@ import uuid
 import asyncio
 import httpx
 from datetime import datetime, timezone, timedelta
+from llm_models import PROVIDER, model_for
 
 NEWSAPI_URL = "https://newsapi.org/v2/everything"
 
@@ -161,7 +162,7 @@ async def score_sentiment(symbol: str) -> dict:
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"sent-{sym}-{uuid.uuid4().hex[:6]}",
             system_message=SENTIMENT_PROMPT,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model(PROVIDER, model_for("fast"))
 
         try:
             resp = await chat.send_message(UserMessage(text=user_text))

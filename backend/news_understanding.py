@@ -14,6 +14,7 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ async def _score_headlines(base: str, heads: list) -> list:
                         "You read central-bank statements, FOMC minutes, CPI and "
                         "NFP prints for their asset-specific price impact. "
                         "Respond only with JSON."),
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+    ).with_model(PROVIDER, model_for("fast"))
     raw = await chat.send_message(UserMessage(text=prompt))
     out = []
     for row in _parse_array(str(raw)):

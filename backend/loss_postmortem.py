@@ -29,6 +29,7 @@ from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 
 from database import get_db
+from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger("loss-postmortem")
 
@@ -153,7 +154,7 @@ async def _claude_narrative(trade: dict, signal: dict, diff: dict) -> dict:
             api_key=os.environ["EMERGENT_LLM_KEY"],
             session_id=f"postmortem-{trade.get('symbol','?')}-{uuid.uuid4().hex[:8]}",
             system_message=_POSTMORTEM_SYSTEM,
-        ).with_model("anthropic", "claude-sonnet-4-5-20250929")
+        ).with_model(PROVIDER, model_for("analysis"))
         response = await chat.send_message(UserMessage(text=user_text))
         # Strip code fences / prefix garbage just in case
         raw = str(response).strip()
