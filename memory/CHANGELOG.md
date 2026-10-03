@@ -1725,3 +1725,9 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 ## 2026-10-03 — Security audit #3: PASS; H2/H4 residuals closed
 - Verdict PASS. SEC-001 closed (accepted residual), H1 closed, H2 closed, H3 open-by-design, H4 closed.
 - Residuals fixed same day: `deploy/stoic-path.sh` now walks every path component (no symlinks, uid 0, mode ≤755 for dir and parents); `deploy/host-python-fix.sh` plan entries are `verb|operand` (no word-splitting; paths with spaces/`;` inert). Installer tests green.
+
+## 2026-10-03 — Fix plan Step A1 (B1, B8): P&L after partial closes
+- B1 `routes/bridge_routes.py`: both close paths (`/bridge/report` status=closed and `/bridge/external-deal` full out-deal) now ADD the banked partial P&L instead of overwriting: `pnl = pnl_banked_partial + final leg`; new fields `pnl_banked_partial`, `pnl_final_leg`; EA journal replays recompute idempotently from the stored banked figure.
+- B8 `routes/bridge_routes.py` partial fill at open: `original_lot_size` is rebased to the FILLED volume (TP1/TP2 partial-close fractions in trade_manager use it), `requested_lot_size` keeps the audit value. Tests iter150/iter71 updated to the new contract.
+- Tests: 4 new in `tests/test_iter25k_partial_close_sync.py`; 37 bridge/report tests + 39 trade_manager tests green; `backend_test.py::test_full_trade_flow` fails identically before/after (pre-existing). Manifest + rc_lock regenerated.
+- Fix-plan tracker (memory/ROADMAP.md): A1 Done. Next: A2 (B2 PANIC stops scalp + lock; B3/R4 expiry only for never-dispatched orders, 120s, unique ticket index; B4 no dispatch after lock; B7 no partial over pending full close).

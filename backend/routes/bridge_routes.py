@@ -1546,8 +1546,11 @@ async def report_trade(payload: BridgeTradeReport):
             filled = float(payload.filled_volume)
             if requested_lot > 0 and filled < requested_lot - 1e-9:
                 update["partial_fill"] = True
-                if not trade.get("original_lot_size"):
-                    update["original_lot_size"] = requested_lot
+                # B8 (fix plan A1): TP1/TP2 partial-close fractions are taken from
+                # original_lot_size — it must be the FILLED volume, not the requested
+                # one, or the EA is asked to close more than the position holds.
+                update["requested_lot_size"] = float(trade.get("requested_lot_size") or requested_lot)
+                update["original_lot_size"] = filled
                 update["lot_size"] = filled
                 logger.warning(
                     "PARTIAL FILL on open trade=%s requested=%.4f "
@@ -1699,6 +1702,18 @@ async def report_trade(payload: BridgeTradeReport):
         update["exit_price"] = payload.exit_price
     if payload.pnl is not None:
         update["pnl"] = payload.pnl
+        # B1 (fix plan A1): the EA reports the FINAL leg's profit. A trade that already
+        # banked a partial close must ADD it, not overwrite it — otherwise TP1 profit
+        # vanished from P&L, daily totals and the loss-streak breaker.
+        if payload.status == "closed" and trade.get("partial_closed"):
+            # first close report: the banked partial P&L is the trade's current pnl;
+            # replays (EA journal re-report) recompute from the stored banked figure.
+            banked = (float(trade.get("pnl_banked_partial") or 0)
+                      if trade.get("pnl_final_leg") is not None or trade.get("status") == "closed"
+                      else float(trade.get("pnl") or 0))
+            update["pnl_banked_partial"] = round(banked, 2)
+            update["pnl_final_leg"] = round(float(payload.pnl), 2)
+            update["pnl"] = round(banked + float(payload.pnl), 2)
     if payload.error:
         update["error"] = payload.error
     if payload.status == "closed":
@@ -2232,9 +2247,15 @@ async def external_deal(payload: BridgeExternalDeal):
                 "partial_close": True, "new_lot_size": update["lot_size"]}
 
     # Full close (or "out" deal for a trade STOIC didn't know was open) — original path.
+    # B1 (fix plan A1): `realized` is this deal's profit only — add the banked partial legs.
+    banked_partial = (float(existing.get("pnl") or 0)
+                      if existing and existing.get("partial_closed") and existing.get("status") != "closed"
+                      else 0.0)
     update = {
         "exit_price": payload.price,
-        "pnl": realized,
+        "pnl": round(banked_partial + float(realized or 0), 2),
+        **({"pnl_banked_partial": round(banked_partial, 2), "pnl_final_leg": round(float(realized or 0), 2)}
+           if banked_partial else {}),
         "status": "closed",
         "closed_at": deal_iso,
         "broker_deal_id": payload.deal_id,
@@ -2376,4 +2397,4 @@ async def external_deal(payload: BridgeExternalDeal):
         except Exception as _sw:  # noqa: BLE001
             record_swallow("bridge", "external_deal", _sw)
 
-    return {"ok": True, "updated": tid, "pnl": realized}
+    return {"ok": True, "updated": tid, "pnl": update.get("pnl", realized)}

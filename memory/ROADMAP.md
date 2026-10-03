@@ -80,3 +80,13 @@ Fingerprint rule per step: `python scripts/generate_test_manifest.py` → `pytho
 - Phase 4 Quant (~1 week each): 12 purged CV/DSR/PBO/cost model · 13 broker instrument specs · 14 HMM regimes + conformal bands · 15 meta-labelling
 - Phase 5: 16 EA v1.58 server part first, then one demo terminal (Windows compile + verify_ea_release.py --sign)
 - Phase 6 when needed: 17 billing idempotency · 18 crypto SL lifecycle · 19 ▲ login/token hardening (hashed terminal tokens — caused 2 Oct rollback; DB restore needed on undo) · 20 Node 22/uvicorn/image pinning
+
+## Operator "STOIC Fix Plan" (PDF, 2026-10-03) — 63 findings, 11 steps, batches A–F, one PR each + 1–2 day soak
+- **A1 P&L after partial closes (B1,B8) — DONE 2026-10-03**
+- A2 order lifecycle & PANIC (B2, B3/R4, B4, B7; files panic_routes, bridge_routes, trade_manager, seed.py; unique ticket index needs dup pre-check)
+- B1 sizing (R1 JPY-cross exposure 150×, R9, R10 price-aware pip value + volume step, B10, B11) · B2 safety guards (R2 opened_at, R5, R6 stale heartbeat/quote block, R7, R8, B6, R14)
+- C1 candle data (A1 per-user/timeframe, R3 broker UTC offset, A3, A10, A11, R11) · C2 AI calls/gates (A2 timeouts, A4, A5, A6, A7, A8, A9, A12, A13, A14, R12) — covers roadmap step 8
+- D1 logs/small fixes (S4, S5, S8 needs RESEND_API_KEY, S9) · D2 2FA/passkeys/admin (S1, S2, S6, S10, S11; set WEBAUTHN_RP_ID/ORIGIN)
+- E1 sessions/navigation (F1, F5, F6, F12) · E2 pages/data freshness (F2, F3, F4, F7, F8, F9, F10, F11)
+- F1 rate limits/backups/deploy safety (S3, S7, S12 encrypted backups passphrase, S13, S14, R13)
+- Deferred to roadmap step 16 (EA v1.58): B5 free margin, B9 spreads.

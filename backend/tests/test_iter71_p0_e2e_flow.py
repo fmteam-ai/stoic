@@ -118,7 +118,7 @@ async def test_p0_unresolved_then_open_then_replay(db):
         after_b = await db.trades.find_one({"_id": inserted.inserted_id})
         assert after_b["status"] == "open"
         assert after_b.get("lot_size") == 0.30, after_b.get("lot_size")
-        assert after_b.get("original_lot_size") == 1.00
+        assert after_b.get("original_lot_size") == 0.30 and after_b.get("requested_lot_size") == 1.00   # fix plan B8
         assert after_b.get("partial_fill") is True
         assert after_b.get("position_volume") == 1.50
         assert after_b.get("mt5_ticket") == 999888777

@@ -183,6 +183,87 @@ class TestPartialClosePreservesTrade:
 
 
 class TestOpenTicketsDerivedFromPositions:
+    # ---------------- fix plan A1 (B1 / B8) ----------------
+    def test_a1_b1_full_close_after_partial_adds_banked_pnl_external_deal(self, mongo_db, fresh_account, me):
+        """B1: TP1 banked +280, final leg +120 → total 400 (was overwritten to 120)."""
+        now = datetime.now(timezone.utc).isoformat()
+        tid = mongo_db.trades.insert_one({
+            "user_id": me["id"], "account_id": str(fresh_account["_id"]),
+            "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.06, "original_lot_size": 0.20,
+            "entry_price": 4050.0, "stop_loss": 4070.0, "status": "open", "mt5_ticket": 700020011,
+            "opened_at": now, "pnl": 280.0, "partial_closed": True,
+        }).inserted_id
+        r = requests.post(f"{API}/bridge/external-deal", json={
+            "bridge_token": fresh_account["bridge_token"], "mt5_ticket": 700020011, "deal_id": 800020011,
+            "deal_entry": "out", "symbol": "XAUUSD", "action": "SELL", "lots": 0.06, "price": 4030.0,
+            "profit": 120.0, "deal_time": 1719500200, "magic": 0,
+        }, timeout=10)
+        assert r.status_code == 200, r.text
+        assert r.json().get("pnl") == 400.0
+        doc = mongo_db.trades.find_one({"_id": tid})
+        assert doc["status"] == "closed" and doc["pnl"] == 400.0
+        assert doc["pnl_banked_partial"] == 280.0 and doc["pnl_final_leg"] == 120.0
+
+    def test_a1_b1_full_close_after_partial_adds_banked_pnl_report(self, mongo_db, fresh_account, me):
+        now = datetime.now(timezone.utc).isoformat()
+        tid = mongo_db.trades.insert_one({
+            "user_id": me["id"], "account_id": str(fresh_account["_id"]),
+            "symbol": "XAUUSD", "action": "BUY", "lot_size": 0.05, "original_lot_size": 0.10,
+            "entry_price": 4000.0, "stop_loss": 3990.0, "status": "open", "mt5_ticket": 700020012,
+            "opened_at": now, "pnl": 50.0, "partial_closed": True,
+        }).inserted_id
+        r = requests.post(f"{API}/bridge/report", json={
+            "bridge_token": fresh_account["bridge_token"], "trade_id": str(tid), "mt5_ticket": 700020012,
+            "status": "closed", "exit_price": 4012.0, "pnl": 60.0,
+        }, timeout=10)
+        assert r.status_code == 200, r.text
+        doc = mongo_db.trades.find_one({"_id": tid})
+        assert doc["status"] == "closed" and doc["pnl"] == 110.0
+        assert doc["pnl_banked_partial"] == 50.0 and doc["pnl_final_leg"] == 60.0
+        # a replayed report must NOT add the banked leg twice
+        r = requests.post(f"{API}/bridge/report", json={
+            "bridge_token": fresh_account["bridge_token"], "trade_id": str(tid), "mt5_ticket": 700020012,
+            "status": "closed", "exit_price": 4012.0, "pnl": 60.0,
+        }, timeout=10)
+        assert r.status_code == 200
+        assert mongo_db.trades.find_one({"_id": tid})["pnl"] == 110.0
+
+    def test_a1_no_partial_full_close_unchanged(self, mongo_db, fresh_account, me):
+        now = datetime.now(timezone.utc).isoformat()
+        tid = mongo_db.trades.insert_one({
+            "user_id": me["id"], "account_id": str(fresh_account["_id"]),
+            "symbol": "XAUUSD", "action": "SELL", "lot_size": 0.10, "entry_price": 4050.0,
+            "stop_loss": 4070.0, "status": "open", "mt5_ticket": 700020013, "opened_at": now, "pnl": 0.0,
+        }).inserted_id
+        r = requests.post(f"{API}/bridge/external-deal", json={
+            "bridge_token": fresh_account["bridge_token"], "mt5_ticket": 700020013, "deal_id": 800020013,
+            "deal_entry": "out", "symbol": "XAUUSD", "action": "SELL", "lots": 0.10, "price": 4025.0,
+            "profit": 250.0, "deal_time": 1719500300, "magic": 0,
+        }, timeout=10)
+        assert r.status_code == 200
+        doc = mongo_db.trades.find_one({"_id": tid})
+        assert doc["pnl"] == 250.0 and "pnl_banked_partial" not in doc
+
+    def test_a1_b8_partial_fill_rebases_original_lot_to_filled(self, mongo_db, fresh_account, me):
+        """B8: requested 0.20, filled 0.12 → original_lot_size 0.12 so TP1 fractions fit the position."""
+        now = datetime.now(timezone.utc).isoformat()
+        tid = mongo_db.trades.insert_one({
+            "user_id": me["id"], "account_id": str(fresh_account["_id"]),
+            "symbol": "XAUUSD", "action": "BUY", "lot_size": 0.20, "original_lot_size": 0.20,
+            "entry_price": 4000.0, "stop_loss": 3990.0, "take_profit": 4030.0, "status": "pending",
+            "mt5_ticket": None, "opened_at": now, "pnl": 0.0,
+        }).inserted_id
+        r = requests.post(f"{API}/bridge/report", json={
+            "bridge_token": fresh_account["bridge_token"], "trade_id": str(tid), "mt5_ticket": 700020014,
+            "status": "open", "entry_price": 4000.5, "filled_volume": 0.12,
+        }, timeout=10)
+        assert r.status_code == 200, r.text
+        doc = mongo_db.trades.find_one({"_id": tid})
+        assert doc["partial_fill"] is True
+        assert doc["lot_size"] == 0.12 and doc["original_lot_size"] == 0.12
+        assert doc["requested_lot_size"] == 0.20
+
+
     def test_heartbeat_with_positions_but_no_open_tickets_field(
         self, mongo_db, fresh_account
     ):

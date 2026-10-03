@@ -163,7 +163,7 @@ class TestBackendScenarios:
                          "position_volume": 0.60})
                 t = await db.trades.find_one({"_id": ins.inserted_id})
                 assert t["partial_fill"] is True
-                assert t["lot_size"] == 0.60 and t["original_lot_size"] == 1.00
+                assert t["lot_size"] == 0.60 and t["original_lot_size"] == 0.60 and t["requested_lot_size"] == 1.00   # fix plan B8: baseline = FILLED
                 ev = await db.trade_events.find_one(
                     {"event_type": "PartialFillAdopted", "trade_id": tid})
                 assert ev and ev["filled_lots"] == 0.60

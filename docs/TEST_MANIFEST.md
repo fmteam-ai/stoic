@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 684 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3817 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3821 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4712 tests across 486 files.**
+**Total: 4716 tests across 486 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -264,7 +264,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter25h_force_sync_safety.py` | http-live | 4 |
 | `backend/tests/test_iter25i_stale_tickets.py` | http-live | 3 |
 | `backend/tests/test_iter25j_health_score.py` | http-live | 5 |
-| `backend/tests/test_iter25k_partial_close_sync.py` | http-live | 4 |
+| `backend/tests/test_iter25k_partial_close_sync.py` | http-live | 8 |
 | `backend/tests/test_iter25l_full_regression.py` | http-live | 12 |
 | `backend/tests/test_iter26_macro_feeds.py` | http-live | 9 |
 | `backend/tests/test_iter26_max_concurrent_endpoints.py` | http-live | 11 |
