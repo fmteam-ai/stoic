@@ -1709,3 +1709,10 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - Diagnostics check renamed "Claude LLM" → "Configured (emergent backend) · fast=… · analysis=…" (`*` marks env override). `.env.example` documents the 5 overrides. `test_iter_optimizer_http` asserts against `optimizer_candidates()`.
 - Guard: `tests/unit/test_llm_models_single_source.py` fails CI if any non-test file hard-codes a model identifier or calls `with_model` without `model_for`.
 - NOT done (operator's PR #17 had it, reverted): `llm_client.py` ANTHROPIC_API_KEY/LLM_BACKEND switch and `llm_usage` logging for every feature — calls still go through emergentintegrations LlmChat with EMERGENT_LLM_KEY.
+
+## 2026-10-03 — Security audit P3 hardening H1, H2, H4 (deploy scripts); H3 intentionally untouched
+- H1 `deploy/lib.sh` `capture_readiness_policy()` / `readiness_policy()`: the readiness policy is captured once into a NON-exported shell var (`STOIC_DEPLOY_POLICY`), validated, and `STOIC_READINESS_POLICY` is scrubbed from the environment so compose/python/child shells cannot inherit it. `update.sh` calls it after sourcing lib.sh; the self re-exec hands the policy over explicitly; `install.sh` no longer exports it; `install_report.sh` dropped the env fallback. Operator usage unchanged: `STOIC_READINESS_POLICY=onboarding-close-only ./deploy/update.sh` or `--onboarding-close-only`.
+- H2 `deploy/lib.sh`: `/usr/local/lib/stoic/bin` is prepended to PATH only if root-owned and mode ≤755; otherwise a loud warning with the chown/chmod fix and NO prepend.
+- H4 `deploy/host-python-fix.sh`: plan is an array of typed actions (`alt-remove|alt-auto|alt-install|link-system|rm-shadow|link-private`) executed via `case` — no `eval`; injection test with a `;`-laden path confirmed inert.
+- H3 (VirtFS `umount -l` sweep) deliberately NOT changed — it is the cPanel overlay2 crash-loop fix.
+- Verified: bash -n all four scripts; policy capture/scrub/validate; PATH guard both branches; dry-run on non-dnf host; 69 deploy-related tests green (2 pre-existing audit_acceptance failures).

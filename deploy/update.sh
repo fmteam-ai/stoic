@@ -19,15 +19,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . deploy/lib.sh
+capture_readiness_policy || exit 1            # audit H1: policy is process-local, scrubbed from env
 
 REF="origin/main"
 for a in "$@"; do
   case "$a" in
-    --onboarding-close-only) export STOIC_READINESS_POLICY=onboarding-close-only ;;
+    --onboarding-close-only) STOIC_DEPLOY_POLICY=onboarding-close-only ;;
     *) REF="$a" ;;
   esac
 done
-ONBOARDING=0; [ "${STOIC_READINESS_POLICY:-}" = "onboarding-close-only" ] && ONBOARDING=1
+ONBOARDING=0; [ "$(readiness_policy)" = "onboarding-close-only" ] && ONBOARDING=1
 LOCK=/tmp/stoic-deploy.lock
 
 if [ -n "${STOIC_UPDATE_REEXEC:-}" ]; then
@@ -54,7 +55,8 @@ else
   # The scripts sourced above came from the OLD checkout. Re-exec so the rest of
   # the update (gates, build, verification, rollback policy) runs with the NEW
   # deploy/update.sh + deploy/lib.sh.
-  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" bash deploy/update.sh "${REF}"
+  # The policy is handed over EXPLICITLY (H1) — the re-exec'd script captures and scrubs it again.
+  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh "${REF}"
 fi
 
 # Pre-build gates fail BEFORE anything on the host changed: restore the checkout

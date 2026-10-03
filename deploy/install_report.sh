@@ -36,7 +36,7 @@ import os
 try:
     deployment = json.load(open("deploy/releases/deployment_state.json"))   # r26 P2-04: what exit 0 meant
 except (OSError, ValueError):
-    deployment = {"deployment_state": "unknown", "readiness_policy": os.environ.get("STOIC_READINESS_POLICY") or "unknown"}
+    deployment = {"deployment_state": "unknown", "readiness_policy": "unknown"}   # audit H1: no env fallback
 try:
     repairs = json.load(open("deploy/releases/docker_repair_summary.json"))   # r26 P2-03: host mutations journal digest
 except (OSError, ValueError):

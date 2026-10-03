@@ -4,7 +4,30 @@
 
 # Deploy scripts need python >= 3.9. bootstrap.sh links one into this PRIVATE dir —
 # never into /usr/bin/python3 (cPanel packman needs the stock interpreter's dnf module).
-case ":${PATH}:" in *":/usr/local/lib/stoic/bin:"*) ;; *) export PATH="/usr/local/lib/stoic/bin:${PATH}" ;; esac
+# Audit H2: only trust the private dir when it is root-owned and not group/world-writable —
+# a prepended PATH entry anyone can write to is a root-privilege escalation.
+_stoic_bin=/usr/local/lib/stoic/bin
+if [ -d "${_stoic_bin}" ]; then
+  _stoic_bin_stat=$(stat -c '%u %a' "${_stoic_bin}" 2>/dev/null || echo "? ?")
+  case "${_stoic_bin_stat}" in
+    "0 "7[0-5][0-5]) case ":${PATH}:" in *":${_stoic_bin}:"*) ;; *) export PATH="${_stoic_bin}:${PATH}" ;; esac ;;
+    *) echo "!! ${_stoic_bin} is not root-owned / is group-or-world-writable (uid+mode: ${_stoic_bin_stat}) — NOT adding to PATH; fix: chown root:root ${_stoic_bin} && chmod 755 ${_stoic_bin}" >&2 ;;
+  esac
+fi
+unset _stoic_bin _stoic_bin_stat
+
+# Audit H1 — the readiness policy is a DEPLOY-TIME decision, not an environment fact.
+# Capture it once into a non-exported shell variable and scrub it from the environment
+# so docker compose, python helpers and child shells can never inherit it.
+capture_readiness_policy() {
+  STOIC_DEPLOY_POLICY="${1:-${STOIC_READINESS_POLICY:-}}"
+  unset STOIC_READINESS_POLICY
+  case "${STOIC_DEPLOY_POLICY}" in
+    ""|release-ready|onboarding-close-only|infrastructure-only) return 0 ;;
+    *) echo "ERROR: unknown readiness policy '${STOIC_DEPLOY_POLICY}' (release-ready | onboarding-close-only | infrastructure-only)" >&2; return 1 ;;
+  esac
+}
+readiness_policy() { printf '%s' "${STOIC_DEPLOY_POLICY:-}"; }
 
 # Set-or-append KEY=VALUE in a dotenv file (idempotent).
 set_kv() {
@@ -175,7 +198,7 @@ wait_release_ready() {
   local n="${1:-45}" tok body i mode="infra"
   tok=$(metrics_token) || return 1
   if [ "$(app_env)" = "production" ]; then
-    if [ "${STOIC_READINESS_POLICY:-}" = "onboarding-close-only" ]; then mode="onboarding"; else mode="strict"; fi
+    if [ "$(readiness_policy)" = "onboarding-close-only" ]; then mode="onboarding"; else mode="strict"; fi
   fi
   for i in $(seq 1 "$n"); do
     body=$(curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null || true)

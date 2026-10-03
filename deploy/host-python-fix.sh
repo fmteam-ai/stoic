@@ -37,34 +37,58 @@ echo "== modern python for deploy scripts: ${MODERN:-none installed}"
 [ -L /usr/local/bin/python3 ] && echo "== /usr/local/bin/python3 -> $(readlink /usr/local/bin/python3) (shadows the system python on PATH)"
 [ -e "${STOIC_BIN}/python3" ] && echo "== ${STOIC_BIN}/python3 -> $(readlink -f "${STOIC_BIN}/python3")"
 
-PLAN=""
+# Audit H4: the plan is an ARRAY of typed actions (verb + fixed operands) executed by
+# a case statement — no `eval`, so a hostile path or alternatives entry can't inject.
+PLAN=(); plan() { PLAN+=("$*"); }
 if ! has_dnf /usr/bin/python3; then
   KEEP=""; DROP=""
   for p in ${ALTS}; do if [ -x "$p" ] && has_dnf "$p"; then KEEP="${KEEP} $p"; else DROP="${DROP} $p"; fi; done
   if [ -n "${KEEP}" ]; then
-    for p in ${DROP}; do PLAN="${PLAN}alternatives --remove python3 ${p}\n"; done
-    PLAN="${PLAN}alternatives --auto python3\n"
+    for p in ${DROP}; do plan alt-remove "${p}"; done
+    plan alt-auto
   elif [ -n "${ALTS}" ] && [ -n "${PLAT}" ]; then
-    PLAN="${PLAN}alternatives --install /usr/bin/python3 python3 ${PLAT} 1000000\nalternatives --auto python3\n"
+    plan alt-install "${PLAT}"; plan alt-auto
   elif [ -n "${PLAT}" ]; then
-    PLAN="${PLAN}ln -sfn ${PLAT} /usr/bin/python3\n"
+    plan link-system "${PLAT}"
   else
     echo "!! no interpreter with the dnf module found — reinstall it: dnf reinstall python3 python3-dnf"; exit 2
   fi
 fi
 if [ -L /usr/local/bin/python3 ] && [ -n "${MODERN}" ] && [ "$(readlink -f /usr/local/bin/python3)" = "$(readlink -f "${MODERN}")" ]; then
-  PLAN="${PLAN}rm -f /usr/local/bin/python3\n"
+  plan rm-shadow
 fi
 if [ -n "${MODERN}" ] && [ "$(readlink -f "${STOIC_BIN}/python3" 2>/dev/null)" != "$(readlink -f "${MODERN}")" ]; then
-  PLAN="${PLAN}mkdir -p ${STOIC_BIN} && ln -sfn ${MODERN} ${STOIC_BIN}/python3\n"
+  plan link-private "${MODERN}"
 fi
 [ -z "${MODERN}" ] && echo "!! no python >= 3.9 for the deploy scripts — install one: dnf install python3.11 (then re-run this script)"
 
-if [ -z "${PLAN}" ]; then echo "== nothing to change — system python intact, private python linked"; exit 0; fi
-echo "== plan:"; printf "${PLAN}" | sed 's/^/   /'
+describe() {   # action -> the exact command it will run (shown in the plan, executed by run_action)
+  case "$1" in
+    alt-remove)   echo "alternatives --remove python3 $2" ;;
+    alt-auto)     echo "alternatives --auto python3" ;;
+    alt-install)  echo "alternatives --install /usr/bin/python3 python3 $2 1000000" ;;
+    link-system)  echo "ln -sfn $2 /usr/bin/python3" ;;
+    rm-shadow)    echo "rm -f /usr/local/bin/python3" ;;
+    link-private) echo "mkdir -p ${STOIC_BIN} && ln -sfn $2 ${STOIC_BIN}/python3" ;;
+    *) echo "?? $*" ;;
+  esac
+}
+run_action() {
+  case "$1" in
+    alt-remove)   alternatives --remove python3 "$2" ;;
+    alt-auto)     alternatives --auto python3 ;;
+    alt-install)  alternatives --install /usr/bin/python3 python3 "$2" 1000000 ;;
+    link-system)  ln -sfn "$2" /usr/bin/python3 ;;
+    rm-shadow)    rm -f /usr/local/bin/python3 ;;
+    link-private) mkdir -p "${STOIC_BIN}" && ln -sfn "$2" "${STOIC_BIN}/python3" ;;
+    *) echo "!! unknown action: $*" >&2; return 1 ;;
+  esac
+}
+if [ "${#PLAN[@]}" -eq 0 ]; then echo "== nothing to change — system python intact, private python linked"; exit 0; fi
+echo "== plan:"; for a in "${PLAN[@]}"; do echo "   $(describe ${a})"; done
 if [ "${APPLY}" != 1 ]; then echo "== dry run — re-run with --apply"; exit 0; fi
 
-printf "${PLAN}" | while IFS= read -r cmd; do [ -n "${cmd}" ] && { echo "-- ${cmd}"; eval "${cmd}" || echo "!! failed: ${cmd}"; }; done
+for a in "${PLAN[@]}"; do set -- ${a}; echo "-- $(describe "$@")"; run_action "$@" || echo "!! failed: $(describe "$@")"; done
 hash -r
 echo "== /usr/bin/python3 -> $(readlink -f /usr/bin/python3) ($(/usr/bin/python3 --version 2>&1)) · dnf module: $(has_dnf /usr/bin/python3 && echo ok || echo STILL MISSING)"
 [ -e "${STOIC_BIN}/python3" ] && echo "== deploy python: ${STOIC_BIN}/python3 -> $("${STOIC_BIN}/python3" --version 2>&1)"

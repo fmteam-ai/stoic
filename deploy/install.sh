@@ -59,7 +59,7 @@ case "${MODE}" in
 esac
 : "${READINESS_POLICY:=release-ready}"
 case "${READINESS_POLICY}" in release-ready|onboarding-close-only|infrastructure-only) ;; *) echo "ERROR: unknown readiness policy '${READINESS_POLICY}'"; exit 1 ;; esac
-export STOIC_READINESS_POLICY="${READINESS_POLICY}"
+STOIC_DEPLOY_POLICY="${READINESS_POLICY}"; unset STOIC_READINESS_POLICY   # audit H1: never exported to children
 
 TAG=""; [ "${CLOUDFLARE}" = 1 ] && TAG=" · cloudflare origin CA"; [ "${CF_ONLY}" = 1 ] && TAG="${TAG} · cf-only"
 echo "== STOIC installer (${MODE#--}${DOMAIN:+ · $DOMAIN}${TAG}) =="
