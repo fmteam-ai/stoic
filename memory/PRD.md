@@ -3086,3 +3086,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Operator: Save to GitHub → onboarding-close-only update.sh → soak: PANIC with scalp running (no new orders, late fill closed), LOCKED → no dispatch, Telegram /status shows the lock, log `unique ticket index … ready`.
 - Next: Fix plan B1 (sizing: R1, R9, R10, B10, B11).
 - 2026-10-03 Security audit (Batch A): CONDITIONAL PASS → SEC-001 (demo step-up skip must use attested_environment) and Telegram /panic unified brake fixed; tests green; manifest + rc_lock refrozen. Host deploy of c31afe58 still pending (operator must `git checkout --detach bd368f8c` then re-run update.sh), then this fix needs another Save to GitHub + update.sh.
+
+## 2026-10-03 — Fix plan Step B1 (sizing) — DONE, user verification pending
+- Price-aware pip values, broker volume step/min from heartbeat specs, JPY-cross exposure fixed (≈150×), trims that fall under the broker minimum skip the trade, authority reductions floor, paper P&L in USD with single settlement. Details: memory/CHANGELOG.md. Tests `tests/test_fixplan_b1_sizing.py`; manifest + rc_lock refrozen.
+- Operator "Check after deploy": EURJPY/GBPJPY signal opens at normal lot (not 0.01); USDCHF lot ≈20% smaller for same risk %; a trim below min logs "below minimum" and skips; paper P&L plausible in dollars.
+- Next: Fix plan B2 (safety guards).

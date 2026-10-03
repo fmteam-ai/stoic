@@ -161,22 +161,63 @@ def pip_value_usd_per_lot_strict(symbol: Optional[str]) -> Optional[float]:
     return None
 
 
-def pip_value_usd_per_lot(symbol: Optional[str], account_type: Optional[str] = None) -> float:
+# Fix plan B1/R10 — approximate USD value of ONE unit of each quote currency,
+# used when no live rate is supplied (exposure caps / cross-pair pip values).
+# Order-of-magnitude correct is what matters here (JPY was counted 150× off).
+QUOTE_USD_APPROX = {
+    "USD": 1.0, "EUR": 1.08, "GBP": 1.27, "JPY": 1.0 / 150.0, "CHF": 1.12,
+    "AUD": 0.65, "NZD": 0.60, "CAD": 0.73, "SGD": 0.74, "SEK": 0.095, "NOK": 0.093,
+    "ZAR": 0.055, "MXN": 0.058, "PLN": 0.25, "TRY": 0.03, "HKD": 0.128, "CNH": 0.14,
+}
+
+
+def pip_value_usd_per_lot(symbol: Optional[str], account_type: Optional[str] = None,
+                          price: Optional[float] = None,
+                          quote_usd: Optional[float] = None) -> float:
     """USD value of 1 pip per 1.00 lot in the given account's lot convention.
 
-    Standard / demo accounts use the broker's full contract size. Cent and
-    microcent accounts use 1/100 and 1/1000 respectively, so the per-lot
-    pip value is scaled down accordingly. Used by risk sizing to translate
-    a USD risk budget into an MT5 lot quantity.
+    Fix plan B1/R10 — PRICE-AWARE for FX: a pip is 10 units of the QUOTE
+    currency per standard lot, so
+      • USD-quoted (EURUSD)      → $10
+      • USD-based  (USDCHF, USDCAD) → 10 / price   (USDCHF 0.80 → $12.50)
+      • JPY-quoted               → 1000 JPY → 1000 × quote_usd (USDJPY: 1000 / price)
+      • other crosses (EURGBP)   → 10 × quote_usd (GBP→USD)
+    `quote_usd` = USD per unit of the quote currency (live when available);
+    without it the QUOTE_USD_APPROX table / fixed JPY constant is used.
+    Standard / demo accounts use the full contract size; cent and microcent
+    accounts scale the per-lot pip value by 1/100 and 1/1000.
     """
     sym = (symbol or "").upper()
     base_sym = base_symbol(sym)
+    px = float(price or 0)
     base = PIP_VALUE_USD_PER_STANDARD_LOT.get(base_sym)
+    if _is_ccy_pair(base_sym):
+        quote = base_sym[3:]
+        if quote == "USD":
+            base = DEFAULT_PIP_VALUE_USD
+        elif base_sym.startswith("USD") and px > 0:
+            base = (1000.0 if quote == "JPY" else 10.0) / px
+        elif quote == "JPY":
+            base = 1000.0 * quote_usd if quote_usd else JPY_PIP_VALUE_USD
+        else:
+            base = 10.0 * (quote_usd or QUOTE_USD_APPROX.get(quote, 1.0))
     if base is None:
         base = JPY_PIP_VALUE_USD if is_jpy_pair(base_sym) else DEFAULT_PIP_VALUE_USD
     atype = (account_type or "standard").lower()
     mult = ACCOUNT_TYPE_LOT_MULTIPLIER.get(atype, 1.0)
     return base * mult
+
+
+def lot_spec(account: Optional[dict], symbol: Optional[str]) -> tuple[float, float]:
+    """Fix plan B1/R10 — (min_lot, lot_step) from the broker's reported symbol
+    specs (EA v1.54+ heartbeat `symbol_specs`), else the 0.01/0.01 default."""
+    specs = ((account or {}).get("symbol_specs") or {}).get(base_symbol(symbol)) or {}
+    try:
+        vmin = float(specs.get("volume_min") or 0)
+        step = float(specs.get("volume_step") or 0)
+    except (TypeError, ValueError):
+        vmin, step = 0.0, 0.0
+    return (vmin if vmin > 0 else 0.01), (step if step > 0 else 0.01)
 
 
 def symbol_match(symbol: Optional[str]) -> dict:

@@ -111,6 +111,8 @@ def test_b3_a3_dispatched_order_expires_from_handover_never_sent_from_creation(d
 def test_b3_duplicate_tickets_block_unique_index_and_are_listed(db, seeded):
     from seed import duplicate_tickets, ensure_unique_ticket_index, UNIQUE_TICKET_INDEX, UNIQUE_TICKET_FILTER
     from database import get_db
+    if UNIQUE_TICKET_INDEX in db.trades.index_information():
+        db.trades.drop_index(UNIQUE_TICKET_INDEX)      # exercise the pre-check path from scratch
     a = _pending(db, seeded, status="open", mt5_ticket=990001)
     b = _pending(db, seeded, status="pending", mt5_ticket=990001)
     _pending(db, seeded, status="closed", mt5_ticket=990001)   # A3: closed rows never count

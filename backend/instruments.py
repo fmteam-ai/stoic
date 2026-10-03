@@ -9,8 +9,9 @@ Notional convention (account currency assumed USD):
   • Registry symbols (metals/crypto/indices): lot × contract_size × price.
   • FX with USD quote (EURUSD): lot × 100,000 × price.
   • FX with USD base (USDJPY): lot × 100,000 (the base IS USD).
-  • USD-less crosses (EURGBP): lot × 100,000 × price — an approximation in
-    quote currency, flagged via `approx` so risk callers can note it.
+  • USD-less crosses (EURGBP, EURJPY): lot × 100,000 × USD-per-base-currency
+    (QUOTE_USD_APPROX table) — fix plan B1/R1; the old `× price` was the
+    notional in the QUOTE currency (≈150× too high for JPY crosses).
 """
 from pip_utils import base_symbol, pip_size
 
@@ -61,5 +62,11 @@ def notional_usd(symbol: str, lot: float, price: float) -> float:
         units = lot * FX_CONTRACT_UNITS
         if base.startswith("USD"):
             return units                      # base currency IS USD
-        return units * price                  # USD quote (or cross ≈)
+        if base.endswith("USD"):
+            return units * price              # USD quote — exact
+        # Fix plan B1/R1 — cross (EURJPY, EURGBP…): the position is `units` of the
+        # BASE currency; convert that to USD (≈ table). `units × price` was the
+        # notional in the QUOTE currency — ≈150× too high for JPY crosses.
+        from pip_utils import QUOTE_USD_APPROX
+        return units * QUOTE_USD_APPROX.get(base[:3], 1.0)
     return lot * price

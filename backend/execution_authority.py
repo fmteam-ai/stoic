@@ -306,9 +306,22 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
                 "reasons": gate.get("reasons")}
     _verdict_id = None
     if gate.get("reduce_factor") and signal.get("lot_size"):
+        from pip_utils import floor_to_lot_step, lot_spec
         _orig = float(signal["lot_size"])
-        signal["lot_size"] = max(
-            0.01, round(_orig * float(gate["reduce_factor"]), 2))
+        _min, _step = lot_spec(account, signal.get("symbol"))
+        # Fix plan B1/B10 — a reduction FLOORS to the broker step and never
+        # rounds back up to the minimum: below one step the order is refused.
+        _reduced = floor_to_lot_step(_orig * float(gate["reduce_factor"]), _step)
+        if _reduced < _min:
+            await _finalize_pre_dispatch(
+                db, iid, "cancelled",
+                f"trading authority {gate.get('level')} reduction ×{gate['reduce_factor']} "
+                f"leaves {_reduced} lots < broker minimum {_min} — below minimum, not opened")
+            logger.warning("TRADING AUTHORITY REDUCE → below minimum lot (%.4f < %s) user=%s sym=%s — skipped",
+                           _reduced, _min, user_id, signal.get("symbol"))
+            return {"blocked": "below_minimum_lot", "intent_id": iid,
+                    "authority_level": gate.get("level"), "reasons": gate.get("reasons")}
+        signal["lot_size"] = _reduced
         signal["_authority_reduced"] = True
         logger.warning("TRADING AUTHORITY REDUCED — lot %s → %s user=%s "
                        "sym=%s", _orig, signal["lot_size"], user_id,

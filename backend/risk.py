@@ -1,7 +1,7 @@
 """Risk management profiles + Kelly-modified dynamic position sizing."""
 from typing import Literal
 
-from pip_utils import price_to_pips, pip_value_usd_per_lot, floor_to_lot_step
+from pip_utils import price_to_pips, pip_value_usd_per_lot, floor_to_lot_step, lot_spec
 
 RiskLevel = Literal["low", "medium", "high", "extreme"]
 
@@ -152,11 +152,13 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                 "method": "rejected_zero_sl",
                 "reject_reason": "stop distance is zero — risk undefined"}
 
-    pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"))
+    # B1/R10 — price-aware pip value (USDCHF/USDCAD/USDJPY use the entry price)
+    pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"), price=float(entry_price))
     if pip_usd <= 0:
         return {"lot_size": 0.0, "sizing_valid": False,
                 "method": "rejected_zero_pip_value",
                 "reject_reason": f"no pip value for {symbol} — risk undefined"}
+    min_lot, lot_step = lot_spec(account, symbol)
 
     payoff_ratio = profile["tp_atr_mult"] / max(profile["sl_atr_mult"], 0.1)
     f = kelly_fraction(
@@ -177,7 +179,7 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
     # H4: floor to the broker step — round-half-up silently ADDED up to +33% risk
     # (0.015 → 0.02). Below one step the broker minimum applies and is then
     # verified against the budget (C5 below) exactly like before.
-    lot_size = max(floor_to_lot_step(lots), 0.01)
+    lot_size = max(floor_to_lot_step(lots, lot_step), min_lot)
     # iter-144 C5 · verify the ACTUAL risk after broker-step rounding and the
     # 0.01 minimum. If the broker minimum forces materially more risk than
     # the budget (e.g. tiny equity, wide stop), REJECT instead of trading a
@@ -188,7 +190,7 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
             "lot_size": 0.0, "sizing_valid": False,
             "method": "rejected_min_lot_risk",
             "reject_reason": (
-                f"broker-minimum 0.01 lot risks ${actual_risk_usd:.2f} vs the "
+                f"broker-minimum {min_lot} lot risks ${actual_risk_usd:.2f} vs the "
                 f"${risk_amount_usd:.2f} budget ({effective_risk_pct:.2f}% of "
                 f"equity) — stop too wide for this account"),
             "risk_amount_usd": round(risk_amount_usd, 2),

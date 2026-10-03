@@ -706,20 +706,30 @@ async def settle_paper_trades_against_price() -> int:
         hit_tp = (action == "BUY" and price >= tp) or (action == "SELL" and price <= tp)
         if not (hit_sl or hit_tp):
             continue
-        # Simulated P&L using lot_size as a generic unit multiplier (microcent convention)
+        # Fix plan B1/B11 — P&L in account USD through the instrument contract:
+        # pips moved × USD per pip per lot (price-aware) × lots. The old
+        # `(price − entry) × lot` ignored contract size entirely.
+        from pip_utils import price_to_pips, pip_value_usd_per_lot
         direction = 1 if action == "BUY" else -1
-        pnl = round(direction * (price - t["entry_price"]) * t["lot_size"], 4)
+        pips = price_to_pips(sym, price - float(t["entry_price"]))
+        pnl = round(direction * pips * pip_value_usd_per_lot(sym, "standard", price=price)
+                    * float(t["lot_size"] or 0), 2)
         now_iso = datetime.now(timezone.utc).isoformat()
-        await db.trades.update_one(
-            {"_id": t["_id"]},
+        # settle exactly once: a concurrent sweep that already closed it must
+        # not credit the virtual balance a second time
+        res = await db.trades.update_one(
+            {"_id": t["_id"], "status": "open"},
             {"$set": {
                 "status": "closed",
                 "exit_price": round(price, 5),
                 "pnl": pnl,
                 "closed_at": now_iso,
                 "close_reason": "stop_loss" if hit_sl else "take_profit",
+                "paper_settled_at": now_iso,
             }},
         )
+        if not res.modified_count:
+            continue
         # Update virtual balance
         await db.accounts.update_one(
             {"_id": t["account_id_obj"]} if "account_id_obj" in t else
