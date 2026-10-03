@@ -1,0 +1,35 @@
+{
+  "summary": "Batch A6 close-out validated. Core pytest suite (72 tests across A6 late-fills, A3/A4 PANIC locks, A2 order lifecycle, B1 sizing) all green under DB_NAME=ai_trading_bot_test. New HTTP integration suite tests/test_a6_api_integration.py (7 tests) passes against preview backend with STOIC_TESTS_ALLOW_DB_NAME=1 — covers /api/admin/account-position-modes list + set (netting / auto / wrong-password-401 / invalid-value-422), owner /api/accounts position_mode fields, admin ops-console unique_ticket_index, and release-readiness checks.unique_ticket_index. Frontend UI (localhost:3000, Preview Unavailable on public URL for headless) verified: /admin/brokers panel renders 500 rows with mode/source/set testids; dialog exposes all three options plus reason/password/otp inputs; submit correctly disabled until password entered; /admin/ops row ops-unique-ticket-index shows 'OK'; /accounts shows account-position-mode-<number> badge 'POSITIONS · HEDGING · ASSUMED'.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Dev-mode cross-origin csrf (NOT a prod bug)", "issue": "When FE runs on localhost:3000 but hits REACT_APP_BACKEND_URL=https://stoic-trading-bot.preview.emergentagent.com, document.cookie cannot read csrf_token (set on preview domain), so axios interceptor omits X-CSRF-Token and POST /admin/account-position-modes/{id} returns 403. Same request works from pytest and curl, and will work in prod (same-origin). No code fix needed.", "affected_selectors": ["account-pm-submit"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_a6_api_integration.py",
+    "/app/backend/tests/test_fixplan_a6_late_fills.py",
+    "/app/backend/tests/test_fixplan_a3_a4_panic_locks.py",
+    "/app/backend/tests/test_fixplan_a2_order_lifecycle.py",
+    "/app/backend/tests/test_fixplan_b1_sizing.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "AccountPositionModesPanel.jsx looks clean (<110 lines, proper useCallback, loading/empty/error states, re-auth gating via disabled submit). No refactor needed.",
+    "admin_set_account_position_mode validates mode enum (422), requires re-auth, appends to admin audit chain — matches spec."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_a6_api_integration.py (new)",
+    "/app/docs/TEST_MANIFEST.md (regenerated via generate_test_manifest.py)",
+    "/app/release/rc_lock.json (regenerated via freeze_rc_lock.py)"
+  ],
+  "success_rate": {"backend": "100% (79/79: 72 fixplan + 7 http integration)", "frontend": "100% (all testids present & interactive)"},
+  "test_credentials": "admin@stoicaibot.com / GmdRF2bcxTbiJLjhD14QuCSWsOjF#q (sourced from /app/memory/test_credentials.md)",
+  "seed_data_creation": "none; FE SET MODE smoke used existing account 6ac140fec1752ed8b3f19a29 and did not persist due to dev-mode csrf cross-origin limitation; pytest API test uses the same existing account and resets to auto on teardown",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "To run the HTTP integration suite against the preview: STOIC_TESTS_ALLOW_DB_NAME=1 python -m pytest tests/test_a6_api_integration.py. Pytest unit suite needs DB_NAME=ai_trading_bot_test. CSRF header must be echoed on POSTs — the fixture reads csrf_token cookie and sets X-CSRF-Token. Preview public URL still shows 'Preview Unavailable' to headless browsers; use http://localhost:3000 inside the pod for UI testing.",
+  "rca of the issue": "n/a — no bugs found"
+}
