@@ -395,7 +395,8 @@ def test_bootstrap_never_repoints_system_python_and_ships_repair_script():
     assert subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", "host-python-fix.sh")]).returncode == 0
     # audit H2: the PATH prepend lives in ONE guarded helper (root-owned, mode <= 755, else refuse + warn)
     guard = _read("deploy", "stoic-path.sh")
-    assert 'export PATH="${_stoic_bin}:${PATH}"' in guard and '"0 "7[0-5][0-5])' in guard and "NOT adding to PATH" in guard
+    assert 'export PATH="${_stoic_bin}:${PATH}"' in guard and '"0 "[0-7][0-5][0-5])' in guard and "NOT adding to PATH" in guard
+    assert '[ -h "${_stoic_p}" ]' in guard and 'dirname "${_stoic_p}"' in guard          # symlink + parent-dir walk
     for script in ("lib.sh", "doctor.sh", "backup.sh", "healthwatch.sh", "install_report.sh"):
         body = _read("deploy", script)
         assert '/stoic-path.sh"' in body, script

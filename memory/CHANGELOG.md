@@ -1721,3 +1721,7 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - `tests/unit/test_selfhost_installer.py` pins deploy-script text; updated to the new contracts (guarded PATH helper, capture_readiness_policy, no eval).
 - H2 completed properly: new `deploy/stoic-path.sh` (root-owned + mode<=755 guard) sourced by lib.sh, doctor.sh, backup.sh, healthwatch.sh, install_report.sh — no unguarded `export PATH=/usr/local/lib/stoic/bin` remains. All 817 unit tests pass locally.
 - LESSON: before finishing any deploy-script change, run `pytest tests/unit/test_selfhost_installer.py` — it asserts literal script content.
+
+## 2026-10-03 — Security audit #3: PASS; H2/H4 residuals closed
+- Verdict PASS. SEC-001 closed (accepted residual), H1 closed, H2 closed, H3 open-by-design, H4 closed.
+- Residuals fixed same day: `deploy/stoic-path.sh` now walks every path component (no symlinks, uid 0, mode ≤755 for dir and parents); `deploy/host-python-fix.sh` plan entries are `verb|operand` (no word-splitting; paths with spaces/`;` inert). Installer tests green.

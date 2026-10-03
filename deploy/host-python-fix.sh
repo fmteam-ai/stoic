@@ -39,7 +39,7 @@ echo "== modern python for deploy scripts: ${MODERN:-none installed}"
 
 # Audit H4: the plan is an ARRAY of typed actions (verb + fixed operands) executed by
 # a case statement — no `eval`, so a hostile path or alternatives entry can't inject.
-PLAN=(); plan() { PLAN+=("$*"); }
+PLAN=(); plan() { PLAN+=("$1|${2:-}"); }   # verb|operand — operands may contain spaces, never word-split
 if ! has_dnf /usr/bin/python3; then
   KEEP=""; DROP=""
   for p in ${ALTS}; do if [ -x "$p" ] && has_dnf "$p"; then KEEP="${KEEP} $p"; else DROP="${DROP} $p"; fi; done
@@ -85,10 +85,10 @@ run_action() {
   esac
 }
 if [ "${#PLAN[@]}" -eq 0 ]; then echo "== nothing to change — system python intact, private python linked"; exit 0; fi
-echo "== plan:"; for a in "${PLAN[@]}"; do echo "   $(describe ${a})"; done
+echo "== plan:"; for a in "${PLAN[@]}"; do echo "   $(describe "${a%%|*}" "${a#*|}")"; done
 if [ "${APPLY}" != 1 ]; then echo "== dry run — re-run with --apply"; exit 0; fi
 
-for a in "${PLAN[@]}"; do set -- ${a}; echo "-- $(describe "$@")"; run_action "$@" || echo "!! failed: $(describe "$@")"; done
+for a in "${PLAN[@]}"; do v="${a%%|*}"; arg="${a#*|}"; echo "-- $(describe "$v" "$arg")"; run_action "$v" "$arg" || echo "!! failed: $(describe "$v" "$arg")"; done
 hash -r
 echo "== /usr/bin/python3 -> $(readlink -f /usr/bin/python3) ($(/usr/bin/python3 --version 2>&1)) · dnf module: $(has_dnf /usr/bin/python3 && echo ok || echo STILL MISSING)"
 [ -e "${STOIC_BIN}/python3" ] && echo "== deploy python: ${STOIC_BIN}/python3 -> $("${STOIC_BIN}/python3" --version 2>&1)"
