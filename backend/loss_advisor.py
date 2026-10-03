@@ -85,7 +85,7 @@ async def _gather(db, user_id: str) -> dict:
     trades = await db.trades.find({
         "user_id": user_id,
         "status": "closed",
-        "origin": "auto",
+        "origin": "auto", "stats_excluded": {"$ne": True},
         "closed_at": {"$gte": since_shadow},
         "pnl": {"$ne": None},
         "pnl_estimated": {"$ne": True},
@@ -552,7 +552,7 @@ async def _due_for_auto_review(db, user_id: str) -> bool:
         except (ValueError, KeyError):
             pass
     new_losses = await db.trades.count_documents({
-        "user_id": user_id, "status": "closed", "origin": "auto",
+        "user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True},
         "pnl": {"$lt": 0},
         "pnl_estimated": {"$ne": True}, "pnl_unknown": {"$ne": True},
         "closed_at": {"$gte": since or (datetime.now(timezone.utc)

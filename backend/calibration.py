@@ -50,7 +50,7 @@ def _bucket(conf: float) -> tuple:
 
 
 async def compute_calibration(db, user_id: str, days: int = 90) -> dict:
-    q = {"user_id": user_id, "status": "closed", "origin": "auto",
+    q = {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True},
          "pnl": {"$ne": None}}
     if days > 0:
         q["closed_at"] = {"$gte": (datetime.now(timezone.utc)

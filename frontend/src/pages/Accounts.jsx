@@ -627,6 +627,13 @@ export default function Accounts() {
                                                         ENVIRONMENT · {a.environment}{a.environment === "DEMO" ? (a.environment_attested ? " · ATTESTED" : " · UNATTESTED") : ""}
                                                     </span>
                                                 )}
+                                                {a.position_mode && (
+                                                    <span data-testid={`account-position-mode-${a.account_number}`}
+                                                        title={a.position_mode_source === "admin" ? "Position mode set by an admin for this account" : a.position_mode_source === "registry" ? "Position mode from the broker-server registry entry" : a.position_mode_source === "ea" ? "Position mode reported by the terminal" : "No admin setting and no registry entry for this broker server — treated as HEDGING. If this broker nets positions, ask an admin to set NETTING (Admin → Broker Registry → Position Modes)."}
+                                                        className={`px-1.5 py-0.5 border ${a.position_mode === "netting" ? "border-[#00BFFF]/40 text-[#00BFFF]" : a.position_mode_source === "default" ? "border-[#1F1F1F] text-[#52525B]" : "border-[#333333] text-[#A1A1AA]"}`}>
+                                                        POSITIONS · {a.position_mode.toUpperCase()} · {a.position_mode_source === "default" ? "ASSUMED" : a.position_mode_source.toUpperCase()}
+                                                    </span>
+                                                )}
                                             </div>
                                             {a.broker_account_id_reported && (
                                                 <div className="font-mono text-[10px] tracking-widest flex items-center gap-1.5 mt-1"

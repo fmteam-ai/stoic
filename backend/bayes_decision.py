@@ -141,7 +141,7 @@ async def train_model(db, user_id: str) -> dict:
     since = (datetime.now(timezone.utc) - timedelta(days=LOOKBACK_DAYS)).isoformat()
     trades = await db.trades.find({
         "user_id": user_id, "status": "closed", "pnl": {"$ne": None},
-        "origin": "auto", "closed_at": {"$gte": since},
+        "origin": "auto", "stats_excluded": {"$ne": True}, "closed_at": {"$gte": since},
         "pnl_estimated": {"$ne": True}, "pnl_unknown": {"$ne": True},
     }).to_list(5000)
     sids = []

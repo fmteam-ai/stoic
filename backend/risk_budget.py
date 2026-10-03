@@ -52,7 +52,7 @@ def _allocations(cfg: dict) -> dict:
 async def _perf_weights(db, user_id: str, account_id: str | None) -> dict:
     """Shrink-only weight per strategy class from 14d realized P&L."""
     since = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
-    q = {"user_id": user_id, "status": "closed", "origin": "auto",
+    q = {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True},
          "pnl": {"$ne": None}, "closed_at": {"$gte": since}}
     if account_id:
         q["account_id"] = account_id

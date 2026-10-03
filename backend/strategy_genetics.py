@@ -63,7 +63,7 @@ async def lineage(db, user_id: str) -> dict:
 
     perf: dict = {}
     async for t in db.trades.find(
-            {"user_id": user_id, "status": "closed", "origin": "auto",
+            {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True},
              "pnl": {"$ne": None},
              "versions.strategy_version": {"$exists": True}},
             {"versions": 1, "pnl": 1}):

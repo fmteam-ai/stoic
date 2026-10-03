@@ -227,13 +227,17 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
     act = fade_tighten(trade, feats, current, pips_up)
     if act:
         from trade_manager import _free_slot_filter
-        await db.trades.update_one(
+        res = await db.trades.update_one(
             _free_slot_filter(trade["_id"]),   # N7 — never overwrite an in-flight close/modification
             {"$set": {"pending_modification": {
                           "type": "MODIFY_SL", "new_sl": act["new_sl"],
                           "requested_at": now_iso},
                       "exit_last_tighten_at": now_iso,
                       "exit_fade_tightened": True}})
+        if not res.modified_count:
+            # A6 — the guarded write did not apply (slot busy): no event, nothing happened
+            logger.info("fade tighten trade=%s skipped — modification slot busy", trade["_id"])
+            return False
         await ws_manager.broadcast(trade["user_id"], "trade_management", {
             "trade_id": str(trade["_id"]), "action": act["kind"],
             "new_sl": act["new_sl"], "locked_pips": act["locked_pips"],
@@ -248,7 +252,7 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
     act = resistance_derisk(trade, feats, current, pips_up)
     if act:
         from trade_manager import _free_slot_filter
-        await db.trades.update_one(
+        res = await db.trades.update_one(
             _free_slot_filter(trade["_id"]),   # N7 — never overwrite an in-flight close/modification
             {"$set": {"pending_modification": {
                           "type": "PARTIAL_CLOSE",
@@ -256,6 +260,9 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
                           "requested_at": now_iso},
                       "exit_derisked": {"barrier": act["barrier"],
                                         "at": now_iso}}})
+        if not res.modified_count:
+            logger.info("resistance de-risk trade=%s skipped — modification slot busy", trade["_id"])
+            return False
         await ws_manager.broadcast(trade["user_id"], "trade_management", {
             "trade_id": str(trade["_id"]), "action": act["kind"],
             "to_lot": act["new_volume"], "barrier": act["barrier"],

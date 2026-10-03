@@ -8,6 +8,7 @@ const CHECK_LABELS = {
     reconciliation: "RECONCILIATION",
     outbox: "OUTBOX BACKLOG",
     schema: "SCHEMA COMPAT",
+    unique_ticket_index: "TICKET INDEX",
 };
 
 function Pill({ ok, label, detail }) {
@@ -57,6 +58,7 @@ export const ReadinessCard = () => {
         if (k === "reconciliation") return checks[k]?.stuck_unresolved_gt_5m ? `${checks[k].stuck_unresolved_gt_5m} stuck` : "";
         if (k === "outbox") return `${checks[k]?.pending ?? 0} pending`;
         if (k === "schema") return `v${checks[k]?.code_version ?? "?"}`;
+        if (k === "unique_ticket_index") return checks[k]?.ok ? "" : checks[k]?.stale ? "STALE" : checks[k]?.present === false ? "NOT BUILT" : "UNVERIFIED";
         return "";
     };
 

@@ -12,6 +12,7 @@ The autouse `_silence_outbound_notifications` fixture monkey-patches the
 notifier's HTTP send to a no-op for the entire test session.
 """
 import os
+import re as _re
 import pytest
 
 # iter-143 · Load backend/.env (MONGO_URL, DB_NAME) and default
@@ -24,13 +25,21 @@ try:
 except ImportError:
     pass
 
-# A5 — the suites write to the database named in backend/.env (shared with the running
-# app). They must NEVER run against a production database: refuse outright.
+# A5/A6-H7 — the suites write to the database named in backend/.env (shared with the running
+# app). They must NEVER run against a production database: refuse outright, and refuse any
+# DB_NAME that does not look like a scratch/test database (the tests flip the platform
+# authority level, insert accounts/trades and run global queries).
+_TEST_DB_PATTERN = _re.compile(r"(test|_ci$|_ci_|ci$|e2e|verify|cleandeploy|scratch|sandbox)", _re.I)
 if os.environ.get("APP_ENV", "").strip().lower() in ("production", "prod") \
         and os.environ.get("STOIC_TESTS_ALLOW_PRODUCTION_DB") != "1":
     raise SystemExit("REFUSING to run the test-suite with APP_ENV=production — tests mutate the "
                      "configured database (accounts, trades, bot_configs). Point MONGO_URL/DB_NAME at a "
                      "scratch database or set STOIC_TESTS_ALLOW_PRODUCTION_DB=1 knowingly.")
+_DB_NAME = os.environ.get("DB_NAME", "")
+if not _TEST_DB_PATTERN.search(_DB_NAME) and os.environ.get("STOIC_TESTS_ALLOW_DB_NAME") != "1":
+    raise SystemExit(f"REFUSING to run the test-suite against DB_NAME={_DB_NAME!r} — it does not look like a "
+                     "test database (expected a name containing test/ci/e2e/verify/scratch, e.g. "
+                     "ai_trading_bot_test). Run with DB_NAME=<name>_test or set STOIC_TESTS_ALLOW_DB_NAME=1 knowingly.")
 if not os.environ.get("REACT_APP_BACKEND_URL"):
     try:
         with open(os.path.join(os.path.dirname(_BACKEND), "frontend", ".env")) as _f:

@@ -69,7 +69,16 @@ async def list_accounts(user=Depends(get_current_user)):
     db = get_db()
     cursor = db.accounts.find({"user_id": user["id"]}).sort("created_at", -1)
     docs = await cursor.to_list(length=100)
-    return [_serialize(d) for d in docs]
+    out = [_serialize(d) for d in docs]
+    # A6/H1 — netting/hedging verdict + where it came from (admin | ea | registry | default)
+    from routes.bridge_routes import position_mode_resolution
+    for d in out:
+        if d.get("mode") == "paper":
+            continue
+        res = await position_mode_resolution(db, d)
+        d["position_mode"] = res["mode"]
+        d["position_mode_source"] = res["source"]
+    return out
 
 
 @router.get("/limits")
@@ -873,9 +882,8 @@ async def import_positions(account_id: str, payload: ImportPositionsRequest,
         if exists:
             skipped.append(p.ticket)
             continue
-        from routes.bridge_routes import is_netting_account
+        # H5 — one leg rule: a manual position import carries no entry deal → unkeyed row
         await db.trades.insert_one({
-            **({"position_leg": int(p.ticket)} if await is_netting_account(db, acc) else {}),
             "user_id": user["id"],
             "account_id": account_id,
             "symbol": p.symbol.upper(),

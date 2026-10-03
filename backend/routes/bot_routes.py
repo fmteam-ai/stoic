@@ -980,14 +980,13 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
             "code": "panic_admin_lock",
             "message": "An admin-wide PANIC lock is active on this account — only an admin can release it."})
     panic_locked = bool(locked_accounts)
-    # SEC-001: server-authoritative classification only — user-writable account_type /
-    # server name / broker_environment never downgrade an account to DEMO on their own.
-    from broker_env import attested_environment, demo_proof
+    # SEC-001 / A6-H2: server-authoritative classification ONLY — PAPER or an admin-approved
+    # DEMO attestation. The EA demo proof is built from owner-controlled inputs (declared
+    # server, login, terminal trust) and must never let a live account pose as demo here.
+    from broker_env import attested_environment
 
     def _non_live(a: dict) -> bool:
-        # PAPER / admin-attested DEMO, or the EA's own fresh demo proof (terminal identity,
-        # reported server + login match, demo-named server) — never a user-typed label alone
-        return attested_environment(a) != "LIVE" or bool(demo_proof(a).get("ok"))
+        return attested_environment(a) != "LIVE"
     # G4 — judge EVERY account the start touches (default scope = all of them), not only
     # the locked ones: an unlocked LIVE account in scope keeps the step-up mandatory.
     scope_q = {"user_id": user["id"]}
@@ -1390,7 +1389,7 @@ async def execution_health(user=Depends(get_current_user)):
 
     cost_rows: dict = {}
     async for t in db.trades.find(
-            {"user_id": user["id"], "status": "closed", "origin": "auto",
+            {"user_id": user["id"], "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True},
              "slippage_pips": {"$exists": True, "$ne": None}},
             {"symbol": 1, "base_symbol": 1, "slippage_pips": 1,
              "entry_price": 1}).sort("closed_at", -1).limit(60):

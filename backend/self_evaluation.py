@@ -258,7 +258,7 @@ async def sweep_self_evaluation(db) -> int:
     since = (datetime.now(timezone.utc)
              - timedelta(hours=EVAL_LOOKBACK_H)).isoformat()
     trades = await db.trades.find(
-        {"status": "closed", "pnl": {"$ne": None}, "origin": "auto",
+        {"status": "closed", "pnl": {"$ne": None}, "origin": "auto", "stats_excluded": {"$ne": True},
          "closed_at": {"$gte": since},
          "self_evaluated": {"$ne": True}}).limit(MAX_PER_SWEEP).to_list(
         MAX_PER_SWEEP)

@@ -136,7 +136,7 @@ async def sweep_learning_records(db) -> int:
     since = (datetime.now(timezone.utc)
              - timedelta(hours=LOOKBACK_H)).isoformat()
     trades = await db.trades.find(
-        {"status": "closed", "pnl": {"$ne": None}, "origin": "auto",
+        {"status": "closed", "pnl": {"$ne": None}, "origin": "auto", "stats_excluded": {"$ne": True},
          "closed_at": {"$gte": since}, "self_evaluated": True,
          "learning_recorded": {"$ne": True}}).limit(
         MAX_PER_SWEEP).to_list(MAX_PER_SWEEP)

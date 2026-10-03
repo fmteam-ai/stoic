@@ -658,25 +658,27 @@ async def heartbeat(payload: BridgeHeartbeat):
             # epoch seconds — labelling it UTC causes timestamp drift.
             # Use server-received UTC as the canonical opened_at instead.
             opened_iso = now_iso
-            netting = await is_netting_account(db, acc)
             if p.magic == STOIC_MAGIC_HB:
                 sib = await find_adoptable_sibling(db, account_id, p.symbol, p.type)
-                if sib and await adopt_sibling(db, sib, ticket=p.ticket, price=p.price_open,
-                                               via="heartbeat", position_leg=(p.ticket if netting else None)):
+                # H5 — a snapshot carries no deal id: the leg is stamped by /report or the
+                # external 'in' deal (the one leg rule), never the position ticket.
+                if sib and await adopt_sibling(db, sib, ticket=p.ticket, price=p.price_open, via="heartbeat"):
                     logger.warning("heartbeat: adopted fill ticket=%s into bot trade %s", p.ticket, sib["_id"])
-                    if sib.get("error") == "panic_lock" or panic_locked(acc):
-                        await close_late_fill_after_panic(db, sib["_id"], acc, "heartbeat")
+                    await handle_late_fill(db, sib, acc, "heartbeat")
                     continue
+            # H5 — the ticket was matched above regardless of leg; a backfill row is unkeyed
+            # (one row per netted position) so it can never sit beside a bot row for the same ticket.
             doc = _backfill_doc(acc, account_id, p, opened_iso)
-            if netting:
-                doc["position_leg"] = int(p.ticket)
             try:
-                await db.trades.insert_one(doc)
+                ins = await db.trades.insert_one(doc)
             except DuplicateKeyError:
                 # A2/B3 unique ticket index: a concurrent writer tracked it first
                 logger.info("backfill skipped — ticket %s already tracked", p.ticket)
                 continue
             backfilled += 1
+            if p.magic == STOIC_MAGIC_HB and panic_locked(acc):
+                # H4 — a bot position surfacing under PANIC with no adoptable sibling
+                await close_late_fill_after_panic(db, ins.inserted_id, acc, "heartbeat")
         if backfilled > 0:
             await ws_manager.broadcast(acc["user_id"], "trades_backfilled", {
                 "account_id": account_id, "count": backfilled,
@@ -730,16 +732,39 @@ def _pending_order_ttl_seconds() -> int:
 _LOCKED_LEVELS = {"CLOSE_ONLY", "PAUSED", "EMERGENCY", "LOCKED"}
 
 
+async def position_mode_resolution(db, acc: dict) -> dict:
+    """A6/H1 — netting vs hedging, in authority order: admin setting on the account →
+    mode reported by the EA (if ever sent) → broker-server registry entry → hedging.
+    The EA (≤ v1.57) never reports ACCOUNT_MARGIN_MODE, so without an admin setting
+    or a registry entry an account is treated as HEDGING — shown on the account card."""
+    ov = acc.get("position_mode_override") or {}
+    if str(ov.get("mode") or "").lower() in ("netting", "hedging"):
+        return {"mode": str(ov["mode"]).lower(), "source": "admin", "by": ov.get("by"), "at": ov.get("at")}
+    ident = acc.get("ea_identity") or {}
+    mode = str(acc.get("margin_mode") or ident.get("margin_mode") or "").lower()
+    if mode in ("netting", "hedging"):
+        return {"mode": mode, "source": "ea"}
+    from broker_registry import merged_capabilities, resolve_registry
+    entry = await resolve_registry(db, acc.get("broker_server") or acc.get("server"))
+    if entry:
+        m = str(merged_capabilities(entry).get("position_mode") or "hedging").lower()
+        return {"mode": "netting" if m == "netting" else "hedging", "source": "registry",
+                "broker": entry.get("name") or entry.get("broker")}
+    return {"mode": "hedging", "source": "default"}
+
+
 async def is_netting_account(db, acc: dict) -> bool:
     """Fix plan A3 — netting accounts merge several of our fills into ONE broker
     position; the unique ticket key then needs the entry leg (deal id)."""
-    ident = acc.get("ea_identity") or {}
-    mode = str(acc.get("margin_mode") or ident.get("margin_mode") or acc.get("position_mode") or "").lower()
-    if mode in ("netting", "hedging"):
-        return mode == "netting"
-    from broker_registry import capabilities_for
-    caps = await capabilities_for(db, acc.get("broker_server"))
-    return str(caps.get("position_mode") or "hedging").lower() == "netting"
+    return (await position_mode_resolution(db, acc))["mode"] == "netting"
+
+
+def netting_leg(netting: bool, deal_id) -> int | None:
+    """A6/H5 — the ONE leg rule: on a netting account a live row is keyed by its ENTRY
+    DEAL id; hedging rows and snapshot backfills (no deal known) carry no leg."""
+    if not netting or not deal_id:
+        return None
+    return int(deal_id)
 
 
 def panic_locked(acc: dict) -> bool:
@@ -758,6 +783,51 @@ async def close_late_fill_after_panic(db, trade_id, acc: dict, source: str) -> N
                    str(acc["_id"]), str(trade_id), source, out.get("command_id"))
 
 
+async def close_late_fill_after_expiry(db, trade: dict, acc: dict, source: str) -> None:
+    """A6/H6 — a fill of an order STOIC already expired is never kept: the signal is stale
+    and no risk gate judged it. FULL_CLOSE at once, audited, ops alert. The row keeps
+    origin=auto (counts in the daily loss cap) but is excluded from loss streaks and
+    strategy statistics (`stats_excluded`)."""
+    from close_commands import request_close
+    out = await request_close(
+        db, {"_id": trade["_id"]}, reason="late_fill_after_expiry", actor=f"bridge:{source}",
+        stamp={"late_fill_after_expiry": True, "stats_excluded": True},
+        pending_modification={"type": "FULL_CLOSE", "reason": "late_fill_after_expiry"},
+        emergency=True)   # an unjudged position must never stay open because a commit path is unavailable
+    tid = str(trade["_id"])
+    msg = (f"late fill of an EXPIRED order closed at once — account={str(acc['_id'])} trade={tid} "
+           f"{trade.get('symbol')} {trade.get('action')} ticket={trade.get('mt5_ticket')} via {source}")
+    logger.warning("%s (%s)", msg, out.get("command_id"))
+    try:
+        await db.audit_log.insert_one({
+            "user_id": trade.get("user_id"), "action": "late_fill_after_expiry",
+            "detail": {"trade_id": tid, "account_id": str(acc["_id"]), "symbol": trade.get("symbol"),
+                       "action": trade.get("action"), "mt5_ticket": trade.get("mt5_ticket"),
+                       "source": source, "command_id": out.get("command_id")},
+            "step_up_verified": False, "at": datetime.now(timezone.utc).isoformat()})
+        from alerting import raise_alert
+        await raise_alert(db, "late_fill_after_expiry", "warning", msg,
+                          dedup_key=f"late_fill_after_expiry:{tid}",
+                          meta={"trade_id": tid, "account_id": str(acc["_id"]), "source": source})
+    except Exception as _sw:  # noqa: BLE001 — the close is already requested
+        record_swallow("bridge", "late_fill_after_expiry_alert", _sw)
+
+
+async def handle_late_fill(db, sibling: dict, acc: dict, source: str) -> str | None:
+    """A6 — the single late-fill policy for every write path (heartbeat snapshot,
+    external-deal 'in', /report). `sibling` is the row BEFORE adoption (its cancel
+    reason tells why the order was dead). PANIC → close (panic); EXPIRED → close
+    (late_fill_after_expiry). Returns the policy applied or None."""
+    err = str(sibling.get("error") or "")
+    if err == "panic_lock" or panic_locked(acc):
+        await close_late_fill_after_panic(db, sibling["_id"], acc, source)
+        return "panic"
+    if err == "pending_order_expired" or sibling.get("close_reason") == "expired":
+        await close_late_fill_after_expiry(db, sibling, acc, source)
+        return "expired"
+    return None
+
+
 async def find_adoptable_sibling(db, account_id: str, symbol: str, action: str,
                                  *, max_age_min: int = 120):
     """A5/N4/N11 — the bot row a broker fill belongs to when the deal/snapshot arrives
@@ -774,20 +844,30 @@ async def find_adoptable_sibling(db, account_id: str, symbol: str, action: str,
 
 async def adopt_sibling(db, sibling: dict, *, ticket: int, price: float, via: str,
                         position_leg=None, extra: dict | None = None) -> bool:
-    """Land a broker fill on an adoptable bot row (SL/TP of the signal survive)."""
+    """Land a broker fill on an adoptable bot row (SL/TP of the signal survive).
+    H11 — a cancelled row sheds its cancel verdict (error / close_reason) so the trade
+    closes later with the REAL reason; its execution intent moves to `filled`."""
     sets = {"mt5_ticket": int(ticket), "status": "open", "entry_price": float(price),
             "closed_at": None, f"adopted_via_{via}": True,
             "adopted_at": datetime.now(timezone.utc).isoformat(), **(extra or {})}
+    upd: dict = {"$set": sets}
     if sibling.get("status") == "cancelled":
         sets["late_fill_after_cancel"] = sibling.get("close_reason") or sibling.get("error")
+        upd["$unset"] = {"error": "", "close_reason": ""}
     if position_leg is not None:
         sets["position_leg"] = int(position_leg)
     try:
         res = await db.trades.update_one(
-            {"_id": sibling["_id"], "mt5_ticket": None, "status": sibling.get("status")}, {"$set": sets})
+            {"_id": sibling["_id"], "mt5_ticket": None, "status": sibling.get("status")}, upd)
     except DuplicateKeyError:
         return False
-    return bool(res.modified_count)
+    if not res.modified_count:
+        return False
+    if sibling.get("execution_intent_id"):
+        from execution_intents import record_late_fill
+        await record_late_fill(db, sibling["execution_intent_id"], ticket=int(ticket), via=via,
+                               prior=sibling.get("error") or sibling.get("status"))
+    return True
 
 
 async def dispatch_lock_reason(db, acc: dict) -> str | None:
@@ -1691,10 +1771,11 @@ async def report_trade(payload: BridgeTradeReport):
             update["deal_ticket"] = int(payload.deal_ticket)
         if payload.position_id:
             update["position_id"] = int(payload.position_id)
-        if payload.mt5_ticket and (payload.deal_ticket or payload.order_ticket) \
-                and await is_netting_account(db, acc):
-            # A3 — netting: our fills merge into one broker position; key the row by entry leg
-            update["position_leg"] = int(payload.deal_ticket or payload.order_ticket)
+        if payload.mt5_ticket and payload.deal_ticket:
+            # A3/H5 — netting: the one leg rule — ENTRY DEAL id only (never the order ticket)
+            leg = netting_leg(await is_netting_account(db, acc), payload.deal_ticket)
+            if leg is not None:
+                update["position_leg"] = leg
         if payload.position_volume and payload.position_volume > 0:
             # netted symbol position AFTER the fill — broker exposure only,
             # never used for per-trade attribution (that is filled_volume)
@@ -1901,11 +1982,15 @@ async def report_trade(payload: BridgeTradeReport):
                     close_reason = "take_profit" if profit_dir else "stop_loss"
             update["close_reason"] = close_reason
 
+    unset: dict = {}
     if payload.status == "open" and trade.get("status") == "cancelled":
         update["late_fill_after_cancel"] = trade.get("close_reason") or trade.get("error")
         update["closed_at"] = None
+        unset = {"error": "", "close_reason": ""}   # H11 — the cancel verdict is void once filled
+        update.pop("error", None)
+    ops = {"$set": update, **({"$unset": unset} if unset else {})}
     try:
-        await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+        await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, ops)
     except DuplicateKeyError:
         # A5 — the heartbeat snapshot / deal sweep tracked this ticket first as an
         # UNPROTECTED backfill row (late fill after expiry/PANIC). Our row carries
@@ -1918,9 +2003,23 @@ async def report_trade(payload: BridgeTradeReport):
             logger.error("report for trade=%s: ticket %s held by another bot-originated row — "
                          "left for the reconciler", payload.trade_id, payload.mt5_ticket)
             return {"ok": False, "reason": "duplicate_ticket_conflict", "trade_id": payload.trade_id}
-        await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
-    if payload.status == "open" and (panic_locked(acc) or trade.get("error") == "panic_lock"):
-        await close_late_fill_after_panic(db, trade["_id"], acc, "report")
+        try:
+            await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, ops)
+        except DuplicateKeyError:
+            # H10 — another writer re-created the duplicate between absorb and land
+            logger.error("report for trade=%s: ticket %s re-duplicated during absorb — left for the reconciler",
+                         payload.trade_id, payload.mt5_ticket)
+            return {"ok": False, "reason": "duplicate_ticket_conflict", "trade_id": payload.trade_id}
+    if payload.status == "open" and payload.mt5_ticket:
+        # H5 — a snapshot backfill row (unkeyed) may sit beside this bot row under a
+        # different leg value: the unique index can't see it, so sweep it here.
+        await _absorb_duplicate_ticket_row(db, str(acc["_id"]), payload.mt5_ticket, None, trade["_id"])
+    if payload.status == "open" and trade.get("execution_intent_id") and trade.get("status") == "cancelled":
+        from execution_intents import record_late_fill
+        await record_late_fill(db, trade["execution_intent_id"], ticket=int(payload.mt5_ticket or 0),
+                               via="report", prior=trade.get("error") or "cancelled")
+    if payload.status == "open":
+        await handle_late_fill(db, trade, acc, "report")
     # Scalp fast-path reconciliation (EA v1.44). /bridge/report is the
     # OPERATIONAL acknowledgement path only: it feeds fill confirmation and
     # frees the position slot. Financial reconciliation (P&L, commission,
@@ -2106,6 +2205,15 @@ async def _absorb_duplicate_ticket_row(db, account_id: str, ticket, position_leg
         "close_reason": "duplicate_absorbed"}})
     carry = {k: dup[k] for k in ("live_pnl", "live_price", "position_volume", "live_snapshot_at")
              if dup.get(k) is not None}
+    # H10 — an in-flight close / modification and banked partial P&L on the duplicate
+    # must survive on the kept row (never dropped with the absorbed copy).
+    keep = await db.trades.find_one({"_id": keep_id}, {
+        "pending_modification": 1, "close_requested": 1, "close_reason": 1, "close_idem_key": 1,
+        "close_command": 1, "pnl_banked_partial": 1, "partial_closed": 1}) or {}
+    for k in ("pending_modification", "close_requested", "close_reason", "close_idem_key", "close_command",
+              "pnl_banked_partial", "partial_closed"):
+        if dup.get(k) not in (None, False, "") and keep.get(k) in (None, False, ""):
+            carry[k] = dup[k]
     carry["absorbed_duplicate_id"] = str(dup["_id"])
     await db.trades.update_one({"_id": keep_id}, {"$set": carry})
     logger.warning("absorbed duplicate ticket row %s (origin=%s) into bot trade %s ticket=%s",
@@ -2315,11 +2423,10 @@ async def external_deal(payload: BridgeExternalDeal):
             netting_acc = await is_netting_account(db, acc)
             if sibling and await adopt_sibling(
                     db, sibling, ticket=payload.mt5_ticket, price=payload.price, via="external_deal",
-                    position_leg=(int(payload.deal_id) if netting_acc else None),
+                    position_leg=netting_leg(netting_acc, payload.deal_id),
                     extra={"broker_deal_id": payload.deal_id}):
                 await _mark_deal_reconciled(db, payload.deal_id, account_id, note="adopted_sibling")
-                if sibling.get("error") == "panic_lock" or panic_locked(acc):
-                    await close_late_fill_after_panic(db, sibling["_id"], acc, "external_deal")
+                await handle_late_fill(db, sibling, acc, "external_deal")
                 await ws_manager.broadcast(user_id, "trade_updated", {
                     "trade_id": str(sibling["_id"]),
                     "status": "open",
@@ -2367,8 +2474,9 @@ async def external_deal(payload: BridgeExternalDeal):
                 "bot-owned 'in' deal %s (ticket %s) had no pending sibling — "
                 "trade created with protection_missing=True",
                 payload.deal_id, payload.mt5_ticket)
-        if await is_netting_account(db, acc):
-            trade_doc["position_leg"] = int(payload.deal_id)
+        leg = netting_leg(await is_netting_account(db, acc), payload.deal_id)
+        if leg is not None:
+            trade_doc["position_leg"] = leg
         try:
             result = await db.trades.insert_one(trade_doc)
         except DuplicateKeyError:
@@ -2562,8 +2670,9 @@ async def external_deal(payload: BridgeExternalDeal):
                 "protection_missing": True,
                 "protection_state": "PROTECTION_UNKNOWN",
             }
-            if await is_netting_account(db, acc):
-                rev_doc["position_leg"] = int(payload.deal_id)
+            leg = netting_leg(await is_netting_account(db, acc), payload.deal_id)
+            if leg is not None:
+                rev_doc["position_leg"] = leg
             try:
                 rev = await db.trades.insert_one(rev_doc)
             except DuplicateKeyError:

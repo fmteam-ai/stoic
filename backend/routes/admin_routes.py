@@ -740,6 +740,68 @@ async def admin_attest_account_environment(account_id: str, payload: dict, user=
                               "at": now})
     acc = await db.accounts.find_one({"_id": acc["_id"]})
     return _env_row(acc)
+
+
+# ── A6/H1 — position mode (netting vs hedging) ───────────────────────────────
+_PM_PROJECTION = {"user_id": 1, "label": 1, "broker": 1, "broker_server": 1, "server": 1,
+                  "account_number": 1, "account_type": 1, "mode": 1, "position_mode_override": 1,
+                  "margin_mode": 1, "ea_identity.margin_mode": 1}
+
+
+async def _position_mode_row(db, a: dict) -> dict:
+    from routes.bridge_routes import position_mode_resolution
+    res = await position_mode_resolution(db, a)
+    return {"account_id": str(a["_id"]), "user_id": a.get("user_id"), "label": a.get("label"),
+            "broker": a.get("broker"), "server": a.get("broker_server") or a.get("server"),
+            "account_number": a.get("account_number"), "account_type": a.get("account_type"),
+            "mode": res["mode"], "source": res["source"], "resolution": res,
+            "override": a.get("position_mode_override")}
+
+
+@router.get("/admin/account-position-modes")
+async def admin_account_position_modes(user=Depends(get_current_user)):
+    """Netting/hedging verdict per broker account with its source (admin | ea | registry | default).
+    The EA (≤ v1.57) never reports ACCOUNT_MARGIN_MODE — a netting broker missing from the
+    registry is treated as hedging unless an admin sets the mode here."""
+    from auth import require_admin
+    require_admin(user)
+    db = get_db()
+    accs = await db.accounts.find({"mode": {"$ne": "paper"}}, _PM_PROJECTION).sort("_id", -1).to_list(500)
+    return {"accounts": [await _position_mode_row(db, a) for a in accs]}
+
+
+@router.post("/admin/account-position-modes/{account_id}")
+async def admin_set_account_position_mode(account_id: str, payload: dict, user=Depends(get_current_user)):
+    """Set (netting | hedging) or clear (auto → registry/default) the account's position mode.
+    Re-auth required; recorded in the admin audit chain."""
+    from auth import require_admin
+    from audit_chain import append_chained
+    require_admin(user)
+    db = get_db()
+    acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")})
+    if not acc:
+        raise HTTPException(status_code=404, detail="account not found")
+    mode = str(payload.get("mode") or "").lower()
+    if mode not in ("netting", "hedging", "auto"):
+        raise HTTPException(status_code=422, detail={"code": "invalid_value",
+                                                     "message": "mode must be netting, hedging or auto"})
+    reason = str(payload.get("reason") or "").strip()[:300]
+    await _reauth(db, user, str(payload.get("password") or ""), payload.get("otp"))
+    now = _now_iso()
+    before = (await _position_mode_row(db, acc))["resolution"]
+    if mode == "auto":
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"position_mode_override": ""}})
+    else:
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"position_mode_override": {
+            "mode": mode, "by": user.get("email"), "at": now, "reason": reason}}})
+    acc = await db.accounts.find_one({"_id": acc["_id"]})
+    row = await _position_mode_row(db, acc)
+    await append_chained(db, {"actor_email": user.get("email"), "action": "account_position_mode_set",
+                              "target_kind": "account", "target_id": str(acc["_id"]),
+                              "target_label": acc.get("label"), "reason": reason or mode,
+                              "meta": {"mode": mode, "before": before, "after": row["resolution"], "reauth": True},
+                              "at": now})
+    return row
 @router.get("/admin/integrations/plans")
 async def admin_plans_get(user=Depends(get_current_user)):
     from auth import require_admin

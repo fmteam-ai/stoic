@@ -42,7 +42,7 @@ async def strategy_cards(db, user_id: str, days: int = 90) -> dict:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     perf: dict = {}
     async for t in db.trades.find(
-            {"user_id": user_id, "status": "closed", "origin": "auto",
+            {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True},
              "closed_at": {"$gte": since}, "pnl": {"$ne": None},
              "scope": {"$ne": None}},
             {"scope": 1, "pnl": 1, "closed_at": 1}).sort("closed_at", 1):

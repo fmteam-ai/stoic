@@ -134,6 +134,28 @@ async def transition(db, intent_id: str, to: str, detail: str = "",
     return upd
 
 
+async def record_late_fill(db, intent_id: str, *, ticket: int, via: str, prior: str = "") -> dict | None:
+    """A6/H11 — broker truth: an order STOIC had already written off (expired /
+    cancelled by PANIC or a lock) filled anyway. The intent becomes `filled` — the
+    only exit from those terminal states, stamped `late_fill` so it is never mistaken
+    for a normal lifecycle. In-flight intents go through the regular transition."""
+    now = _now()
+    upd = await db.execution_intents.find_one_and_update(
+        {"intent_id": intent_id, "status": {"$in": ["expired", "cancelled", "rejected", "unknown"]}},
+        {"$set": {"status": "filled", "updated_at": now, "late_fill": True,
+                  "late_fill_via": via, "late_fill_prior_status": str(prior or "")[:40],
+                  "result": {"ticket": int(ticket), "late_fill": True}},
+         "$push": {"history": {"to": "filled", "at": now,
+                               "detail": f"late fill via {via} (was {prior or 'terminal'}) ticket={ticket}"}}},
+        return_document=ReturnDocument.AFTER)
+    if upd is None:
+        return await transition(db, intent_id, "filled", f"fill via {via} ticket={ticket}",
+                                result={"ticket": int(ticket)})
+    logger.warning("intent %s: late fill via %s (was %s) ticket=%s", intent_id, via, prior, ticket)
+    upd.pop("_id", None)
+    return upd
+
+
 class PreDispatchError(Exception):
     """Executors raise this when the action verifiably never left STOIC."""
 

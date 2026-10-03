@@ -108,7 +108,8 @@ def test_a3_netting_detection_prefers_account_flag_then_registry(db, seeded):
     from database import get_db
     assert _arun(is_netting_account(get_db(), {"margin_mode": "netting"})) is True
     assert _arun(is_netting_account(get_db(), {"margin_mode": "hedging", "broker_server": "x"})) is False
-    with patch("broker_registry.capabilities_for", AsyncMock(return_value={"position_mode": "netting"})):
+    with patch("broker_registry.resolve_registry",
+               AsyncMock(return_value={"name": "NettingBroker", "capabilities": {"position_mode": "netting"}})):
         assert _arun(is_netting_account(get_db(), {"broker_server": "Netting-Demo"})) is True
 
 
@@ -473,6 +474,8 @@ def test_n11_heartbeat_before_report_adopts_pending_bot_row_and_closes_after_pan
 
 
 def test_n2_position_leg_on_backfill_reversal_and_import_for_netting(db, seeded, monkeypatch):
+    """A6/H5 — ONE leg rule: entry DEAL id on netting accounts; a snapshot backfill / manual
+    import knows no deal and is unkeyed (never the position ticket)."""
     import routes.bridge_routes as br
     from models import BridgeHeartbeat, BridgePosition
     monkeypatch.setattr(br.ws_manager, "broadcast", AsyncMock())
@@ -483,17 +486,20 @@ def test_n2_position_leg_on_backfill_reversal_and_import_for_netting(db, seeded,
                                                    price_open=1.1, magic=0)])
     _arun(br.heartbeat(hb))
     row = db.trades.find_one({"account_id": seeded["account_id"], "mt5_ticket": 880700})
-    assert row and row["position_leg"] == 880700 and row["backfilled_from_snapshot"]
+    assert row and row.get("position_leg") is None and row["backfilled_from_snapshot"]
     db.trades.update_one({"_id": row["_id"]}, {"$set": {TAG: True}})
     src = open(br.__file__).read()
-    assert src.count('rev_doc["position_leg"] = int(payload.deal_id)') == 1
-    assert 'is_netting_account(db, acc)' in open(os.path.join(os.path.dirname(br.__file__), "account_routes.py")).read()
+    assert src.count("netting_leg(await is_netting_account(db, acc), payload.deal_id)") == 2   # 'in' + reversal
+    assert "position_leg=netting_leg(netting_acc, payload.deal_id)" in src
+    assert 'int(p.ticket)} if await is_netting_account' not in open(
+        os.path.join(os.path.dirname(br.__file__), "account_routes.py")).read()
 
 
 def test_n7_adaptive_exits_use_free_slot_filter():
     import adaptive_exits, inspect
     src = inspect.getsource(adaptive_exits)
     assert src.count("_free_slot_filter(trade[\"_id\"])") == 2
+    assert src.count("if not res.modified_count:") == 2   # A6 — guarded write not applied → no event, False
     assert '{"_id": trade["_id"]},\n            {"$set": {"pending_modification"' not in src
 
 
@@ -519,6 +525,7 @@ def test_n10_tick_ingress_halts_on_platform_kill_switch(db, seeded, monkeypatch)
     from routes.bridge_routes import receive_ticks, BridgeTicks
     import routes.bridge_routes as br
     from scalp.engine import get_runner, _runners
+    prev = (db.platform_state.find_one({"_id": "trading_authority"}) or {}).get("level")   # H7 — restore after
     db.platform_state.update_one({"_id": "trading_authority"}, {"$set": {"level": "LOCKED"}}, upsert=True)
     runner = get_runner(seeded["account_id"], seeded["user_id"], "EURUSD")
     runner.enabled = True
@@ -531,16 +538,31 @@ def test_n10_tick_ingress_halts_on_platform_kill_switch(db, seeded, monkeypatch)
         assert runner.enabled is False
     finally:
         _runners.pop(f"{seeded['account_id']}:EURUSD", None)
-        db.platform_state.update_one({"_id": "trading_authority"}, {"$set": {"level": "FULL"}})
+        if prev is None:
+            db.platform_state.delete_one({"_id": "trading_authority"})
+        else:
+            db.platform_state.update_one({"_id": "trading_authority"}, {"$set": {"level": prev}})
 
 
-def test_n12_ea_demo_proof_allows_release_without_mfa(db, seeded, monkeypatch):
+def test_h2_ea_demo_proof_alone_never_skips_step_up(db, seeded, monkeypatch):
+    """A6/H2 — every demo_proof input is owner-controlled: a live account could pose as demo.
+    Only PAPER or an admin-approved attestation (attested_environment != LIVE) skips the step-up."""
     db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {
         "server": "Broker-Demo", "account_number": "123", "broker_account_id_reported": "123",
         "ea_identity": {"authoritative": True, "installation_id": "inst-1", "broker_server": "Broker-Demo"},
         "last_heartbeat": _iso(5)}})
-    from broker_env import demo_proof
-    assert demo_proof(db.accounts.find_one({"_id": seeded["acc_oid"]}))["ok"] is True
+    from broker_env import demo_proof, attested_environment
+    acc = db.accounts.find_one({"_id": seeded["acc_oid"]})
+    assert demo_proof(acc)["ok"] is True and attested_environment(acc) == "LIVE"
+    _lock(db, seeded, scope="user")
+    calls = []
+    with patch("webauthn_mfa.has_passkey", AsyncMock(return_value=False)):
+        out = _start(seeded, monkeypatch, step_up_calls=calls)
+    assert out["active"] is True and calls == ["panic_release"]
+
+
+def test_h2_paper_only_scope_releases_without_step_up(db, seeded, monkeypatch):
+    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {"mode": "paper"}})
     _lock(db, seeded, scope="user")
     calls = []
     with patch("webauthn_mfa.has_passkey", AsyncMock(return_value=False)):

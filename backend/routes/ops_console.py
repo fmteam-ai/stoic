@@ -212,6 +212,11 @@ async def ops_console(user=Depends(get_current_user)):
     except Exception as e:  # noqa: BLE001
         logger.warning("ops mongo health check failed: %s", e)
         out["mongo"] = {"ok": False, "error": "mongo health check failed"}
+    try:
+        from seed import ticket_index_check
+        out["unique_ticket_index"] = await ticket_index_check(db)   # A6/H12
+    except Exception as e:  # noqa: BLE001
+        out["unique_ticket_index"] = {"ok": False, "detail": f"ticket index state unavailable: {e}"}
 
     # ── Stripe webhooks + payments ──────────────────────────────────────
     wh_counts = {}

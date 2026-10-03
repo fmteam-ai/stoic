@@ -546,7 +546,7 @@ async def _process_user_account_locked(db, cfg: dict):
     if anti_tilt_enabled and anti_tilt_n > 0:
         # iter-122 · origin=auto: judge the bot by its OWN trades — a $-0.16
         # manual close must not freeze auto-execution.
-        recent_q = {"user_id": user_id, "status": "closed", "origin": "auto"}
+        recent_q = {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True}}
         if cfg_account_id:
             recent_q["account_id"] = cfg_account_id
         recent = await db.trades.find(recent_q).sort(
@@ -1586,7 +1586,7 @@ async def _process_user_account_locked(db, cfg: dict):
         cutoff = (datetime.now(timezone.utc) - timedelta(hours=LOSS_STREAK_COOLDOWN_HRS)).isoformat()
         ls_q = {
             "user_id": user_id, "symbol": symbol_match(sym), "action": signal["action"],
-            "status": "closed", "origin": "auto", "closed_at": {"$gte": cutoff},
+            "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True}, "closed_at": {"$gte": cutoff},
         }
         if cfg.get("account_id"):
             ls_q["account_id"] = cfg["account_id"]

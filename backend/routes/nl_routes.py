@@ -441,12 +441,23 @@ async def _enable_bots(user_id, target, ctx=None):
     db = get_db()
     q = nx.target_filter(user_id, ctx, bot_query(user_id, target))
 
-    # N13 — a PANIC lock is released only via Bot Start (step-up); flipping
-    # `active` here would show ACTIVE while nothing can trade.
-    locked = await db.accounts.count_documents({"user_id": user_id, "authority_lock.reason": "panic"})
-    if locked:
-        return {"bots_enabled": 0, "blocked": "panic_lock",
-                "message": f"PANIC lock active on {locked} account(s) — release it from Bot Config → Start"}
+    # N13 / A6 — a PANIC lock is released only via Bot Start (step-up); flipping
+    # `active` here would show ACTIVE while nothing can trade. Judge ONLY the
+    # accounts the target touches, and name the right release path.
+    cfg_accounts = {c.get("account_id") async for c in db.bot_configs.find(q, {"account_id": 1})}
+    lock_q = {"user_id": user_id, "authority_lock.reason": "panic"}
+    if cfg_accounts and None not in cfg_accounts:
+        lock_q["_id"] = {"$in": [ObjectId(a) for a in cfg_accounts if ObjectId.is_valid(str(a))]}
+    locked_accs = await db.accounts.find(lock_q, {"authority_lock": 1}).to_list(length=100)
+    if locked_accs:
+        def _is_platform(lk: dict) -> bool:   # mirrors panic_routes.PLATFORM_LOCK_MATCH
+            return lk.get("scope") == "platform" or (not lk.get("scope") and lk.get("by") == "admin")
+        admin_locked = any(_is_platform(a.get("authority_lock") or {}) for a in locked_accs)
+        hint = ("an admin-wide PANIC lock is active — only an admin can release it (Admin Ops → RELEASE ADMIN LOCK)"
+                if admin_locked else "release it from Bot Config → Start")
+        return {"bots_enabled": 0, "blocked": "panic_admin_lock" if admin_locked else "panic_lock",
+                "admin_lock": admin_locked,
+                "message": f"PANIC lock active on {len(locked_accs)} targeted account(s) — {hint}"}
 
     async def work(session):
         res = await db.bot_configs.update_many(q, {"$set": {

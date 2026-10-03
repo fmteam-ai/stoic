@@ -12,9 +12,12 @@ row per group and moves the rest to `trades_duplicates_archive` (reversible by h
 Keep = the bot-originated / protected / partial-banked / richest row (see _rank). Safety checks
 (each refuses the group → MANUAL):
   * any row with a pending modification / close in flight
+  * more than one bot trade in the group (distinct execution_intent_id / signal_id)
   * a candidate carries realised P&L the kept row does not already hold
-  * a candidate was CREATED in the last 10 minutes (its report may still be landing)
-  * archive insert is verified before the source row is deleted; hard cap per run (--max)
+  * a candidate was WRITTEN in the last 10 minutes (its report may still be landing)
+  * archive insert is verified before the source row is deleted; the delete is conditional on
+    the row being unchanged since read (pnl, pending_modification, close_requested, status,
+    updated_at) — otherwise the archive copy is removed again; hard cap per run (--max)
 """
 import asyncio
 import os
@@ -53,12 +56,19 @@ def plan_group(rows: list[dict], now: datetime | None = None) -> tuple[dict | No
     """(keep, archive, refusal_reason) for one LIVE duplicate group (the index only covers
     open/pending rows, so every group is live by definition). Pure — unit-tested.
 
-    A5 — refusals (→ MANUAL) are things an operator must look at, not the mere fact that
-    two rows are open: a close/modification in flight, realised P&L on a row we would drop,
-    or a row created in the last 10 minutes (a writer may still be landing its report)."""
+    A5/A6-H3 — refusals (→ MANUAL) are things an operator must look at, not the mere fact
+    that two rows are open: a close/modification in flight, MORE THAN ONE bot trade in the
+    group (distinct execution_intent_id / signal_id — never archive a real trade), realised
+    P&L on a row we would drop, or a row WRITTEN in the last 10 minutes (last write, not
+    creation — a report may still be landing)."""
     now = now or datetime.now(timezone.utc)
     if any(r.get("pending_modification") or r.get("close_requested") for r in rows):
         return None, [], "modification or close in flight"
+    intents = {str(r["execution_intent_id"]) for r in rows if r.get("execution_intent_id")}
+    signals = {str(r["signal_id"]) for r in rows if r.get("signal_id")}
+    if len(intents) > 1 or len(signals) > 1:
+        return None, [], (f"{max(len(intents), len(signals))} distinct bot trades in the group "
+                          f"(intents={sorted(intents)} signals={sorted(signals)})")
     keep = max(rows, key=_rank)
     recent = (now - timedelta(seconds=RECENT_CREATE_S)).isoformat()
     archive = []
@@ -67,10 +77,22 @@ def plan_group(rows: list[dict], now: datetime | None = None) -> tuple[dict | No
             continue
         if abs(float(r.get("pnl") or 0)) > 1e-9 and abs(float(r.get("pnl") or 0) - float(keep.get("pnl") or 0)) > 1e-9:
             return None, [], f"row {r['_id']} carries P&L {r.get('pnl')} not held by the kept row"
-        if str(r.get("opened_at") or "") >= recent:
-            return None, [], f"row {r['_id']} was created in the last {RECENT_CREATE_S // 60} minutes"
+        if _ts(r) >= recent:
+            return None, [], f"row {r['_id']} was written in the last {RECENT_CREATE_S // 60} minutes"
         archive.append(r)
     return keep, archive, None
+
+
+UNCHANGED_FIELDS = ("pnl", "pending_modification", "close_requested", "status", "updated_at")
+
+
+def unchanged_filter(row: dict) -> dict:
+    """H3 — delete only the row exactly as it was read: any P&L / close / status write that
+    landed mid-run makes the delete a no-op (the archive copy is then removed again)."""
+    q = {"_id": row["_id"]}
+    for k in UNCHANGED_FIELDS:
+        q[k] = row.get(k) if k in row else {"$exists": False}
+    return q
 
 
 async def main(mode: str, apply: bool, max_rows: int) -> int:
@@ -122,7 +144,12 @@ async def main(mode: str, apply: bool, max_rows: int) -> int:
             if not await db.trades_duplicates_archive.find_one({"_id": ins.inserted_id}):
                 print(f"ABORT: archive copy of {r['_id']} not readable back — source row kept")
                 return 1
-            await db.trades.delete_one({"_id": r["_id"]})
+            deleted = await db.trades.delete_one(unchanged_filter(r))
+            if deleted.deleted_count != 1:
+                # H3 — the row changed since it was read (P&L / close / status landed mid-run)
+                await db.trades_duplicates_archive.delete_one({"_id": ins.inserted_id})
+                print(f"SKIPPED: {r['_id']} changed since read — source row kept, archive copy removed")
+                continue
             archived += 1
     if mode == "--archive":
         if not apply:

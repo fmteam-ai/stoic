@@ -239,7 +239,7 @@ async def strategy_edge(db, user_id: str, regime_key: str) -> dict:
     for cls in DEFAULT_ALLOCATIONS:
         pnls = []
         async for t in db.trades.find(
-                {"user_id": user_id, "origin": "auto", "status": "closed",
+                {"user_id": user_id, "origin": "auto", "stats_excluded": {"$ne": True}, "status": "closed",
                  "pnl": {"$ne": None}, "closed_at": {"$gte": since},
                  "strategy_class": cls, "market_regime.key": regime_key},
                 {"pnl": 1}).limit(1000):

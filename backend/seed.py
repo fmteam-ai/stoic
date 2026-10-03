@@ -259,16 +259,20 @@ async def ensure_unique_ticket_index(db, *, rebuild: bool = False) -> dict:
     existing = (await db.trades.index_information()).get(UNIQUE_TICKET_INDEX)
     if existing and existing.get("key") == UNIQUE_TICKET_KEYS \
             and existing.get("partialFilterExpression") == UNIQUE_TICKET_FILTER:
+        await _record_ticket_index_state(db, present=True, stale=False)
         return {"created": False, "present": True, "duplicates": []}
     if existing and not rebuild:
         _ticket_log.error("unique ticket index %s has a STALE definition (key=%s filter=%s) — "
                           "run ops/ticket_duplicates.py --build-index to rebuild", UNIQUE_TICKET_INDEX,
                           existing.get("key"), existing.get("partialFilterExpression"))
+        await _record_ticket_index_state(db, present=True, stale=True, key=existing.get("key"),
+                                         filter_=existing.get("partialFilterExpression"))
         return {"created": False, "present": True, "stale": True, "duplicates": []}
     dups = await duplicate_tickets(db)
     if dups:
         _ticket_log.error("unique ticket index NOT built — %d duplicate (account, ticket) group(s): %s",
                           len(dups), dups)
+        await _record_ticket_index_state(db, present=False, stale=False, duplicates=len(dups))
         return {"created": False, "present": False, "duplicates": dups}
     if existing:
         await db.trades.drop_index(UNIQUE_TICKET_INDEX)
@@ -277,7 +281,44 @@ async def ensure_unique_ticket_index(db, *, rebuild: bool = False) -> dict:
                                  partialFilterExpression=UNIQUE_TICKET_FILTER)
     _ticket_log.info("unique ticket index %s ready on trades(account_id, mt5_ticket, position_leg) "
                      "for open/pending rows", UNIQUE_TICKET_INDEX)
+    await _record_ticket_index_state(db, present=True, stale=False)
     return {"created": True, "present": True, "duplicates": []}
+
+
+TICKET_INDEX_STATE_ID = "unique_ticket_index"
+
+
+async def _record_ticket_index_state(db, *, present: bool, stale: bool, key=None, filter_=None,
+                                     duplicates: int = 0) -> None:
+    """A6/H12 — the boot verdict on the unique ticket index is kept in platform_state so
+    release readiness and Admin Ops show it (a log line alone is not an operator surface)."""
+    from datetime import datetime, timezone
+    doc = {"present": present, "stale": stale, "ok": present and not stale, "duplicates": duplicates,
+           "checked_at": datetime.now(timezone.utc).isoformat()}
+    if stale:
+        doc["actual_key"] = [list(k) for k in (key or [])] if isinstance(key, list) else key
+        doc["actual_filter"] = filter_
+    try:
+        await db.platform_state.update_one({"_id": TICKET_INDEX_STATE_ID}, {"$set": doc}, upsert=True)
+    except Exception as e:  # noqa: BLE001 — the verdict is advisory; boot must not fail on it
+        _ticket_log.warning("ticket index state not recorded: %s", e)
+
+
+async def ticket_index_check(db) -> dict:
+    """Release-readiness / Ops Console view of the unique ticket index verdict."""
+    st = await db.platform_state.find_one({"_id": TICKET_INDEX_STATE_ID}, {"_id": 0})
+    if not st:
+        return {"ok": False, "present": False, "stale": False,
+                "detail": "unique ticket index never verified (boot check did not run)"}
+    out = {"ok": bool(st.get("ok")), "present": bool(st.get("present")), "stale": bool(st.get("stale")),
+           "checked_at": st.get("checked_at"), "duplicates": st.get("duplicates", 0)}
+    if st.get("stale"):
+        out["detail"] = ("unique ticket index has a STALE definition — "
+                         "run ops/ticket_duplicates.py --build-index")
+    elif not st.get("present"):
+        out["detail"] = (f"unique ticket index NOT built — {st.get('duplicates', 0)} duplicate group(s); "
+                         "run ops/ticket_duplicates.py --archive")
+    return out
 
 
 async def ensure_indexes():

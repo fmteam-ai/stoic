@@ -249,6 +249,11 @@ async def release_readiness(request: Request):
     from release_truth import release_attestation_check, rc_lock_check
     checks["release_attestation"] = release_attestation_check(is_production())
     checks["rc_lock"] = rc_lock_check(is_production())
+    try:
+        from seed import ticket_index_check
+        checks["unique_ticket_index"] = await ticket_index_check(db)   # A6/H12
+    except Exception as e:  # noqa: BLE001
+        checks["unique_ticket_index"] = {"ok": False, "detail": f"ticket index state unavailable: {e}"}
     # P2-1 — repair-ledger anchor: latest signed anchor must still be reachable (no tail deletion)
     try:
         from health_repairs import verify_anchor

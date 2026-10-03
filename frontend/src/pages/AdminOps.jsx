@@ -404,10 +404,10 @@ function Panel({ title, icon: Icon, children, testid }) {
     );
 }
 
-const Row = ({ k, v, vCls = "text-white" }) => (
-    <div className="flex justify-between text-xs py-1 border-b border-[#141414] last:border-0">
+const Row = ({ k, v, vCls = "text-white", testid }) => (
+    <div className="flex justify-between text-xs py-1 border-b border-[#141414] last:border-0" data-testid={testid}>
         <span className="text-[#71717A]">{k}</span>
-        <span className={`font-mono ${vCls}`}>{v}</span>
+        <span className={`font-mono ${vCls} text-right`}>{v}</span>
     </div>
 );
 
@@ -604,6 +604,9 @@ export default function AdminOps() {
                     <Row k="Mongo ping" v={d.mongo.ok ? `${d.mongo.ping_ms} ms` : "DOWN"} vCls={d.mongo.ok ? tone.ok : tone.bad} />
                     <Row k="Data / Index size" v={d.mongo.ok ? `${d.mongo.data_mb} / ${d.mongo.index_mb} MB` : "—"} vCls={tone.dim} />
                     <Row k="Collections" v={d.mongo.collections ?? "—"} vCls={tone.dim} />
+                    <Row k="Unique ticket index" testid="ops-unique-ticket-index"
+                        v={d.unique_ticket_index?.ok ? "OK" : d.unique_ticket_index?.stale ? "STALE — run ops/ticket_duplicates.py --build-index" : d.unique_ticket_index?.present === false ? `NOT BUILT · ${d.unique_ticket_index?.duplicates ?? "?"} duplicate group(s)` : "UNVERIFIED"}
+                        vCls={d.unique_ticket_index?.ok ? tone.ok : tone.bad} />
                 </Panel>
 
                 <Panel title="Stripe Webhooks" icon={CreditCard} testid="ops-panel-stripe">

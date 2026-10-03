@@ -47,7 +47,7 @@ def _now():
 async def freeze_check(db, user_id: str) -> dict:
     """Learning freezes while the system is in a bad short-term state."""
     recent = await db.trades.find(
-        {"user_id": user_id, "status": "closed", "origin": "auto",
+        {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True},
          "pnl": {"$ne": None}},
         {"pnl": 1, "closed_at": 1}).sort("closed_at", -1).to_list(length=STREAK_FREEZE_N)
     if len(recent) >= STREAK_FREEZE_N and all(float(t["pnl"]) < 0 for t in recent):
@@ -155,7 +155,7 @@ async def staged_ml_retrain(db, user_id: str) -> dict:
     since = (_now() - timedelta(days=LOOKBACK_DAYS)).isoformat()
     trades = await db.trades.find({
         "user_id": user_id, "status": "closed", "pnl": {"$ne": None},
-        "origin": "auto", "closed_at": {"$gte": since},
+        "origin": "auto", "stats_excluded": {"$ne": True}, "closed_at": {"$gte": since},
         "pnl_estimated": {"$ne": True}, "pnl_unknown": {"$ne": True},
     }).sort("closed_at", 1).to_list(5000)
     if len(trades) < MIN_TRADES:

@@ -299,7 +299,7 @@ async def what_if(db, user_id: str, *, days: int = 30,
                   trailing_start_r: float | None = None) -> dict:
     since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     trades = await db.trades.find(
-        {"user_id": user_id, "origin": "auto", "status": "closed",
+        {"user_id": user_id, "origin": "auto", "stats_excluded": {"$ne": True}, "status": "closed",
          "pnl": {"$ne": None}, "closed_at": {"$gte": since},
          "entry_price": {"$ne": None}},
         {"pnl": 1, "symbol": 1, "action": 1, "entry_price": 1,
