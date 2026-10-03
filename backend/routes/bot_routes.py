@@ -1472,7 +1472,10 @@ async def execution_health(user=Depends(get_current_user)):
 async def calibration_status(user=Depends(get_current_user)):
     """Calibration Health card (roadmap C1 follow-up) — per model: is the Platt
     calibration ACTIVE (standard sign), LEGACY-IGNORED (fitted under the inverted
-    convention, raw p used until refit) or PENDING (no fit / too few samples)."""
+    convention, raw p used until refit) or PENDING (no fit / too few samples).
+    Admin-only (security audit P3): model keys / sample counts are internal ops data."""
+    from auth import require_admin
+    require_admin(user)
     from probability_calibrator import platt_is_valid, PLATT_SIGN
     db = get_db()
     models = []

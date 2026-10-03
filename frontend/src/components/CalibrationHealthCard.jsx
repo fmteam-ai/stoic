@@ -33,7 +33,7 @@ function Row({ m }) {
 }
 
 export function CalibrationHealthCard({ data }) {
-    if (!data) return null;
+    if (!data || data.detail) return null;   // admin-only endpoint — hidden for non-admins
     const c = data.counts || {};
     const headTone = c.legacy_ignored ? "warn" : c.active ? "good" : "neutral";
     const headLabel = c.legacy_ignored ? `${c.legacy_ignored} LEGACY IGNORED` : c.active ? `${c.active} ACTIVE` : "NO MODELS";

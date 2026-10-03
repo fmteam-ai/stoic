@@ -1687,3 +1687,7 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - Calibration Health Card: `GET /api/bot/calibration-status` (learned_meta artifacts: active / legacy_ignored / pending via `platt_is_valid`; scalp models: active/pending) + `frontend/src/components/CalibrationHealthCard.jsx` rendered on Bot Health under Forecast Health (testids `calibration-health-card`, `calibration-summary`, `calibration-row-*`, `calibration-state-*`). Verified live: 4 learned-meta artifacts already refit under the standard convention (A 0.32–0.41) with Brier/ECE improving.
 - Tests: `tests/unit/test_step4_fail_closed_risk.py` (14). Related failures all pre-existing (engine fixtures blocked by trading_authority/account_not_enabled). Manifest + rc_lock regenerated.
 - Expect: more SKIP/BLOCKED pulses at first (`sl_tp_side`, `cvar_budget` fail-closed, `risk_engine_error_block`) — intended per roadmap.
+
+## 2026-10-03 — Security audit #2: PASS
+- Verdict PASS (was CONDITIONAL PASS). No Critical/High/Medium. SEC-001 largely addressed already (uniform 403 + rate limits; narrow residual). H1–H4 remain open as operator-only P3 deploy-script hardening (not network-reachable).
+- New P3 fixed immediately: `GET /api/bot/calibration-status` now `require_admin` (model keys/sample counts are internal ops data); `CalibrationHealthCard` hides itself for non-admins (`data.detail`).
