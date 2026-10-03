@@ -323,6 +323,8 @@ async def get_bot_pulse(user=Depends(get_current_user)):
     db = get_db()
     cursor = db.bot_configs.find({"user_id": user["id"]})
     docs = await cursor.to_list(length=100)
+    locked_ids = {str(a["_id"]) async for a in db.accounts.find(
+        {"user_id": user["id"], "authority_lock.reason": "panic"}, {"_id": 1})}
     # Batch-resolve custom preset labels so we don't fire one query per config
     # when a user has 20+ accounts, each with a `custom:<id>` active preset.
     custom_ids: set[str] = set()
@@ -396,6 +398,7 @@ async def get_bot_pulse(user=Depends(get_current_user)):
             "unbound": acct_id is None,
             "label": label,
             "active": bool(d.get("active")),
+            "locked": (str(acct_id) in locked_ids) if acct_id else bool(locked_ids),
             "paper_shadow_mode": bool(d.get("paper_shadow_mode")),
             "symbols": d.get("symbols") or [],
             "strategy_key": active_preset or None,
@@ -680,6 +683,14 @@ GUARD_FLAG_FIELDS = ("daily_drawdown_enabled", "weekly_drawdown_enabled", "month
 GUARD_MODE_FIELDS = ("uncertainty_gate_mode", "calendar_intel_mode")   # enforce → anything else
 
 
+async def _mfa_enrolled(db, user_id: str) -> bool:
+    full = await db.users.find_one({"_id": ObjectId(user_id)}, {"two_factor_enabled": 1})
+    if (full or {}).get("two_factor_enabled"):
+        return True
+    from webauthn_mfa import has_passkey
+    return await has_passkey(db, user_id)
+
+
 async def _live_context(db, user_id: str, account_id: Optional[str],
                         owns=None) -> bool:
     """True when the action can touch live capital."""
@@ -953,12 +964,25 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
     # Step-up MFA — starting a bot on a live context (fresh activation or
     # panic/trip release) requires a fresh TOTP verification (iter-153).
     cfg_before = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
-    # Fix plan A2/B2 — a PANIC lock on the account(s) is released ONLY here, with step-up.
+    # Fix plan A2/B2 + A4 — a PANIC lock is released ONLY here, with step-up. A user
+    # releases only their OWN panic (scope=user); an admin-wide lock (scope=platform)
+    # needs /admin/panic/release. Demo/paper-only scopes without MFA enrolled may
+    # release without step-up (there is no live capital behind them).
     lock_q = {"user_id": user["id"], "authority_lock.reason": "panic"}
     if owns:
         lock_q["_id"] = owns["_id"]
-    panic_locked = await db.accounts.count_documents(lock_q) > 0
-    if await _live_context(db, user["id"], account_id, owns) or panic_locked:
+    locked_accounts = await db.accounts.find(lock_q, {"authority_lock": 1, "mode": 1, "broker_environment": 1,
+                                                       "account_type": 1, "broker_server": 1, "server": 1}
+                                             ).to_list(length=50)
+    if any((a.get("authority_lock") or {}).get("scope") == "platform" for a in locked_accounts):
+        raise HTTPException(status_code=409, detail={
+            "code": "panic_admin_lock",
+            "message": "An admin-wide PANIC lock is active on this account — only an admin can release it."})
+    panic_locked = bool(locked_accounts)
+    from broker_env import broker_environment
+    demo_only = bool(locked_accounts) and all(broker_environment(a) != "LIVE" for a in locked_accounts)
+    live_ctx = await _live_context(db, user["id"], account_id, owns)
+    if live_ctx or panic_locked:
         # Staged-rollout gate (advisory unless STAGE_ENFORCEMENT=true)
         from routes.validation_routes import live_stage_gate
         stage_block = await live_stage_gate(db)
@@ -967,17 +991,18 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
                 "code": "deployment_stage_blocked", "message": stage_block})
         action = ("panic_release" if ((cfg_before or {}).get("tripped_at") or panic_locked)
                   else "live_activation")
-        await require_step_up(db, user, request, action)
+        skip_step_up = panic_locked and demo_only and not await _mfa_enrolled(db, user["id"])
+        if not skip_step_up:
+            await require_step_up(db, user, request, action)
         await audit_event(db, user["id"], action,
                           {"account_id": account_id, "via": "bot_start",
-                           "account_lock_released": panic_locked},
-                          request, step_up=True)
+                           "account_lock_released": panic_locked,
+                           "demo_release_without_mfa": skip_step_up},
+                          request, step_up=not skip_step_up)
     if panic_locked:
-        await db.accounts.update_many(
-            lock_q,
-            {"$unset": {"trading_authority": "", "authority_lock": ""},
-             "$set": {"authority_lock_released": {
-                 "at": datetime.now(timezone.utc).isoformat(), "by": user["id"], "via": "bot_start"}}})
+        from routes.panic_routes import release_panic_locks
+        await release_panic_locks(db, {**lock_q, "authority_lock.scope": {"$ne": "platform"}},
+                                  actor=user["id"], via="bot_start")
     await _get_or_create_config(db, user["id"], account_id)
     # CRITICAL: re-enabling a bot must clear the panic/circuit-breaker trip
     # markers, otherwise the UI keeps showing "PANIC LOCK" forever even
@@ -2242,8 +2267,28 @@ async def get_bot_status(account_id: Optional[str] = None,
                 except Exception:
                     pass
 
+    # A4 — a PANIC lock dominates every other state on the dashboard
+    lock_q = {"user_id": user["id"], "authority_lock.reason": "panic"}
+    if effective_account:
+        try:
+            lock_q["_id"] = ObjectId(effective_account)
+        except Exception:
+            pass
+    locked_accounts = await db.accounts.find(lock_q, {"authority_lock": 1, "label": 1}).to_list(length=50)
+    panic_lock = None
+    if locked_accounts:
+        scopes = {(a.get("authority_lock") or {}).get("scope") or "user" for a in locked_accounts}
+        panic_lock = {"accounts": len(locked_accounts),
+                      "labels": [a.get("label") for a in locked_accounts][:5],
+                      "scope": "platform" if "platform" in scopes else "user",
+                      "at": max(((a.get("authority_lock") or {}).get("at") or "") for a in locked_accounts) or None}
+
     why_no_trade = None
-    if not cfg.get("active"):
+    if panic_lock:
+        why_no_trade = ("PANIC LOCK active — no new orders reach the terminal. "
+                        + ("An admin must release it." if panic_lock["scope"] == "platform"
+                           else "Release it by starting the bot (step-up)."))
+    elif not cfg.get("active"):
         why_no_trade = "Bot is stopped — start it from Bot Config"
     elif not cfg.get("auto_execute"):
         why_no_trade = "Auto-execute is OFF — signals generated but trades require manual click"
@@ -2313,6 +2358,8 @@ async def get_bot_status(account_id: Optional[str] = None,
 
     return {
         "active": cfg.get("active", False),
+        "panic_locked": bool(panic_lock),
+        "panic_lock": panic_lock,
         "auto_execute": cfg.get("auto_execute", True),
         "risk_level": cfg.get("risk_level", "medium"),
         "symbols": cfg.get("symbols", []),

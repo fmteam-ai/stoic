@@ -139,15 +139,26 @@ async def reconcile_account(account_id: str, open_tickets: list[int],
             # ESTIMATED exit (better a close-to-real number than a dash).
             # The EA's deal-history sweep overwrites with exact broker
             # figures when/if the "out" deal arrives (pnl_estimated flag).
+            # Fix plan A4: a TP1 partial already banked is KEPT — the final leg
+            # is added to it (or left unknown), never used to overwrite it.
             live_pnl = t.get("live_pnl")
             live_price = t.get("live_price")
+            banked = None
+            if t.get("partial_closed"):
+                banked = float(t.get("pnl_banked_partial") if t.get("pnl_banked_partial") is not None
+                               else (t.get("pnl") or 0))
+                update["pnl_banked_partial"] = round(banked, 2)
             if live_pnl is not None or live_price is not None:
-                update["pnl"] = float(live_pnl or 0.0)
+                update["pnl"] = round((banked or 0.0) + float(live_pnl or 0.0), 2)
+                update["pnl_final_leg"] = round(float(live_pnl or 0.0), 2)
                 update["exit_price"] = live_price
                 update["pnl_estimated"] = True
                 update["close_reason"] = t.get("close_reason") or _infer_close_reason(t, live_price)
             else:
                 update["pnl_unknown"] = True
+                if banked is not None:
+                    update["pnl"] = round(banked, 2)
+                    update["pnl_final_leg_unknown"] = True
         await db.trades.update_one({"_id": t["_id"]}, {"$set": update, "$unset": {
             "reconcile_miss_streak": "", "reconcile_first_missing_at": ""}})
         closed.append(str(t["_id"]))

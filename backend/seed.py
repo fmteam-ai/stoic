@@ -223,37 +223,52 @@ async def invalidate_legacy_plaintext_tokens():
 
 
 _ticket_log = logging.getLogger("seed.indexes")
+LIVE_TICKET_STATUSES = ["open", "pending"]
+UNIQUE_TICKET_FILTER = {"mt5_ticket": {"$type": "number", "$gt": 0},
+                        "status": {"$in": LIVE_TICKET_STATUSES}}
 
 
 async def duplicate_tickets(db, limit: int = 20) -> list[dict]:
-    """Records sharing one (account_id, mt5_ticket) — they block the unique index."""
+    """LIVE (open/pending) records sharing one (account_id, mt5_ticket, position_leg) —
+    they block the unique index. Netting accounts carry `position_leg` (entry deal id)
+    so several of our fills into ONE broker position stay distinct rows."""
     rows = await db.trades.aggregate([
-        {"$match": {"mt5_ticket": {"$type": "number", "$gt": 0}}},
-        {"$group": {"_id": {"account_id": "$account_id", "mt5_ticket": "$mt5_ticket"},
+        {"$match": UNIQUE_TICKET_FILTER},
+        {"$group": {"_id": {"account_id": "$account_id", "mt5_ticket": "$mt5_ticket",
+                            "position_leg": {"$ifNull": ["$position_leg", None]}},
                     "n": {"$sum": 1}, "trade_ids": {"$push": "$_id"}}},
         {"$match": {"n": {"$gt": 1}}},
         {"$limit": limit},
     ]).to_list(length=limit)
     return [{"account_id": r["_id"]["account_id"], "mt5_ticket": r["_id"]["mt5_ticket"],
+             "position_leg": r["_id"].get("position_leg"),
              "count": r["n"], "trade_ids": [str(x) for x in r["trade_ids"]]} for r in rows]
 
 
 UNIQUE_TICKET_INDEX = "uniq_account_ticket"
+UNIQUE_TICKET_KEYS = [("account_id", 1), ("mt5_ticket", 1), ("position_leg", 1)]
 
 
 async def ensure_unique_ticket_index(db) -> dict:
-    """Fix plan A2/B3 — one broker ticket maps to ONE trade row per account.
-    Partial (positive numeric tickets only); refused — loudly, listing the
-    offenders — while duplicates exist, so boot never fails on legacy data."""
+    """Fix plan A2/B3 + A3 — one broker ticket maps to ONE live (open/pending) trade row
+    per account (per entry leg on netting accounts). Closed/cancelled rows are exempt so
+    history can keep broker ticket re-use. Refused — loudly, listing the offenders — while
+    duplicates exist, so boot never fails on legacy data. A stale definition under the
+    same name (earlier key/filter) is dropped and rebuilt."""
     dups = await duplicate_tickets(db)
     if dups:
         _ticket_log.error("unique ticket index NOT built — %d duplicate (account, ticket) group(s): %s",
-                     len(dups), dups)
+                          len(dups), dups)
         return {"created": False, "duplicates": dups}
-    await db.trades.create_index(
-        [("account_id", 1), ("mt5_ticket", 1)], name=UNIQUE_TICKET_INDEX, unique=True,
-        partialFilterExpression={"mt5_ticket": {"$type": "number", "$gt": 0}})
-    _ticket_log.info("unique ticket index %s ready on trades(account_id, mt5_ticket)", UNIQUE_TICKET_INDEX)
+    existing = (await db.trades.index_information()).get(UNIQUE_TICKET_INDEX)
+    if existing and (existing.get("key") != UNIQUE_TICKET_KEYS
+                     or existing.get("partialFilterExpression") != UNIQUE_TICKET_FILTER):
+        await db.trades.drop_index(UNIQUE_TICKET_INDEX)
+        _ticket_log.warning("unique ticket index %s had a stale definition — rebuilt", UNIQUE_TICKET_INDEX)
+    await db.trades.create_index(UNIQUE_TICKET_KEYS, name=UNIQUE_TICKET_INDEX, unique=True,
+                                 partialFilterExpression=UNIQUE_TICKET_FILTER)
+    _ticket_log.info("unique ticket index %s ready on trades(account_id, mt5_ticket, position_leg) "
+                     "for open/pending rows", UNIQUE_TICKET_INDEX)
     return {"created": True, "duplicates": []}
 
 

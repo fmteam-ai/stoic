@@ -715,6 +715,33 @@ def _pending_order_ttl_seconds() -> int:
 _LOCKED_LEVELS = {"CLOSE_ONLY", "PAUSED", "EMERGENCY", "LOCKED"}
 
 
+async def is_netting_account(db, acc: dict) -> bool:
+    """Fix plan A3 — netting accounts merge several of our fills into ONE broker
+    position; the unique ticket key then needs the entry leg (deal id)."""
+    mode = str(acc.get("margin_mode") or acc.get("position_mode") or "").lower()
+    if mode in ("netting", "hedging"):
+        return mode == "netting"
+    from broker_registry import capabilities_for
+    caps = await capabilities_for(db, acc.get("broker_server"))
+    return str(caps.get("position_mode") or "hedging").lower() == "netting"
+
+
+def panic_locked(acc: dict) -> bool:
+    return (acc.get("authority_lock") or {}).get("reason") == "panic"
+
+
+async def close_late_fill_after_panic(db, trade_id, acc: dict, source: str) -> None:
+    """Fix plan A4 — a fill landing AFTER PANIC is closed at once (never left open)."""
+    from close_commands import request_close
+    out = await request_close(
+        db, {"_id": trade_id}, reason="panic", actor=f"bridge:{source}",
+        stamp={"late_fill_after_panic": True},
+        pending_modification={"type": "FULL_CLOSE", "reason": "late_fill_after_panic"},
+        emergency=True)
+    logger.warning("late fill after PANIC on account=%s trade=%s via %s — close requested (%s)",
+                   str(acc["_id"]), str(trade_id), source, out.get("command_id"))
+
+
 async def dispatch_lock_reason(db, acc: dict) -> str | None:
     """Fix plan A2/B4 — cheap lock check at the poll fence: platform kill switch
     or an account-level lock (PANIC, quarantine) ⇒ no NEW order reaches the EA.
@@ -991,23 +1018,28 @@ async def poll_trades(payload: PollRequest):
     # after it was created. When the terminal reconnects after an outage, hours-old
     # orders must EXPIRE, not fill at whatever the price is now. Close requests and
     # orders already holding a ticket are never expired (they are safety exits).
-    # Fix plan A2/B3: only orders NEVER handed to the EA expire here — a dispatched
-    # slow-filling order is the broker's to confirm or reject, never cancelled server-side.
+    # Fix plan A3: an order the terminal picked up but never confirmed expires too —
+    # TTL counted from the hand-over (`_dispatched_at`), never-sent orders from creation.
+    # A fill reported later still lands (/bridge/report flips the row back to open).
     ttl_s = _pending_order_ttl_seconds()
     expire_before = (datetime.now(timezone.utc) - timedelta(seconds=ttl_s)).isoformat()
     expired_ids = []
     stale_rows = await db.trades.find({
         "account_id": str(acc["_id"]), "status": "pending",
         "close_requested": {"$ne": True}, "mt5_ticket": None,
-        "$or": [{"_dispatched_at": {"$exists": False}}, {"_dispatched_at": None}],
-        "opened_at": {"$lt": expire_before},
-    }, {"execution_intent_id": 1, "opened_at": 1, "symbol": 1, "user_id": 1}).to_list(length=50)
+        "$or": [
+            {"_dispatched_at": {"$in": [None]}, "opened_at": {"$lt": expire_before}},
+            {"_dispatched_at": {"$lt": expire_before}},
+        ],
+    }, {"execution_intent_id": 1, "opened_at": 1, "symbol": 1, "user_id": 1,
+        "_dispatched_at": 1}).to_list(length=50)
     for stale in stale_rows:
+        dispatched = bool(stale.get("_dispatched_at"))
         res = await db.trades.update_one(
-            {"_id": stale["_id"], "status": "pending",
-             "$or": [{"_dispatched_at": {"$exists": False}}, {"_dispatched_at": None}]},
+            {"_id": stale["_id"], "status": "pending", "mt5_ticket": None},
             {"$set": {"status": "cancelled", "error": "pending_order_expired",
                       "close_reason": "expired",
+                      "expired_after_dispatch": dispatched,
                       "closed_at": datetime.now(timezone.utc).isoformat(),
                       "expired_after_s": ttl_s}})
         if not res.modified_count:
@@ -1016,13 +1048,15 @@ async def poll_trades(payload: PollRequest):
         if stale.get("execution_intent_id"):
             from execution_intents import transition as _intent_expire
             await _intent_expire(db, stale["execution_intent_id"], "expired",
-                                 detail=f"not dispatched within {ttl_s}s (terminal offline)")
+                                 detail=(f"no broker confirmation within {ttl_s}s of dispatch"
+                                         if dispatched else
+                                         f"not dispatched within {ttl_s}s (terminal offline)"))
         if stale.get("user_id"):
             await ws_manager.broadcast(stale["user_id"], "trade_updated", {
                 "trade_id": str(stale["_id"]), "status": "cancelled",
                 "close_reason": "expired"})
     if expired_ids:
-        logger.warning("expired %d never-dispatched pending order(s) for account=%s (ttl=%ss): %s",
+        logger.warning("expired %d pending order(s) for account=%s (ttl=%ss): %s",
                        len(expired_ids), str(acc["_id"]), ttl_s, expired_ids)
     # Fix plan A2/B4 — kill switch / LOCKED: pending NEW orders are cancelled, never
     # handed to the EA. Close requests (1b) and modifications (2) still flow.
@@ -1604,6 +1638,10 @@ async def report_trade(payload: BridgeTradeReport):
             update["deal_ticket"] = int(payload.deal_ticket)
         if payload.position_id:
             update["position_id"] = int(payload.position_id)
+        if payload.mt5_ticket and (payload.deal_ticket or payload.order_ticket) \
+                and await is_netting_account(db, acc):
+            # A3 — netting: our fills merge into one broker position; key the row by entry leg
+            update["position_leg"] = int(payload.deal_ticket or payload.order_ticket)
         if payload.position_volume and payload.position_volume > 0:
             # netted symbol position AFTER the fill — broker exposure only,
             # never used for per-trade attribution (that is filled_volume)
@@ -1810,7 +1848,12 @@ async def report_trade(payload: BridgeTradeReport):
                     close_reason = "take_profit" if profit_dir else "stop_loss"
             update["close_reason"] = close_reason
 
+    if payload.status == "open" and trade.get("status") == "cancelled":
+        update["late_fill_after_cancel"] = trade.get("close_reason") or trade.get("error")
+        update["closed_at"] = None
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, {"$set": update})
+    if payload.status == "open" and (panic_locked(acc) or trade.get("error") == "panic_lock"):
+        await close_late_fill_after_panic(db, trade["_id"], acc, "report")
     # Scalp fast-path reconciliation (EA v1.44). /bridge/report is the
     # OPERATIONAL acknowledgement path only: it feeds fill confirmation and
     # frees the position slot. Financial reconciliation (P&L, commission,
@@ -1951,6 +1994,30 @@ async def _scalp_reconcile_close(db, account_id: str, trade: dict, payload,
                       "reconciliation_target": "scalp_runner"},
              "$inc": {"reconciliation_attempts": 1}})
     return res
+
+
+async def _merge_duplicate_in_deal(db, account_id: str, payload, trade_doc: dict) -> str | None:
+    """A3 — fold an 'in' deal whose ticket row already exists into that row: record the
+    deal id, adopt broker position volume, backfill identifiers the row lacks."""
+    q = {"account_id": account_id, "mt5_ticket": payload.mt5_ticket, "status": {"$in": ["open", "pending"]}}
+    if trade_doc.get("position_leg") is not None:
+        q["position_leg"] = trade_doc["position_leg"]
+    existing = await db.trades.find_one(q) or await db.trades.find_one(
+        {"account_id": account_id, "mt5_ticket": payload.mt5_ticket}, sort=[("opened_at", -1)])
+    if not existing:
+        return None
+    sets = {}
+    if payload.position_volume and payload.position_volume > 0:
+        sets["position_volume"] = float(payload.position_volume)
+    for k in ("entry_price", "magic_number", "origin", "broker_deal_epoch"):
+        if existing.get(k) in (None, 0, "") and trade_doc.get(k) not in (None, ""):
+            sets[k] = trade_doc[k]
+    if not existing.get("broker_deal_id"):
+        sets["broker_deal_id"] = payload.deal_id
+    await db.trades.update_one({"_id": existing["_id"]}, {
+        **({"$set": sets} if sets else {}),
+        "$addToSet": {"merged_deal_ids": int(payload.deal_id)}})
+    return str(existing["_id"])
 
 
 @router.post("/external-deal")
@@ -2219,14 +2286,20 @@ async def external_deal(payload: BridgeExternalDeal):
                 "bot-owned 'in' deal %s (ticket %s) had no pending sibling — "
                 "trade created with protection_missing=True",
                 payload.deal_id, payload.mt5_ticket)
+        if await is_netting_account(db, acc):
+            trade_doc["position_leg"] = int(payload.deal_id)
         try:
             result = await db.trades.insert_one(trade_doc)
         except DuplicateKeyError:
-            # A2/B3 unique ticket index — a concurrent writer tracked this ticket first;
-            # the EA re-sends the deal and the next pass takes the `existing` path.
-            logger.warning("external-deal 'in' %s: ticket %s already tracked — deferred",
-                           payload.deal_id, payload.mt5_ticket)
-            return {"status": "deferred", "reason": "duplicate_ticket"}
+            # A3 — a concurrent writer tracked this ticket first: MERGE the deal into that
+            # row (idempotent) instead of failing on every retry.
+            merged = await _merge_duplicate_in_deal(db, account_id, payload, trade_doc)
+            await _mark_deal_reconciled(db, payload.deal_id, account_id, note="merged_duplicate_ticket")
+            logger.warning("external-deal 'in' %s: ticket %s already tracked — merged into %s",
+                           payload.deal_id, payload.mt5_ticket, merged)
+            return {"ok": True, "merged_into": merged, "reason": "duplicate_ticket"}
+        if panic_locked(acc) and payload.magic == STOIC_MAGIC:
+            await close_late_fill_after_panic(db, result.inserted_id, acc, "external_deal")
         if protection_unknown:
             # fire the recovery state machine NOW — an unprotected bot
             # position must not wait for the next scheduled sweep
@@ -2325,9 +2398,12 @@ async def external_deal(payload: BridgeExternalDeal):
 
     # Full close (or "out" deal for a trade STOIC didn't know was open) — original path.
     # B1 (fix plan A1): `realized` is this deal's profit only — add the banked partial legs.
-    banked_partial = (float(existing.get("pnl") or 0)
-                      if existing and existing.get("partial_closed") and existing.get("status") != "closed"
-                      else 0.0)
+    banked_partial = 0.0
+    if existing and existing.get("partial_closed"):
+        if existing.get("pnl_banked_partial") is not None:
+            banked_partial = float(existing["pnl_banked_partial"])   # reconciler / report stamped it
+        elif existing.get("status") != "closed":
+            banked_partial = float(existing.get("pnl") or 0)
     update = {
         "exit_price": payload.price,
         "pnl": round(banked_partial + float(realized or 0), 2),

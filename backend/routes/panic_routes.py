@@ -55,7 +55,10 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
         {**query, "enabled": True},
         {"$set": {"enabled": False, "panic_disabled_at": now_iso, **stamp}}, session=session,
     )
-    lock = {"reason": "panic", "at": now_iso, "by": broadcast_user_id or "admin"}
+    # A4 — scope decides who may release: a user's own PANIC (`user`) is released by
+    # that user via /bot/start; an admin-wide PANIC (`platform`) only via /admin/panic/release.
+    lock = {"reason": "panic", "at": now_iso, "by": broadcast_user_id or "admin",
+            "scope": "user" if query.get("user_id") else "platform"}
     acct_result = await db.accounts.update_many(
         query, {"$set": {"trading_authority": "LOCKED", "authority_lock": lock}}, session=session,
     )
@@ -158,6 +161,29 @@ async def panic_global(user=Depends(get_current_user)):
     require_admin(user)
     reset_rate_limiter()  # clear all rate-limit buckets
     return await _disable_all_bots_and_close_trades({})
+
+
+async def release_panic_locks(db, query: dict, *, actor: str, via: str) -> int:
+    """Unset PANIC locks matching `query`; stamps who released them."""
+    res = await db.accounts.update_many(
+        {**query, "authority_lock.reason": "panic"},
+        {"$unset": {"trading_authority": "", "authority_lock": ""},
+         "$set": {"authority_lock_released": {
+             "at": datetime.now(timezone.utc).isoformat(), "by": actor, "via": via}}})
+    return res.modified_count
+
+
+@router.post("/admin/panic/release")
+async def panic_release_global(request: Request, user=Depends(get_current_user)):
+    """A4 — release admin-wide (and any remaining) PANIC locks. Admin + step-up."""
+    from auth import require_admin
+    from step_up import require_step_up
+    require_admin(user)
+    db = get_db()
+    await require_step_up(db, user, request, "panic_release")
+    n = await release_panic_locks(db, {}, actor=user["id"], via="admin_panic_release")
+    await audit_event(db, user["id"], "panic_release_global", {"accounts_unlocked": n}, request, step_up=True)
+    return {"accounts_unlocked": n}
 
 
 OUTBOX_LEASE_S = 30

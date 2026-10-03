@@ -88,28 +88,32 @@ def test_r4_default_ttl_is_120s():
             os.environ["PENDING_ORDER_TTL_SECONDS"] = saved
 
 
-def test_b3_dispatched_slow_fill_is_never_expired_server_side(db, seeded, monkeypatch):
+def test_b3_a3_dispatched_order_expires_from_handover_never_sent_from_creation(db, seeded, monkeypatch):
     monkeypatch.setenv("PENDING_ORDER_TTL_SECONDS", "120")
-    # handed to the EA 10 minutes ago, broker still working it (no report yet)
-    inflight = _pending(db, seeded, opened_at=_iso(600), _dispatched_at=_iso(590), _dispatch_count=1)
+    # handed to the EA 90s ago (created 10 min ago): still inside its 120s window → re-offered
+    inflight = _pending(db, seeded, opened_at=_iso(600), _dispatched_at=_iso(90), _dispatch_count=1)
+    # handed over 10 min ago, never confirmed → expired (A3: "like the rest")
+    silent = _pending(db, seeded, opened_at=_iso(700), _dispatched_at=_iso(600), _dispatch_count=1)
     never_sent = _pending(db, seeded, opened_at=_iso(600))
     resp = _poll(seeded["token"])
     dispatched = {t["trade_id"] for t in resp["trades"]}
-    row = db.trades.find_one({"_id": inflight})
-    assert row["status"] == "pending", "a broker-accepted order must not be cancelled"
-    assert str(inflight) in dispatched   # dispatch lock (30s) lapsed → re-offered, never expired
+    assert db.trades.find_one({"_id": inflight})["status"] == "pending"
+    assert str(inflight) in dispatched
+    gone = db.trades.find_one({"_id": silent})
+    assert gone["status"] == "cancelled" and gone["expired_after_dispatch"] is True
     stale = db.trades.find_one({"_id": never_sent})
-    assert stale["status"] == "cancelled"
+    assert stale["status"] == "cancelled" and stale["expired_after_dispatch"] is False
     assert stale["close_reason"] == "expired" and stale["error"] == "pending_order_expired"
     assert stale["expired_after_s"] == 120
-    assert str(never_sent) not in dispatched
+    assert not ({str(silent), str(never_sent)} & dispatched)
 
 
 def test_b3_duplicate_tickets_block_unique_index_and_are_listed(db, seeded):
-    from seed import duplicate_tickets, ensure_unique_ticket_index, UNIQUE_TICKET_INDEX
+    from seed import duplicate_tickets, ensure_unique_ticket_index, UNIQUE_TICKET_INDEX, UNIQUE_TICKET_FILTER
     from database import get_db
     a = _pending(db, seeded, status="open", mt5_ticket=990001)
-    b = _pending(db, seeded, status="closed", mt5_ticket=990001)
+    b = _pending(db, seeded, status="pending", mt5_ticket=990001)
+    _pending(db, seeded, status="closed", mt5_ticket=990001)   # A3: closed rows never count
     dups = _arun(duplicate_tickets(get_db()))
     hit = [d for d in dups if d["mt5_ticket"] == 990001 and d["account_id"] == seeded["account_id"]]
     assert hit and set(hit[0]["trade_ids"]) == {str(a), str(b)} and hit[0]["count"] == 2
@@ -121,13 +125,16 @@ def test_b3_duplicate_tickets_block_unique_index_and_are_listed(db, seeded):
     assert out["created"] == (not remaining)
     if out["created"]:
         info = db.trades.index_information()[UNIQUE_TICKET_INDEX]
-        assert info["unique"] is True
-        assert info["partialFilterExpression"] == {"mt5_ticket": {"$type": "number", "$gt": 0}}
-        # null / zero tickets (pending rows) are exempt from uniqueness
-        _pending(db, seeded)
-        _pending(db, seeded)
+        assert info["unique"] is True and info["partialFilterExpression"] == UNIQUE_TICKET_FILTER
+        _pending(db, seeded)                      # null tickets exempt
         _pending(db, seeded, mt5_ticket=0)
-        _pending(db, seeded, mt5_ticket=0)
+        _pending(db, seeded, status="closed", mt5_ticket=990001)   # closed re-use allowed
+        # A3 netting: same position ticket, distinct entry legs coexist while open
+        _pending(db, seeded, status="open", mt5_ticket=990002, position_leg=1)
+        _pending(db, seeded, status="open", mt5_ticket=990002, position_leg=2)
+        from pymongo.errors import DuplicateKeyError
+        with pytest.raises(DuplicateKeyError):
+            _pending(db, seeded, status="open", mt5_ticket=990001)
 
 
 # ------------------------------------------------------------------ B4

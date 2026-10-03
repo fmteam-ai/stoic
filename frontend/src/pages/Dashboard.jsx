@@ -4,7 +4,7 @@ import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianG
 import api, { formatApiError } from "@/lib/api";
 import { TradingSafetyBanner } from "@/components/TradingSafetyBanner";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock, Bot, Pause, CheckCircle2, AlertCircle, Clock, Target, TrendingUp, TrendingDown } from "lucide-react";
+import { ArrowUp, ArrowDown, RefreshCw as ArrowsClockwise, LineChart as ChartLineUp, Newspaper, ShieldAlert, CalendarClock, Bot, Pause, CheckCircle2, AlertCircle, Clock, Target, TrendingUp, TrendingDown, Lock } from "lucide-react";
 import { useLiveStream } from "@/lib/useLiveStream";
 import { IntegrityWidget } from "@/components/IntegrityWidget";
 import { PerAccountComparison } from "@/components/PerAccountComparison";
@@ -106,7 +106,8 @@ function BotStatusStrip({ status }) {
     const minConf = status.min_confidence;
 
     let stateIcon, stateColor, stateLabel;
-    if (!active) { stateIcon = Pause; stateColor = "#52525B"; stateLabel = "STOPPED"; }
+    if (status.panic_locked) { stateIcon = Lock; stateColor = "#FF3B30"; stateLabel = status.panic_lock?.scope === "platform" ? "PANIC LOCKED · ADMIN" : "PANIC LOCKED"; }
+    else if (!active) { stateIcon = Pause; stateColor = "#52525B"; stateLabel = "STOPPED"; }
     else if (hasVeto) { stateIcon = AlertCircle; stateColor = "#FFB000"; stateLabel = "VETOED"; }
     else if (isHold) { stateIcon = Clock; stateColor = "#FFB000"; stateLabel = "HOLDING"; }
     else { stateIcon = CheckCircle2; stateColor = "#00FF41"; stateLabel = "TRADING"; }

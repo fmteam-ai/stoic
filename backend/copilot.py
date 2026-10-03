@@ -102,8 +102,14 @@ async def _build_context_snapshot(user_id: str) -> dict:
     ]
 
     # Panic state
-    panic = await db.panic_state.find_one({"user_id": user_id}) or {}
-    snap["panic"] = {"active": bool(panic.get("active")), "reason": panic.get("reason")}
+    # A4 — the PANIC lock lives on the accounts (authority_lock), not a side table
+    locked = await db.accounts.find({"user_id": user_id, "authority_lock.reason": "panic"},
+                                    {"label": 1, "authority_lock": 1}).to_list(length=20)
+    snap["panic"] = {"active": bool(locked),
+                     "reason": ("PANIC LOCK — no new orders until released" if locked else None),
+                     "locked_accounts": [a.get("label") for a in locked],
+                     "scope": ("platform" if any((a.get("authority_lock") or {}).get("scope") == "platform"
+                                                 for a in locked) else ("user" if locked else None))}
 
     # Active conditional triggers
     triggers = await db.conditional_triggers.find(

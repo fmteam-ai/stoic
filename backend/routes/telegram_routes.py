@@ -92,9 +92,11 @@ async def _cmd_status(token, chat_id, user_id) -> None:
         "user_id": user_id, "status": {"$in": ["pending", "open"]}
     })
     active = bool(cfg and cfg.get("active"))
+    locked = await db.accounts.count_documents({"user_id": user_id, "authority_lock.reason": "panic"})
+    state = ("🔒 PANIC LOCKED" if locked else ("🟢 ACTIVE" if active else "🔴 STOPPED"))
     parts = [
         "*🤖 Bot Status*",
-        f"State: {'🟢 ACTIVE' if active else '🔴 STOPPED'}",
+        f"State: {state}",
         f"Risk: {_esc(cfg.get('risk_level','medium') if cfg else 'medium')}",
         f"Symbols: {_esc(' · '.join(cfg.get('symbols', []) if cfg else []))}",
         f"Open trades: {open_trades}",
@@ -185,6 +187,13 @@ async def _cmd_balance(token, chat_id, user_id) -> None:
 
 async def _cmd_run(token, chat_id, user_id) -> None:
     db = get_db()
+    # A4 — a PANIC lock is released only in the dashboard (step-up); flipping
+    # `active` here would show ACTIVE while nothing can trade.
+    if await db.accounts.count_documents({"user_id": user_id, "authority_lock.reason": "panic"}):
+        await _send_reply(token, chat_id,
+                          "*🔒 PANIC LOCK active*\n\nRelease it from the dashboard \\(Bot Config → Start, "
+                          "step\\-up required\\) before the bot can run\\.")
+        return
     # Broadcast: turn ON every bot the user owns. Telegram has no concept
     # of "which account" — the safe default is to control all of them.
     res = await db.bot_configs.update_many(

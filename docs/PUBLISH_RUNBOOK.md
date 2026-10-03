@@ -287,20 +287,33 @@ deploy/rollback.sh v1.4.1 --with-db backups/<archive>   # also restore the DB sn
 | a Docker secret in `./secrets/` | `docker compose up -d --force-recreate backend worker-*` |
 | forecast profile on/off | edit `COMPOSE_FILE` in `./.env`, then `make publish` |
 
-### Unique ticket index (fix plan A2 / B3)
+### Unique ticket index (fix plan A2 / A3)
 
-Boot builds `uniq_account_ticket` on `trades(account_id, mt5_ticket)` (partial: positive numeric
-tickets). While two rows share one ticket the index is **refused** and the backend log lists the
-offenders (`seed.indexes … unique ticket index NOT built`). Resolve on the server:
+Boot builds `uniq_account_ticket` on `trades(account_id, mt5_ticket, position_leg)` for **open/pending**
+rows only (closed history may re-use broker tickets; netting accounts carry the entry deal id in
+`position_leg`, so several fills into one broker position stay distinct). While two live rows share a
+key the index is **refused** and the backend log lists the offenders
+(`seed.indexes … unique ticket index NOT built`). Resolve on the server:
 
 ```bash
-docker compose exec -T backend python ops/ticket_duplicates.py            # list KEEP / dup / MANUAL
-docker compose exec -T backend python ops/ticket_duplicates.py --archive  # move non-open dups to trades_duplicates_archive
+docker compose exec -T backend python ops/ticket_duplicates.py                  # list KEEP / archive / MANUAL
+docker compose exec -T backend python ops/ticket_duplicates.py --archive        # dry run of the plan
+docker compose exec -T backend python ops/ticket_duplicates.py --archive --yes  # apply (cap --max=50 rows/run)
 docker compose exec -T backend python ops/ticket_duplicates.py --build-index
 ```
 
-Groups with two OPEN rows are marked MANUAL and never touched — close/merge them by hand first.
-After the index exists the log shows `unique ticket index uniq_account_ticket ready`.
+Safety: groups with two open rows, a close/modification in flight, a candidate carrying P&L the kept
+row lacks, or a row written in the last 10 minutes are MANUAL and never touched; archive copies are
+read back before the source row is deleted. After the index exists the log shows
+`unique ticket index uniq_account_ticket ready`.
+
+### PANIC locks (fix plan A2 / A4)
+
+PANIC locks the account(s) (`trading_authority=LOCKED`, `authority_lock.scope=user|platform`), stops the
+scalp runners and cancels queued orders; a fill that lands afterwards is closed at once. A user releases
+their **own** lock by starting the bot (step-up; demo/paper-only users without MFA need none). An
+**admin-wide** PANIC (`POST /api/admin/panic`) is released only via `POST /api/admin/panic/release`
+(admin + step-up). Dashboard, Bot Pulse, Telegram `/status` and the Co-pilot all show the lock.
 
 ---
 

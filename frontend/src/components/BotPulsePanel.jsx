@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
-import { Activity, Pause, AlertTriangle, Ban, CheckCircle2, Clock, ChevronDown, ChevronUp } from "lucide-react";
+import { Activity, Pause, AlertTriangle, Ban, CheckCircle2, Clock, ChevronDown, ChevronUp, Lock } from "lucide-react";
 
 // Threshold at which we switch from the full expanded list to a dropdown+preview.
 // Below this, all rows render inline; above, users pick one to inspect + can
@@ -62,7 +62,12 @@ function PulseRow({ item }) {
                     {item.label}
                 </div>
                 <div className="mt-1 flex flex-wrap gap-1.5">
-                    {item.active && !isShadow && (
+                    {item.locked && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-[#FF3B30]/50 text-[#FF3B30] text-[10px] font-mono tracking-widest" data-testid={`bot-pulse-locked-${item.config_id}`}>
+                            <Lock className="w-3 h-3" /> PANIC LOCKED
+                        </span>
+                    )}
+                    {item.active && !isShadow && !item.locked && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-[#00FF41]/40 text-[#00FF41] text-[10px] font-mono tracking-widest">
                             <span className="w-1.5 h-1.5 bg-[#00FF41] rounded-full animate-pulse" /> RUNNING
                         </span>
@@ -249,7 +254,7 @@ export default function BotPulsePanel() {
                         data-testid="bot-pulse-selector"
                         className="bg-[#0A0A0A] border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-white focus:outline-none focus:border-[#00FF41] transition-colors max-w-[420px]">
                         {rankedItems.map(i => {
-                            const state = i.active ? "RUNNING" : (i.paper_shadow_mode ? "SHADOW" : "OFF");
+                            const state = i.locked ? "LOCKED" : (i.active ? "RUNNING" : (i.paper_shadow_mode ? "SHADOW" : "OFF"));
                             const strat = i.strategy_label ? ` · ${i.strategy_label}` : "";
                             const lvl = i.pulse?.level ? ` · ${i.pulse.level.toUpperCase()}` : "";
                             return (
