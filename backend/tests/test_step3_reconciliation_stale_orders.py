@@ -153,7 +153,8 @@ def test_c4_hours_old_pending_order_expires_instead_of_dispatching(db, seeded, m
     assert str(fresh_id) in dispatched
     assert str(stale_id) not in dispatched
     stale = db.trades.find_one({"_id": stale_id})
-    assert stale["status"] == "cancelled" and stale["close_reason"] == "stale_order_expired"
+    assert stale["status"] == "cancelled" and stale["close_reason"] == "expired"
+    assert stale["error"] == "pending_order_expired"
     assert stale["expired_after_s"] == 300
     assert db.execution_intents.find_one({"intent_id": intent_id})["status"] == "expired"
 
@@ -177,6 +178,6 @@ def test_c4_ttl_floor_and_default():
     try:
         assert _pending_order_ttl_seconds() == 30
         os.environ["PENDING_ORDER_TTL_SECONDS"] = ""
-        assert _pending_order_ttl_seconds() == 300
+        assert _pending_order_ttl_seconds() == 120   # fix plan A2/R4
     finally:
         os.environ.pop("PENDING_ORDER_TTL_SECONDS", None)

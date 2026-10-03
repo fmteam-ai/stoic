@@ -25,6 +25,13 @@ from notifier import notify_circuit_breaker
 
 logger = logging.getLogger("trade-manager")
 
+# Fix plan A2/B7 — a tier modification may only be written while the position
+# is still open, has NO close in flight and holds no other pending modification;
+# it must never overwrite an in-flight FULL_CLOSE (PANIC / manual / TP3).
+def _free_slot_filter(trade_id) -> dict:
+    return {"_id": trade_id, "status": "open", "close_requested": {"$ne": True},
+            "$or": [{"pending_modification": None}, {"pending_modification": {"$exists": False}}]}
+
 # Default pip targets (override per-trade if signal provided them)
 # user policy (2026-07-16): TP1 100 / TP2 200, bank half at TP1, rest at TP2
 DEFAULT_SL_PIPS = 120
@@ -166,8 +173,8 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
         tier2_frac = 0.5 if cfg.get("let_winners_run") else 0.25
         new_lot = round(original_lot * tier2_frac, 2)
         if new_lot >= 0.01:
-            await db.trades.update_one(
-                {"_id": trade_id},
+            res = await db.trades.update_one(
+                _free_slot_filter(trade_id),
                 {"$set": {
                     "pending_modification": {
                         "type": "PARTIAL_CLOSE",
@@ -177,6 +184,8 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                     "tp2_target_lot": new_lot,
                 }},
             )
+            if not res.matched_count:
+                return  # close in flight / slot taken — never overwrite it
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
                 "action": "PARTIAL_CLOSE_TP2",
@@ -192,8 +201,8 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     # running toward TP2/TP3 to raise the average win.
     if not trade.get("tp1_closed") and pips_up >= tp1_pips:
         if cfg.get("let_winners_run"):
-            await db.trades.update_one(
-                {"_id": trade_id},
+            res = await db.trades.update_one(
+                _free_slot_filter(trade_id),
                 {"$set": {
                     "tp1_closed": True,
                     "pending_modification": {
@@ -204,6 +213,8 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                     "be_target_sl": round(entry, 5),
                 }},
             )
+            if not res.matched_count:
+                return
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
                 "action": "BE_ONLY_TP1_WINNERS_RUN",
@@ -215,8 +226,8 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             return
         new_lot = round(original_lot * 0.5, 2)
         if new_lot >= 0.01:
-            await db.trades.update_one(
-                {"_id": trade_id},
+            res = await db.trades.update_one(
+                _free_slot_filter(trade_id),
                 {"$set": {
                     "pending_modification": {
                         "type": "PARTIAL_CLOSE",
@@ -228,6 +239,8 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                     "be_target_sl": round(entry, 5),
                 }},
             )
+            if not res.matched_count:
+                return
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
                 "action": "PARTIAL_CLOSE_TP1_AND_BE",

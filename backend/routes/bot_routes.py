@@ -953,19 +953,31 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
     # Step-up MFA — starting a bot on a live context (fresh activation or
     # panic/trip release) requires a fresh TOTP verification (iter-153).
     cfg_before = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
-    if await _live_context(db, user["id"], account_id, owns):
+    # Fix plan A2/B2 — a PANIC lock on the account(s) is released ONLY here, with step-up.
+    lock_q = {"user_id": user["id"], "authority_lock.reason": "panic"}
+    if owns:
+        lock_q["_id"] = owns["_id"]
+    panic_locked = await db.accounts.count_documents(lock_q) > 0
+    if await _live_context(db, user["id"], account_id, owns) or panic_locked:
         # Staged-rollout gate (advisory unless STAGE_ENFORCEMENT=true)
         from routes.validation_routes import live_stage_gate
         stage_block = await live_stage_gate(db)
         if stage_block:
             raise HTTPException(status_code=409, detail={
                 "code": "deployment_stage_blocked", "message": stage_block})
-        action = ("panic_release" if (cfg_before or {}).get("tripped_at")
+        action = ("panic_release" if ((cfg_before or {}).get("tripped_at") or panic_locked)
                   else "live_activation")
         await require_step_up(db, user, request, action)
         await audit_event(db, user["id"], action,
-                          {"account_id": account_id, "via": "bot_start"},
+                          {"account_id": account_id, "via": "bot_start",
+                           "account_lock_released": panic_locked},
                           request, step_up=True)
+    if panic_locked:
+        await db.accounts.update_many(
+            lock_q,
+            {"$unset": {"trading_authority": "", "authority_lock": ""},
+             "$set": {"authority_lock_released": {
+                 "at": datetime.now(timezone.utc).isoformat(), "by": user["id"], "via": "bot_start"}}})
     await _get_or_create_config(db, user["id"], account_id)
     # CRITICAL: re-enabling a bot must clear the panic/circuit-breaker trip
     # markers, otherwise the UI keeps showing "PANIC LOCK" forever even

@@ -292,7 +292,7 @@ export default function BotConfig() {
         setErr(""); setMsg("");
         try {
             const { data } = await api.post("/panic");
-            setMsg(`PANIC LOCK engaged · ${data.bots_disabled} bot(s) disabled · ${data.trades_cancelled} pending cancelled · ${data.open_trades_marked_for_close} open marked-for-close.`);
+            setMsg(`PANIC LOCK engaged · ${data.bots_disabled} bot(s) disabled · ${data.scalp_runners_disabled ?? 0} scalp runner(s) stopped · ${data.accounts_locked ?? 0} account(s) LOCKED · ${data.trades_cancelled} pending cancelled · ${data.open_trades_marked_for_close} open marked-for-close. Release the lock by starting the bot (step-up required); scalp stays off until re-enabled.`);
             await load();
         } catch (e) { setErr(formatApiError(e)); }
     };

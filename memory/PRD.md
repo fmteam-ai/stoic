@@ -3075,3 +3075,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
   approval_mode; /authority/inventory/pending + release-readiness inventory expose approval_mode (+note).
   Panel: labels "same admin · fresh step-up", single-operator badge, hint mentions the env. Tests in
   test_iter239_round10.py. Docs: PUBLISH_RUNBOOK.md, .env.example.
+
+## 2026-10-03 — Fix plan Step A2 (order lifecycle & PANIC) — DONE, user verification pending
+- PANIC now stops scalp + LOCKS accounts (release via /bot/start step-up); poll fence cancels queued NEW orders under kill switch / LOCKED; expiry (120s) only for never-dispatched orders; unique ticket index with duplicate pre-check + `ops/ticket_duplicates.py`; trade_manager never overwrites an in-flight FULL_CLOSE. Details: memory/CHANGELOG.md. Tests `tests/test_fixplan_a2_order_lifecycle.py`; manifest + rc_lock refrozen.
+- Operator: Save to GitHub (confirm `origin/main` unchanged first) → `STOIC_READINESS_POLICY=onboarding-close-only ./deploy/update.sh` → check log for `unique ticket index … ready` (else run ops/ticket_duplicates.py) → soak checks: PANIC with scalp running, LOCKED platform → no dispatch, slow fill never cancelled.
+- Next: Fix plan B1 (sizing: R1, R9, R10, B10, B11).

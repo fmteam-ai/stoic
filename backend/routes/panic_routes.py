@@ -20,6 +20,18 @@ from rate_limiter import reset as reset_rate_limiter
 router = APIRouter(tags=["panic"])
 
 
+def halt_local_scalp_runners(user_id: str | None) -> int:
+    """Flip every in-process scalp runner (of `user_id`, or all) to disabled."""
+    from scalp.engine import _runners
+    n = 0
+    for r in list(_runners.values()):
+        if user_id is None or r.user_id == user_id:
+            if r.enabled:
+                n += 1
+            r.enabled = False
+    return n
+
+
 async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str = None,
                                              stamp: dict | None = None, session=None) -> dict:
     """`stamp` = nl_execution.effect_stamp(ctx) when invoked from the fenced NL executor."""
@@ -34,6 +46,20 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
             "tripped_reason": "PANIC LOCK — all trading halted by user/admin", **stamp,
         }}, session=session,
     )
+    # Fix plan A2/B2 — PANIC also stops the scalp fast path (persisted config +
+    # in-process runners) and LOCKS the account(s): the authority choke point,
+    # the tick ingress (re-reads the account every batch, so it works across
+    # workers) and the poll dispatch fence all refuse new exposure until the
+    # lock is released via /bot/start (panic_release step-up).
+    scalp_result = await db.scalp_configs.update_many(
+        {**query, "enabled": True},
+        {"$set": {"enabled": False, "panic_disabled_at": now_iso, **stamp}}, session=session,
+    )
+    lock = {"reason": "panic", "at": now_iso, "by": broadcast_user_id or "admin"}
+    acct_result = await db.accounts.update_many(
+        query, {"$set": {"trading_authority": "LOCKED", "authority_lock": lock}}, session=session,
+    )
+    halt_local_scalp_runners(query.get("user_id"))
     # Mark all pending trades cancelled
     trade_cancel = await db.trades.update_many(
         {**query, "status": "pending"},
@@ -51,6 +77,8 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
                                  session=session, stamp=stamp, emergency=True)   # r26 P2-02: the brake never refuses
     payload = {
         "bots_disabled": bot_result.modified_count,
+        "scalp_runners_disabled": scalp_result.modified_count,
+        "accounts_locked": acct_result.modified_count,
         "trades_cancelled": trade_cancel.modified_count,
         "open_trades_marked_for_close": closed["trades_marked_for_close"],
         "close_command_id": closed["command_id"],

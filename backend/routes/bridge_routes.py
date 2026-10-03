@@ -60,6 +60,34 @@ async def _account_by_token(token: str) -> dict:
     return acc
 
 
+def _backfill_doc(acc: dict, account_id: str, p, opened_iso: str) -> dict:
+    return {
+        "user_id": acc["user_id"],
+        "account_id": account_id,
+        "symbol": p.symbol,
+        "action": p.type,
+        "lot_size": p.volume,
+        "entry_price": p.price_open,
+        "stop_loss": p.sl or 0.0,
+        # broker snapshot IS confirmed protection evidence (round 12)
+        "confirmed_stop_loss": p.sl or 0.0,
+        "take_profit": p.tp or 0.0,
+        "exit_price": None,
+        "pnl": 0.0,
+        "status": "open",
+        "mode": "live",
+        "broker": acc.get("broker", "MT5"),
+        "mt5_ticket": int(p.ticket),
+        "opened_at": opened_iso,
+        "closed_at": None,
+        "origin": ("manual" if p.magic == 0 else
+                   "auto" if p.magic == 901234 else "other_ea"),
+        "magic_number": int(p.magic or 0),
+        "external_open": p.magic != 901234,
+        "backfilled_from_snapshot": True,
+    }
+
+
 @router.post("/heartbeat")
 async def heartbeat(payload: BridgeHeartbeat):
     db = get_db()
@@ -627,31 +655,12 @@ async def heartbeat(payload: BridgeHeartbeat):
             # epoch seconds — labelling it UTC causes timestamp drift.
             # Use server-received UTC as the canonical opened_at instead.
             opened_iso = now_iso
-            await db.trades.insert_one({
-                "user_id": acc["user_id"],
-                "account_id": account_id,
-                "symbol": p.symbol,
-                "action": p.type,
-                "lot_size": p.volume,
-                "entry_price": p.price_open,
-                "stop_loss": p.sl or 0.0,
-                # broker snapshot IS confirmed protection evidence (round 12)
-                "confirmed_stop_loss": p.sl or 0.0,
-                "take_profit": p.tp or 0.0,
-                "exit_price": None,
-                "pnl": 0.0,
-                "status": "open",
-                "mode": "live",
-                "broker": acc.get("broker", "MT5"),
-                "mt5_ticket": int(p.ticket),
-                "opened_at": opened_iso,
-                "closed_at": None,
-                "origin": ("manual" if p.magic == 0 else
-                           "auto" if p.magic == 901234 else "other_ea"),
-                "magic_number": int(p.magic or 0),
-                "external_open": p.magic != 901234,
-                "backfilled_from_snapshot": True,
-            })
+            try:
+                await db.trades.insert_one(_backfill_doc(acc, account_id, p, opened_iso))
+            except DuplicateKeyError:
+                # A2/B3 unique ticket index: a concurrent writer tracked it first
+                logger.info("backfill skipped — ticket %s already tracked", p.ticket)
+                continue
             backfilled += 1
         if backfilled > 0:
             await ws_manager.broadcast(acc["user_id"], "trades_backfilled", {
@@ -699,7 +708,27 @@ class PollRequest(BaseModel):
 
 
 def _pending_order_ttl_seconds() -> int:
-    return max(30, int(os.environ.get("PENDING_ORDER_TTL_SECONDS") or 300))
+    # Fix plan A2/R4: 120s default — a NEW market order is only valid briefly.
+    return max(30, int(os.environ.get("PENDING_ORDER_TTL_SECONDS") or 120))
+
+
+_LOCKED_LEVELS = {"CLOSE_ONLY", "PAUSED", "EMERGENCY", "LOCKED"}
+
+
+async def dispatch_lock_reason(db, acc: dict) -> str | None:
+    """Fix plan A2/B4 — cheap lock check at the poll fence: platform kill switch
+    or an account-level lock (PANIC, quarantine) ⇒ no NEW order reaches the EA.
+    Close requests and modifications are never blocked (reducing risk)."""
+    if acc.get("broker_account_mismatch"):
+        return "account_quarantined"
+    if str(acc.get("trading_authority") or "FULL") in _LOCKED_LEVELS:
+        lock = acc.get("authority_lock") or {}
+        return f"account_{str(acc.get('trading_authority')).lower()}" + (
+            f":{lock['reason']}" if lock.get("reason") else "")
+    doc = await db.platform_state.find_one({"_id": "trading_authority"}, {"level": 1})
+    if doc and str(doc.get("level") or "FULL") in _LOCKED_LEVELS:
+        return f"platform_{str(doc['level']).lower()}"
+    return None
 
 
 class BridgeCandles(BaseModel):
@@ -889,6 +918,13 @@ async def receive_ticks(payload: BridgeTicks):
         await runner.restore_risk(db)
         from scalp.model import load_persisted
         await load_persisted(db, runner.model_key())
+    # Fix plan A2/B2 — an account lock (PANIC / quarantine / kill switch) halts
+    # NEW scalp entries on whichever worker owns the runner; closes still flow.
+    if runner.enabled and (account.get("broker_account_mismatch")
+                           or str(account.get("trading_authority") or "FULL") in _LOCKED_LEVELS):
+        runner.enabled = False
+        logger.warning("scalp runner %s:%s disabled — account authority %s",
+                       str(account["_id"]), base, account.get("trading_authority"))
     out = await runner.ingest(db, account, payload.ticks or [], payload.sent_at_ms)
     await _record_tick_ingress(db, str(account["_id"]), base, "ok", None,
                                len(payload.ticks or []))
@@ -955,19 +991,23 @@ async def poll_trades(payload: PollRequest):
     # after it was created. When the terminal reconnects after an outage, hours-old
     # orders must EXPIRE, not fill at whatever the price is now. Close requests and
     # orders already holding a ticket are never expired (they are safety exits).
+    # Fix plan A2/B3: only orders NEVER handed to the EA expire here — a dispatched
+    # slow-filling order is the broker's to confirm or reject, never cancelled server-side.
     ttl_s = _pending_order_ttl_seconds()
     expire_before = (datetime.now(timezone.utc) - timedelta(seconds=ttl_s)).isoformat()
     expired_ids = []
     stale_rows = await db.trades.find({
         "account_id": str(acc["_id"]), "status": "pending",
         "close_requested": {"$ne": True}, "mt5_ticket": None,
+        "$or": [{"_dispatched_at": {"$exists": False}}, {"_dispatched_at": None}],
         "opened_at": {"$lt": expire_before},
     }, {"execution_intent_id": 1, "opened_at": 1, "symbol": 1, "user_id": 1}).to_list(length=50)
     for stale in stale_rows:
         res = await db.trades.update_one(
-            {"_id": stale["_id"], "status": "pending"},
-            {"$set": {"status": "cancelled", "error": "stale_order_expired",
-                      "close_reason": "stale_order_expired",
+            {"_id": stale["_id"], "status": "pending",
+             "$or": [{"_dispatched_at": {"$exists": False}}, {"_dispatched_at": None}]},
+            {"$set": {"status": "cancelled", "error": "pending_order_expired",
+                      "close_reason": "expired",
                       "closed_at": datetime.now(timezone.utc).isoformat(),
                       "expired_after_s": ttl_s}})
         if not res.modified_count:
@@ -980,10 +1020,39 @@ async def poll_trades(payload: PollRequest):
         if stale.get("user_id"):
             await ws_manager.broadcast(stale["user_id"], "trade_updated", {
                 "trade_id": str(stale["_id"]), "status": "cancelled",
-                "close_reason": "stale_order_expired"})
+                "close_reason": "expired"})
     if expired_ids:
-        logger.warning("expired %d stale pending order(s) for account=%s (ttl=%ss): %s",
+        logger.warning("expired %d never-dispatched pending order(s) for account=%s (ttl=%ss): %s",
                        len(expired_ids), str(acc["_id"]), ttl_s, expired_ids)
+    # Fix plan A2/B4 — kill switch / LOCKED: pending NEW orders are cancelled, never
+    # handed to the EA. Close requests (1b) and modifications (2) still flow.
+    lock_reason = await dispatch_lock_reason(db, acc)
+    if lock_reason:
+        now_iso = datetime.now(timezone.utc).isoformat()
+        locked_rows = await db.trades.find({
+            "account_id": str(acc["_id"]), "status": "pending",
+            "close_requested": {"$ne": True}, "mt5_ticket": None,
+            "$or": [{"_dispatched_at": {"$exists": False}}, {"_dispatched_at": None}],
+        }, {"execution_intent_id": 1, "user_id": 1}).to_list(length=50)
+        for row in locked_rows:
+            res = await db.trades.update_one(
+                {"_id": row["_id"], "status": "pending",
+                 "$or": [{"_dispatched_at": {"$exists": False}}, {"_dispatched_at": None}]},
+                {"$set": {"status": "cancelled", "error": f"authority_locked:{lock_reason}",
+                          "close_reason": "authority_locked", "closed_at": now_iso}})
+            if not res.modified_count:
+                continue
+            if row.get("execution_intent_id"):
+                from execution_intents import transition as _intent_cancel
+                await _intent_cancel(db, row["execution_intent_id"], "cancelled",
+                                     detail=f"authority locked ({lock_reason}) at dispatch fence")
+            if row.get("user_id"):
+                await ws_manager.broadcast(row["user_id"], "trade_updated", {
+                    "trade_id": str(row["_id"]), "status": "cancelled",
+                    "close_reason": "authority_locked"})
+        if locked_rows:
+            logger.warning("dispatch fence refused %d pending order(s) for account=%s: %s",
+                           len(locked_rows), str(acc["_id"]), lock_reason)
     out = []
     # Loop up to 20 times, each iteration atomically claims one pending doc.
     for _ in range(20):
@@ -991,6 +1060,7 @@ async def poll_trades(payload: PollRequest):
             {
                 "account_id": str(acc["_id"]),
                 "status": "pending",
+                **({"close_requested": {"$eq": True}} if lock_reason else {}),
                 "$or": [
                     {"_dispatched_at": {"$exists": False}},
                     {"_dispatched_at": None},
@@ -2149,7 +2219,14 @@ async def external_deal(payload: BridgeExternalDeal):
                 "bot-owned 'in' deal %s (ticket %s) had no pending sibling — "
                 "trade created with protection_missing=True",
                 payload.deal_id, payload.mt5_ticket)
-        result = await db.trades.insert_one(trade_doc)
+        try:
+            result = await db.trades.insert_one(trade_doc)
+        except DuplicateKeyError:
+            # A2/B3 unique ticket index — a concurrent writer tracked this ticket first;
+            # the EA re-sends the deal and the next pass takes the `existing` path.
+            logger.warning("external-deal 'in' %s: ticket %s already tracked — deferred",
+                           payload.deal_id, payload.mt5_ticket)
+            return {"status": "deferred", "reason": "duplicate_ticket"}
         if protection_unknown:
             # fire the recovery state machine NOW — an unprotected bot
             # position must not wait for the next scheduled sweep
@@ -2328,8 +2405,12 @@ async def external_deal(payload: BridgeExternalDeal):
                 "protection_missing": True,
                 "protection_state": "PROTECTION_UNKNOWN",
             }
-            rev = await db.trades.insert_one(rev_doc)
-            if was_scalp:
+            try:
+                rev = await db.trades.insert_one(rev_doc)
+            except DuplicateKeyError:
+                logger.warning("reversal row for ticket %s already tracked — skipped", payload.mt5_ticket)
+                rev = None
+            if rev is not None and was_scalp:
                 # Round 8 item 4 — scalp strategies do NOT support reversals:
                 # flatten the unexpected opposite position immediately through
                 # the unified close protocol (r26 P2-01: immutable command row).
@@ -2345,7 +2426,7 @@ async def external_deal(payload: BridgeExternalDeal):
                 payload.action,
                 "EMERGENCY CLOSE queued (scalp)" if was_scalp
                 else "tracked with protection_missing=True",
-                str(rev.inserted_id))
+                str(rev.inserted_id) if rev is not None else "already-tracked")
     else:
         # Close event with no matching trade — user opened AND closed on MT5
         # without STOIC ever tracking it. Insert a fully-closed audit row so
@@ -2369,7 +2450,12 @@ async def external_deal(payload: BridgeExternalDeal):
             "broker_deal_id": payload.deal_id,
             **update,
         }
-        result = await db.trades.insert_one(trade_doc)
+        try:
+            result = await db.trades.insert_one(trade_doc)
+        except DuplicateKeyError:
+            logger.warning("external-deal 'out' %s: ticket %s already tracked — deferred",
+                           payload.deal_id, payload.mt5_ticket)
+            return {"status": "deferred", "reason": "duplicate_ticket"}
         tid = str(result.inserted_id)
         await _mark_deal_reconciled(db, payload.deal_id, account_id,
                                     note="no_tracked_trade_audit_row")

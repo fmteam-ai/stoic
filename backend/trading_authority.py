@@ -66,7 +66,11 @@ async def account_domain(db, account: dict | None = None) -> dict:
                 "reason": "trading_enabled is not explicitly true — account OFF"}
     lvl = account.get("trading_authority")
     if lvl in LEVELS and lvl != "FULL":
-        return {"level": lvl, "reason": "account-level restriction"}
+        lock = account.get("authority_lock") or {}
+        why = "account-level restriction"
+        if lock.get("reason") == "panic":
+            why = "PANIC lock — release by starting the bot (step-up required)"
+        return {"level": lvl, "reason": why}
     return {"level": "FULL", "reason": "account unrestricted"}
 
 

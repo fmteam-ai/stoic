@@ -222,6 +222,41 @@ async def invalidate_legacy_plaintext_tokens():
     return {"activation": r1.modified_count, "reset": r2.modified_count}
 
 
+_ticket_log = logging.getLogger("seed.indexes")
+
+
+async def duplicate_tickets(db, limit: int = 20) -> list[dict]:
+    """Records sharing one (account_id, mt5_ticket) — they block the unique index."""
+    rows = await db.trades.aggregate([
+        {"$match": {"mt5_ticket": {"$type": "number", "$gt": 0}}},
+        {"$group": {"_id": {"account_id": "$account_id", "mt5_ticket": "$mt5_ticket"},
+                    "n": {"$sum": 1}, "trade_ids": {"$push": "$_id"}}},
+        {"$match": {"n": {"$gt": 1}}},
+        {"$limit": limit},
+    ]).to_list(length=limit)
+    return [{"account_id": r["_id"]["account_id"], "mt5_ticket": r["_id"]["mt5_ticket"],
+             "count": r["n"], "trade_ids": [str(x) for x in r["trade_ids"]]} for r in rows]
+
+
+UNIQUE_TICKET_INDEX = "uniq_account_ticket"
+
+
+async def ensure_unique_ticket_index(db) -> dict:
+    """Fix plan A2/B3 — one broker ticket maps to ONE trade row per account.
+    Partial (positive numeric tickets only); refused — loudly, listing the
+    offenders — while duplicates exist, so boot never fails on legacy data."""
+    dups = await duplicate_tickets(db)
+    if dups:
+        _ticket_log.error("unique ticket index NOT built — %d duplicate (account, ticket) group(s): %s",
+                     len(dups), dups)
+        return {"created": False, "duplicates": dups}
+    await db.trades.create_index(
+        [("account_id", 1), ("mt5_ticket", 1)], name=UNIQUE_TICKET_INDEX, unique=True,
+        partialFilterExpression={"mt5_ticket": {"$type": "number", "$gt": 0}})
+    _ticket_log.info("unique ticket index %s ready on trades(account_id, mt5_ticket)", UNIQUE_TICKET_INDEX)
+    return {"created": True, "duplicates": []}
+
+
 async def ensure_indexes():
     db = get_db()
     await invalidate_legacy_plaintext_tokens()
@@ -278,6 +313,7 @@ async def ensure_indexes():
     await db.trades.create_index([("user_id", 1), ("status", 1)])
     await db.trades.create_index([("user_id", 1), ("closed_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])
+    await ensure_unique_ticket_index(db)
     # Round 15 item 10 — decision updates key on decision_id everywhere;
     # without this index every update is a collection scan (caught by
     # dependency_health_check on first deploy). Partial: legacy docs

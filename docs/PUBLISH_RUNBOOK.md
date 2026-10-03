@@ -287,6 +287,21 @@ deploy/rollback.sh v1.4.1 --with-db backups/<archive>   # also restore the DB sn
 | a Docker secret in `./secrets/` | `docker compose up -d --force-recreate backend worker-*` |
 | forecast profile on/off | edit `COMPOSE_FILE` in `./.env`, then `make publish` |
 
+### Unique ticket index (fix plan A2 / B3)
+
+Boot builds `uniq_account_ticket` on `trades(account_id, mt5_ticket)` (partial: positive numeric
+tickets). While two rows share one ticket the index is **refused** and the backend log lists the
+offenders (`seed.indexes … unique ticket index NOT built`). Resolve on the server:
+
+```bash
+docker compose exec -T backend python ops/ticket_duplicates.py            # list KEEP / dup / MANUAL
+docker compose exec -T backend python ops/ticket_duplicates.py --archive  # move non-open dups to trades_duplicates_archive
+docker compose exec -T backend python ops/ticket_duplicates.py --build-index
+```
+
+Groups with two OPEN rows are marked MANUAL and never touched — close/merge them by hand first.
+After the index exists the log shows `unique ticket index uniq_account_ticket ready`.
+
 ---
 
 ## Phase 7 — Promotion gates before autonomous live
