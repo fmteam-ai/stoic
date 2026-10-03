@@ -12,7 +12,7 @@
 #                                        (BACKUP_RCLONE_REMOTE) or aws s3 (BACKUP_S3_URI)
 #   deploy/backup.sh schedule          → print crontab lines for nightly backup + verify
 set -euo pipefail
-case ":${PATH}:" in *":/usr/local/lib/stoic/bin:"*) ;; *) export PATH="/usr/local/lib/stoic/bin:${PATH}" ;; esac   # private python >= 3.9 (bootstrap.sh)
+. "$(dirname "${BASH_SOURCE[0]}")/stoic-path.sh"   # private python >= 3.9 (bootstrap.sh) — audit H2 guarded PATH prepend
 cd "$(dirname "$0")/.."
 
 BACKUP_DIR="${BACKUP_DIR:-./backups}"

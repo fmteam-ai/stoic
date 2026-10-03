@@ -14,7 +14,7 @@
 #                                 throw-away mongo:7 and compare every collection count —
 #                                 prints the verified file, exit 1 on any mismatch
 set -uo pipefail
-case ":${PATH}:" in *":/usr/local/lib/stoic/bin:"*) ;; *) export PATH="/usr/local/lib/stoic/bin:${PATH}" ;; esac   # private python >= 3.9 (bootstrap.sh)
+. "$(dirname "${BASH_SOURCE[0]}")/stoic-path.sh"   # private python >= 3.9 (bootstrap.sh) — audit H2 guarded PATH prepend
 cd "$(dirname "$0")/.."
 QUIET=0; BUNDLE=0; DBONLY=0; BACKUP_NOW=0
 for a in "$@"; do case "$a" in --quiet) QUIET=1 ;; --bundle) BUNDLE=1 ;; --db) DBONLY=1 ;; --backup-now) DBONLY=1; BACKUP_NOW=1 ;; esac; done

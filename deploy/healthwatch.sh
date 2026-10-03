@@ -11,7 +11,7 @@
 # Alerts fire on FAIL (once, then every HEALTHWATCH_REMIND_HOURS=6 while still
 # failing) and once more on recovery — no hourly spam while healthy.
 set -uo pipefail
-case ":${PATH}:" in *":/usr/local/lib/stoic/bin:"*) ;; *) export PATH="/usr/local/lib/stoic/bin:${PATH}" ;; esac   # private python >= 3.9 (bootstrap.sh)
+. "$(dirname "${BASH_SOURCE[0]}")/stoic-path.sh"   # private python >= 3.9 (bootstrap.sh) — audit H2 guarded PATH prepend
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 STATE_DIR="${HEALTHWATCH_STATE_DIR:-/var/lib/stoic}"

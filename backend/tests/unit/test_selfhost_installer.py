@@ -393,9 +393,16 @@ def test_bootstrap_never_repoints_system_python_and_ships_repair_script():
         assert needle in fix, needle
     assert os.stat(os.path.join(ROOT, "deploy", "host-python-fix.sh")).st_mode & stat.S_IXUSR
     assert subprocess.run(["bash", "-n", os.path.join(ROOT, "deploy", "host-python-fix.sh")]).returncode == 0
-    path_line = 'export PATH="/usr/local/lib/stoic/bin:${PATH}"'
+    # audit H2: the PATH prepend lives in ONE guarded helper (root-owned, mode <= 755, else refuse + warn)
+    guard = _read("deploy", "stoic-path.sh")
+    assert 'export PATH="${_stoic_bin}:${PATH}"' in guard and '"0 "7[0-5][0-5])' in guard and "NOT adding to PATH" in guard
     for script in ("lib.sh", "doctor.sh", "backup.sh", "healthwatch.sh", "install_report.sh"):
-        assert path_line in _read("deploy", script), script
+        body = _read("deploy", script)
+        assert '/stoic-path.sh"' in body, script
+        assert 'export PATH="/usr/local/lib/stoic/bin' not in body, script          # no unguarded prepend anywhere
+    assert "eval" not in fix.replace("no `eval`", "")                                   # audit H4: typed actions, no eval
+    for needle in ("run_action()", "describe()", "alt-remove", "link-private"):
+        assert needle in fix, needle
     assert "alternatives --set python3" not in _read("deploy", "doctor.sh")
     assert "host-python-fix.sh" in _read("deploy", "doctor.sh") and "host-python-fix.sh" in _read("docs", "DEPLOYMENT.md")
 
@@ -404,12 +411,17 @@ def test_update_honours_onboarding_close_only_policy_without_opening_trading():
     """Running build predates the go-live Admin panel → pre-build gate can never clear (chicken-and-egg).
     STOIC_READINESS_POLICY=onboarding-close-only reports operator gates instead of refusing; trading stays CLOSE_ONLY."""
     u = _read("deploy", "update.sh"); lib = _read("deploy", "lib.sh")
-    assert "--onboarding-close-only) export STOIC_READINESS_POLICY=onboarding-close-only" in u
+    # audit H1: the policy is captured into a non-exported shell var and scrubbed from the environment
+    assert "--onboarding-close-only) STOIC_DEPLOY_POLICY=onboarding-close-only" in u
+    assert "capture_readiness_policy || exit 1" in u and "export STOIC_READINESS_POLICY" not in u
+    assert 'STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh' in u      # explicit hand-over on re-exec
+    assert "unset STOIC_READINESS_POLICY" in lib and 'readiness_policy() { printf' in lib
+    assert "export STOIC_READINESS_POLICY" not in _read("deploy", "install.sh")
     assert u.index('[ "${ONBOARDING}" = 1 ]') < u.index("strict_prebuild_gate || gate_refused")   # gate skipped only under the policy
     assert "topology policy gate SKIPPED (onboarding-close-only)" in u and 'RECONCILE_EXPECT=""' in u
     assert '"onboarding_close_only"' in u and "deployment_state.json" in u
     assert "policy=onboarding-close-only" in u                                      # releases.log records the relaxed publish
-    assert 'if [ "${STOIC_READINESS_POLICY:-}" = "onboarding-close-only" ]; then mode="onboarding"; else mode="strict"; fi' in lib
+    assert 'if [ "$(readiness_policy)" = "onboarding-close-only" ]; then mode="onboarding"; else mode="strict"; fi' in lib
     # infra checks remain mandatory under the relaxed policy (only "strict" short-circuits on d.ready)
     assert 'if mode == "strict":' in lib and "missing = [k for k in infra if not" in lib
     assert "onboarding-close-only" in _read("docs", "PUBLISH_RUNBOOK.md")

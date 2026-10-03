@@ -2,19 +2,8 @@
 # Shared helpers for deploy/install.sh · update.sh · rollback.sh
 # Source from the repo root:  . deploy/lib.sh
 
-# Deploy scripts need python >= 3.9. bootstrap.sh links one into this PRIVATE dir —
-# never into /usr/bin/python3 (cPanel packman needs the stock interpreter's dnf module).
-# Audit H2: only trust the private dir when it is root-owned and not group/world-writable —
-# a prepended PATH entry anyone can write to is a root-privilege escalation.
-_stoic_bin=/usr/local/lib/stoic/bin
-if [ -d "${_stoic_bin}" ]; then
-  _stoic_bin_stat=$(stat -c '%u %a' "${_stoic_bin}" 2>/dev/null || echo "? ?")
-  case "${_stoic_bin_stat}" in
-    "0 "7[0-5][0-5]) case ":${PATH}:" in *":${_stoic_bin}:"*) ;; *) export PATH="${_stoic_bin}:${PATH}" ;; esac ;;
-    *) echo "!! ${_stoic_bin} is not root-owned / is group-or-world-writable (uid+mode: ${_stoic_bin_stat}) — NOT adding to PATH; fix: chown root:root ${_stoic_bin} && chmod 755 ${_stoic_bin}" >&2 ;;
-  esac
-fi
-unset _stoic_bin _stoic_bin_stat
+# Deploy scripts need python >= 3.9 from the PRIVATE dir (audit H2: guarded prepend, see stoic-path.sh).
+. "$(dirname "${BASH_SOURCE[0]}")/stoic-path.sh"
 
 # Audit H1 — the readiness policy is a DEPLOY-TIME decision, not an environment fact.
 # Capture it once into a non-exported shell variable and scrub it from the environment

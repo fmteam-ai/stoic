@@ -1716,3 +1716,8 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - H4 `deploy/host-python-fix.sh`: plan is an array of typed actions (`alt-remove|alt-auto|alt-install|link-system|rm-shadow|link-private`) executed via `case` — no `eval`; injection test with a `;`-laden path confirmed inert.
 - H3 (VirtFS `umount -l` sweep) deliberately NOT changed — it is the cPanel overlay2 crash-loop fix.
 - Verified: bash -n all four scripts; policy capture/scrub/validate; PATH guard both branches; dry-run on non-dnf host; 69 deploy-related tests green (2 pre-existing audit_acceptance failures).
+
+## 2026-10-03 — CI fix (backend-unit) after H1/H2/H4
+- `tests/unit/test_selfhost_installer.py` pins deploy-script text; updated to the new contracts (guarded PATH helper, capture_readiness_policy, no eval).
+- H2 completed properly: new `deploy/stoic-path.sh` (root-owned + mode<=755 guard) sourced by lib.sh, doctor.sh, backup.sh, healthwatch.sh, install_report.sh — no unguarded `export PATH=/usr/local/lib/stoic/bin` remains. All 817 unit tests pass locally.
+- LESSON: before finishing any deploy-script change, run `pytest tests/unit/test_selfhost_installer.py` — it asserts literal script content.
