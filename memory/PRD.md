@@ -3137,3 +3137,7 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - 2026-10-05: AI latency card (`/api/diagnostic/ai-latency`, Bot Health) + CI release-hash drift guard shipped. EA 1.58 ready; rollout = Save to GitHub → ea-release signs → attach EX5 on terminals.
 - 2026-10-05: Security audit of the deployed app PASSED (no P0–P2); P3 hardening applied (scanner residue rule, admin-only diagnostics, fail-open alert, bounded denied counter), verified by testing agent iteration_228.
 - Next: brake timeline; passkey + step-up Playwright case; scorecard digest in the weekly report.
+
+## GO-LIVE PREP (June 2026, fork)
+- release_preflight.sh was failing `release_summary_current` (RELEASE_SUMMARY.md lagged test manifest 4585→4999 tests). Regenerated release/rc_lock.json + docs/RELEASE_SUMMARY.md; preflight now 5/5 OK.
+- Go-live path documented to user: Save to GitHub → CI green → run `ea-release` workflow (EA 1.58 .ex5) → server `deploy/update.sh` (Path A) or tag `vX.Y.Z` → release.yml + deploy-production.yml (Path B).
