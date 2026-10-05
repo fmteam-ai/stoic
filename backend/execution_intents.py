@@ -140,31 +140,38 @@ async def record_late_fill(db, intent_id: str, *, ticket: int, via: str, prior: 
     only exit from those terminal states, stamped `late_fill` so it is never mistaken
     for a normal lifecycle. In-flight intents go through the regular transition."""
     now = _now()
-    upd = await db.execution_intents.find_one_and_update(
+    # N12 — read the intent's REAL prior status (ReturnDocument.BEFORE); the caller's
+    # `prior` hint is a trade-row field and may be stale or empty.
+    before = await db.execution_intents.find_one_and_update(
         {"intent_id": intent_id, "status": {"$in": ["expired", "cancelled", "rejected", "unknown"]}},
-        {"$set": {"status": "filled", "updated_at": now, "late_fill": True,
-                  "late_fill_via": via, "late_fill_prior_status": str(prior or "")[:40],
-                  "result": {"ticket": int(ticket), "late_fill": True}},
-         "$push": {"history": {"to": "filled", "at": now,
-                               "detail": f"late fill via {via} (was {prior or 'terminal'}) ticket={ticket}"}}},
-        return_document=ReturnDocument.AFTER)
-    if upd is None:
+        {"$set": {"status": "filled", "updated_at": now, "late_fill": True, "late_fill_via": via,
+                  "result": {"ticket": int(ticket), "late_fill": True}}},
+        return_document=ReturnDocument.BEFORE)
+    if before is None:
         return await transition(db, intent_id, "filled", f"fill via {via} ticket={ticket}",
                                 result={"ticket": int(ticket)})
-    if upd.get("late_fill_prior_status") in ("rejected", "unknown") or str(prior) in ("rejected", "unknown"):
-        # N12 — the broker said "rejected"/we never learned the outcome, yet a fill
+    real_prior = str(before.get("status") or prior or "terminal")[:40]
+    await db.execution_intents.update_one(
+        {"intent_id": intent_id},
+        {"$set": {"late_fill_prior_status": real_prior},
+         "$push": {"history": {"to": "filled", "at": now,
+                               "detail": f"late fill via {via} (was {real_prior}) ticket={ticket}"}}})
+    if real_prior in ("rejected", "unknown"):
+        # the broker said "rejected"/we never learned the outcome, yet a fill
         # arrived: broker truth wins, but this contradiction is surfaced, never silent.
         await db.execution_intents.update_one({"intent_id": intent_id}, {"$set": {"late_fill_anomaly": True}})
         try:
             from alerting import raise_alert
             await raise_alert(db, "late_fill_after_reject", "warning",
-                              f"intent {intent_id} was {upd.get('late_fill_prior_status') or prior} but filled "
+                              f"intent {intent_id} was {real_prior} but filled "
                               f"via {via} (ticket {ticket}) — verify the broker position and the EA journal",
                               dedup_key=f"late_fill_after_reject:{intent_id}",
                               meta={"intent_id": intent_id, "ticket": int(ticket), "via": via})
         except Exception as e:  # noqa: BLE001
             logger.warning("late-fill anomaly alert failed: %s", type(e).__name__)
-    logger.warning("intent %s: late fill via %s (was %s) ticket=%s", intent_id, via, prior, ticket)
+    logger.warning("intent %s: late fill via %s (was %s) ticket=%s", intent_id, via, real_prior, ticket)
+    upd = await db.execution_intents.find_one({"intent_id": intent_id}) or {**before, "status": "filled",
+                                                                                 "late_fill_prior_status": real_prior}
     upd.pop("_id", None)
     return upd
 

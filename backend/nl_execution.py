@@ -264,7 +264,7 @@ async def capital_capable(db) -> bool:
     if await db.accounts.count_documents(live_like):
         return True
     bound = {"status": {"$ne": "deleted"}, "$or": [
-        {"bridge_token": {"$exists": True, "$nin": [None, ""]}},
+        {"$or": [{"bridge_token_hash": {"$type": "string"}}, {"bridge_token": {"$exists": True, "$nin": [None, ""]}}]},
         {"last_heartbeat": {"$exists": True, "$nin": [None, ""]}},
         {"broker_password_enc": {"$exists": True, "$nin": [None, ""]}},
         {"mt5_password_enc": {"$exists": True, "$nin": [None, ""]}}]}

@@ -75,6 +75,16 @@ async def loop(interval_s: int = 60) -> None:
     first = True
     while True:
         try:
+            # S16 — exactly one agent acts at a time: the in-process loop (BACKGROUND_WORKERS_IN_PROCESS)
+            # and the worker-security container compete for the same `security` lease; the loser only
+            # waits (never detects / contains / alerts twice).
+            from workers.base import _try_acquire
+            if not await _try_acquire(db, "security"):
+                if first:
+                    log.info("security agent: lease held by another process — standing by")
+                first = False
+                await asyncio.sleep(interval_s)
+                continue
             runs = await tick(db, boot=first)
             first = False
             if runs:

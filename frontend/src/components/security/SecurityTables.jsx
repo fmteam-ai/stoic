@@ -24,7 +24,7 @@ export function WouldHaveDoneList({ onChanged }) {
     };
     return (
         <div className="bg-[#0A0A0A] border border-[#1F1F1F]" data-testid="security-actions-panel">
-            <Head icon={Scale} title={`Rules R1–R8 · actions (${d.actions.length})`} />
+            <Head icon={Scale} title={`Rules R1–R9 · actions (${d.actions.length})`} />
             <div className="max-h-[320px] overflow-y-auto divide-y divide-[#141414]">
                 {d.actions.length === 0 && <div className="p-4 text-xs text-[#52525B]" data-testid="security-actions-empty">No rule has met its proof threshold yet. Observe mode logs every proposal here before enforce mode is switched on.</div>}
                 {d.actions.map(a => (

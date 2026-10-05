@@ -70,7 +70,7 @@ async def system_certification(db, account: dict) -> dict:
          "opened_at": {"$gte": cutoff}}, limit=1)
     checks = [
         {"key": "bridge_paired", "label": "Bridge paired",
-         "ok": bool(account.get("bridge_token"))},
+         "ok": bool(account.get("bridge_token_hash") or account.get("bridge_token"))},
         {"key": "heartbeat_fresh", "label": "Heartbeat < 5 min",
          "ok": hb_age is not None and hb_age < 300,
          "value": f"{int(hb_age)}s" if hb_age is not None else "never"},

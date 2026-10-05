@@ -71,7 +71,9 @@ def test_p2_both_pre_trade_checks_use_preflight_price():
 def test_p3_trade_of_day_cap_default_is_flagged_in_pulse():
     import bot_runner
     src = inspect.getsource(bot_runner)
-    assert 'trade_of_day_cap_default = cfg.get("trade_of_day_cap") is None' in src
+    # main93 — an explicit EMPTY value is "not set" (→ 1), never "unlimited"; only an explicit 0 disables
+    assert 'trade_of_day_cap_default = _tod_raw in (None, "")' in src
+    assert "trade_of_day_cap = 1 if trade_of_day_cap_default else int(_tod_raw)" in src
     assert "default, not set on this config" in src
 
 
@@ -122,7 +124,9 @@ def test_p5_stopless_trade_fallback_uses_its_own_symbol_in_usd():
     from pip_utils import pip_value_usd_per_lot, price_to_pips
     new_pips = price_to_pips("XAUUSD", 5.0)
     gold_pip = pip_value_usd_per_lot("XAUUSD", "standard", price=2400.0)
-    expected = new_pips * gold_pip * 0.10 + max(new_pips, 100.0) * gold_pip * 0.01   # new trade + USD fallback × BTC lot
+    btc_pip = pip_value_usd_per_lot("BTCUSD", "standard", price=60000.0)
+    # main93 P5 — the new trade's stop DISTANCE (floor 100 pips) priced in the OPEN trade's OWN pip value
+    expected = new_pips * gold_pip * 0.10 + max(new_pips, 100.0) * btc_pip * 0.01
     assert abs(float(chk["value"].split("$")[1].split(" ")[0].replace(",", "")) - expected) < 1.0
 
 

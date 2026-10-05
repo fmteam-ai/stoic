@@ -20,12 +20,12 @@ from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from starlette.middleware.cors import CORSMiddleware
-from bson import ObjectId
+from bson import ObjectId  # noqa: F401 — re-exported for route modules
 
 from database import close_client, get_db
 from app_env import is_production
 from seed import seed_admin, ensure_indexes
-from auth import decode_token
+from auth import decode_token  # noqa: F401
 from ws_manager import manager as ws_manager
 import bot_runner
 import trade_manager
@@ -242,6 +242,20 @@ async def health():
             "execution_policy_version": EXECUTION_POLICY_VERSION,
             "ea_version": LATEST_EA,
             "app_env": os.environ.get("APP_ENV") or "development"}
+    # P1-05 (A9e) — the RUNNING release identity: image digest + the EX5 hashes this build
+    # admits for live terminals, so the health page can be compared with the promoted digests.
+    try:
+        from ea_capabilities import accepted_ea_sha256s, shipped_ea_version
+        _accepted = accepted_ea_sha256s()
+        prov["release_identity"] = {
+            "image_digest": os.environ.get("STOIC_IMAGE_DIGEST") or None,
+            "ea_shipped_version": shipped_ea_version(),
+            "ea_expected_sha256": _accepted[0] if _accepted else None,
+            "ea_accepted_sha256s": _accepted,
+            "ea_signed_record": bool(_accepted) and not os.environ.get("EA_RELEASE_SHA256"),
+        }
+    except Exception as _e:  # noqa: BLE001 — provenance must never break the probe
+        prov["release_identity"] = {"error": type(_e).__name__}
     # audit round 7 P1 — deployment-signed environment marker so mutating
     # test runners (route sweep, drills) can PROVE they are not on production
     # before their first login. HMAC(LEDGER_ANCHOR_KEY, "env|build").
@@ -585,15 +599,15 @@ async def ws_endpoint(websocket: WebSocket):
         await _reject(4401)
         return
     try:
-        payload = decode_token(token)
-        if payload.get("type") != "access":
-            await _reject(4401)
+        # P1-02 / P1-03 — the SAME validator as HTTP: revoked session / tokens_valid_after /
+        # forced password change all close the socket (4401 / 4403), never a stale user_id.
+        from auth import validate_access_token, TokenRejected
+        try:
+            user = await validate_access_token(get_db(), token, path=None)
+        except TokenRejected as e:
+            await _reject(4403 if e.status == 403 else 4401)
             return
-        user_id = payload["sub"]
-        db = get_db()
-        if not await db.users.find_one({"_id": ObjectId(user_id)}):
-            await _reject(4401)
-            return
+        user_id = user["id"]
     except Exception:
         await _reject(4401)
         return

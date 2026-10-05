@@ -108,11 +108,17 @@ def record(args):
     version = mq5_property_version()
     if not version:
         raise SystemExit("FAIL: cannot read #property version from the MQ5")
+    # N-R6 — keep the last SIGNED release as `previous` so terminals still on it stay
+    # live-admissible during the rollout (the backend accepts current + previous).
+    previous = ea.get("previous")
+    if ea.get("ex5_sha256") and (ea.get("signature") or {}).get("sig_hex") and ea.get("version") != version:
+        previous = {k: v for k, v in ea.items() if k != "previous"}
     ea.update({
         "version": version,
         "mq5_sha256": mq5_now,
         "ex5_sha256": sha256_file(args.ex5),
         "ex5_note": None,
+        "previous": previous,
         "compile_log": {"errors": errors, "warnings": warnings,
                         "log_sha256": sha256_file(args.compile_log)},
         "metaeditor_version": tool["metaeditor_version"] or args.metaeditor_version,

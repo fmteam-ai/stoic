@@ -35,9 +35,12 @@ async def B2(db, cfg):
             continue                                   # S2 — an old EA still polling with a rotated token
         by_ip[e.get("ip") or "?"] = by_ip.get(e.get("ip") or "?", 0) + int((e.get("detail") or {}).get("count") or 1)
     lim = th(cfg, "B2", "invalid_token_5m", 100)
-    # S2 — never block an address that ALSO heartbeats with a valid token (a VPS running several EAs)
+    # S2 — never block an address that ALSO heartbeats with a valid token (a VPS running several EAs).
+    # M1 — read the per-IP last-valid-heartbeat record (hb_valid_ips), not the throttled sightings.
     since = iso_ago(minutes=5)
     valid_ips = set()
+    async for r in db.hb_valid_ips.find({"last_at": {"$gte": since}}, {"_id": 1}).limit(5000):
+        valid_ips.add(r["_id"])
     async for a in db.accounts.find({"hb_sightings.at": {"$gte": since}}, {"hb_sightings": 1}).limit(2000):
         valid_ips.update(s.get("ip") for s in (a.get("hb_sightings") or []) if s.get("at", "") >= since)
     return [f("B2", f"ip:{ip}", "high", "bridge", f"{n} bridge requests with invalid tokens from {ip} in 5 min", {"ip": ip, "requests": n})

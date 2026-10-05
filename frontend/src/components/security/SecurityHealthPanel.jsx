@@ -103,12 +103,12 @@ export function SecurityHealthPanel({ initialFindingId }) {
             </div>
             {status.mode === "observe" && (
                 <div className="font-mono text-[10px] text-[#71717A] border border-[#1F1F1F] px-3 py-2" data-testid="security-observe-note">
-                    OBSERVE MODE — rules R1–R8 are evaluated and logged as “would have done”; nothing is blocked. Worker lease: {status.worker_lease?.holder || "—"} · {status.checks_total} checks · {status.protected_ips_count} protected IPs/CIDRs configured.
+                    OBSERVE MODE — rules R1–R9 are evaluated and logged as “would have done”; nothing is blocked. Worker lease: {status.worker_lease?.holder || "—"} · {status.checks_total} checks · {status.protected_ips_count} protected IPs/CIDRs configured.
                 </div>
             )}
             <div className="bg-[#0A0A0A] border border-[#1F1F1F] px-3 py-2 flex flex-wrap items-center gap-2" data-testid="security-rules-strip">
                 <span className="font-mono text-[10px] tracking-widest text-[#71717A]">RULES {status.mode === "enforce" ? "ENFORCED" : "ARMED FOR ENFORCE"}</span>
-                {["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"].map(r => {
+                {["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"].map(r => {
                     const on = (status.rules_enabled || []).includes(r);
                     return (
                         <button key={r} disabled={busy} onClick={() => toggleRule(r)} data-testid={`security-rule-toggle-${r}`} data-on={on}

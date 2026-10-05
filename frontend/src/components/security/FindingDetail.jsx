@@ -45,8 +45,8 @@ export function FindingDetail({ id, onChanged, onClose }) {
     const isOpen = ["open", "contained", "acknowledged"].includes(f.status);
     // S10 — the Undo button follows the ACTION, not the finding status: an auto-resolved
     // finding may still have its block / suspension / freeze active.
-    const canUndo = !!actionId && (f.status === "contained" || f.action_active === true);
     const actionId = (String(f.action_taken || "").match(/\[action ([0-9a-f]{24})\]/) || [])[1];
+    const canUndo = !!actionId && (f.status === "contained" || f.action_active === true);
     const undo = async () => {
         setBusy(true);
         try { await api.post(`/admin/security/actions/${actionId}/undo`, { note: "undone from finding" }); toast.success("Containment action undone"); const { data } = await api.get(`/admin/security/findings/${id}`); setF(data); onChanged?.(); }

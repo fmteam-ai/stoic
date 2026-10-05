@@ -158,24 +158,55 @@ async def deny_if_blocked(db, kind: str, value: str, scope: str = "all") -> None
                        f"Contact support with reference {str(b.get('_id'))[-8:]}."})
 
 
+def _trusted_proxy_nets() -> list:
+    """N-R1 — internal reverse-proxy hops (Caddy / nginx containers) that may appear at the
+    RIGHT end of X-Forwarded-For. Configured, never guessed: TRUSTED_PROXY_CIDRS=172.16.0.0/12,…"""
+    import ipaddress
+    out = []
+    for c in (os.environ.get("TRUSTED_PROXY_CIDRS") or "").split(","):
+        c = c.strip()
+        if not c:
+            continue
+        try:
+            out.append(ipaddress.ip_network(c, strict=False))
+        except ValueError:
+            logging.getLogger("security").warning("TRUSTED_PROXY_CIDRS: ignoring invalid entry %r", c)
+    return out
+
+
+def _is_trusted_proxy(ip: str, nets: list) -> bool:
+    import ipaddress
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(a in n for n in nets)
+
+
 def client_ip(request: Request) -> str:
-    """Client IP for rate-limit keying. When TRUST_CF_CONNECTING_IP=true
-    (origin reachable only via Cloudflare — e.g. behind cloudflared Tunnel),
-    CF-Connecting-IP is authoritative and unspoofable. Otherwise uses the
-    RIGHTMOST X-Forwarded-For entry — the hop appended by our trusted
-    ingress — so attackers cannot rotate lockout keys by spoofing the
-    leftmost value (SEC-002)."""
+    """Client IP for rate-limit keying and security-agent blocks.
+
+    X-Forwarded-For is walked from the RIGHT (the hop appended by our ingress) and every
+    entry inside TRUSTED_PROXY_CIDRS (our own Caddy → nginx containers) is skipped; the
+    first untrusted address is the peer that reached our edge. Attackers cannot rotate
+    keys by spoofing the leftmost value (SEC-002): an untrusted edge peer overwrites it.
+    When TRUST_CF_CONNECTING_IP=true and that edge peer IS Cloudflare, CF-Connecting-IP
+    is authoritative (S1: never when the request reached the origin directly)."""
     fwd = request.headers.get("x-forwarded-for", "")
-    hop = fwd.split(",")[-1].strip() if fwd else (request.client.host if request.client else "unknown")
+    chain = [h.strip() for h in fwd.split(",") if h.strip()] if fwd else []
+    if not chain:
+        chain = [request.client.host if request.client else "unknown"]
+    nets = _trusted_proxy_nets()
+    i = len(chain) - 1
+    while i > 0 and nets and _is_trusted_proxy(chain[i], nets):
+        i -= 1
+    hop = chain[i]
     if os.environ.get("TRUST_CF_CONNECTING_IP", "false").lower() == "true":
         cf = request.headers.get("cf-connecting-ip", "")
-        # S1 — the header is only authoritative when the hop that delivered it IS
-        # Cloudflare; anyone reaching the origin directly could otherwise choose
-        # which IP the security agent blocks.
         from security_agent.rules import is_cloudflare
         if cf and (is_cloudflare(hop) or hop in ("127.0.0.1", "::1")):
             return cf.strip()
-    # r23: no X-Real-IP fallback — only the ingress-appended hop or the socket peer.
+    # r23: no X-Real-IP fallback — only the ingress-observed chain or the socket peer.
     return hop
 
 
@@ -411,11 +442,18 @@ async def revoke_family(db, family: str, reason: str) -> int:
 
 
 async def revoke_all_user_sessions(db, user_id: str, reason: str) -> int:
-    """Password change / reset / 2FA reset / suspension → every session dies."""
+    """Password change / reset / 2FA reset / suspension → every session dies.
+    P1-02 — also stamps users.tokens_valid_after so every ACCESS token minted before now
+    (including sid-less legacy ones) is refused by auth.validate_access_token at once."""
+    now = datetime.now(timezone.utc)
     res = await db.auth_sessions.update_many(
         {"user_id": user_id, "revoked": False},
-        {"$set": {"revoked": True, "revoked_reason": reason,
-                  "revoked_at": datetime.now(timezone.utc).isoformat()}})
+        {"$set": {"revoked": True, "revoked_reason": reason, "revoked_at": now.isoformat()}})
+    try:
+        from bson import ObjectId as _OID
+        await db.users.update_one({"_id": _OID(str(user_id))}, {"$set": {"tokens_valid_after": now.isoformat()}})
+    except Exception:  # noqa: BLE001 — fake ids in unit tests
+        pass
     return res.modified_count
 
 

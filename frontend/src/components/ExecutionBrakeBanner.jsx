@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
-import { Ban, Unlock } from "lucide-react";
+import { Ban, Unlock, ShieldAlert } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
-// A7d — execution-health brake: shown while any of the user's accounts has
-// NEW entries paused after repeated late fills / rejects / slippage vetoes /
-// duplicate tickets. Manual release is a step-up action.
+// A7d (operator spec) — shown while any account has NEW entries paused after two late
+// fills in 24 h. There is no auto-release: only an ADMIN can resume, after checking the
+// EA / VPS (step-up). Owners see the brake and who to contact.
 export function ExecutionBrakeBanner() {
+    const { user } = useAuth();
+    const isAdmin = user?.role === "admin";
     const [rows, setRows] = useState([]);
     const [busy, setBusy] = useState(null);
 
@@ -31,7 +34,7 @@ export function ExecutionBrakeBanner() {
             toast.success("Execution brake released — new entries resume on the next scan.");
             await load();
         } catch (e) {
-            toast.error(e?.response?.data?.detail?.message || "Release failed");
+            toast.error(e?.response?.data?.detail?.message || e?.response?.data?.detail || "Release failed");
         } finally {
             setBusy(null);
         }
@@ -49,16 +52,23 @@ export function ExecutionBrakeBanner() {
                     <div className="flex-1 min-w-[200px] text-xs text-[#E4E4E7] font-mono">
                         <span className="text-white">{a.label || a.login || a.broker}</span>
                         <span className="text-[#A1A1AA]"> · {a.execution_brake.reason}</span>
-                        <div className="text-[10px] text-[#71717A] mt-0.5">
-                            New entries paused; managed exits continue. Auto-release after a clean hour
-                            {a.execution_brake.release_after ? ` (earliest ${String(a.execution_brake.release_after).slice(11, 16)} UTC)` : ""}.
+                        <div className="text-[10px] text-[#71717A] mt-0.5" data-testid={`execution-brake-note-${a.id}`}>
+                            New entries paused since {String(a.execution_brake.since || "").slice(11, 16)} UTC; managed exits continue.
+                            No automatic release — an admin resumes after checking the EA / VPS.
                         </div>
                     </div>
-                    <button onClick={() => release(a.id)} disabled={busy === a.id}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#FF3B30]/60 text-[#FF3B30] hover:bg-[#FF3B30]/10 text-[10px] font-mono tracking-widest disabled:opacity-50"
-                            data-testid={`execution-brake-release-${a.id}`}>
-                        <Unlock className="w-3 h-3" /> {busy === a.id ? "RELEASING…" : "RELEASE (2FA)"}
-                    </button>
+                    {isAdmin ? (
+                        <button onClick={() => release(a.id)} disabled={busy === a.id}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#FF3B30]/60 text-[#FF3B30] hover:bg-[#FF3B30]/10 text-[10px] font-mono tracking-widest disabled:opacity-50"
+                                data-testid={`execution-brake-release-${a.id}`}>
+                            <Unlock className="w-3 h-3" /> {busy === a.id ? "RESUMING…" : "ADMIN RESUME (2FA)"}
+                        </button>
+                    ) : (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#1F1F1F] text-[#A1A1AA] text-[10px] font-mono tracking-widest"
+                              data-testid={`execution-brake-contact-${a.id}`}>
+                            <ShieldAlert className="w-3 h-3" /> ADMIN RESUME REQUIRED
+                        </span>
+                    )}
                 </div>
             ))}
         </div>

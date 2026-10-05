@@ -54,7 +54,11 @@ ensure_release_secrets() {
     (umask 077; python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/secrets_master_key)
     echo "   generated secrets_master_key (dedicated vault key — sealed integration secrets migrate at boot)"
   }
-  chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/secrets_master_key
+  # N-R2 — every `file:` secret docker-compose*.yml mounts must exist BEFORE compose up, also
+  # on hosts installed before the secret was introduced (update.sh path). Empty placeholder:
+  # the operator pastes the BotFather token to enable security alerts.
+  [ -f secrets/security_telegram_token ] || { (umask 077; : > secrets/security_telegram_token); echo "   created empty security_telegram_token (paste the BotFather token to enable security alerts)"; }
+  chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/secrets_master_key secrets/security_telegram_token
 }
 
 # After a failed `compose up`, an app container CREATED BY THIS PASS that exited

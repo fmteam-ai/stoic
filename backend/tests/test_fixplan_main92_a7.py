@@ -76,7 +76,7 @@ def test_n3_late_fill_stamps_written_directly():
     s_panic = inspect.getsource(br.close_late_fill_after_panic)
     s_exp = inspect.getsource(br.close_late_fill_after_expiry)
     assert '"late_fill_after_panic": True, "stats_excluded": True}})' in s_panic and "await db.trades.update_one" in s_panic
-    assert '"late_fill_after_expiry": True, "stats_excluded": True}})' in s_exp
+    assert 'flag: True, "stats_excluded": True}})' in s_exp and 'reason == "late_fill_after_lock"' in s_exp
     assert 'stamp={"late_fill_after_panic": True, "stats_excluded": True}' in s_panic
 
 
@@ -190,53 +190,84 @@ def _acc_row():
     return {"_id": ObjectId(), "user_id": "u1", "label": "ICM-1", "mode": "live"}
 
 
-def test_a7d_brake_engages_after_threshold_and_blocks_new_entries():
+def test_a7d_only_late_fills_count_one_alerts_owner_two_in_24h_pause():
+    """Operator spec: 1 late fill → owner (Telegram + in-app) + admins alerted; rejects / slippage /
+    duplicates are recorded but never count; 2 late fills in 24 h → brake, no auto-release."""
     import execution_health as eh
     db = FakeDb()
     acc = _acc_row(); db.accounts.rows.append(acc)
-    alerts = []
+    alerts, tg = [], []
 
     async def fake_alert(db_, kind, sev, msg, dedup_key=None, meta=None, **kw):
         alerts.append((kind, sev))
-    with patch("alerting.raise_alert", fake_alert), patch.object(eh, "THRESHOLD", 3):
-        assert run(eh.record_event(db, str(acc["_id"]), "u1", "late_fill", trade_id="t1")) is None
+
+    async def fake_tg(user_id, event_type, title, lines):
+        tg.append((user_id, event_type)); return True
+    with patch("alerting.raise_alert", fake_alert), patch("notifier.send_telegram", fake_tg):
+        # non-late-fill anomalies: recorded, never alert, never count
         assert run(eh.record_event(db, str(acc["_id"]), "u1", "reject", trade_id="t2")) is None
-        state = run(eh.record_event(db, str(acc["_id"]), "u1", "slippage_veto", trade_id="t3"))
-    assert state and state["active"] and state["event_count"] == 3 and set(state["kinds"]) == {"late_fill", "reject", "slippage_veto"}
-    assert alerts == [("execution_brake", "critical")]
+        assert run(eh.record_event(db, str(acc["_id"]), "u1", "slippage_veto", trade_id="t3")) is None
+        assert run(eh.record_event(db, str(acc["_id"]), "u1", "duplicate_ticket", trade_id="t4")) is None
+        assert alerts == [] and tg == [] and not db.notifications.rows
+        # first late fill → alert owner + admins, NOT braked
+        assert run(eh.record_event(db, str(acc["_id"]), "u1", "late_fill", trade_id="t1", detail="expired via report")) is None
+        assert alerts == [("late_fill", "warning")] and tg == [("u1", "execution_brake")]
+        assert db.notifications.rows[-1]["kind"] == "execution_late_fill"
+        assert not eh.is_braked(db.accounts.rows[0])
+        # second late fill → brake engaged, admin-only release, no release_after
+        state = run(eh.record_event(db, str(acc["_id"]), "u1", "late_fill", trade_id="t5"))
+    assert state and state["active"] and state["event_count"] == 2 and state["kinds"] == ["late_fill"]
+    assert state["release_after"] is None and state["release_requires"] == "admin"
+    assert ("execution_brake", "critical") in alerts
     assert eh.is_braked(db.accounts.rows[0])
-    # unknown kinds are ignored; a second evaluation is idempotent
-    assert run(eh.record_event(db, str(acc["_id"]), "u1", "nonsense")) is None
-    with patch("alerting.raise_alert", fake_alert):
-        assert run(eh.record_event(db, str(acc["_id"]), "u1", "reject")) is None
-    assert len(alerts) == 1
+    assert any(a["action"] == "execution_brake_engaged" for a in db.audit_log.rows)
     s = run(eh.summary(db, str(acc["_id"])))
-    assert s["brake"]["active"] and s["events_in_window"] == 4
+    assert s["brake"]["active"] and s["events_in_window"] == 2 and s["counted_kinds"] == ["late_fill"] and s["release_min"] is None
+    assert eh.THRESHOLD == 2 and eh.WINDOW_MIN == 1440
 
 
-def test_a7d_auto_release_only_after_clean_period_and_manual_release():
+def test_a7d_no_auto_release_admin_release_audited_and_old_events_never_retrigger():
     import execution_health as eh
     db = FakeDb()
     acc = _acc_row()
-    acc["execution_brake"] = {"active": True, "since": "x",
-                              "release_after": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}
+    acc["execution_brake"] = {"active": True, "since": "x", "reason": "2 late fills in 24 h", "release_after": None}
     db.accounts.rows.append(acc)
-    # a fresh anomaly inside the clean window → not released, window pushed out
-    db.execution_health_events.rows.append({"account_id": str(acc["_id"]), "kind": "reject",
-                                            "at": datetime.now(timezone.utc).isoformat()})
+    for i in range(3):
+        db.execution_health_events.rows.append({"account_id": str(acc["_id"]), "kind": "late_fill",
+                                                "at": (datetime.now(timezone.utc) - timedelta(minutes=5 + i)).isoformat()})
+    # there is no automatic release — ever
     assert run(eh.maybe_auto_release(db, db.accounts.rows[0])) is False
     assert db.accounts.rows[0]["execution_brake"]["active"] is True
-    # clean → released
-    db.execution_health_events.rows.clear()
-    db.accounts.rows[0]["execution_brake"]["release_after"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
-    assert run(eh.maybe_auto_release(db, db.accounts.rows[0])) is True
-    assert db.accounts.rows[0]["execution_brake"]["active"] is False
-    assert db.accounts.rows[0]["execution_brake"]["released_by"] == "auto"
-    # manual release writes an audited, step-up-verified entry
-    db.accounts.rows[0]["execution_brake"] = {"active": True, "since": "y", "reason": "r"}
-    st = run(eh.release(db, str(acc["_id"]), actor="user:a@b", reason="manual release"))
-    assert st["active"] is False and st["last_reason"] == "r"
+    # admin release: audited, step-up verified, released_at recorded
+    st = run(eh.release(db, str(acc["_id"]), actor="admin:a@b", reason="admin resume after EA/VPS check"))
+    assert st["active"] is False and st["last_reason"] == "2 late fills in 24 h" and st["released_by"] == "admin:a@b"
     assert any(a["action"] == "execution_brake_released" and a["step_up_verified"] for a in db.audit_log.rows)
+    # M3 — the three OLD late fills no longer count: the brake does not re-engage on them
+    assert run(eh.evaluate(db, str(acc["_id"]))) is None
+    assert run(eh.window_events(db, str(acc["_id"]))) == []
+    # one NEW late fill after the release counts again (alert only), a second one brakes again
+    async def noop(*a, **k):
+        return True
+    with patch("alerting.raise_alert", noop), patch("notifier.send_telegram", noop):
+        assert run(eh.record_event(db, str(acc["_id"]), "u1", "late_fill")) is None
+        assert run(eh.record_event(db, str(acc["_id"]), "u1", "late_fill"))["active"] is True
+
+
+def test_a7d_enforced_at_dispatch_fence_and_admin_only_api():
+    """M4 — the brake is checked where EVERY new order passes (poll-trades), so scalp-fast,
+    manual and already-queued orders cannot bypass it; the API release is admin + step-up."""
+    import routes.bridge_routes as br
+    import routes.account_routes as ar
+    from security_matrix import BOLA_MATRIX
+    src = inspect.getsource(br.poll_trades)
+    assert 'lock_reason = "execution_brake"' in src and "_eh_braked(acc)" in src
+    rel = inspect.getsource(ar.account_execution_brake_release)
+    assert "require_admin(user)" in rel and 'require_step_up(db, user, request, "execution_brake_release")' in rel
+    assert '"user_id": user["id"]' not in rel.split("find_one")[1].split(")")[0]   # admin releases ANY account
+    assert BOLA_MATRIX[("POST", "/api/accounts/{account_id}/execution-brake/release")] == "admin_only"
+    root = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src")
+    banner = open(os.path.join(root, "components", "ExecutionBrakeBanner.jsx")).read()
+    assert "ADMIN RESUME" in banner and "isAdmin" in banner and "release_after" not in banner
 
 
 def test_a7d_wired_into_runner_executor_bridge_api_and_ui():

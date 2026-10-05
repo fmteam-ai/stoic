@@ -298,6 +298,9 @@ if [ "${MODE}" = "--production" ] || [ "${MODE}" = "--behind-proxy" ]; then
   set_kv backend/.env CSRF_ENFORCE_ORIGIN true
   set_kv backend/.env CORS_ORIGINS "https://${DOMAIN},https://www.${DOMAIN}"
   set_kv backend/.env TURNSTILE_EXPECTED_HOSTNAMES "${DOMAIN},www.${DOMAIN}"
+  # N-R1 — the Caddy → nginx hops live on docker networks; the backend skips them when it
+  # walks X-Forwarded-For so every user keeps their own IP (rate limits, lockouts, blocks).
+  grep -q "^TRUSTED_PROXY_CIDRS=." backend/.env || set_kv backend/.env TRUSTED_PROXY_CIDRS "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8,::1/128,fd00::/8"
 else
   grep -q "^APP_ENV=production" backend/.env && {
     echo "ERROR: backend/.env says APP_ENV=production but you ran --dev."

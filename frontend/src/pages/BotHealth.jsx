@@ -14,6 +14,7 @@ import { ForecastHealthCard } from "../components/ForecastHealthCard";
 import { CalibrationHealthCard } from "../components/CalibrationHealthCard";
 import { ReadinessCard } from "../components/ReadinessCard";
 import { AiLatencyCard } from "../components/AiLatencyCard";
+import { ReleaseIdentityCard } from "../components/ReleaseIdentityCard";
 import { ChaosDrillsCard } from "../components/ChaosDrillsCard";
 import { StressTestCard } from "../components/StressTestCard";
 import { SoakReportCard } from "../components/DemoReadinessPanels";
@@ -633,6 +634,7 @@ export default function BotHealth() {
                 <CapitalStageCard />
                 <SubsystemHealthCard />
                 <AiLatencyCard />
+                <ReleaseIdentityCard />
                 <RealtimeRiskCard />
                 <OperatorConsole onAction={load} />
                 <ModeGuardianCard />

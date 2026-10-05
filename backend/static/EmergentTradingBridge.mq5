@@ -266,14 +266,14 @@
 //|         EURUSD from a GOLD/other-symbol chart).                   |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.58"
+#property version   "1.59"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.58"
+#define EA_CLIENT_VERSION "1.59"
 
 input string ServerUrl              = "https://stoic-trading-bot.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";

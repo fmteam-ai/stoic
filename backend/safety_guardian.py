@@ -257,9 +257,10 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     open_count = 0
     stopless_count = 0
     new_sl_pips = price_to_pips(signal.get("symbol") or "", abs(entry - sl)) if entry and sl else 0.0
-    # main92 P5 — the stop-less fallback is a USD amount for the NEW trade
-    # (per lot), re-expressed in the other trade's own pips below.
-    new_sl_usd_per_lot = max(new_sl_pips, 100.0) * pip_usd
+    # main92 P5 / main93 — a stop-less open trade is charged the NEW trade's stop
+    # DISTANCE (floor 100 pips) priced in the OPEN trade's OWN pip value; the new
+    # trade's pip value is only the last resort when the open symbol has none.
+    fallback_pips = max(new_sl_pips, 100.0)
     async for t in db.trades.find(
             open_q, {"lot_size": 1, "entry_price": 1, "stop_loss": 1,
                      "symbol": 1, "sl_pips": 1}):
@@ -277,10 +278,8 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
             elif t_lot > 0:
                 stopless_count += 1
                 own_pips = float(t.get("sl_pips") or 0)
-                if own_pips > 0 and t_pip_usd > 0:
-                    open_risk_usd += max(own_pips * t_pip_usd, new_sl_usd_per_lot) * t_lot
-                else:
-                    open_risk_usd += new_sl_usd_per_lot * t_lot
+                unit = t_pip_usd if t_pip_usd > 0 else pip_usd
+                open_risk_usd += max(own_pips, fallback_pips) * unit * t_lot
             else:
                 continue
         except Exception:

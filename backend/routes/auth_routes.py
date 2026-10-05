@@ -55,7 +55,7 @@ async def _issue_session_cookies(db, uid: str, email: str, response,
                                  request: Request | None = None):
     """Access token + session-tracked (revocable, rotating) refresh token."""
     claims = await create_session(db, uid, request)
-    access = create_access_token(uid, email)
+    access = create_access_token(uid, email, sid=claims["sid"])   # P1-02 — revocable with its session
     refresh = create_refresh_token(uid, claims)
     await stamp_session_token(db, claims["jti"], refresh)
     set_auth_cookies(response, access, refresh)
@@ -594,7 +594,7 @@ async def refresh_token(request: Request, response: Response):
         claims = await consume_and_rotate(db, payload, token, request)
         if claims is None:
             claims = await create_session(db, uid, request)
-        access = create_access_token(uid, user["email"])
+        access = create_access_token(uid, user["email"], sid=claims["sid"])   # P1-02
         new_refresh = create_refresh_token(uid, claims)
         await stamp_session_token(db, claims["jti"], new_refresh)
         set_auth_cookies(response, access, new_refresh)

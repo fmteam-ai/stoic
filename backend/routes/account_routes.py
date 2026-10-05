@@ -61,8 +61,15 @@ def _serialize(doc: dict) -> dict:
     doc["has_master_password"] = bool(creds.get("master"))
     # SEC hardening — the bridge token is a secret; never bulk-return it.
     # The owner fetches it on demand via GET /{id}/bridge-token.
-    doc["has_bridge_token"] = bool(doc.pop("bridge_token", None))
-    doc.pop("bridge_token_prev", None)
+    # P1-01 — only a keyed hash + last 4 are stored; strip every token-bearing field.
+    import bridge_tokens as _bt
+    doc["has_bridge_token"] = _bt.has_token(doc)
+    doc["bridge_token_masked"] = _bt.masked(doc)
+    _bt.strip_plaintext(doc)
+    for k in ("bridge_token_hash", "bridge_token_prev_hash", "bridge_token_retired_hashes", "bridge_token_suspended"):
+        v = doc.pop(k, None)
+        if k == "bridge_token_suspended" and v:
+            doc["bridge_token_suspended_until"] = v.get("expires_at")   # state, not the secret
     return doc
 
 
@@ -580,7 +587,7 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
                                    else None),
         "base_currency": payload.base_currency,
         "mode": payload.mode,
-        "bridge_token": generate_bridge_token(),  # unused for paper but harmless
+        **__import__("bridge_tokens").token_fields(generate_bridge_token()),  # P1-01 — hash only; paper needs no EA token
         "status": "connected" if is_paper else "disconnected",
         # P0 (release review): enablement is ALWAYS an explicit boolean —
         # new accounts start OFF until the owner turns trading on.
@@ -821,26 +828,31 @@ async def trust_terminal(account_id: str, request: Request,
 
 
 @router.post("/{account_id}/rotate-token")
-async def rotate_token(account_id: str, user=Depends(get_current_user)):
+async def rotate_token(account_id: str, request: Request, user=Depends(get_current_user)):
+    """P1-01 — step-up protected; the new token is returned ONCE and stored only as a keyed hash."""
+    import bridge_tokens as bt
     db = get_db()
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
+    from step_up import require_step_up
+    await require_step_up(db, user, request, "bridge_token_rotate")
     new_token = generate_bridge_token()
     grace_until = (datetime.now(timezone.utc)
                    + timedelta(minutes=15)).isoformat()
-    suspended = (acc.get("bridge_token_suspended") or {}).get("token") == acc.get("bridge_token")
-    await db.accounts.update_one(
-        {"_id": acc["_id"]},
-        {"$set": {"bridge_token": new_token,
-                  # SA4 R5 — a suspended token gets no grace window: re-pairing is the reinstatement
-                  "bridge_token_prev": None if suspended else acc.get("bridge_token"),
-                  "bridge_token_prev_expires": grace_until,
-                  "status": "disconnected"},
-         "$unset": {"bridge_token_suspended": ""}},
-    )
-    return {"bridge_token": new_token, "prev_token_grace_until": grace_until}
+    # SA4 R5 — a suspended token gets no grace window: re-pairing is the reinstatement
+    suspended = bool(acc.get("bridge_token_suspended"))
+    upd = bt.rotation_update(acc, new_token, grace_until=grace_until, suspended=suspended)
+    upd["$set"]["status"] = "disconnected"
+    await db.accounts.update_one({"_id": acc["_id"]}, upd)
+    await db.audit_log.insert_one({
+        "user_id": user["id"], "actor": user["id"], "action": "bridge_token_rotated",
+        "detail": {"account_id": account_id, "last4": new_token[-4:], "suspended_before": suspended},
+        "step_up_verified": True, "at": datetime.now(timezone.utc).isoformat()})
+    return {"bridge_token": new_token, "bridge_token_masked": f"••••••••••••{new_token[-4:]}",
+            "prev_token_grace_until": None if suspended else grace_until,
+            "note": "Shown once — copy it into the EA now. It is stored only as a hash."}
 
 
 @router.post("/{account_id}/request-sync")
@@ -931,38 +943,40 @@ async def get_bridge_token(account_id: str, user=Depends(get_current_user)):
     """Audit F-05 — the full secret is shown ONCE (creation/rotation).
     Thereafter only a masked form + usage metadata is returned; use
     rotate to obtain a fresh full token."""
+    import bridge_tokens as bt
     db = get_db()
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"),
          "user_id": user["id"]},
-        {"bridge_token": 1, "bridge_last_used_at": 1})
+        {"bridge_token_hash": 1, "bridge_token_last4": 1, "bridge_token": 1, "bridge_last_used_at": 1})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
-    tok = acc.get("bridge_token") or ""
-    return {"bridge_token_masked": (f"••••••••••••{tok[-4:]}" if tok else ""),
-            "has_bridge_token": bool(tok),
+    return {"bridge_token_masked": bt.masked(acc),
+            "has_bridge_token": bt.has_token(acc),
             "last_used_at": acc.get("bridge_last_used_at"),
             "note": "Full token is shown only once at creation/rotation. "
                     "Rotate to get a new one (15-min grace for the old)."}
 
 
 @router.post("/{account_id}/bridge-token/revoke")
-async def revoke_bridge_token(account_id: str,
+async def revoke_bridge_token(account_id: str, request: Request,
                               user=Depends(get_current_user)):
     """Audit F-05 — immediate kill: EA polling stops until a rotate
-    issues a fresh token."""
+    issues a fresh token. P1-01 — step-up protected."""
     db = get_db()
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"),
-         "user_id": user["id"]}, {"label": 1})
+         "user_id": user["id"]}, {"label": 1, "bridge_token_hash": 1})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
-    await db.accounts.update_one(
-        {"_id": acc["_id"]},
-        {"$unset": {"bridge_token": "", "bridge_token_prev": "",
-                    "bridge_token_prev_expires": ""},
-         "$set": {"bridge_token_revoked_at":
-                  datetime.now(timezone.utc).isoformat()}})
+    from step_up import require_step_up
+    await require_step_up(db, user, request, "bridge_token_revoke")
+    upd = {"$unset": {"bridge_token": "", "bridge_token_prev": "", "bridge_token_hash": "", "bridge_token_last4": "",
+                      "bridge_token_prev_hash": "", "bridge_token_prev_expires": ""},
+           "$set": {"bridge_token_revoked_at": datetime.now(timezone.utc).isoformat()}}
+    if acc.get("bridge_token_hash"):
+        upd["$addToSet"] = {"bridge_token_retired_hashes": acc["bridge_token_hash"]}
+    await db.accounts.update_one({"_id": acc["_id"]}, upd)
     await db.audit_log.insert_one({
         "user_id": user["id"], "actor": user["id"],
         "action": "bridge_token_revoked",
@@ -1475,8 +1489,8 @@ async def accounts_certification(user=Depends(get_current_user)):
              "value": v or "—", "ok": bool(v) and v == LATEST_EA,
              "hint": f"latest is {LATEST_EA}"},
             {"key": "bridge_paired", "label": "Bridge paired",
-             "value": "yes" if a.get("bridge_token") else "no",
-             "ok": bool(a.get("bridge_token"))},
+             "value": "yes" if (a.get("bridge_token_hash") or a.get("bridge_token")) else "no",
+             "ok": bool(a.get("bridge_token_hash") or a.get("bridge_token"))},
             {"key": "heartbeat", "label": "EA heartbeat",
              "value": f"{int(hb_age)}s ago" if hb_age is not None else "never",
              "ok": hb_age is not None and hb_age < HEARTBEAT_FRESH_S},
@@ -1585,10 +1599,13 @@ async def account_execution_health(account_id: str, user=Depends(get_current_use
 
 @router.post("/{account_id}/execution-brake/release")
 async def account_execution_brake_release(account_id: str, request: Request, user=Depends(get_current_user)):
-    """Manual release of the execution brake — a live-sensitive action (step-up)."""
+    """Resume after an execution brake — operator spec: ADMIN only (after checking the
+    EA / VPS), step-up verified, audited. Owners see the brake but cannot lift it."""
+    from auth import require_admin
+    require_admin(user)
     db = get_db()
-    acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
-                                     {"_id": 1, "execution_brake": 1})
+    acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")},
+                                     {"_id": 1, "execution_brake": 1, "user_id": 1})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     if not (acc.get("execution_brake") or {}).get("active"):
@@ -1596,5 +1613,12 @@ async def account_execution_brake_release(account_id: str, request: Request, use
     from step_up import require_step_up
     await require_step_up(db, user, request, "execution_brake_release")
     from execution_health import release
-    state = await release(db, account_id, actor=f"user:{user.get('email')}", reason="manual release")
+    state = await release(db, account_id, actor=f"admin:{user.get('email')}", reason="admin resume after EA/VPS check")
+    try:
+        await db.audit_log.insert_one({
+            "user_id": user["id"], "action": "admin_execution_brake_release",
+            "detail": {"account_id": account_id, "owner_user_id": acc.get("user_id")},
+            "step_up_verified": True, "at": datetime.now(timezone.utc).isoformat()})
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "brake": state}

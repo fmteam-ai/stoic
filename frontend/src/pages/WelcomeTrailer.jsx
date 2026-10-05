@@ -208,10 +208,11 @@ export default function WelcomeTrailer() {
                             designed to <em>refuse</em> trades that fail its risk checks.
                         </h1>
                         <p className="subline">
-                            Sound on. Watch how a multi-agent AI pipeline,
-                            fail-closed safety governance and one-command VPS
-                            infrastructure trade gold and bitcoin — so you
-                            don&apos;t have to.
+                            Sound on. Watch a multi-agent AI pipeline, fail-closed
+                            safety governance and one-command VPS infrastructure
+                            designed for automated gold and bitcoin strategies —
+                            live availability depends on verified connectivity and
+                            safety readiness.
                         </p>
                         <div className="cta-block" style={{ marginTop: "2.5rem" }}>
                             <button

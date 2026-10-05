@@ -138,14 +138,20 @@ mongosh -u "$MONGO_ROOT_USER" -p "$(cat secrets/mongo_root_password)" \
 ```
 `MONGO_URL` gains `&replicaSet=rs0`. Managed MongoDB (Atlas etc.) already qualifies.
 
-## EA v1.58 (main92 H1) — rebuild required
-EA 1.58 adds `margin_mode` (ACCOUNT_MARGIN_MODE) to every heartbeat so netting accounts are
-recognised from the terminal itself. `docs/RELEASE_HASHES.json#ea.mq5_sha256` was re-captured for
-the 1.58 source (the previous record still pointed at the 1.56 source from 2026-08-29, so the
-`ea-release` compile-record-sign job failed its "source drifted" gate on the first MQ5 push since).
-Push to main → `ea-release.yml` compiles with MetaEditor, records + signs the EX5 (needs the
-RELEASE_SIGNER_* secrets) and commits `release/ea_release.json` back; then roll 1.58 to every
-terminal. Terminals on 1.57 keep working (live minimum stays 1.57; `margin_mode_v1` is optional).
+## EA v1.59 (main92 H1 / main93 decision 1) — rebuild required
+EA 1.59 (the `margin_mode` change, renamed from the interim 1.58 as agreed — no signed 1.58 EX5
+was ever produced) adds `margin_mode` (ACCOUNT_MARGIN_MODE) to every heartbeat so netting accounts
+are recognised from the terminal itself. `docs/RELEASE_HASHES.json#ea.mq5_sha256` is captured for
+the 1.59 source. Push to main → `ea-release.yml` compiles with MetaEditor, records + signs the EX5
+(needs the RELEASE_SIGNER_* secrets) and commits `release/ea_release.json` back; then roll 1.59 to
+every terminal. Terminals on 1.57 keep working (live minimum stays 1.57; `margin_mode_v1` is optional).
+
+**N-R6 rollout rule (dual hash):** the backend accepts the CURRENT and the PREVIOUS signed EX5 hash
+(`ea_release.json#previous`, written by `verify_ea_release.py --record` when the version changes) plus
+the env pins `EA_RELEASE_SHA256` / `EA_RELEASE_SHA256_PREVIOUS`. Until the signed 1.59 record exists,
+**set `EA_RELEASE_SHA256` to the 1.57 EX5 hash on the server** or live accounts go CLOSE_ONLY
+(`EA_RELEASE_HASH_UNPINNED`). Once 1.59 is signed, keep the 1.57 hash in `EA_RELEASE_SHA256_PREVIOUS`
+until every terminal is upgraded; remove it afterwards so 1.57 terminals are refused again.
 
 ## EA v1.57 (audit r17 P0-01) — rebuild required
 `backend/static/EmergentTradingBridge.mq5` now parses `close_idem_key` /

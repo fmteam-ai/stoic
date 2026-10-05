@@ -102,6 +102,8 @@ fi
 
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
 ensure_release_secrets
+# N-R1 — hosts installed before the trusted-proxy chain existed: default the docker ranges once
+grep -q "^TRUSTED_PROXY_CIDRS=." backend/.env 2>/dev/null || set_kv backend/.env TRUSTED_PROXY_CIDRS "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8,::1/128,fd00::/8"
 provision_images || rollback
 
 echo "-- restarting stack"

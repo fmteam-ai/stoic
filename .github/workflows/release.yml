@@ -98,11 +98,13 @@ jobs:
           cd backend
           # zero collection errors in the exact pinned environment
           python -m pytest tests/unit --collect-only -q
+          # P2-02 (A9e) — coverage XML travels with the release evidence (pytest-cov is CI-only)
+          pip install -q pytest-cov
           python -m pytest tests/unit \
             tests/test_iter148_p0_exec_truth.py \
             tests/test_iter149_netting_truth.py \
             tests/test_iter150_netting_hedging.py::TestEaSourceScenarios \
-            -q --junitxml=/tmp/junit-unit.xml
+            -q --junitxml=/tmp/junit-unit.xml --cov=. --cov-report=xml:/tmp/coverage.xml
           python -m pytest tests/integration -m integration -q --junitxml=/tmp/junit-integration.xml
           # audit r14 P1-05 — safety-critical controls are a REQUIRED release gate
           N=$(python -m pytest tests/integration -m critical_controls --collect-only -q 2>/dev/null | grep -c '::')
@@ -118,6 +120,7 @@ jobs:
             /tmp/junit-unit.xml
             /tmp/junit-integration.xml
             /tmp/junit-critical.xml
+            /tmp/coverage.xml
 
   hermetic-verify:
     # Audit round 7 P2 — ONE reproducible command (scripts/verify_release.sh) run
@@ -786,6 +789,8 @@ jobs:
             evidence/grype-backend.json
             evidence/junit-unit.xml
             evidence/junit-integration.xml
+            evidence/junit-critical.xml
+            evidence/coverage.xml
             evidence/hermetic/hermetic-verification.json
             evidence/signer-canary.json
             rc_lock.json

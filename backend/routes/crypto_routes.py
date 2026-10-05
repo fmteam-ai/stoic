@@ -164,7 +164,7 @@ async def create_crypto_account(payload: BinanceAccountCreate, user=Depends(get_
         "equity": float(payload.initial_balance),
         "free_margin": float(payload.initial_balance),
         "creds": {"api_key": enc_key, "api_secret": enc_sec, "api_passphrase": enc_pass},
-        "bridge_token": generate_bridge_token(),  # reused as a generic account-secret
+        **__import__("bridge_tokens").token_fields(generate_bridge_token()),  # P1-01 — hash only
         "status": "connected",
         "last_heartbeat": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),

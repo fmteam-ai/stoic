@@ -74,9 +74,9 @@ def live_gate(account: dict) -> dict | None:
             return {"code": "EA_BINARY_PROOF_MISSING",
                     "reason": "terminal has not reported its EX5 hash over a verified installation chain — "
                               "pair the terminal and let the signed binary proof arrive on the heartbeat"}
-        if reported != expected.lower():
+        if reported not in accepted_ea_sha256s():
             return {"code": "EA_BINARY_HASH_MISMATCH",
-                    "reason": "terminal-reported EX5 hash does not match the verified release hash"}
+                    "reason": "terminal-reported EX5 hash matches neither the current nor the previous signed release hash"}
         # r22/r25: only an INSTALLER-MEASURED hash bound to the same installation
         # counts as proof. user_trust (token + public login/server), an unmeasured
         # installer pairing, or an EA echoing a hash the installer never recorded
@@ -131,18 +131,40 @@ def shipped_ea_version(mq5_path: str | None = None) -> str:
 
 
 def expected_ea_sha256() -> str | None:
-    """Verified EX5 hash for the CURRENT EA version. Trusted ONLY from:
-      · EA_RELEASE_SHA256 env pin (set by the attested deploy), or
+    """Verified EX5 hash for the CURRENT EA version (first of `accepted_ea_sha256s()`)."""
+    acc = accepted_ea_sha256s()
+    return acc[0] if acc else None
+
+
+def accepted_ea_sha256s() -> list[str]:
+    """N-R6 — EX5 hashes a LIVE terminal may run, current first. Trusted ONLY from:
+      · EA_RELEASE_SHA256 / EA_RELEASE_SHA256_PREVIOUS env pins (set by the attested deploy), or
       · a release record (release/ea_release.json | docs/RELEASE_HASHES.json#ea) that is
-        Ed25519-SIGNED, compiled by the sanctioned CI job, whose recorded MQ5 hash
-        matches the MQ5 this server ships, and whose version == the shipped #property version.
-    Never from account metadata; an unsigned or drifted record yields None (fail closed)."""
+        Ed25519-SIGNED, compiled by the sanctioned CI job, whose recorded MQ5 hash matches the
+        MQ5 this server ships and whose version == the shipped #property version — plus the
+        record's `previous` entry (the last signed release) so a rollout never puts terminals
+        still on the previous EA into CLOSE_ONLY. Never from account metadata; an unsigned or
+        drifted record contributes nothing (fail closed)."""
+    import os
+    out: list[str] = []
+    for name in ("EA_RELEASE_SHA256", "EA_RELEASE_SHA256_PREVIOUS"):
+        env = (os.environ.get(name) or "").strip().lower()
+        if len(env) == 64 and env not in out:
+            out.append(env)
+    rec = _signed_release_record()
+    if rec:
+        for h in (rec.get("ex5_sha256"), (rec.get("previous") or {}).get("ex5_sha256")):
+            h = str(h or "").lower()
+            if len(h) == 64 and h not in out:
+                out.append(h)
+    return out
+
+
+def _signed_release_record() -> dict | None:
+    """The verified EA release entry (current + optional signed `previous`) or None."""
     import hashlib
     import json
     import os
-    env = (os.environ.get("EA_RELEASE_SHA256") or "").strip().lower()
-    if len(env) == 64:
-        return env
     here = os.path.dirname(os.path.abspath(__file__))
     mq5_path = os.path.join(here, "static", "EmergentTradingBridge.mq5")
     candidates = list(_EA_RELEASE_FILES) + [os.path.join(here, "..", "docs", "RELEASE_HASHES.json"),
@@ -164,7 +186,7 @@ def expected_ea_sha256() -> str | None:
             h = str((rec or {}).get("ex5_sha256") or "").lower()
             sig = (rec or {}).get("signature") or {}
             # the record must be for the EA this server SHIPS (its #property version),
-            # which may be newer than the live-minimum capability version (1.58 ≥ 1.57)
+            # which may be newer than the live-minimum capability version (1.59 ≥ 1.57)
             ok = (len(h) == 64 and str(rec.get("version") or "") == shipped_ea_version(mq5_path)
                   and rec.get("compiled_by") == "github-actions" and sig.get("sig_hex"))
             if ok and os.path.exists(mq5_path):
@@ -172,14 +194,25 @@ def expected_ea_sha256() -> str | None:
                 ok = hashlib.sha256(open(mq5_path, "rb").read().replace(b"\r\n", b"\n")).hexdigest() == str(rec.get("mq5_sha256") or "")
             if ok:
                 from release_signing import verify_hex
-                body = {k: rec.get(k) for k in ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
-                                                "windows_build", "mt5_build", "source_commit")}
-                payload = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
-                ok = verify_hex(payload, sig["sig_hex"])
-            result = h if ok else None
+                ok = verify_hex(_canonical_payload(rec), sig["sig_hex"])
+            if ok:
+                prev = rec.get("previous") or None
+                # the previous release must carry its own valid signature (its MQ5 is gone)
+                if prev and not (len(str(prev.get("ex5_sha256") or "")) == 64 and prev.get("compiled_by") == "github-actions"
+                                 and (prev.get("signature") or {}).get("sig_hex")
+                                 and verify_hex(_canonical_payload(prev), prev["signature"]["sig_hex"])):
+                    prev = None
+                result = {**rec, "previous": prev}
         except Exception:  # noqa: BLE001 — unreadable/unverifiable record ⇒ fail closed
             result = None
         _EXPECTED_CACHE[key] = result
         if result:
             return result
     return None
+
+
+def _canonical_payload(rec: dict) -> bytes:
+    import json
+    body = {k: rec.get(k) for k in ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
+                                    "windows_build", "mt5_build", "source_commit")}
+    return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()

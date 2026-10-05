@@ -28,14 +28,26 @@ def is_cloudflare(ip: str) -> bool:
 
 RULES = {
     "R1": {"title": "Brute force → block IP on auth routes", "checks": ("A1",), "action": "block_ip", "scope": "auth", "undo": "unblock_ip"},
-    "R2": {"title": "Account under attack → lock password login", "checks": ("A1", "A3"), "action": "lock_login", "scope": "account", "undo": "unlock_account"},
+    "R2": {"title": "Account under attack → lock password login", "checks": ("A1",), "action": "lock_login", "scope": "account", "undo": "unlock_account"},
     "R3": {"title": "2FA/OTP guessing → lock OTP verify", "checks": ("A2",), "action": "lock_otp", "scope": "account", "undo": "unlock_otp"},
     "R4": {"title": "Stolen session → revoke session family", "checks": ("A4",), "action": "revoke_sessions", "scope": "user", "undo": None},
     "R5": {"title": "Stolen bridge token → suspend token", "checks": ("B1",), "action": "suspend_bridge_token", "scope": "account", "undo": "reinstate_token"},
     "R6": {"title": "Bridge token guessing → block IP on /bridge/*", "checks": ("B2",), "action": "block_ip", "scope": "bridge", "undo": "unblock_ip"},
     "R7": {"title": "Unauthorised command → freeze new entries + revoke actor sessions", "checks": ("A6", "B3"), "action": "freeze_new_entries", "scope": "account", "undo": "unfreeze"},
     "R8": {"title": "Scanning / flooding → block IP", "checks": ("A7",), "action": "block_ip", "scope": "all", "undo": "unblock_ip"},
+    # P1-04 — credential stuffing (A3: one IP, many accounts) targets the IP on auth routes; it was
+    # wrongly proposed as R2 (lock_login, account scope) with an IP target.
+    "R9": {"title": "Credential stuffing → block IP on auth routes", "checks": ("A3",), "action": "block_ip", "scope": "auth", "undo": "unblock_ip"},
 }
+# P1-04 — fixed (action → target kind) mapping; `evaluate` asserts every proposal against it so a
+# rule can never be emitted with a target type its action cannot act on.
+ACTION_TARGET_KIND = {"block_ip": "ip", "lock_login": "account", "lock_otp": "account", "revoke_sessions": "user",
+                      "suspend_bridge_token": "account", "freeze_new_entries": ("account", "user")}
+
+
+def target_kind_valid(action: str, kind: str) -> bool:
+    allowed = ACTION_TARGET_KIND.get(action)
+    return kind == allowed if isinstance(allowed, str) else kind in (allowed or ())
 FORBIDDEN_ACTIONS = ("close_trade", "modify_trade", "open_trade", "set_sl_tp", "stop_protection_loop", "stop_trade_manager")
 
 
@@ -82,7 +94,7 @@ def evaluate(finding: dict, cfg: dict) -> list[dict]:
     if cid == "A1" and key.startswith("A1:account:") and int(ev.get("failures") or 0) >= th.get("A1", {}).get("account_fail_10m", 50) and len(ev.get("ips") or []) >= 3:
         p("R2", "account", ev.get("account"), accm, notify_owner=True)
     if cid == "A3" and int(ev.get("accounts") or 0) >= th.get("A3", {}).get("accounts_per_ip_10m", 5):
-        p("R2", "ip", ev.get("ip"), ipm, note="credential stuffing source blocked on auth routes")
+        p("R9", "ip", ev.get("ip"), ipm, note="credential stuffing source blocked on auth routes")
     if cid == "A2" and int(ev.get("failures") or 0) >= th.get("A2", {}).get("otp_fail_10m", 10):
         p("R3", "account", ev.get("target"), accm)
     if cid == "A4":
@@ -101,6 +113,7 @@ def evaluate(finding: dict, cfg: dict) -> list[dict]:
         p("R8", "ip", ev.get("top_ip"), ipm)
     for prop in out:
         assert prop["action"] not in FORBIDDEN_ACTIONS
+        assert target_kind_valid(prop["action"], prop["target_kind"]), (prop["rule"], prop["action"], prop["target_kind"])
         if is_protected(cfg, prop["target_kind"], prop["target"]):
             prop.update(blocked_by="protected_target", severity_escalation="critical")
     return out

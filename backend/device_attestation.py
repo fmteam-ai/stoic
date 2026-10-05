@@ -250,11 +250,12 @@ async def verify_attestation(db, body: dict, client_ip: str | None = None) -> di
                                                   "at": now.isoformat(), "reason": "invalid_signature"})
         await _abuse_event(db, "invalid_signature", p["installation_id"], client_ip, dk["key_id"])
         raise AttestationError("invalid_signature", "signature does not verify under the enrolled device key")
-    from ea_capabilities import expected_ea_sha256
+    from ea_capabilities import accepted_ea_sha256s, expected_ea_sha256
     expected = (expected_ea_sha256() or "").lower()
+    accepted = accepted_ea_sha256s()
     attestation = {"key_id": dk["key_id"], "algorithm": dk["algorithm"], "nonce": p["nonce"], "ts": p["ts"],
                    "terminal_identity": p["terminal_identity"], "capabilities": p["capabilities"],
-                   "verified_at": now.isoformat(), "release_match": bool(expected) and expected == p["ex5_sha256"]}
+                   "verified_at": now.isoformat(), "release_match": bool(accepted) and p["ex5_sha256"] in accepted}
     await db.installations.update_one(
         {"_id": inst["_id"]},
         {"$set": {"ex5_sha256": p["ex5_sha256"], "ex5_sha256_at": now.isoformat(),

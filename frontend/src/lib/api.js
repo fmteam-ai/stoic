@@ -71,6 +71,12 @@ function makeResponseInterceptor(client) {
             } catch (_) { /* fall through to original error */ }
         }
         // Legacy session without a csrf cookie → bootstrap it, retry once.
+        if (status === 403 && error.response?.data?.detail?.code === "password_change_required"
+            && typeof window !== "undefined" && !window.location.pathname.startsWith("/settings")) {
+            // P1-03 — the server gates every other call until the password is changed
+            window.location.assign("/settings?password_change=required");
+            return Promise.reject(error);
+        }
         if (status === 403 && !cfg._csrfRetried
             && error.response?.data?.detail?.code === "csrf_failed") {
             cfg._csrfRetried = true;

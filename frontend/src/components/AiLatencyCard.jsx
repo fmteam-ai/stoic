@@ -25,7 +25,10 @@ export function AiLatencyCard() {
         finally { setLoading(false); }
     }, [hours]);
 
-    useEffect(() => { load(); const t = setInterval(load, 60_000); return () => clearInterval(t); }, [load]);
+    useEffect(() => {
+        if (hidden) return undefined;                       // main93 Low — stop polling after a 401/403
+        load(); const t = setInterval(load, 60_000); return () => clearInterval(t);
+    }, [load, hidden]);
 
     const overall = VERDICT[d?.overall] || null;
     if (hidden) return null;

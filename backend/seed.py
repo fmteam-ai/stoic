@@ -325,7 +325,10 @@ async def ensure_indexes():
     db = get_db()
     await invalidate_legacy_plaintext_tokens()
     await db.users.create_index("email", unique=True)
-    await db.accounts.create_index("bridge_token", unique=True)
+    # P1-01 — bridge tokens live as keyed hashes; the plaintext index is dropped and legacy rows migrated
+    import bridge_tokens as _bt
+    await _bt.ensure_indexes(db)
+    await _bt.migrate_plaintext(db)
     await db.accounts.create_index("user_id")
     # ops collections — BSON-date native (TTL prunes acked alerts after 30d)
     await db.ops_alerts.create_index([("dedup_key", 1), ("acked_at", 1)])
@@ -453,6 +456,7 @@ async def ensure_indexes():
         # Auth hardening: revocable refresh sessions + shared rate limits
         await db.auth_sessions.create_index("jti", unique=True)
         await db.auth_sessions.create_index([("user_id", 1), ("revoked", 1)])
+        await db.auth_sessions.create_index([("session_id", 1), ("revoked", 1)])   # P1-02 access-token validator
         await db.auth_sessions.create_index("expires_at",
                                             expireAfterSeconds=0)
         await db.rate_limits.create_index("expires_at", expireAfterSeconds=0)

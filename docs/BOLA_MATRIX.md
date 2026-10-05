@@ -12,7 +12,7 @@ Auto-generated from `backend/security_matrix.py`. Every route accepting `account
 | POST | `/api/accounts/{account_id}/certify` | user_scoped_query |
 | PATCH | `/api/accounts/{account_id}/credentials` | user_scoped_query |
 | POST | `/api/accounts/{account_id}/credentials/reveal` | user_scoped_query |
-| POST | `/api/accounts/{account_id}/execution-brake/release` | user_scoped_query |
+| POST | `/api/accounts/{account_id}/execution-brake/release` | admin_only |
 | GET | `/api/accounts/{account_id}/execution-health` | user_scoped_query |
 | POST | `/api/accounts/{account_id}/import-positions` | user_scoped_query |
 | GET | `/api/accounts/{account_id}/installations` | user_scoped_query |
@@ -163,6 +163,6 @@ Auto-generated from `backend/security_matrix.py`. Every route accepting `account
 | POST | `/api/trades/{trade_id}/revive` | user_scoped_query |
 | GET | `/api/trades/{trade_id}/timeline` | user_scoped_query |
 | GET | `/api/trades/{trade_id}/trace` | user_scoped_query |
-| GET | `/api/v1/accounts/{account_id}/certificate` | public_signed_view |
+| GET | `/api/v1/accounts/{account_id}/certificate` | user_scoped_query |
 | GET | `/api/v1/connect/accounts/{account_id}/status` | user_scoped_query |
 | GET | `/api/v1/trades` | user_scoped_query |

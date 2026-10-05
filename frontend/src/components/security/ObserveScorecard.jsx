@@ -73,6 +73,16 @@ export function ObserveScorecard({ status, onToggleRule, busy }) {
                                     <tr key={`${r.rule}-x`} className="border-t border-[#1F1F1F] bg-black/40" data-testid={`security-scorecard-detail-${r.rule}`}>
                                         <td colSpan={8} className="px-4 py-2 text-[#A1A1AA]">
                                             <div>{r.why} · {r.distinct_targets} distinct target(s) · action <span className="text-white">{r.action}</span></div>
+                                            {Array.isArray(r.checklist) && (
+                                                <ul className="mt-1.5 grid sm:grid-cols-2 gap-x-4 gap-y-0.5" data-testid={`security-scorecard-checklist-${r.rule}`}>
+                                                    {r.checklist.map((c) => (
+                                                        <li key={c.id} className={c.ok ? "text-[#00FF41]/90" : "text-[#FFB000]"}>{c.ok ? "✓" : "✗"} {c.label}</li>
+                                                    ))}
+                                                    <li className={`sm:col-span-2 tracking-widest ${r.promotable ? "text-[#00FF41]" : "text-[#71717A]"}`} data-testid={`security-scorecard-promotable-${r.rule}`}>
+                                                        {r.promotable ? "PROMOTION CHECKLIST COMPLETE — enabling is a deliberate step-up action" : "PROMOTION BLOCKED — keep observing"}
+                                                    </li>
+                                                </ul>
+                                            )}
                                             {r.examples.length ? (
                                                 <ul className="mt-1 space-y-0.5">
                                                     {r.examples.map((ex, i) => (

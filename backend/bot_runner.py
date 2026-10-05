@@ -534,8 +534,14 @@ async def _process_user_account_locked(db, cfg: dict):
     anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4))
     # main92 P3 — configs without a value fall back to 1 auto trade / symbol /
     # day (the API default); the pulse says so, so operators can review it.
-    trade_of_day_cap_default = cfg.get("trade_of_day_cap") is None
-    trade_of_day_cap = int(cfg.get("trade_of_day_cap", 1) or 0)
+    # main93 — an explicit EMPTY value ("" / None) is "not set", never "unlimited":
+    # only an explicit 0 disables the cap.
+    _tod_raw = cfg.get("trade_of_day_cap")
+    trade_of_day_cap_default = _tod_raw in (None, "")
+    try:
+        trade_of_day_cap = 1 if trade_of_day_cap_default else int(_tod_raw)
+    except (TypeError, ValueError):
+        trade_of_day_cap, trade_of_day_cap_default = 1, True
     asia_skip_xau = bool(cfg.get("asia_session_skip_xau", True))
     sl_cooldown_enabled = bool(cfg.get("sl_cooldown_enabled", True))
     sl_cooldown_min = int(cfg.get("sl_cooldown_minutes", _sl_cooldown_minutes_default()) or 0)
@@ -1644,15 +1650,16 @@ async def _process_user_account_locked(db, cfg: dict):
         # Target account: per-account cfg pins one; default cfg picks the first connected.
         target_account = connected[0]
 
-        # A7d — execution-health brake: repeated late fills / rejects / slippage
-        # vetoes / duplicate tickets pause NEW entries on this account.
-        from execution_health import is_braked as _eh_braked, maybe_auto_release as _eh_release
-        if _eh_braked(target_account) and not await _eh_release(db, target_account):
+        # A7d — execution-health brake: repeated late fills pause NEW entries on
+        # this account until an admin resumes (no auto-release; enforced again at
+        # the dispatch fence so queued / scalp-fast / manual orders cannot bypass it).
+        from execution_health import is_braked as _eh_braked
+        if _eh_braked(target_account):
             _br = target_account.get("execution_brake") or {}
             await _record_pulse(db, cfg, symbol=sym,
                 action="SKIP", level="warn",
-                reason=f"EXECUTION BRAKE — {_br.get('reason')}. New entries paused until "
-                       f"{str(_br.get('release_after') or '')[:16]} UTC or manual release.",
+                reason=f"EXECUTION BRAKE — {_br.get('reason')}. New entries paused until an admin "
+                       "checks the EA / VPS and presses Resume.",
             )
             continue
 

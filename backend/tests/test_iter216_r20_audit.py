@@ -2,7 +2,7 @@
 Iter-216 / Round-20 security audit verification (STRICTLY READ-ONLY on preview).
 
 Covers:
-  - GET /api/health → 200, ea_version == '1.58'
+  - GET /api/health → 200, ea_version == '1.59'
   - GET /api/status → 200, trading.readiness.dominant_code present, 6 components
   - GET /api/authority/decision (admin) → 200 with state, dominant_code, blockers;
       any live-mode trading_enabled account must carry an EA blocker among
@@ -61,7 +61,7 @@ def test_health_ea_157():
     assert r.status_code == 200
     j = r.json()
     assert j.get("status") in ("ok", "healthy"), j
-    assert j.get("ea_version") == "1.58", j
+    assert j.get("ea_version") == "1.59", j
 
 
 def test_status_dominant_code_and_components():

@@ -245,6 +245,8 @@ jobs:
         run: python scripts/check_ea_structure.py
       - name: EA release-hash drift guard (MQ5 vs docs/RELEASE_HASHES.json)
         run: python scripts/check_release_hash_drift.py
+      - name: Update-path smoke — every compose secret is provisioned by deploy/lib.sh (N-R2)
+        run: python scripts/check_compose_secrets.py
 
   ea-compile:
     # Real MetaEditor compile gate — fails the pipeline on any MQL error and

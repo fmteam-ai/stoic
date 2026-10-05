@@ -731,10 +731,11 @@ async def revoke_installation(installation_id: str,
         {"account_id": inst["account_id"],
          "installation_id": installation_id},
         {"$set": {"revoked": True, "revoked_at": now}})
+    # P1-01 — a revocation rotation nobody needs to read: store the hash only (re-pair issues the next token)
+    _acc = await db.accounts.find_one({"_id": ObjectId(inst["account_id"])}) or {"_id": ObjectId(inst["account_id"])}
     await db.accounts.update_one(
         {"_id": ObjectId(inst["account_id"])},
-        {"$set": {"bridge_token": f"tok_{_secrets.token_urlsafe(32)}",
-                  "bridge_token_rotated_at": now.isoformat()}})
+        __import__("bridge_tokens").rotation_update(_acc, f"tok_{_secrets.token_urlsafe(32)}", grace_until=None, suspended=True))
     return {"ok": True, "installation_id": installation_id,
             "note": "lease revoked + bridge token rotated — re-pair to "
                     "restore execution"}
@@ -827,7 +828,7 @@ async def report_artifact_digest(payload: dict, cert_fp: str = _FP_HEADER):
         agent = await _mtls_gate(db, token, cert_fp)
         reporter = {"kind": "agent", "agent_id": str(agent["_id"])}
     elif bridge_token:
-        acc = await db.accounts.find_one({"bridge_token": bridge_token})
+        acc = await __import__("bridge_tokens").find_by_current(db, bridge_token)   # P1-01 — by hash
         if not acc:
             raise HTTPException(status_code=401, detail="unknown bridge token")
         reporter = {"kind": "installer", "account_id": str(acc["_id"])}

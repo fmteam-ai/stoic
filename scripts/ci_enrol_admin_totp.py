@@ -13,16 +13,34 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backend"))
 
 CI_DB_MARKERS = ("ci", "e2e", "test")
+# main93 Low (M7) — hard guards: the script only runs INSIDE GitHub Actions (or with an explicit
+# local opt-in), never against a production-looking database or a non-loopback/non-docker Mongo.
+LOCAL_OPT_IN = "STOIC_ALLOW_LOCAL_TOTP_ENROL"
+
+
+def _guard() -> str | None:
+    if (os.environ.get("APP_ENV") or "").lower() == "production":
+        return "APP_ENV=production"
+    if os.environ.get("GITHUB_ACTIONS") != "true" and os.environ.get(LOCAL_OPT_IN) != "1":
+        return f"not running in GitHub Actions (set {LOCAL_OPT_IN}=1 to opt in locally)"
+    db_name = os.environ.get("DB_NAME") or ""
+    if not any(m in db_name.lower() for m in CI_DB_MARKERS):
+        return f"DB_NAME={db_name!r} does not look like a CI/e2e database"
+    if db_name.lower() in ("ai_trading_bot", "stoic", "production", "prod"):
+        return f"DB_NAME={db_name!r} is a production database name"
+    url = os.environ.get("MONGO_URL") or ""
+    host = url.split("@")[-1].split("/")[0].split(":")[0].lower()
+    if host not in ("localhost", "127.0.0.1", "mongo", "mongodb", "::1"):
+        return f"MONGO_URL host {host!r} is not a local/CI Mongo"
+    return None
 
 
 def main() -> int:
-    if (os.environ.get("APP_ENV") or "").lower() == "production":
-        print("refusing: APP_ENV=production", file=sys.stderr)
+    why = _guard()
+    if why:
+        print(f"refusing: {why}", file=sys.stderr)
         return 2
     db_name = os.environ.get("DB_NAME") or ""
-    if not any(m in db_name.lower() for m in CI_DB_MARKERS):
-        print(f"refusing: DB_NAME={db_name!r} does not look like a CI/e2e database", file=sys.stderr)
-        return 2
     email = (os.environ.get("ADMIN_EMAIL") or "").lower()
     if not email:
         print("refusing: ADMIN_EMAIL unset", file=sys.stderr)

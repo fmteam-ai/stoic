@@ -109,13 +109,19 @@ async def execute(db, cfg: dict, prop: dict, finding: dict) -> dict:
 
 
 async def shared_ip_share(db, ip: str) -> float:
-    """S1 — share of the last 10 min of IP-keyed security events / login attempts carried by `ip`."""
+    """S1 / M2 — share of SUCCESSFUL traffic (login sessions + valid EA heartbeats, last 60 min)
+    carried by `ip`. Measured against all users' successful traffic, NOT against the attacker's
+    own failure events: a brute-forcer with 100 % of the failures and 0 sessions has share 0
+    (blockable); a proxy/NAT that every real user resolves to has share ≈ 1 (refused)."""
     try:
-        since = (_now() - timedelta(minutes=10)).isoformat()
-        total = await db.security_events.count_documents({"at": {"$gte": since}, "ip": {"$nin": [None, ""]}})
+        since = (_now() - timedelta(minutes=60)).isoformat()
+        sess_total = await db.auth_sessions.count_documents({"created_at": {"$gte": since}, "ip": {"$nin": [None, ""]}})
+        hb_total = await db.hb_valid_ips.count_documents({"last_at": {"$gte": since}})
+        total = sess_total + hb_total
         if total < rules.SHARED_IP_MIN_EVENTS:
             return 0.0
-        mine = await db.security_events.count_documents({"at": {"$gte": since}, "ip": str(ip)})
+        mine = await db.auth_sessions.count_documents({"created_at": {"$gte": since}, "ip": str(ip)})
+        mine += await db.hb_valid_ips.count_documents({"_id": str(ip), "last_at": {"$gte": since}})
         return mine / total
     except Exception as e:  # noqa: BLE001
         log.warning("shared-ip share unavailable: %s", type(e).__name__)
@@ -155,13 +161,13 @@ async def _apply(db, cfg: dict, prop: dict, row: dict) -> dict:
         n = await revoke_all_user_sessions(db, str(target), f"security_agent:{prop['rule']}")
         return {"status": "done", "revoked_sessions": n, "undo": None}
     if act == "suspend_bridge_token":
-        acc = await db.accounts.find_one({"_id": _oid(target)}, {"bridge_token": 1, "user_id": 1, "label": 1})
-        if not acc or not acc.get("bridge_token"):
+        acc = await db.accounts.find_one({"_id": _oid(target)}, {"bridge_token": 1, "bridge_token_hash": 1, "user_id": 1, "label": 1})
+        if not acc or not (acc.get("bridge_token_hash") or acc.get("bridge_token")):
             return {"status": "skipped", "note": "account or token not found"}
         exp = (_now() + timedelta(minutes=minutes)).isoformat() if minutes else None
-        await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"bridge_token_suspended": {
-            "token": acc["bridge_token"], "at": _now().isoformat(), "rule": prop["rule"], "dedup_key": row["dedup_key"],
-            "expires_at": exp}}})
+        from bridge_tokens import suspension_record
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"bridge_token_suspended": suspension_record(
+            acc, at=_now().isoformat(), rule=prop["rule"], dedup_key=row["dedup_key"], expires_at=exp)}})   # P1-01 — by hash
         await _notify_owner(db, acc.get("user_id"), act, acc.get("label") or target, 0)
         return {"status": "done", "prior": {"bridge_token_suspended": None}}
     if act == "freeze_new_entries":

@@ -251,8 +251,19 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         backend_base = str(request.base_url).rstrip("/")
     backend_base = backend_base.rstrip("/")
 
+    # P1-01 — the account's token is not readable any more (hash only): pairing ISSUES a fresh
+    # token, hands it to the installer exactly once, and retires the old one (one account → one
+    # installation; a stale terminal keeps the 15-min grace to report its last state).
+    import bridge_tokens as _bt
+    from auth import generate_bridge_token as _gen
+    fresh_token = _gen()
+    await db.accounts.update_one(
+        {"_id": account["_id"]},
+        _bt.rotation_update(account, fresh_token,
+                            grace_until=(datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
+                            suspended=bool(account.get("bridge_token_suspended"))))
     return {
-        "bridge_token": account.get("bridge_token"),
+        "bridge_token": fresh_token,
         "installation_id": installation_id,
         "account_label": account.get("label"),
         "broker": account.get("broker"),
@@ -260,7 +271,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "server_url": backend_base,
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
-        "ea_latest_version": "1.58",
+        "ea_latest_version": "1.59",
         # r26 P1-02 — device key enrolled with THIS pairing (None when the installer sent none)
         "device_key_id": (device_key or {}).get("key_id"),
         "attestation_challenge_url": f"{backend_base}/api/infra/attestation/challenge",

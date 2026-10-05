@@ -181,7 +181,7 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     ("POST", "/api/admin/security/actions/{action_id}/extend"): ADM,
     # A7d — execution-health brake (owner-scoped read + step-up release)
     ("GET", "/api/accounts/{account_id}/execution-health"): USQ,
-    ("POST", "/api/accounts/{account_id}/execution-brake/release"): USQ,
+    ("POST", "/api/accounts/{account_id}/execution-brake/release"): ADM,     # main93 A7d — admin Resume only
     # main92 follow-up (N11 round 2) — every sensitive route the in-process OpenAPI scan finds
     ("GET", "/api/accounts/{account_id}/bridge-token"): USQ,
     ("POST", "/api/accounts/{account_id}/bridge-token/revoke"): USQ,
@@ -195,7 +195,7 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     ("GET", "/api/v1/connect/accounts/{account_id}/status"): USQ,
     ("GET", "/api/ledger/statements"): USQ,                        # ledger_rows(user_id, account_id)
     ("GET", "/api/pamm/investor/programs/{program_id}"): PGA,      # investor_program_view → linked programs only
-    ("GET", "/api/v1/accounts/{account_id}/certificate"): PUB,     # public certificate — signed, non-sensitive view
+    ("GET", "/api/v1/accounts/{account_id}/certificate"): USQ,     # API-key scoped (_key_account) — signed public view of the KEY'S account
     ("POST", "/api/infra/installations/{installation_id}/device-key/revoke"): USQ,   # admin bypass
     # N11 — admin account environment / position-mode overrides (re-auth + audit chain)
     ("GET", "/api/admin/account-environments"): ADM,

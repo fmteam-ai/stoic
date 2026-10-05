@@ -48,6 +48,20 @@ async def _record(chat, label: str, ms: float, outcome: str, timeout_s: float) -
         logger.debug("ai latency sample not recorded: %s", type(e).__name__)
 
 
+def _record_bg(chat, label: str, ms: float, outcome: str, timeout_s: float) -> None:
+    """M5 — telemetry write runs in the background with a short timeout; a slow Mongo
+    must never add latency to the trading loop that made the AI call."""
+    async def _w():
+        try:
+            await asyncio.wait_for(_record(chat, label, ms, outcome, timeout_s), timeout=2.0)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("ai latency sample dropped: %s", type(e).__name__)
+    try:
+        asyncio.get_running_loop().create_task(_w())
+    except RuntimeError:
+        pass
+
+
 async def send_with_timeout(chat, message, *, label: str = "llm", seconds: float | None = None):
     secs = seconds or ai_timeout_sec()
     t0 = time.monotonic()
@@ -55,12 +69,12 @@ async def send_with_timeout(chat, message, *, label: str = "llm", seconds: float
         out = await asyncio.wait_for(chat.send_message(message), timeout=secs)
     except asyncio.TimeoutError:
         logger.warning("AI call %s timed out after %.0fs — using fallback", label, secs)
-        await _record(chat, label, (time.monotonic() - t0) * 1000, "timeout", secs)
+        _record_bg(chat, label, (time.monotonic() - t0) * 1000, "timeout", secs)
         raise
     except Exception:
-        await _record(chat, label, (time.monotonic() - t0) * 1000, "error", secs)
+        _record_bg(chat, label, (time.monotonic() - t0) * 1000, "error", secs)
         raise
-    await _record(chat, label, (time.monotonic() - t0) * 1000, "ok", secs)
+    _record_bg(chat, label, (time.monotonic() - t0) * 1000, "ok", secs)
     return out
 
 

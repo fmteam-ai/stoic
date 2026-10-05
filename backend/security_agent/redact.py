@@ -67,6 +67,17 @@ class RedactingFilter(logging.Filter):
             if masked != msg:
                 record.msg, record.args = masked, ()
                 record.security_redacted = True
+            # S5 — tracebacks are formatted by the handler AFTER this filter, so an HTTP error
+            # carrying e.g. the Telegram bot URL would print unmasked: pre-format and mask them.
+            if record.exc_info and record.exc_info[1] is not None:
+                import traceback
+                text = "".join(traceback.format_exception(*record.exc_info))
+                record.exc_text = mask(text)
+                record.exc_info = None
+            elif record.exc_text:
+                record.exc_text = mask(record.exc_text)
+            if record.stack_info:
+                record.stack_info = mask(record.stack_info)
         except Exception:  # noqa: BLE001 — a logging filter must never raise
             pass
         return True

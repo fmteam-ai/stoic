@@ -30,13 +30,19 @@ def get_jwt_secret() -> str:
     return os.environ["JWT_SECRET"]
 
 
-def create_access_token(user_id: str, email: str) -> str:
+def create_access_token(user_id: str, email: str, sid: str | None = None) -> str:
+    """P1-02 — access tokens carry iat + the refresh session id (sid) so revocation of the
+    session (logout, revoke-all, password change, security agent) ends them immediately."""
+    now = datetime.now(timezone.utc)
     payload = {
         "sub": user_id,
         "email": email,
         "type": "access",
-        "exp": datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MIN),
+        "iat": now,
+        "exp": now + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MIN),
     }
+    if sid:
+        payload["sid"] = sid
     return jwt.encode(payload, get_jwt_secret(), algorithm=JWT_ALGORITHM)
 
 
@@ -91,6 +97,66 @@ def require_admin(user: dict) -> None:
         })
 
 
+# P1-03 — while must_change_password is set, only these paths are reachable (HTTP); WebSockets refuse.
+PASSWORD_CHANGE_ALLOWED_PATHS = ("/api/auth/me", "/api/auth/change-password", "/api/auth/logout",
+                                 "/api/auth/refresh", "/api/auth/csrf", "/api/auth/sessions",
+                                 "/api/auth/sessions/revoke-all")
+
+
+class TokenRejected(Exception):
+    def __init__(self, status: int, detail):
+        super().__init__(detail)
+        self.status, self.detail = status, detail
+
+
+async def validate_access_token(db, token: str, *, path: str | None = None) -> dict:
+    """P1-02 / P1-03 — the ONE validator for HTTP and WebSockets.
+    Decode → type → user exists → status → session (sid) not revoked → iat ≥ user's
+    tokens_valid_after → forced-password-change gate. Raises TokenRejected."""
+    try:
+        payload = decode_token(token)
+    except jwt.ExpiredSignatureError:
+        raise TokenRejected(401, "Token expired")
+    except jwt.InvalidTokenError:
+        raise TokenRejected(401, "Invalid token")
+    if payload.get("type") != "access":
+        raise TokenRejected(401, "Invalid token type")
+    if payload.get("iat") is None:
+        raise TokenRejected(401, "Token predates revocable sessions — sign in again")
+    try:
+        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
+    except Exception:  # noqa: BLE001
+        user = None
+    if not user:
+        raise TokenRejected(401, "User not found")
+    status = user.get("status") or "active"
+    if status in ("suspended", "terminated") and user.get("role") != "admin":
+        raise TokenRejected(403, {"code": f"account_{status}", "message": f"Account {status}."})
+    sid = payload.get("sid")
+    if sid:
+        revoked = await db.auth_sessions.find_one({"session_id": sid, "revoked": True}, {"_id": 1})
+        if revoked:
+            raise TokenRejected(401, {"code": "session_revoked", "message": "Session revoked — sign in again."})
+    valid_after = user.get("tokens_valid_after")
+    if valid_after:
+        try:
+            va = datetime.fromisoformat(str(valid_after).replace("Z", "+00:00"))
+            if va.tzinfo is None:
+                va = va.replace(tzinfo=timezone.utc)
+            if int(payload["iat"]) < int(va.timestamp()):
+                raise TokenRejected(401, {"code": "session_revoked", "message": "Session revoked — sign in again."})
+        except (TypeError, ValueError):
+            pass
+    if user.get("must_change_password"):
+        if path is None or not any(path == p or path.startswith(p + "/") for p in PASSWORD_CHANGE_ALLOWED_PATHS):
+            raise TokenRejected(403, {"code": "password_change_required",
+                                      "message": "You must change your password before continuing."})
+    user["id"] = str(user["_id"])
+    user.pop("_id", None)
+    user.pop("password_hash", None)
+    return user
+
+
 async def get_current_user(request: Request) -> dict:
     token = request.cookies.get("access_token")
     if not token:
@@ -100,32 +166,9 @@ async def get_current_user(request: Request) -> dict:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     try:
-        payload = decode_token(token)
-        if payload.get("type") != "access":
-            raise HTTPException(status_code=401, detail="Invalid token type")
-        db = get_db()
-        user = await db.users.find_one({"_id": ObjectId(payload["sub"])})
-        if not user:
-            raise HTTPException(status_code=401, detail="User not found")
-        # Block requests from suspended/terminated users mid-session (Terms §8).
-        # Admins are never auto-blocked by their own suspension status.
-        status = user.get("status") or "active"
-        if status in ("suspended", "terminated") and user.get("role") != "admin":
-            raise HTTPException(
-                status_code=403,
-                detail={
-                    "code": f"account_{status}",
-                    "message": f"Account {status}.",
-                },
-            )
-        user["id"] = str(user["_id"])
-        user.pop("_id", None)
-        user.pop("password_hash", None)
-        return user
-    except jwt.ExpiredSignatureError:
-        raise HTTPException(status_code=401, detail="Token expired")
-    except jwt.InvalidTokenError:
-        raise HTTPException(status_code=401, detail="Invalid token")
+        return await validate_access_token(get_db(), token, path=request.url.path)
+    except TokenRejected as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
 
 
 def generate_bridge_token() -> str:
