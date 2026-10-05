@@ -3125,3 +3125,10 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## 2026-10-05 — Fix plan Steps D1 + D2 — DONE, user verification pending (fix plan fully executed)
 - Logs: URL/query secret redaction, HTTP clients at WARNING, Telegram webhook secret in header, no links in logs, production requires RESEND_API_KEY, admin by role only. Hardening: step-up for passkey enrolment / forced promotion / VPS destroy, pinned WEBAUTHN_RP_ID+ORIGIN in production, 2FA enrolment needs the password + email notice, admin checks require admin 2FA everywhere, API keys revoked on password change/reset/suspension. Details: memory/CHANGELOG.md.
 - Host env needed before deploy: RESEND_API_KEY, WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN (+ still pending: SECURITY_AGENT_PROTECTED_IPS, SECURITY_AGENT_TELEGRAM_*).
+
+## 2026-10-05 — main92 review corrections (A8a + A8b + A7 + A7d + SA5) — DONE, user verification pending
+- All four engineering steps of the main92 review implemented and tested (details: memory/CHANGELOG.md, docs/KNOWN_TEST_FAILURES.md). CI fixes: gitleaks fingerprints + runtime-built fixtures; `ADMIN_MFA_ENFORCED: "false"` on the frontend-e2e job (root cause: D2 admin-MFA gate vs TOTP-less CI admin).
+- New runtime pieces: `execution_health.py` (A7d brake, env EXEC_BRAKE_*), `_security_agent_middleware` in server.py (S12), `security_denied_counts` / `security_signals` collections, `security_freeze` account field (S8), `bridge_token_retired` (S2), EA heartbeat `margin_mode` (H1, additive — bump to 1.58 at the next EA release).
+- Operator checklist before deploy: review step 1 items (RESEND_API_KEY, WEBAUTHN_*, admin 2FA), paste the security Telegram token into `secrets/security_telegram_token`, keep the agent in observe; after deploy retrain ML, check `candle_feed_health.offset_source`, watch `entry_deviation` with `price_source`, enable R4 first.
+- Open decisions: P3 `trade_of_day_cap` default stays 1 (now visible in the pulse reason) — confirm or set per config; EA version bump for `margin_mode`.
+- Next: B1-fix (H9 rate table); 14-day observe scorecard; AI-latency card.

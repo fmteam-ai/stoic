@@ -12,6 +12,7 @@ DEFAULTS = {
     "protected_ips": [],
     "max_actions_per_hour": 10,
     "ip_block_min": 60,
+    "token_suspend_min": 240,     # SA5 S3 — R5 suspension lifetime
     "account_lock_min": 30,
     "critical_repeat_min": 30,
     "daily_report_utc": "07:00",
@@ -41,6 +42,7 @@ _ENV = {
     "protected_ips": ("SECURITY_AGENT_PROTECTED_IPS", "list"),
     "max_actions_per_hour": ("SECURITY_AGENT_MAX_ACTIONS_PER_HOUR", int),
     "ip_block_min": ("SECURITY_AGENT_IP_BLOCK_MIN", int), "account_lock_min": ("SECURITY_AGENT_ACCOUNT_LOCK_MIN", int),
+    "token_suspend_min": ("SECURITY_AGENT_TOKEN_SUSPEND_MIN", int),
     "critical_repeat_min": ("SECURITY_AGENT_CRITICAL_REPEAT_MIN", int),
     "daily_report_utc": ("SECURITY_AGENT_DAILY_REPORT_UTC", str), "retention_days": ("SECURITY_AGENT_RETENTION_DAYS", int),
     "ai_summary": ("SECURITY_AGENT_AI_SUMMARY", "bool"), "alert_emails": ("SECURITY_AGENT_ALERT_EMAILS", "list"),

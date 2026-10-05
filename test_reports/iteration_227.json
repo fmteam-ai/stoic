@@ -1,0 +1,27 @@
+{
+  "summary": "iter227 — live preview validation of main92 corrections (A7d execution-health brake, A7 N10/N13, P2 price_source, S1 master-admin bypass, S5 Telegram token log redaction, S12 security middleware, A8 regression). Backend: 16/16 pytest cases pass in /app/backend/tests/test_main92_live_iter227.py (incl. one skipped→now passing after payload fix). Frontend: login, Dashboard (/), /admin/ops → SECURITY & HEALTH tab, and /settings all render correctly against the preview URL for the admin@trading.bot account. No regressions found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_main92_live_iter227.py",
+    "/app/test_reports/pytest/iter227.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "/app/backend/routes/account_routes.py is 1601 lines — above the 700-line soft cap in the review guidelines. A7d endpoints (execution-health, execution-brake/release) are appended at the bottom but share a file with import routes, position-mode admin bits, demo certification, etc. Consider splitting into account_routes/execution_health_routes.py for readability + lower merge-conflict risk.",
+    "execution_health.evaluate() swallows alerting/audit exceptions silently with `except Exception: pass` (lines 83, 89, 128, 134). While this prevents the brake from being blocked by alerting failures, there is no counter/metric for failed audit writes — a prod audit regression would be silent. Consider logging at WARNING with a structured code and/or incrementing a dedicated metric.",
+    "/app/backend/routes/trade_routes.py execute_signal() rejects via 409 with price_source but there is NO log line emitted on this specific refusal path — the operator sees it only via the HTTP response. For live-trading forensics, log a warning (symbol, px_src, deviation, user_id) at the raise site so brake-adjacent 'why did my manual execute fail?' questions are answerable from backend logs.",
+    "admin_set_account_position_mode writes the 'intent' audit entry BEFORE _reauth is called when… wait — correct: `_reauth` is on line 791, intent audit on line 796. Order is reauth-then-intent. The N13 fix comment claims 'audit entry is written BEFORE the change (intent), so a failed or interrupted write can never leave an unaudited position-mode change' — that is still correct for the WRITE, but a FAILED reauth produces no audit entry at all. If auditing failed-reauth attempts is desired for the admin audit chain, consider emitting a lightweight 'account_position_mode_set_failed_reauth' entry on 401.",
+    "tests/conftest.py monkey-patches requests.Session.request to auto-inject X-CSRF-Token and X-Step-Up-Bypass. This is convenient for the HTTP suite but it masks real integration bugs: any test wanting to verify CSRF enforcement or the un-bypassed step-up gate must drop out of requests.Session (we used urllib). Document this clearly in conftest."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_main92_live_iter227.py (new; 16 tests)"
+  ],
+  "success_rate": {"backend": "100% (16/16)", "frontend": "100% (all critical UI elements verified)"},
+  "test_credentials": "admin@trading.bot (TEST_ADMIN_EMAIL from backend/.env; password read from TEST_ADMIN_PASSWORD at runtime, never embedded).",
+  "seed_data_creation": "Transient only, all cleaned up at end of each test: (a) 3 execution_health_events docs for the admin's live account; (b) accounts.execution_brake set to {active:false} after test; (c) one security_blocks row with iter227:true marker; (d) one signals doc with iter227:true marker.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run cmd: cd /app/backend && STOIC_TESTS_ALLOW_DB_NAME=1 python -m pytest tests/test_main92_live_iter227.py -v. The test file reads BASE from REACT_APP_BACKEND_URL, MONGO_URL/DB_NAME from env, and TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD + STEP_UP_BYPASS_TOKEN from backend/.env (preview). The conftest at tests/conftest.py auto-injects X-CSRF-Token and X-Step-Up-Bypass headers on every requests.Session mutating call — my CSRF-required test uses urllib to bypass that patch (Cloudflare blocks default urllib UA → set Mozilla UA). The S5 Telegram-token redaction check scans the last ~4000 lines of /var/log/supervisor/backend.*.log; if the hot-reload rotates logs frequently, run the triggering request first and the scan immediately after. ADMIN_MFA_ENFORCED=false in preview; admin has no TOTP, so the brake-release test accepts BOTH outcomes (403 step_up_required OR 200 when the STEP_UP_BYPASS_TOKEN header path fires via conftest). N13 reauth payload shape is {mode:'auto'|'netting'|'hedging', password:'...'} — NOT {position_mode, current_password}.",
+  "rca of the issue": "n/a — no bug found. Three transient test failures during authoring were test-side only: (1) ignored conftest's CSRF auto-injection — fixed by using raw urllib for the csrf-missing check; (2) wrong payload field names (position_mode/current_password) for the N13 endpoint — fixed to {mode,password}; (3) P2 test needed a persisted signal to call /api/trades/execute/{signal_id} — fixed by inserting a stale signal doc and cleaning up after. All 16 cases now pass against the live preview backend."
+}
