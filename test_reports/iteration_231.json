@@ -1,0 +1,36 @@
+{
+  "summary": "A13 Part 1 backend verification. All unit suites pass (26/26 across test_a13_part1.py + test_iter35_binance_ccxt.py + test_demo_readiness.py) and regression suite is green (35/35 across test_fixplan_main94_a10.py + test_fixplan_main96_a12.py + test_iter35_crypto_routes_http.py). A new HTTP smoke suite (test_iter231_a13_http.py, 4 tests) was added and all pass against the preview backend using admin cookie auth.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_a13_part1.py",
+    "/app/backend/tests/test_iter35_binance_ccxt.py",
+    "/app/backend/tests/test_demo_readiness.py",
+    "/app/backend/tests/test_iter231_a13_http.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "demo_readiness.build() nests grants_authority under payload['authority']['grants_authority'] — the request text said top-level 'grants_authority false'. Behaviour is correct (never grants trading authority) and the readiness page explicitly states so, but UI consumers must read authority.grants_authority, not grants_authority.",
+    "A13-1 kill-switch correctly blocks live-intent accounts (via _wants_live) BEFORE constructing BinanceClient; paper/testnet accounts are not blocked.",
+    "A13-2 production_key_violation covers all four cases (missing / <32 / equal JWT_SECRET / valid distinct). token_hash raises RuntimeError in APP_ENV=production without BRIDGE_TOKEN_HASH_KEY. deploy_preflight.run_preflight() emits a 'bridge_hash_key' check.",
+    "Known pre-existing failures (per agent-to-agent note) were NOT re-tested and are not reported as new: test_iter181_deploy_preflight.py (needs replica set), test_iter136_security_hardening.py::test_bridge_token_rotation_grace, test_iter54_heartbeat_ws_mismatch.py."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter231_a13_http.py (NEW — HTTP smoke for A13-1 kill switch surface + A13-3 demo-readiness)",
+    "/app/docs/TEST_MANIFEST.md (regenerated via scripts/generate_test_manifest.py)"
+  ],
+  "success_rate": {"backend": "100%", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "admin@trading.bot / password from /app/memory/test_credentials.md (TEST_ADMIN_PASSWORD in backend/.env). MFA not enforced in preview (ADMIN_MFA_ENFORCED=false).",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "A13 Part 1 landed cleanly. HTTP endpoint path is /api/admin/demo-readiness (hyphenated), not /api/admin/demo/readiness as the review request text wrote. grants_authority lives under payload['authority']. Live-crypto kill switch requires BOTH CRYPTO_LIVE_TRADING_ENABLED and BINANCE_LIVE_ENABLED true; preview has neither set so _live_enabled() is False and any live-intent crypto order returns {'blocked':'crypto_live_disabled'}. Use STOIC_TESTS_ALLOW_DB_NAME=1 DB_NAME=ai_trading_bot when running the new HTTP suite against the preview backend.",
+  "rca of the issue": "n/a — no regressions found; prior work by main agent (patching _wants_live into the engine check and the autouse gate_or_block fixture) resolved the earlier failures."
+}

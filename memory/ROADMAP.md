@@ -1,5 +1,8 @@
 # STOIC — Roadmap
 
+- **A13 Audit Fix List** (PDF uploaded by user): ~~Part 1 (during demo)~~ DONE 2026-06 → **P1 Part 2 (before live / real money)** → **P2 Part 3** → **P2 P1-05 live-trading truth unproved**.
+- **User ops**: rotate Telegram bot token (appeared in chat); SECURITY_AGENT_PROTECTED_IPS + enforce mode (SA4, currently observe); production env needs BRIDGE_TOKEN_HASH_KEY (boot refuses without it since A13-2).
+
 - **P0** Production deployment to stoicaibot.com (K8s timeout on last attempt — retry with `deployment_agent` readiness check; export state from Preview → import to Production for EA token sync).
 - **P1** Broker Partnership Setup — `PartnerBrokerCard.jsx` with IB tracking links + free broker VPS guidance.
 - **P1** Binance live BTC execution via CCXT.
