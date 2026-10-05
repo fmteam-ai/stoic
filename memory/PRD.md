@@ -3121,3 +3121,7 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 
 ## 2026-10-05 — Fix plan Step C2 (AI calls and gates) — DONE, user verification pending
 - Hard 10 s timeouts + fallbacks on every loop AI call (A2), sanitised sentiment + untrusted headlines + 2-source veto (A4/A5), gold booster never raises floor (A6), atr_14/ma_20/ma_200 (A7), direction-aware correlation veto (A8), raw-setup-score calibration (A9), fresh-install retrain fix (A12), regime_volatile flag (A13), optimizer ≥30 trades + bool parsing + Wilder RSI (A14), calibrated-space threshold (R12). Details: memory/CHANGELOG.md. Tests: 11 unit + 115 regression; roadmap step 8 covered → continue at step 9 / fix plan Batch D.
+
+## 2026-10-05 — Fix plan Steps D1 + D2 — DONE, user verification pending (fix plan fully executed)
+- Logs: URL/query secret redaction, HTTP clients at WARNING, Telegram webhook secret in header, no links in logs, production requires RESEND_API_KEY, admin by role only. Hardening: step-up for passkey enrolment / forced promotion / VPS destroy, pinned WEBAUTHN_RP_ID+ORIGIN in production, 2FA enrolment needs the password + email notice, admin checks require admin 2FA everywhere, API keys revoked on password change/reset/suspension. Details: memory/CHANGELOG.md.
+- Host env needed before deploy: RESEND_API_KEY, WEBAUTHN_RP_ID, WEBAUTHN_ORIGIN (+ still pending: SECURITY_AGENT_PROTECTED_IPS, SECURITY_AGENT_TELEGRAM_*).
