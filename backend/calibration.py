@@ -70,7 +70,7 @@ async def compute_calibration(db, user_id: str, days: int = 90) -> dict:
             except Exception:
                 pass
         async for s in db.signals.find({"_id": {"$in": oids}},
-                                       {"confidence": 1, "scope": 1}):
+                                       {"confidence": 1, "scope": 1, "setup_score": 1}):
             conf_by_sig[str(s["_id"])] = s
 
     engines: dict = {}
@@ -79,7 +79,7 @@ async def compute_calibration(db, user_id: str, days: int = 90) -> dict:
         if pnl == 0:
             continue
         sig = conf_by_sig.get(str(t.get("signal_id")), {})
-        conf = t.get("confidence") or sig.get("confidence")
+        conf = calibration_input(t, sig)
         if conf is None:
             continue
         scope = t.get("scope") or sig.get("scope") or "unattributed"
@@ -146,6 +146,22 @@ async def _table_for(db, user_id: str) -> dict:
     table = await compute_calibration(db, user_id, days=90)
     _cache[user_id] = {"table": table, "expires": now + CACHE_TTL}
     return table
+
+
+def calibration_input(trade: dict | None = None, sig: dict | None = None) -> float | None:
+    """Fix plan A9 — the number calibration buckets on, identical for history and
+    the live lookup: the RAW setup score (never the news-/session-adjusted
+    confidence). Falls back to confidence only for legacy rows without a score."""
+    trade, sig = trade or {}, sig or {}
+    raw = trade.get("setup_score_raw")
+    if raw is None and isinstance(sig.get("setup_score"), dict):
+        raw = sig["setup_score"].get("score")
+    if raw is None:
+        raw = trade.get("confidence") if trade.get("confidence") is not None else sig.get("confidence")
+    try:
+        return float(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 async def calibrated_p_win(db, user_id: str, scope: str,

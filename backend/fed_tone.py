@@ -60,7 +60,8 @@ async def get_fed_tone() -> dict | None:
             session_id=f"fed-tone-{int(now)}",
             system_message="You are a monetary policy analyst. Respond only with JSON.",
         ).with_model(PROVIDER, model_for("fast"))
-        raw = await chat.send_message(UserMessage(text=prompt))
+        from llm_timeout import send_with_timeout
+        raw = await send_with_timeout(chat, UserMessage(text=prompt), label="fed_tone")
         txt = str(raw).strip()
         if txt.startswith("```"):
             txt = txt.strip("`").replace("json", "", 1).strip()

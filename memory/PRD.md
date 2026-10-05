@@ -3118,3 +3118,6 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## 2026-10-05 — Fix plan Step C1 (candle data) — DONE, user verification pending
 - Per-user/timeframe candle reads with validated ingest (A1), broker-offset UTC normalisation (R3), no VWAP before first bar of day (A3), broker tick as live price + `price_source` on every signal (A10), per-user forecast cache (A11), training rows with UTC open-time anchor / entry-time stop / scoped signals (R11). Details: memory/CHANGELOG.md. Tests unit 7 + live 5 (iteration_225 100%).
 - Next: Fix plan C2 (AI calls/gates), then D1/D2; SA5 hardening extras; Telegram secrets + protected IPs still pending from user.
+
+## 2026-10-05 — Fix plan Step C2 (AI calls and gates) — DONE, user verification pending
+- Hard 10 s timeouts + fallbacks on every loop AI call (A2), sanitised sentiment + untrusted headlines + 2-source veto (A4/A5), gold booster never raises floor (A6), atr_14/ma_20/ma_200 (A7), direction-aware correlation veto (A8), raw-setup-score calibration (A9), fresh-install retrain fix (A12), regime_volatile flag (A13), optimizer ≥30 trades + bool parsing + Wilder RSI (A14), calibrated-space threshold (R12). Details: memory/CHANGELOG.md. Tests: 11 unit + 115 regression; roadmap step 8 covered → continue at step 9 / fix plan Batch D.

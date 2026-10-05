@@ -77,8 +77,10 @@ def featurize(action, symbol, sig, when=None) -> list:
         1.0 if "london" in sess else 0.0,
         1.0 if ("new" in sess or "ny" in sess) else 0.0,
         1.0 if "TREND" in reg else 0.0,
-        1.0 if "RANGE" in reg else 0.0,
-        1.0 if "VOL" in reg else 0.0,
+        1.0 if "RANGE" in reg or "CHOP" in reg else 0.0,
+        # fix plan A13 — "volatile" means HIGH vol / shock; LOW_VOL_TREND used
+        # to light this flag because the substring "VOL" matched
+        1.0 if ("HIGH_VOL" in reg or "SHOCK" in reg) and "LOW_VOL" not in reg else 0.0,
         math.sin(2 * math.pi * when.hour / 24),
         math.cos(2 * math.pi * when.hour / 24),
         float(when.weekday()),

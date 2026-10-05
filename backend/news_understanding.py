@@ -230,7 +230,8 @@ async def _score_headlines(base: str, heads: list) -> list:
                         "NFP prints for their asset-specific price impact. "
                         "Respond only with JSON."),
     ).with_model(PROVIDER, model_for("fast"))
-    raw = await chat.send_message(UserMessage(text=prompt))
+    from llm_timeout import send_with_timeout
+    raw = await send_with_timeout(chat, UserMessage(text=prompt), label=f"news:{base}")
     out = []
     for row in _parse_array(str(raw)):
         try:

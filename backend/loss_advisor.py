@@ -261,7 +261,8 @@ async def _claude_measures(payload: dict) -> dict:
             session_id=f"loss-review-{uuid.uuid4().hex[:8]}",
             system_message=_ADVISOR_SYSTEM,
         ).with_model(PROVIDER, model_for("analysis"))
-        raw = str(await chat.send_message(UserMessage(text=json.dumps(payload, default=str)))).strip()
+        from llm_timeout import send_with_timeout
+        raw = str(await send_with_timeout(chat, UserMessage(text=json.dumps(payload, default=str)), label="loss_advisor", seconds=30)).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw.lower().startswith("json"):

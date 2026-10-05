@@ -261,7 +261,8 @@ async def _ask_llm(telemetry: dict) -> dict:
             session_id=f"bot-doctor-{uuid.uuid4().hex[:8]}",
             system_message=_DOCTOR_SYSTEM,
         ).with_model(PROVIDER, model_for("analysis"))
-        resp = await chat.send_message(UserMessage(text=user_text))
+        from llm_timeout import send_with_timeout
+        resp = await send_with_timeout(chat, UserMessage(text=user_text), label="bot_doctor", seconds=30)
         raw = str(resp).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")

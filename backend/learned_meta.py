@@ -158,7 +158,11 @@ async def _build_dataset() -> tuple[np.ndarray, np.ndarray, list[str]]:
         except Exception:
             continue
     if not sig_ids:
-        return np.array([]), np.array([]), []
+        # fix plan A12 — fresh install: same 5-tuple shape as the populated path
+        # (retrain() used to crash unpacking 3 values into 5)
+        return (np.array([]), np.array([]), [], None,
+                {"total_closed": len(trades), "accepted": 0, "alpha_clean_accepted": 0,
+                 "unattributed_included": 0, "excluded_noise": 0, "excluded_by_category": {}})
     sig_map = {}
     async for s in db.signals.find({"_id": {"$in": sig_ids}}):
         sig_map[str(s["_id"])] = s
@@ -418,19 +422,10 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
             cal_source = "in_sample_fallback"
             oos_auc = None
 
-    # Calibrate threshold: lowest p_win below which precision_of_rejection >= 0.6
-    threshold = 0.45
-    for cand in np.arange(0.30, 0.50, 0.01):
-        rejected = p_eval < cand
-        if rejected.sum() == 0:
-            continue
-        if (y_eval[rejected] == 0).mean() >= 0.6:
-            threshold = float(cand)
-            break
-
     # iter-52 · Platt scaling for calibrated probabilities (H5: fit on OOS).
     brier_raw = brier_score(p_eval, y_eval)
     platt = fit_platt(p_eval, y_eval)
+    p_space = p_eval
     if not platt.get("skipped"):
         p_cal = np.array([apply_platt(float(pi), platt) for pi in p_eval])
         brier_cal = brier_score(p_cal, y_eval)
@@ -438,6 +433,20 @@ def _fit_artifact(X: np.ndarray, y: np.ndarray, key: str, label: str,
         platt["brier_calibrated"] = round(brier_cal, 4)
         platt["ece_raw"] = expected_calibration_error(p_eval, y_eval)
         platt["ece_calibrated"] = expected_calibration_error(p_cal, y_eval)
+        p_space = p_cal
+
+    # Fix plan R12 · the threshold is applied to CALIBRATED p_win at predict
+    # time (p_cal < threshold → REJECT), so it is tuned in the same space:
+    # lowest calibrated p below which precision_of_rejection ≥ 0.6, searched
+    # over 0.30–0.60 (was raw probabilities, 0.30–0.50).
+    threshold = 0.45
+    for cand in np.arange(0.30, 0.60, 0.01):
+        rejected = p_space < cand
+        if rejected.sum() == 0:
+            continue
+        if (y_eval[rejected] == 0).mean() >= 0.6:
+            threshold = float(cand)
+            break
 
     return {
         "key": key,

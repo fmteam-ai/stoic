@@ -90,8 +90,16 @@ def _apply_dual_veto(action: str, confidence: float, sentiment: dict) -> tuple:
     'Strongly' means sentiment score has magnitude >= 0.5 AND opposes the action.
     Returns (final_action, veto_reason or '').
     """
-    score = float(sentiment.get("score") or 0)
+    try:
+        score = float(sentiment.get("score") or 0)
+    except (TypeError, ValueError):
+        score = 0.0
     if abs(score) < 0.5:
+        return action, ""
+    # Fix plan A5 — a veto needs corroboration: at least 2 distinct news sources
+    # (one outlet's headline can colour confidence, never silence a setup).
+    srcs = sentiment.get("distinct_sources")
+    if srcs is not None and int(srcs or 0) < 2:
         return action, ""
     if action == "BUY" and score <= -0.5:
         return "HOLD", f"News sentiment is strongly bearish ({score}); chart BUY vetoed."
@@ -221,8 +229,9 @@ async def analyze_symbol(symbol: str, risk_level: str,
     if symbol.upper() == "XAUUSD":
         base_min = adapted_profile["min_confidence"]
         if session.get("is_high_volume_window"):
-            # Lower floor by 3 pts (clamped at 70) — best liquidity, tightest spreads.
-            new_min = max(70, base_min - 3)
+            # Lower floor by 3 pts but never below 70 — and never RAISE it (fix
+            # plan A6: an aggressive 65 floor used to be pushed UP to 70 here).
+            new_min = min(base_min, max(70, base_min - 3))
             liquidity_window["confidence_adjustment"] = new_min - base_min
             adapted_profile = {**adapted_profile, "min_confidence": new_min}
         elif session["primary"] in ("off-hours",) and not session.get("is_weekend"):
@@ -440,10 +449,11 @@ async def analyze_symbol(symbol: str, risk_level: str,
                 session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
                 system_message=NARRATOR_PROMPT,
             ).with_model(PROVIDER, model_for("analysis"))
-            narration = await chat.send_message(UserMessage(text=json.dumps({
+            from llm_timeout import send_with_timeout
+            narration = await send_with_timeout(chat, UserMessage(text=json.dumps({
                 "confirmed_setup": {"direction": action, "cascade": mtf_conf},
                 "market_context": json.loads(user_text),
-            }, separators=(",", ":"))))
+            }, separators=(",", ":"))), label=f"narration:{symbol}")
             parsed = _parse_ai_json(str(narration))
             if parsed.get("reasoning"):
                 reasoning = f"{reasoning}\n\n{parsed['reasoning']}"

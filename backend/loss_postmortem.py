@@ -155,7 +155,8 @@ async def _claude_narrative(trade: dict, signal: dict, diff: dict) -> dict:
             session_id=f"postmortem-{trade.get('symbol','?')}-{uuid.uuid4().hex[:8]}",
             system_message=_POSTMORTEM_SYSTEM,
         ).with_model(PROVIDER, model_for("analysis"))
-        response = await chat.send_message(UserMessage(text=user_text))
+        from llm_timeout import send_with_timeout
+        response = await send_with_timeout(chat, UserMessage(text=user_text), label="postmortem", seconds=30)
         # Strip code fences / prefix garbage just in case
         raw = str(response).strip()
         if raw.startswith("```"):

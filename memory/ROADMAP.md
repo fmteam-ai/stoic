@@ -91,7 +91,7 @@ Fingerprint rule per step: `python scripts/generate_test_manifest.py` → `pytho
 - **B2 safety guards (R2 opened_at, R5 clamp fails closed, R6 heartbeat/quote block, R7, R8, B6 manual price check, R14) — DONE 2026-10-05**
 - **Security & Health Agent SA1–SA4 — DONE 2026-10-05** (observe mode until operator sets SECURITY_AGENT_PROTECTED_IPS + Telegram secrets and enables rules one at a time; SA5 hardening extras pending)
 - **C1 candle data (A1 per-user/timeframe + validated ingest, R3 broker UTC offset, A3, A10 broker tick, A11, R11) — DONE 2026-10-05**
-- C2 AI calls/gates (A2 timeouts, A4, A5, A6, A7, A8, A9, A12, A13, A14, R12) — covers roadmap step 8
+- **C2 AI calls/gates (A2 timeouts, A4, A5, A6, A7, A8, A9, A12, A13, A14, R12) — DONE 2026-10-05** (roadmap step 8 covered)
 - D1 logs/small fixes (S4, S5, S8 needs RESEND_API_KEY, S9) · D2 2FA/passkeys/admin (S1, S2, S6, S10, S11; set WEBAUTHN_RP_ID/ORIGIN)
 - E1 sessions/navigation (F1, F5, F6, F12) · E2 pages/data freshness (F2, F3, F4, F7, F8, F9, F10, F11)
 - F1 rate limits/backups/deploy safety (S3, S7, S12 encrypted backups passphrase, S13, S14, R13)

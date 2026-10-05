@@ -124,7 +124,10 @@ async def apply_rec(report_id: str, rec_id: str, user=Depends(get_current_user))
     report, rec = await _get_report_and_rec(db, user["id"], report_id, rec_id)
     if rec.get("status") != "pending":
         raise HTTPException(status_code=409, detail=f"Recommendation already {rec.get('status')}")
-    audit = await apply_recommendation(user["id"], report, rec)
+    try:
+        audit = await apply_recommendation(user["id"], report, rec)
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
     await db.optimizer_reports.update_one(
         {"_id": report["_id"], "recommendations.id": rec_id},
         {"$set": {"recommendations.$.status": "applied",

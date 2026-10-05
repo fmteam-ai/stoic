@@ -193,7 +193,8 @@ async def _lesson_llm(trade, ev) -> str | None:
                                    "sentence, ≤25 words, specific and "
                                    "actionable.")).with_model(
         PROVIDER, model_for("analysis"))
-    out = await chat.send_message(UserMessage(text=ctx))
+    from llm_timeout import send_with_timeout
+    out = await send_with_timeout(chat, UserMessage(text=ctx), label="self_eval", seconds=30)
     return str(out).strip()[:300]
 
 

@@ -66,38 +66,46 @@ class RiskAgent:
         if action not in ("BUY", "SELL"):
             return {"veto": False, "reason": "", "corr": None, "correlated_with": None}
 
-        same_dir_other = [
+        others = [
             p for p in active_positions
             if (p.get("symbol") or "").upper() != sym
-            and (p.get("action") or "").upper() == action.upper()
+            and (p.get("action") or "").upper() in ("BUY", "SELL")
             and (p.get("status") or "") in ("open", "pending")
         ]
-        if not same_dir_other:
+        if not others:
             return {"veto": False, "reason": "", "corr": None, "correlated_with": None}
 
-        # iter-142 · Correlation now measured on timestamp-aligned daily
-        # LOG RETURNS (portfolio.var.corr_returns) — raw close levels read
-        # spuriously high whenever both series merely trended. Unknown
-        # correlation (insufficient overlapping history) substitutes the
-        # conservative UNKNOWN_RHO prior rather than assuming independence.
+        # iter-142 · Correlation measured on timestamp-aligned daily LOG RETURNS
+        # (portfolio.var.corr_returns); unknown correlation substitutes the
+        # conservative UNKNOWN_RHO prior.
+        # Fix plan A8 · DIRECTION-AWARE: the exposure two positions share is
+        # r × (+1 same direction, −1 opposite). BUY XAUUSD next to an open BUY
+        # EURUSD with r=+0.8 stacks; BUY XAUUSD next to a SELL USDJPY with
+        # r=−0.8 ALSO stacks (both bet the same way); BUY XAUUSD next to a BUY
+        # USDJPY with r=−0.8 is a hedge and passes.
         from portfolio.var import UNKNOWN_RHO, corr_returns
-        for p in same_dir_other:
+        for p in others:
             other_sym = (p.get("symbol") or "").upper()
+            other_action = (p.get("action") or "").upper()
             corr = await corr_returns(sym, other_sym)
             unknown = corr is None
             if unknown:
                 corr = UNKNOWN_RHO
-            if abs(corr) >= self.corr_threshold:
+            sign = 1.0 if other_action == action.upper() else -1.0
+            effective = corr * sign
+            if effective >= self.corr_threshold:
                 suffix = (" (assumed — insufficient overlapping return history)"
                           if unknown else "")
+                how = "same-direction" if sign > 0 else "inverse-pair opposite-direction"
                 return {
                     "veto": True,
                     "reason": (
-                        f"Cross-asset correlation r={corr:+.2f} ≥ "
-                        f"{self.corr_threshold:+.2f} with open {other_sym} "
-                        f"{action} — blocking same-direction stack.{suffix}"
+                        f"Cross-asset exposure r={corr:+.2f} with open {other_sym} "
+                        f"{other_action} → effective {effective:+.2f} ≥ "
+                        f"{self.corr_threshold:+.2f} — blocking {how} stack.{suffix}"
                     ),
                     "corr": round(corr, 3),
+                    "effective_corr": round(effective, 3),
                     "correlated_with": other_sym,
                 }
         return {"veto": False, "reason": "", "corr": None, "correlated_with": None}

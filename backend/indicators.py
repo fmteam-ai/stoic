@@ -25,19 +25,34 @@ def ema(closes: list, period: int) -> Optional[float]:
 
 
 def rsi(closes: list, period: int = 14) -> Optional[float]:
-    """Relative Strength Index over the last `period` closes."""
+    """Wilder RSI (fix plan A14): seeded with the simple average of the first
+    `period` changes, then smoothed with alpha = 1/period over the whole series."""
     if len(closes) < period + 1:
         return None
-    gains, losses = [], []
-    for i in range(1, period + 1):
-        d = closes[-(period + 1) + i] - closes[-(period + 1) + i - 1]
-        (gains if d > 0 else losses).append(abs(d))
-    avg_g = sum(gains) / period if gains else 0
-    avg_l = sum(losses) / period if losses else 0
+    deltas = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    avg_g = sum(d for d in deltas[:period] if d > 0) / period
+    avg_l = sum(-d for d in deltas[:period] if d < 0) / period
+    for d in deltas[period:]:
+        avg_g = (avg_g * (period - 1) + max(d, 0.0)) / period
+        avg_l = (avg_l * (period - 1) + max(-d, 0.0)) / period
     if avg_l == 0:
         return 100.0
     rs = avg_g / avg_l
     return 100 - (100 / (1 + rs))
+
+
+def atr(history: list, period: int = 14) -> Optional[float]:
+    """Wilder ATR over daily candles (fix plan A7 — atr_14 was never produced)."""
+    if len(history) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(history)):
+        h, lo, pc = float(history[i]["high"]), float(history[i]["low"]), float(history[i - 1]["close"])
+        trs.append(max(h - lo, abs(h - pc), abs(lo - pc)))
+    val = sum(trs[:period]) / period
+    for tr in trs[period:]:
+        val = (val * (period - 1) + tr) / period
+    return val
 
 
 def volatility(closes: list, period: int = 30) -> float:
@@ -79,6 +94,11 @@ def compute_indicators(history: list) -> dict:
         "sma_20": _round(sma(closes, 20)),
         "sma_50": _round(sma(closes, 50)),
         "sma_200": _round(sma(closes, min(200, n))),
+        # fix plan A7 — names the confluence / VaR / microstructure layers read
+        "ma_20": _round(sma(closes, 20)),
+        "ma_200": _round(sma(closes, min(200, n))),
+        "ma_200_full": n >= 200,
+        "atr_14": _round(atr(history, 14)),
         "ema_12": _round(ema(closes, 12)),
         "ema_26": _round(ema(closes, 26)),
         "rsi_14": _round(rsi(closes, 14), 2),

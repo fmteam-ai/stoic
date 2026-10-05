@@ -665,10 +665,10 @@ async def _process_user_account_locked(db, cfg: dict):
             if (signal.get("action") in ("BUY", "SELL")
                     and cfg.get("_tier_calibrated_p_win", True)):
                 try:
-                    from calibration import calibrated_p_win
+                    from calibration import calibrated_p_win, calibration_input
                     signal["calibrated_p_win"] = await calibrated_p_win(
                         db, user_id, signal.get("scope"),
-                        float(signal.get("confidence") or 0))
+                        calibration_input(sig=signal) or 0.0)   # fix plan A9: raw setup score
                 except Exception as e:  # noqa: BLE001
                     logger.debug("calibrated_p_win lookup failed: %s", e)
             # iter-145 H6 · EV gate — a high win rate can still lose money.

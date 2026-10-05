@@ -395,6 +395,10 @@ class MT5BridgeEngine(ExecutionEngine):
             "tp2": signal.get("tp2"),
             "tp3": signal.get("tp3"),
             "sl_pips": signal.get("sl_pips"),
+            # fix plan A9 — raw setup score persisted so calibration history and
+            # the live lookup bucket on the SAME number
+            "setup_score_raw": ((signal.get("setup_score") or {}).get("score")
+                                if isinstance(signal.get("setup_score"), dict) else None),
             "tp_pips": signal.get("tp_pips"),
             "tp1_closed": False,
             "tp2_closed": False,
@@ -628,6 +632,10 @@ class PaperEngine(ExecutionEngine):
             "tp2": signal.get("tp2"),
             "tp3": signal.get("tp3"),
             "sl_pips": signal.get("sl_pips"),
+            # fix plan A9 — raw setup score persisted so calibration history and
+            # the live lookup bucket on the SAME number
+            "setup_score_raw": ((signal.get("setup_score") or {}).get("score")
+                                if isinstance(signal.get("setup_score"), dict) else None),
             "tp_pips": signal.get("tp_pips"),
             "tp1_closed": False,
             "tp2_closed": False,

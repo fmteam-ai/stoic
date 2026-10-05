@@ -33,7 +33,7 @@ from llm_models import optimizer_candidates
 
 logger = logging.getLogger("ai-optimizer")
 
-MIN_TRADES = 3          # below this we store an insufficient_data report, no LLM
+MIN_TRADES = 30         # fix plan A14 — no parameter changes from a 3-trade sample
 CACHE_MINUTES = 5       # manual re-analyze within this window returns cached report
 SCHEDULED_EVERY_HOURS = 24
 
@@ -235,7 +235,8 @@ async def _call_llm(window_hours: int, payload: dict) -> tuple[dict | None, str 
                 session_id=f"optimizer-{uuid.uuid4().hex[:10]}",
                 system_message=system,
             ).with_model(provider, model)
-            response = await chat.send_message(UserMessage(text=text))
+            from llm_timeout import send_with_timeout
+            response = await send_with_timeout(chat, UserMessage(text=text), label=f"optimizer:{model}", seconds=30)
             return _parse_llm_json(response), model
         except Exception as e:  # noqa: BLE001
             logger.warning("optimizer LLM %s failed: %s", model, e)
@@ -247,7 +248,15 @@ async def _call_llm(window_hours: int, payload: dict) -> tuple[dict | None, str 
 def _clamp(field: str, value):
     kind, lo, hi = ALLOWED_FIELDS[field]
     if kind == "bool":
-        return bool(value)
+        # fix plan A14 — the model answers with strings: bool("false") was True
+        if isinstance(value, str):
+            v = value.strip().lower()
+            if v in ("true", "yes", "on", "1", "enabled"):
+                return True
+            if v in ("false", "no", "off", "0", "disabled", ""):
+                return False
+            return None
+        return bool(value) if isinstance(value, (bool, int, float)) else None
     if kind == "enum":
         v = str(value).lower()
         return v if v in hi else None
@@ -484,6 +493,8 @@ async def apply_recommendation(user_id: str, report: dict, rec: dict) -> dict:
     if rec["type"] == "config_change":
         field = rec["field"]
         value = _clamp(field, rec["to"])  # re-clamp — defense in depth
+        if value is None:
+            raise ValueError("recommendation value is no longer valid")
         await db.bot_configs.update_one(
             _config_filter(user_id, account_id),
             {"$set": {field: value, "updated_at": now}},
