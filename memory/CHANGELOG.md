@@ -1825,3 +1825,8 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - Tests `tests/test_fixplan_b2_safety_guards.py` (7); manifest + rc_lock refrozen. Pre-existing stale failures noted (not B2): `tests/test_safety_guardian.py::test_mt5_engine_*` (fixture lacks trading_enabled / EA fence / recovery window gates).
 - Operator "Check after deploy": daily cap 2 → third trade skipped; stop the EA 3 min → `stale_heartbeat` blocks, resumes on reconnect; more SKIP/BLOCKED in Bot Health at first; executing an old signal by hand → "Price moved too far".
 - Next: Fix plan Batch C1 (candle data: A1, R3, A3, A10, A11, R11).
+
+## 2026-10-05 — Security audit #5 (SA3/SA4 + B2 release): PASS (no P0–P2) → 2 P3 fixed
+- SEC-001 P3: protected list matched the master admin by email only; user-id-keyed rules R4/R7 could contain the admin. Fix: `config.load` resolves `admin_user_id` from ADMIN_EMAIL; `rules.is_protected` also matches it (unit test added).
+- Hardening P3: nginx `location /api/` `add_header` dropped the server-level security headers → re-declared nosniff / X-Frame-Options DENY / Referrer-Policy / HSTS / strict CSP inside the `/api/` block (deploy/nginx.conf). Syntax validated with `nginx -t` (upstream name unresolvable outside compose, expected).
+- Noted (by design): R2/R3 account locks are an opt-in, 30-min, owner-notified DoS trade-off.

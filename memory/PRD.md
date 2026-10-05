@@ -3111,5 +3111,6 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## 2026-10-05 — Security & Health Agent SA4 (enforce mode) + Fix plan B2 — DONE, user verification pending
 - SA4: actions.py (block_ip / lock_login / lock_otp / revoke_sessions / suspend_bridge_token / freeze_new_entries, undo/extend, protected list, hourly cap, audit chain), is_blocked hooks in auth + bridge, RULES strip + ACTIVE BLOCKS panel + UNDO in the Security tab. Live-verified R6 cycle. Mode stays OBSERVE with no rules until the operator enables them. Details: memory/CHANGELOG.md.
 - B2: R2 (opened_at cap), R5 (clamp fails closed), R6 (heartbeat/quote block), R7 (forecast stop bounded), R8 (guardian pending/stop-less/daily-loss scope), B6 (manual execute price check + account id), R14 (no 500 reproducible). Details: memory/CHANGELOG.md.
+- Security audit #5 PASS 2026-10-05 (2 P3 fixed, see CHANGELOG).
 - Still needed from user: `SECURITY_AGENT_PROTECTED_IPS`, `SECURITY_AGENT_TELEGRAM_BOT_TOKEN` / `SECURITY_AGENT_TELEGRAM_CHAT_ID` (Docker secrets), Resend domain verification.
 - Next: Fix plan Batch C1 (candle data), then C2; SA5 hardening extras (pip-audit job, npm audit, backup restore test, TLS/header/port checks).

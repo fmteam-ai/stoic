@@ -91,11 +91,14 @@ def test_protected_targets_never_blocked_and_cap_switches_to_alert_only():
     seed(db, "A1", f"account:{admin}", "high", {"account": admin, "failures": 99, "ips": ["1", "2", "3"]})
     seed(db, "A1", "ip:203.0.113.9", "high", {"ip": "203.0.113.9", "failures": 99})
     seed(db, "A1", "ip:172.64.1.1", "high", {"ip": "172.64.1.1", "failures": 99})                            # Cloudflare range
+    c["admin_user_id"] = "adminoid"
+    seed(db, "A4", "user:adminoid", "critical", {"event": {"user_id": "adminoid"}})                           # audit #5 SEC-001: admin by user-id
     for i in range(4):
         seed(db, "B2", f"ip:7.7.7.{i}", "high", {"ip": f"7.7.7.{i}", "requests": 40})
     run(actions.sweep(db, c))
     st = [a["status"] for a in db.security_actions.rows]
-    assert st[:3] == ["refused_protected"] * 3 and st[3:].count("done") == 2 and st[3:].count("refused_cap") == 2
+    assert st[:4] == ["refused_protected"] * 4 and st[4:].count("done") == 2 and st[4:].count("refused_cap") == 2
+    assert db.auth_sessions.rows == [] and not any(a["action"] == "revoke_sessions" and a["status"] == "done" for a in db.security_actions.rows)
     assert len(db.security_blocks.rows) == 2 and all(b["value"].startswith("7.7.7.") for b in db.security_blocks.rows)
     kinds = {r["check_id"] for r in db.security_findings.rows}
     assert {"protected_target", "containment_cap_reached"} <= kinds

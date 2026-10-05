@@ -85,4 +85,8 @@ def merge_state(cfg: dict, state: dict | None) -> dict:
 
 async def load(db) -> dict:
     state = await db.platform_state.find_one({"_id": STATE_ID})
-    return merge_state(from_env(), state)
+    cfg = merge_state(from_env(), state)
+    # Audit #5 SEC-001: user-id-keyed rules (R4/R7) must recognise the master admin too.
+    admin = await db.users.find_one({"email": (os.environ.get("ADMIN_EMAIL") or "admin@stoicaibot.com").lower()}, {"_id": 1})
+    cfg["admin_user_id"] = str(admin["_id"]) if admin else None
+    return cfg

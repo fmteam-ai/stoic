@@ -36,7 +36,8 @@ def is_protected(cfg: dict, kind: str, value: str) -> bool:
     """Master admin account and allow-listed IPs/CIDRs can never be blocked or locked."""
     if kind in ("account", "user"):
         admin = (os.environ.get("ADMIN_EMAIL") or "admin@stoicaibot.com").lower()
-        return str(value or "").lower() == admin
+        v = str(value or "").lower()
+        return v == admin or (bool(cfg.get("admin_user_id")) and v == str(cfg["admin_user_id"]).lower())
     if kind == "ip":
         try:
             ip = ipaddress.ip_address(str(value))
