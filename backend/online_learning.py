@@ -39,7 +39,7 @@ async def sweep_online_learning(db) -> int:
         try:
             n_closed = await db.trades.count_documents(
                 {"user_id": uid, "status": "closed", "pnl": {"$ne": None},
-                 "origin": "auto"})
+                 "origin": "auto", "stats_excluded": {"$ne": True}})
             state = await db.online_learning.find_one({"user_id": uid}) or {}
             last_n = int(state.get("n_trades") or 0)
             age_s = MAX_STALENESS_S + 1

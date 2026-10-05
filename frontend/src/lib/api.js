@@ -59,8 +59,11 @@ function makeResponseInterceptor(client) {
         const url = String(cfg.url || "");
         const isAuthPath = url.includes("/auth/login") || url.includes("/auth/refresh")
             || url.includes("/auth/register") || url.includes("/auth/logout");
-        // Access token expired → refresh once, retry once.
-        if (status === 401 && !cfg._retried && !isAuthPath) {
+        // Access token expired → refresh once, retry once. A 401 that carries a
+        // re-auth verdict (wrong password / TOTP on an admin write) is NOT an
+        // expired session: never refresh-and-replay it (N13).
+        const reauthFailed = error.response?.data?.detail?.code === "reauth_failed";
+        if (status === 401 && !cfg._retried && !isAuthPath && !reauthFailed) {
             cfg._retried = true;
             try {
                 await silentRefresh();

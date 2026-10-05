@@ -1332,10 +1332,15 @@ void SendHeartbeat() {
    // can verify the full identity chain (unverified = telemetry only).
    string broker_srv = AccountInfoString(ACCOUNT_SERVER);
    int term_build = (int)TerminalInfoInteger(TERMINAL_BUILD);
+   // H1 — the server must know whether this account NETS positions (one
+   // broker position per symbol) or hedges; report ACCOUNT_MARGIN_MODE.
+   string margin_mode = ((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE)
+                         == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING) ? "hedging" : "netting";
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
+      "\"margin_mode\":\"%s\","
       "\"broker_server\":\"%s\",\"installation_id\":\"%s\","
       "\"terminal_build\":%d,\"ea_version\":\"%s\","
       "\"ea_binary_sha256\":\"%s\","
@@ -1345,6 +1350,7 @@ void SendHeartbeat() {
       "\"broker_time\":%s,"
       "\"available_symbols\":%s}",
       EffectiveToken, balance, equity, openPos, spreads, login, ccy,
+      margin_mode,
       broker_srv, EffectiveInstallation, term_build, EA_CLIENT_VERSION,
       EffectiveProofHash,
       (long)TimeGMT() * 1000,

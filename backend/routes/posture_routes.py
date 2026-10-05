@@ -274,13 +274,13 @@ async def market_posture(user=Depends(get_current_user)):
     cutoff = (now - timedelta(minutes=30)).isoformat()
     recent_losses = await db.trades.count_documents(
         {"user_id": uid, "status": "closed", "pnl": {"$lt": 0},
-         "closed_at": {"$gte": cutoff}})
+         "closed_at": {"$gte": cutoff}, "stats_excluded": {"$ne": True}})
 
     # Today's expectancy (Quant agent)
     day0 = now.strftime("%Y-%m-%dT00:00:00")
     today = await db.trades.find(
         {"user_id": uid, "status": "closed", "pnl": {"$ne": None},
-         "closed_at": {"$gte": day0}}).to_list(2000)
+         "closed_at": {"$gte": day0}, "stats_excluded": {"$ne": True}}).to_list(2000)
     wins = [t["pnl"] for t in today if t["pnl"] > 0]
     losses = [t["pnl"] for t in today if t["pnl"] < 0]
     n = len(wins) + len(losses)

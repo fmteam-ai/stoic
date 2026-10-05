@@ -35,7 +35,7 @@ export function FindingDetail({ id, onChanged, onClose }) {
         setBusy(true);
         try {
             const { data } = await api.post(`/admin/security/findings/${id}/status`, { status });
-            setF(data); toast.success(`Finding marked ${status.replace("_", " ")}`); onChanged?.();
+            setF(data); toast.success(`Finding marked ${status.replace(/_/g, " ")}`); onChanged?.();
         } catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
     };
 
@@ -43,6 +43,9 @@ export function FindingDetail({ id, onChanged, onClose }) {
     if (!id) return <div className={`${box} p-6 text-xs text-[#52525B]`} data-testid="finding-detail-empty">Select a finding to see the full report.</div>;
     if (!f) return <div className={`${box} p-6 flex justify-center`}><Loader2 className="w-5 h-5 animate-spin text-[#52525B]" /></div>;
     const isOpen = ["open", "contained", "acknowledged"].includes(f.status);
+    // S10 — the Undo button follows the ACTION, not the finding status: an auto-resolved
+    // finding may still have its block / suspension / freeze active.
+    const canUndo = !!actionId && (f.status === "contained" || f.action_active === true);
     const actionId = (String(f.action_taken || "").match(/\[action ([0-9a-f]{24})\]/) || [])[1];
     const undo = async () => {
         setBusy(true);
@@ -71,12 +74,12 @@ export function FindingDetail({ id, onChanged, onClose }) {
                     {f.resolved_at ? ` · resolved ${String(f.resolved_at).slice(0, 16)}Z by ${f.resolved_by}` : ""}
                 </Field>
                 <Field k="Evidence (masked)"><pre className="text-[10px] text-[#A1A1AA] overflow-x-auto" data-testid="finding-evidence">{JSON.stringify(f.evidence, null, 1)}</pre></Field>
-                {isOpen && (
+                {(isOpen || canUndo) && (
                     <div className="flex flex-wrap gap-2 pt-3" data-testid="finding-actions">
                         {f.status !== "acknowledged" && <button className={b} disabled={busy} onClick={() => act("acknowledged")} data-testid="finding-ack-btn">ACKNOWLEDGE</button>}
                         <button className={b} disabled={busy} onClick={() => act("resolved")} data-testid="finding-resolve-btn">MARK RESOLVED</button>
                         <button className={b} disabled={busy} onClick={() => act("false_positive")} data-testid="finding-fp-btn">FALSE POSITIVE</button>
-                        <button className={`${b} ${actionId && f.status === "contained" ? "" : "opacity-40 cursor-not-allowed"}`} disabled={busy || !actionId || f.status !== "contained"}
+                        <button className={`${b} ${canUndo ? "" : "opacity-40 cursor-not-allowed"}`} disabled={busy || !canUndo}
                             onClick={undo} title={actionId ? "Undo the automatic containment action" : "No containment action on this finding"} data-testid="finding-undo-btn">UNDO ACTION</button>
                     </div>
                 )}

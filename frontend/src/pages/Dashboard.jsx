@@ -15,6 +15,7 @@ import { MacroClimate } from "@/components/MacroClimate";
 import { DiagnosticModal } from "@/components/DiagnosticModal";
 import BotPulsePanel from "@/components/BotPulsePanel";
 import SilentBotBanner from "@/components/SilentBotBanner";
+import ExecutionBrakeBanner from "@/components/ExecutionBrakeBanner";
 import MtfCascadePanel from "@/components/MtfCascadePanel";
 import TrendScoreStrip from "@/components/TrendScoreStrip";
 import MarketStateStrip from "@/components/MarketStateStrip";
@@ -516,6 +517,7 @@ export default function Dashboard() {
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="dashboard-error">{err}</div>}
 
                 <SilentBotBanner />
+                <ExecutionBrakeBanner />
 
                 <CoachPanel />
 

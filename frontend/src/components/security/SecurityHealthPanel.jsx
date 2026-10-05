@@ -55,7 +55,17 @@ export function SecurityHealthPanel({ initialFindingId }) {
             await load();
         } catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
     };
-    const openReport = (kind) => window.open(`${api.defaults.baseURL}/admin/security/reports/${kind}?format=html&build=true`, "_blank", "noopener");
+    // S16 — fetched through the authenticated api client (cookies + CSRF), so it works when the
+    // backend lives on another domain than the app; served as a blob download.
+    const openReport = async (kind) => {
+        try {
+            const { data } = await api.get(`/admin/security/reports/${kind}`, { params: { format: "html", build: true }, responseType: "blob" });
+            const url = URL.createObjectURL(data);
+            const a = document.createElement("a");
+            a.href = url; a.download = `stoic-security-${kind}-${new Date().toISOString().slice(0, 10)}.html`; a.click();
+            setTimeout(() => URL.revokeObjectURL(url), 10_000);
+        } catch (e) { toast.error(e?.response?.data?.detail?.message || "Report download failed"); }
+    };
 
     if (!status) return <div className="flex justify-center py-16" data-testid="security-panel-loading"><Loader2 className="w-6 h-6 animate-spin text-[#52525B]" /></div>;
     const light = LIGHT[status.light] || LIGHT.green;
@@ -123,7 +133,7 @@ export function SecurityHealthPanel({ initialFindingId }) {
                             </select>
                             <select className={sel} value={filters.status} onChange={e => setFilters({ ...filters, status: e.target.value })} data-testid="security-filter-status">
                                 <option value="">OPEN (ALL)</option>
-                                {["open", "contained", "acknowledged", "resolved", "false_positive"].map(a => <option key={a} value={a}>{a.replace("_", " ").toUpperCase()}</option>)}
+                                {["open", "contained", "acknowledged", "resolved", "false_positive"].map(a => <option key={a} value={a}>{a.replace(/_/g, " ").toUpperCase()}</option>)}
                             </select>
                         </div>
                     </div>

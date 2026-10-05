@@ -35,7 +35,11 @@ router = APIRouter(prefix="/bridge", tags=["bridge"], dependencies=[Depends(_bri
 async def _account_by_token(token: str) -> dict:
     db = get_db()
     acc = await db.accounts.find_one({"bridge_token": token})
-    if acc and (acc.get("bridge_token_suspended") or {}).get("token") == token:
+    susp = (acc or {}).get("bridge_token_suspended") or {}
+    if acc and susp.get("token") == token and susp.get("expires_at") and susp["expires_at"] < datetime.now(timezone.utc).isoformat():
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"bridge_token_suspended": ""}})   # S3 — suspension expired
+        susp = {}
+    if acc and susp.get("token") == token:
         # SA4 R5 — token seen from two places: suspended until the owner re-pairs
         # (rotation issues a new token, which is not the suspended one).
         raise HTTPException(status_code=401, detail={
@@ -47,7 +51,8 @@ async def _account_by_token(token: str) -> dict:
         if acc.get("bridge_token_prev"):
             await db.accounts.update_one(
                 {"_id": acc["_id"]},
-                {"$unset": {"bridge_token_prev": "",
+                {"$set": {"bridge_token_retired": acc["bridge_token_prev"]},   # S2 — remembered as "old EA", never valid
+                 "$unset": {"bridge_token_prev": "",
                             "bridge_token_prev_expires": ""}})
         # audit F-05 — last-used tracking (throttled to ~1/min)
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -65,8 +70,10 @@ async def _account_by_token(token: str) -> dict:
         {"bridge_token_prev": token,
          "bridge_token_prev_expires": {"$gt": now}})
     if not acc:
-        from security_agent.events import emit as _sa_emit
-        await _sa_emit(db, "bridge_invalid_token", {"token_prefix": str(token)[:4]})   # B2 — IP from the request contextvar
+        from security_agent.events import emit_throttled as _sa_emit_t
+        # S2 — a rotated (retired) token is an old EA, not an attacker; S15 — one event per IP per 10 s
+        retired = bool(await db.accounts.find_one({"$or": [{"bridge_token_prev": token}, {"bridge_token_retired": token}]}, {"_id": 1}))
+        await _sa_emit_t(db, "bridge_invalid_token", {"token_prefix": str(token)[:4], "retired": retired}, window_s=10)
         raise HTTPException(status_code=401, detail="Invalid bridge token")
     return acc
 
@@ -76,6 +83,11 @@ async def record_heartbeat_sighting(db, acc: dict, payload) -> None:
     from security_agent.events import request_ip as _sa_ip
     sight = {"ip": _sa_ip.get(), "terminal": payload.installation_id or (str(payload.terminal_build) if getattr(payload, "terminal_build", None) else None),
              "at": datetime.now(timezone.utc).isoformat()}
+    # main92 P11 — one $push per heartbeat was a write amplifier: only record
+    # a sighting when the IP or terminal differs from the last one.
+    last = ((acc.get("hb_sightings") or [None])[-1]) or {}
+    if last.get("ip") == sight["ip"] and last.get("terminal") == sight["terminal"]:
+        return
     await db.accounts.update_one({"_id": acc["_id"]}, {"$push": {"hb_sightings": {"$each": [sight], "$slice": -20}}})
 
 
@@ -201,9 +213,15 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "status": "OK" if abs(skew) <= 1500 else "SKEW_SUSPECTED"}
         except (TypeError, ValueError):
             pass
+    # H1 leftover — EA step: ACCOUNT_MARGIN_MODE reported on every heartbeat
+    hb_margin_mode = str(getattr(payload, "margin_mode", None) or "").lower()
+    if hb_margin_mode in ("netting", "hedging"):
+        set_doc["margin_mode"] = hb_margin_mode
+        set_doc["margin_mode_reported_at"] = now_iso
     if effective_installation_id:
         set_doc["ea_identity"] = {
             "installation_id": effective_installation_id,
+            "margin_mode": hb_margin_mode or None,
             "broker_server": payload.broker_server,
             "terminal_build": payload.terminal_build,
             "ea_version": payload.ea_version,
@@ -453,6 +471,7 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "mt5_ticket": {"$in": tickets},
                 "status": "closed",
                 "exit_price": None,
+                **NO_REVIVE_FILTER,     # N4 — never undo a late-fill / PANIC close
             }).to_list(length=50)
             for t in revive_candidates:
                 await db.trades.update_one(
@@ -656,7 +675,8 @@ async def heartbeat(payload: BridgeHeartbeat):
                 # position open. Premature close (panic + reconcile race).
                 # Bring it back under bot control.
                 if (existing.get("status") == "closed"
-                        and existing.get("exit_price") is None):
+                        and existing.get("exit_price") is None
+                        and not intentional_close(existing)):   # N4
                     await db.trades.update_one(
                         {"_id": existing["_id"]},
                         {"$set": {
@@ -768,11 +788,16 @@ async def position_mode_resolution(db, acc: dict) -> dict:
     if mode in ("netting", "hedging"):
         return {"mode": mode, "source": "ea"}
     from broker_registry import merged_capabilities, resolve_registry
-    entry = await resolve_registry(db, acc.get("broker_server") or acc.get("server"))
+    # H1 leftover — the registry is keyed by the server name the EA REPORTS
+    # (ACCOUNT_SERVER); the user-typed name is only a fallback and is marked.
+    ea_server = ident.get("broker_server") or (acc.get("verified_identity") or {}).get("broker_server")
+    server = ea_server or acc.get("broker_server") or acc.get("server")
+    entry = await resolve_registry(db, server)
     if entry:
         m = str(merged_capabilities(entry).get("position_mode") or "hedging").lower()
         return {"mode": "netting" if m == "netting" else "hedging", "source": "registry",
-                "broker": entry.get("name") or entry.get("broker")}
+                "broker": entry.get("name") or entry.get("broker"),
+                "server_source": "ea" if ea_server else "user_typed"}
     return {"mode": "hedging", "source": "default"}
 
 
@@ -794,12 +819,37 @@ def panic_locked(acc: dict) -> bool:
     return (acc.get("authority_lock") or {}).get("reason") == "panic"
 
 
+# N4 — closes STOIC meant (PANIC, late fill of an expired/cancelled order, an
+# in-flight FULL_CLOSE) are never "mistakes" the auto-revive may undo while the
+# EA is still working the close.
+INTENTIONAL_CLOSE_REASONS = ("panic", "late_fill_after_expiry", "late_fill_after_panic",
+                             "late_fill_after_cancel", "unprotected_position", "duplicate_absorbed")
+NO_REVIVE_FILTER = {
+    "close_requested": {"$ne": True},
+    "late_fill_after_panic": {"$ne": True},
+    "late_fill_after_expiry": {"$ne": True},
+    "close_reason": {"$nin": list(INTENTIONAL_CLOSE_REASONS)},
+}
+
+
+def intentional_close(trade: dict) -> bool:
+    pm = trade.get("pending_modification") or {}
+    return bool(trade.get("close_requested") or trade.get("late_fill_after_panic")
+                or trade.get("late_fill_after_expiry")
+                or trade.get("close_reason") in INTENTIONAL_CLOSE_REASONS
+                or (isinstance(pm, dict) and pm.get("type") == "FULL_CLOSE"))
+
+
 async def close_late_fill_after_panic(db, trade_id, acc: dict, source: str) -> None:
     """Fix plan A4 — a fill landing AFTER PANIC is closed at once (never left open)."""
     from close_commands import request_close
+    # N3 — stamp first, unconditionally: a PANIC late fill is never a strategy
+    # outcome and the close request only stamps rows that are still "open".
+    await db.trades.update_one({"_id": trade_id}, {"$set": {
+        "late_fill_after_panic": True, "stats_excluded": True}})
     out = await request_close(
         db, {"_id": trade_id}, reason="panic", actor=f"bridge:{source}",
-        stamp={"late_fill_after_panic": True},
+        stamp={"late_fill_after_panic": True, "stats_excluded": True},
         pending_modification={"type": "FULL_CLOSE", "reason": "late_fill_after_panic"},
         emergency=True)
     logger.warning("late fill after PANIC on account=%s trade=%s via %s — close requested (%s)",
@@ -812,6 +862,8 @@ async def close_late_fill_after_expiry(db, trade: dict, acc: dict, source: str) 
     origin=auto (counts in the daily loss cap) but is excluded from loss streaks and
     strategy statistics (`stats_excluded`)."""
     from close_commands import request_close
+    await db.trades.update_one({"_id": trade["_id"]}, {"$set": {   # N3 — stamp regardless of status
+        "late_fill_after_expiry": True, "stats_excluded": True}})
     out = await request_close(
         db, {"_id": trade["_id"]}, reason="late_fill_after_expiry", actor=f"bridge:{source}",
         stamp={"late_fill_after_expiry": True, "stats_excluded": True},
@@ -842,13 +894,21 @@ async def handle_late_fill(db, sibling: dict, acc: dict, source: str) -> str | N
     reason tells why the order was dead). PANIC → close (panic); EXPIRED → close
     (late_fill_after_expiry). Returns the policy applied or None."""
     err = str(sibling.get("error") or "")
+    policy = None
     if err == "panic_lock" or panic_locked(acc):
         await close_late_fill_after_panic(db, sibling["_id"], acc, source)
-        return "panic"
-    if err == "pending_order_expired" or sibling.get("close_reason") == "expired":
+        policy = "panic"
+    elif err == "pending_order_expired" or sibling.get("close_reason") == "expired":
         await close_late_fill_after_expiry(db, sibling, acc, source)
-        return "expired"
-    return None
+        policy = "expired"
+    if policy:
+        try:
+            from execution_health import record_event
+            await record_event(db, str(acc["_id"]), acc.get("user_id"), "late_fill",
+                               trade_id=sibling["_id"], detail=f"{policy} via {source}")
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "exec_health_late_fill", _sw)
+    return policy
 
 
 async def find_adoptable_sibling(db, account_id: str, symbol: str, action: str,
@@ -930,7 +990,9 @@ def broker_offset_sec(acc: dict) -> tuple[int, str]:
     bt = acc.get("broker_time_info") or {}
     try:
         if bt.get("server_gmt_offset_sec") is not None:
-            off = int(bt["server_gmt_offset_sec"])
+            # main92 P6 — the EA derives the offset from two clock reads, so
+            # 10799 s must mean 10800: snap to 15 min like the deals path.
+            off = int(round(int(bt["server_gmt_offset_sec"]) / 900.0) * 900)
             if abs(off) <= 50400:
                 return off, "ea_broker_time"
     except (TypeError, ValueError):
@@ -999,8 +1061,13 @@ async def receive_candles(payload: BridgeCandles):
     # Fix plan R3 — EA bar times are BROKER server time; normalise to UTC
     # before the forming-bar check, VWAP day anchors and storage.
     offset, offset_source = broker_offset_sec(account)
-    raw = [dict(b, t=int(b["t"]) - offset) if isinstance(b, dict) and str(b.get("t", "")).lstrip("-").isdigit() else b
-           for b in (payload.bars or [])[-200:]]
+    def _shift(b):
+        # main92 P9 — float timestamps (1.7e9) must be shifted too
+        try:
+            return dict(b, t=int(float(b["t"])) - offset)
+        except (KeyError, TypeError, ValueError):
+            return b
+    raw = [_shift(b) if isinstance(b, dict) else b for b in (payload.bars or [])[-200:]]
     bars, dropped = validate_bars(raw, payload.timeframe)
     now_ts = int(datetime.now(timezone.utc).timestamp())
     # Fix plan A10 — the forming bar's close IS the broker's live tick.
@@ -1042,7 +1109,10 @@ async def receive_candles(payload: BridgeCandles):
     try:
         set_doc = {"bars": bars, "source_symbol": payload.symbol,
                    "account_id": str(account["_id"]),
-                   "updated_at": now_iso, "t_basis": "utc",
+                   "updated_at": now_iso,
+                   # main92 P9 — only claim UTC once the offset is known, so a
+                   # doc written before the first heartbeat still gets migrated
+                   "t_basis": "utc" if offset_source != "unknown" else "broker_unknown",
                    "broker_offset_sec": offset, "offset_source": offset_source}
         if last_tick:
             set_doc["last_tick"] = last_tick
@@ -1817,6 +1887,13 @@ async def report_trade(payload: BridgeTradeReport):
             await _intent_transition(db, trade["execution_intent_id"],
                                      "rejected",
                                      detail=str(payload.error or "")[:120])
+    if payload.status == "failed":
+        try:
+            from execution_health import record_event
+            await record_event(db, str(acc["_id"]), acc.get("user_id"), "reject",
+                               trade_id=trade["_id"], detail=str(payload.error or "")[:120])
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "exec_health_reject", _sw)
     # EA v1.50 — broker-native OrderCheck preflight rejection: structured
     # telemetry so failed preflights are visible and countable.
     if payload.status == "failed" and (payload.error or "").startswith(
@@ -1856,11 +1933,14 @@ async def report_trade(payload: BridgeTradeReport):
             update["deal_ticket"] = int(payload.deal_ticket)
         if payload.position_id:
             update["position_id"] = int(payload.position_id)
-        if payload.mt5_ticket and payload.deal_ticket:
-            # A3/H5 — netting: the one leg rule — ENTRY DEAL id only (never the order ticket)
-            leg = netting_leg(await is_netting_account(db, acc), payload.deal_ticket)
+        if payload.mt5_ticket and (payload.deal_ticket or payload.order_ticket):
+            # A3/H5 — netting: the one leg rule — ENTRY DEAL id; N5 — an EA that
+            # reports no deal ticket falls back to the ORDER ticket so the row
+            # still gets a leg (the deal sweep upgrades it to the deal id).
+            leg = netting_leg(await is_netting_account(db, acc), payload.deal_ticket or payload.order_ticket)
             if leg is not None:
                 update["position_leg"] = leg
+                update["position_leg_source"] = "deal_ticket" if payload.deal_ticket else "order_ticket"
         if payload.position_volume and payload.position_volume > 0:
             # netted symbol position AFTER the fill — broker exposure only,
             # never used for per-trade attribution (that is filled_volume)
@@ -1976,6 +2056,12 @@ async def report_trade(payload: BridgeTradeReport):
                 }
                 update["close_reason"] = "slippage_veto"
                 update["slippage_veto_cap_pips"] = cap
+                try:
+                    from execution_health import record_event
+                    await record_event(db, account_id_str, acc.get("user_id"), "slippage_veto",
+                                       trade_id=trade["_id"], detail=f"{slip_pips:.1f}p > cap {cap:g}p")
+                except Exception as _sw:  # noqa: BLE001
+                    record_swallow("bridge", "exec_health_slippage", _sw)
         # v62.6/SEC — PAMM envelope slippage cap enforced POST-TRADE
         # (never user-disableable). The EA-supplied requested_price is a
         # SELF-REPORT: it is only trusted when it lies within a sanity
@@ -2071,8 +2157,11 @@ async def report_trade(payload: BridgeTradeReport):
     if payload.status == "open" and trade.get("status") == "cancelled":
         update["late_fill_after_cancel"] = trade.get("close_reason") or trade.get("error")
         update["closed_at"] = None
-        unset = {"error": "", "close_reason": ""}   # H11 — the cancel verdict is void once filled
         update.pop("error", None)
+        # H11 — the cancel verdict is void once filled. N2 — a key the same
+        # update also $sets (slippage veto close_reason) must not be $unset too:
+        # Mongo rejects the conflicting paths and the EA would retry forever.
+        unset = {k: "" for k in ("error", "close_reason") if k not in update}
     ops = {"$set": update, **({"$unset": unset} if unset else {})}
     try:
         await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, ops)
@@ -2087,6 +2176,12 @@ async def report_trade(payload: BridgeTradeReport):
                 "duplicate_ticket_conflict": {"ticket": payload.mt5_ticket, "at": datetime.now(timezone.utc).isoformat()}}})
             logger.error("report for trade=%s: ticket %s held by another bot-originated row — "
                          "left for the reconciler", payload.trade_id, payload.mt5_ticket)
+            try:
+                from execution_health import record_event
+                await record_event(db, str(acc["_id"]), acc.get("user_id"), "duplicate_ticket",
+                                   trade_id=trade["_id"], detail=f"ticket {payload.mt5_ticket}")
+            except Exception as _sw:  # noqa: BLE001
+                record_swallow("bridge", "exec_health_duplicate", _sw)
             return {"ok": False, "reason": "duplicate_ticket_conflict", "trade_id": payload.trade_id}
         try:
             await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, ops)
@@ -2257,7 +2352,14 @@ async def _merge_duplicate_in_deal(db, account_id: str, payload, trade_doc: dict
         {"account_id": account_id, "mt5_ticket": payload.mt5_ticket}, sort=[("opened_at", -1)])
     if not existing:
         return None
+    # N1 — a manual / other-EA 'in' deal is never folded into a bot row
+    if trade_doc.get("origin") not in (None, existing.get("origin")) and existing.get("origin") == "auto":
+        return None
     sets = {}
+    if (existing.get("position_leg_source") == "order_ticket" and payload.deal_id
+            and trade_doc.get("position_leg") is not None):
+        sets["position_leg"] = trade_doc["position_leg"]           # N5 — order-ticket leg → deal id
+        sets["position_leg_source"] = "deal_ticket"
     if payload.position_volume and payload.position_volume > 0:
         sets["position_volume"] = float(payload.position_volume)
     for k in ("entry_price", "magic_number", "origin", "broker_deal_epoch"):
@@ -2488,8 +2590,17 @@ async def external_deal(payload: BridgeExternalDeal):
 
     if payload.deal_entry == "in":
         # OPEN event — only insert if STOIC doesn't already track this ticket.
+        shared_with_bot_row = None
         if existing:
-            return {"ok": True, "noop": "ticket_already_tracked"}
+            # N1 — on a NETTING account a manual add shares the bot's position
+            # ticket: it must become its own manual row (own leg), not vanish
+            # into the bot's position silently.
+            if (is_external and existing.get("origin") == "auto" and payload.deal_id
+                    and existing.get("position_leg") != int(payload.deal_id)
+                    and await is_netting_account(db, acc)):
+                shared_with_bot_row = existing
+            else:
+                return {"ok": True, "noop": "ticket_already_tracked"}
 
         # iter-93: race-condition fix. When STOIC fires an order, execution.py
         # inserts a trade doc with status="pending" and mt5_ticket=None. The EA
@@ -2562,6 +2673,21 @@ async def external_deal(payload: BridgeExternalDeal):
         leg = netting_leg(await is_netting_account(db, acc), payload.deal_id)
         if leg is not None:
             trade_doc["position_leg"] = leg
+        if shared_with_bot_row is not None:
+            trade_doc["netting_shared_with"] = str(shared_with_bot_row["_id"])
+            trade_doc["stats_excluded"] = True
+            try:
+                from alerting import raise_alert
+                await raise_alert(
+                    db, "manual_volume_on_bot_position", "warning",
+                    f"{trade_origin} {payload.action} {payload.lots} {payload.symbol} added to the bot's netted "
+                    f"position (ticket {payload.mt5_ticket}) — account={account_id}. The bot's stop/target "
+                    f"now cover the combined volume; review before leaving it unattended.",
+                    dedup_key=f"manual_volume_on_bot_position:{account_id}:{payload.deal_id}",
+                    meta={"account_id": account_id, "bot_trade_id": str(shared_with_bot_row["_id"]),
+                          "deal_id": payload.deal_id, "mt5_ticket": payload.mt5_ticket})
+            except Exception as _sw:  # noqa: BLE001
+                record_swallow("bridge", "manual_volume_alert", _sw)
         try:
             result = await db.trades.insert_one(trade_doc)
         except DuplicateKeyError:

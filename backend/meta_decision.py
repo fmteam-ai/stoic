@@ -43,7 +43,7 @@ async def _reliability(db, user_id: str, scope: str) -> float:
     recent, base = [], []
     async for t in db.trades.find(
             {"user_id": user_id, "scope": scope, "status": "closed",
-             "closed_at": {"$gte": d90}, "alpha_clean": {"$ne": False}},
+             "closed_at": {"$gte": d90}, "alpha_clean": {"$ne": False}, "stats_excluded": {"$ne": True}},
             {"pnl": 1, "entry_price": 1, "stop_loss": 1, "exit_price": 1,
              "action": 1, "closed_at": 1}).limit(1000):
         r, _s = result_r(t)
@@ -65,7 +65,7 @@ async def _execution_quality(db, user_id: str, symbol: str) -> float:
     slips, totals = [], []
     async for t in db.trades.find(
             {"user_id": user_id, "symbol": symbol, "status": "closed",
-             "closed_at": {"$gte": d14}},
+             "closed_at": {"$gte": d14}, "stats_excluded": {"$ne": True}},
             {"slippage_pips": 1, "latency_trace": 1}).limit(200):
         if t.get("slippage_pips") is not None:
             slips.append(float(t["slippage_pips"]))

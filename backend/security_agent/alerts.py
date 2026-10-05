@@ -79,7 +79,10 @@ def _claim_filter(cfg: dict) -> dict:
     """Open Critical/High findings that are due an alert: never alerted, or Critical older than the repeat interval
     (acknowledged findings stop repeating)."""
     repeat_cut = (datetime.now(timezone.utc) - timedelta(minutes=int(cfg.get("critical_repeat_min") or 30))).isoformat()
-    return {"severity": {"$in": list(ALERT_SEVERITIES)}, "$or": [
+    retry_cut = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
+    return {"severity": {"$in": list(ALERT_SEVERITIES)},
+            "$and": [{"$or": [{"last_alert_failed": {"$ne": True}}, {"last_alert_attempt_at": {"$lt": retry_cut}}]}],
+            "$or": [
         {"status": {"$in": ["open", "contained", "acknowledged"]}, "alert_count": {"$in": [None, 0]}},
         {"status": {"$in": ["open", "contained"]}, "severity": "critical", "alert_count": {"$gte": 1}, "last_alert_at": {"$lt": repeat_cut}}]}
 
@@ -90,7 +93,13 @@ async def deliver(db, cfg: dict, fd: dict, *, repeat: bool, send_tg=None, send_m
     tg = await send_tg(text)
     mail = await send_mail(cfg, f"[STOIC SECURITY] {fd['severity'].upper()} {fd.get('check_id')}: {fd.get('title')}", text)
     now = datetime.now(timezone.utc).isoformat()
-    await db.security_findings.update_one({"_id": fd["_id"]}, {"$set": {"last_alert_at": now, "last_alert_channels": {"telegram": tg, "email": mail}}, "$inc": {"alert_count": 1}})
+    if tg or mail:
+        await db.security_findings.update_one({"_id": fd["_id"]}, {"$set": {"last_alert_at": now, "last_alert_attempt_at": now, "last_alert_failed": False,
+                                                                        "last_alert_channels": {"telegram": tg, "email": mail}}, "$inc": {"alert_count": 1}})
+    else:
+        # S11 — nothing was delivered: not "sent"; retried on a later tick (5-min backoff)
+        await db.security_findings.update_one({"_id": fd["_id"]}, {"$set": {"last_alert_attempt_at": now, "last_alert_failed": True},
+                                                                  "$inc": {"alert_failures": 1}})
     await db.security_actions.insert_one({"kind": "alert", "finding_id": str(fd["_id"]), "dedup_key": fd["dedup_key"], "severity": fd["severity"],
                                           "repeat": repeat, "channels": {"telegram": tg, "email": mail}, "at": now, "actor": "security_agent"})
     return {"telegram": tg, "email": mail}

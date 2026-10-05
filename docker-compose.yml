@@ -133,6 +133,21 @@ services:
   worker-security:
     <<: *app-common
     command: ["python", "-m", "workers.security"]
+    # S14 — the security Telegram bot token is a Docker secret visible ONLY to this
+    # worker (never in backend/.env, never in the API / other worker containers).
+    environment:
+      <<: *app-env
+      SECURITY_AGENT_TELEGRAM_BOT_TOKEN_FILE: /run/secrets/security_telegram_token
+    secrets:
+      - mongo_url
+      - jwt_secret
+      - key_vault_master
+      - secrets_master_key
+      - metrics_token
+      - order_auth_secret
+      - ledger_anchor_key
+      - signer_token
+      - security_telegram_token
 
   worker-model:
     <<: *app-common
@@ -162,6 +177,8 @@ services:
       - "127.0.0.1:3000:3000"
 
 secrets:
+  security_telegram_token:
+    file: ./secrets/security_telegram_token
   mongo_root_password:
     file: ./secrets/mongo_root_password
   mongo_app_password:

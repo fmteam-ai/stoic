@@ -50,7 +50,9 @@ async def I4(db, cfg):
                 m = datetime.fromtimestamp(os.path.getmtime(os.path.join(bdir, n)), tz=timezone.utc)
                 newest = m if newest is None or m > newest else newest
     except OSError:
-        return []     # no backup folder on this host (preview) — the host check is S4/P4's job
+        # S13 — no backup folder mounted: report "no data" (mount it read-only on the worker) instead of silence
+        return [f("I4", "no_data", "low", "integrity", f"backup folder {bdir} is not readable from the security worker — "
+                  "mount it read-only (STOIC_BACKUP_DIR) so backup age can be checked", {"dir": bdir, "no_data": True})]
     max_h = th(cfg, "I4", "max_backup_age_h", 26)
     if newest is None or now() - newest > timedelta(hours=max_h):
         age = "never" if newest is None else f"{(now() - newest).total_seconds() / 3600:.1f} h ago"
@@ -127,7 +129,14 @@ async def P5(db, cfg):
     from silent_failures import swallow_counters
     lim = th(cfg, "P5", "repeats_15m", 20)
     out = []
-    for key, n in (swallow_counters() or {}).items():
+    counters = dict(swallow_counters() or {})
+    # S13 — the API/worker processes persist their counters; the security worker reads them
+    async for row in db.security_signals.find({"kind": "swallow_counters", "at": {"$gte": iso_ago(minutes=15)}}).limit(50):
+        for key, n in (row.get("counters") or {}).items():
+            counters[key] = max(int(counters.get(key, 0)), int(n))
+    if not counters and not swallow_counters():
+        out.append(f("P5", "no_data", "low", "platform", "no swallowed-exception counters published by any process in 15 min", {"no_data": True}))
+    for key, n in counters.items():
         if int(n) >= lim:
             out.append(f("P5", f"group:{key}", "medium", "platform", f"swallowed exception group {key} hit {n} times", {"group": key, "count": int(n)}))
     return out

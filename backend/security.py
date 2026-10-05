@@ -4,6 +4,7 @@ detection. MongoDB is the shared store (no Redis in this stack)."""
 import asyncio
 import hashlib
 import os
+import logging
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -110,10 +111,16 @@ async def active_blocks(db) -> list:
     import time as _t
     if _t.monotonic() - _BLOCK_CACHE["at"] > _BLOCK_TTL_S:
         now = datetime.now(timezone.utc)
-        rows = await db.security_blocks.find(
-            {"active": True, "expires_at": {"$gt": now}},
-            {"kind": 1, "value": 1, "scope": 1}).limit(5000).to_list(length=5000)
-        _BLOCK_CACHE.update(at=_t.monotonic(), rows=rows)
+        try:
+            rows = await db.security_blocks.find(
+                {"active": True, "expires_at": {"$gt": now}},
+                {"kind": 1, "value": 1, "scope": 1}).limit(5000).to_list(length=5000)
+            _BLOCK_CACHE.update(at=_t.monotonic(), rows=rows, error=None)
+        except Exception as e:  # noqa: BLE001 — S7: a Mongo hiccup must not turn every login/bridge call into a 500
+            _BLOCK_CACHE.update(at=_t.monotonic(), error=type(e).__name__)
+            logging.getLogger("security").warning(
+                "security_blocks unavailable (%s) — serving the last good block list (%d rows)",
+                type(e).__name__, len(_BLOCK_CACHE["rows"]))
     return _BLOCK_CACHE["rows"]
 
 
@@ -148,15 +155,18 @@ def client_ip(request: Request) -> str:
     RIGHTMOST X-Forwarded-For entry — the hop appended by our trusted
     ingress — so attackers cannot rotate lockout keys by spoofing the
     leftmost value (SEC-002)."""
+    fwd = request.headers.get("x-forwarded-for", "")
+    hop = fwd.split(",")[-1].strip() if fwd else (request.client.host if request.client else "unknown")
     if os.environ.get("TRUST_CF_CONNECTING_IP", "false").lower() == "true":
         cf = request.headers.get("cf-connecting-ip", "")
-        if cf:
+        # S1 — the header is only authoritative when the hop that delivered it IS
+        # Cloudflare; anyone reaching the origin directly could otherwise choose
+        # which IP the security agent blocks.
+        from security_agent.rules import is_cloudflare
+        if cf and (is_cloudflare(hop) or hop in ("127.0.0.1", "::1")):
             return cf.strip()
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[-1].strip()
     # r23: no X-Real-IP fallback — only the ingress-appended hop or the socket peer.
-    return request.client.host if request.client else "unknown"
+    return hop
 
 
 # --------------------------------------------------------------------- CSRF

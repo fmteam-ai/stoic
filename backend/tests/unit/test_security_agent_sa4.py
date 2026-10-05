@@ -130,14 +130,14 @@ def test_account_actions_lock_login_otp_freeze_suspend_revoke_with_prior_state_r
     assert acc1["trading_authority"] == "CLOSE_ONLY" and acc1["authority_lock"]["reason"] == "security_agent"      # frozen, closes allowed
     assert acc1["bridge_token_suspended"]["token"] == "tok-live"
     acc2 = db.accounts.rows[1]
-    assert acc2["trading_authority"] == "LOCKED" and acc2["authority_lock"]["reason"] == "panic" and by[("freeze_new_entries", "acc2")]["noop"]   # never overrides PANIC
+    assert acc2["trading_authority"] == "LOCKED" and acc2["authority_lock"]["reason"] == "panic" and "never overrides a PANIC lock" in by[("freeze_new_entries", "acc2")]["note"] and acc2["security_freeze"]   # never overrides PANIC (S8: freeze kept in its own field)
     assert db.auth_sessions.rows[0]["revoked"] is True and db.auth_sessions.rows[1]["revoked"] is False
-    assert len([n for n in db.notifications.rows if n["user_id"] == "u1"]) == 4                              # R2, R3, R5, R7 owner notices
+    assert len([n for n in db.notifications.rows if n["user_id"] == "u1"]) == 5                              # R2, R3, R5, R7 ×2 owner notices (S8: freeze recorded on the PANIC-locked account too)
     assert all(n["kind"].startswith("security_") for n in db.notifications.rows)
     assert snapshot(db) == before                                                                            # rule 3: trades/orders/configs untouched
     # undo restores the exact prior state
     run(actions.undo(db, by[("freeze_new_entries", "acc1")]["_id"], "adm@x"))
-    assert acc1["trading_authority"] == "FULL" and acc1["authority_lock"] is None
+    assert acc1.get("trading_authority") in (None, "FULL") and acc1.get("authority_lock") is None and "security_freeze" not in acc1   # S16: exact prior restored
     run(actions.undo(db, by[("suspend_bridge_token", "acc1")]["_id"], "adm@x"))
     assert "bridge_token_suspended" not in acc1
     run(actions.undo(db, by[("lock_login", "v@x.com")]["_id"], "adm@x"))

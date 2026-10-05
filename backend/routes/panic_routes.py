@@ -183,6 +183,11 @@ async def release_panic_locks(db, query: dict, *, actor: str, via: str) -> int:
         {"$unset": {"trading_authority": "", "authority_lock": ""},
          "$set": {"authority_lock_released": {
              "at": datetime.now(timezone.utc).isoformat(), "by": actor, "via": via}}})
+    # S8 — a PANIC release never lifts a security-agent freeze: re-apply it from its own field
+    async for acc in db.accounts.find({**query, "security_freeze": {"$exists": True}}, {"security_freeze": 1}).limit(500):
+        fz = acc.get("security_freeze") or {}
+        await db.accounts.update_one({"_id": acc["_id"], "authority_lock": {"$exists": False}}, {"$set": {
+            "trading_authority": "CLOSE_ONLY", "authority_lock": {"reason": "security_agent", **fz}}})
     if res.modified_count:
         from canonical_decision import bump_authority_version
         await bump_authority_version(db, f"panic_release:{via}", user_id=actor)

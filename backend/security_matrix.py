@@ -174,6 +174,14 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     ("GET", "/api/admin/security/blocks"): ADM,
     ("POST", "/api/admin/security/actions/{action_id}/undo"): ADM,
     ("POST", "/api/admin/security/actions/{action_id}/extend"): ADM,
+    # A7d — execution-health brake (owner-scoped read + step-up release)
+    ("GET", "/api/accounts/{account_id}/execution-health"): USQ,
+    ("POST", "/api/accounts/{account_id}/execution-brake/release"): USQ,
+    # N11 — admin account environment / position-mode overrides (re-auth + audit chain)
+    ("GET", "/api/admin/account-environments"): ADM,
+    ("POST", "/api/admin/account-environments/{account_id}"): ADM,
+    ("GET", "/api/admin/account-position-modes"): ADM,
+    ("POST", "/api/admin/account-position-modes/{account_id}"): ADM,
 }
 
 SENSITIVE_PARAMS = {"account_id", "bot_id",

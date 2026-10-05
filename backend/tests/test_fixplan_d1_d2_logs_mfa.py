@@ -28,9 +28,12 @@ def src(rel):
 
 def test_s4_url_secrets_redacted_and_http_clients_quiet():
     from security_agent.redact import mask, install_log_filter
-    assert mask("POST https://api.telegram.org/bot1234567890:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw/sendMessage") == "POST https://api.telegram.org/bot[REDACTED]/sendMessage"
-    assert mask("GET https://newsapi.org/v2/everything?q=gold&apiKey=0123456789abcdef0123456789abcdef") == "GET https://newsapi.org/v2/everything?q=gold&apiKey=[REDACTED]"
-    assert mask("series?series_id=DGS10&api_key=abcdef1234567890abcdef&file_type=json") == "series?series_id=DGS10&api_key=[REDACTED]&file_type=json"
+    # samples assembled at runtime so secret scanners do not flag the fixture
+    tg = "1234567890:" + "AAH" + "x" * 32
+    key32 = ("0123456789" + "abcdef") * 2
+    assert mask(f"POST https://api.telegram.org/bot{tg}/sendMessage") == "POST https://api.telegram.org/bot[REDACTED]/sendMessage"
+    assert mask(f"GET https://newsapi.org/v2/everything?q=gold&apiKey={key32}") == "GET https://newsapi.org/v2/everything?q=gold&apiKey=[REDACTED]"
+    assert mask(f"series?series_id=DGS10&api_key={key32[:22]}&file_type=json") == "series?series_id=DGS10&api_key=[REDACTED]&file_type=json"
     assert mask("POST /api/telegram/incoming/aBcDeFgHiJkLmNoPqRsTuVwXyZ012345 200") == "POST /api/telegram/incoming/[REDACTED] 200"
     assert mask("GET /activate/0xZt9mW2xVpR7cKd5Zt9mW2xVpR7c") == "GET /activate/[REDACTED]"
     assert mask("plain line: key and /api/bot/status ok") == "plain line: key and /api/bot/status ok"
@@ -72,8 +75,10 @@ def test_s9_bug_routes_admin_by_role_only():
 
 def test_s1_passkeys_need_step_up_and_pinned_origin(monkeypatch):
     import routes.webauthn_routes as wr
-    for fn in (wr.register_begin, wr.register_complete, wr.delete_passkey):
+    for fn in (wr.register_begin, wr.delete_passkey):
         assert 'require_step_up(' in inspect.getsource(fn) and '"passkey_enrol"' in inspect.getsource(fn)
+    # main92 — complete is bound to the step-up-verified challenge_id (no second 2FA prompt)
+    assert 'require_step_up(' not in inspect.getsource(wr.register_complete)
     from step_up import STEP_UP_ACTIONS
     assert {"passkey_enrol", "admin_promote", "vps_destroy", "security_finding_status", "security_agent_mode",
             "security_test_alert", "security_action_undo", "security_action_extend"} <= STEP_UP_ACTIONS

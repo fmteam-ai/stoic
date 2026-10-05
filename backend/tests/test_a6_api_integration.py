@@ -55,21 +55,9 @@ def throwaway_account(admin_session):
         except Exception:
             pass
         return
-    # Fallback: use an existing account from the position-modes list
-    rr = admin_session.get(f"{BASE_URL}/api/admin/account-position-modes", timeout=30)
-    accs = rr.json().get("accounts", []) if rr.status_code == 200 else []
-    assert accs, f"could not create account ({r.status_code}) and no existing accounts in list: {r.text[:200]}"
-    acc_id = accs[0]["account_id"]
-    yield {"id": acc_id, "account_number": accs[0].get("account_number"), "created": False}
-    # Reset mode to auto on exit
-    try:
-        admin_session.post(
-            f"{BASE_URL}/api/admin/account-position-modes/{acc_id}",
-            json={"mode": "auto", "password": ADMIN_PASSWORD, "reason": "qa-teardown"},
-            timeout=20,
-        )
-    except Exception:
-        pass
+    # N8 — never borrow a REAL account (the teardown would reset its admin
+    # position-mode override): skip when a disposable one cannot be created.
+    pytest.skip(f"could not create a disposable QA account ({r.status_code}): {r.text[:200]}")
 
 
 def _find_row(resp_json, account_id):

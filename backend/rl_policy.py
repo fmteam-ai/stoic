@@ -134,7 +134,7 @@ async def train_policy(db, user_id: str) -> dict:
     trades = await db.trades.find({
         "user_id": user_id, "status": "closed", "pnl": {"$ne": None},
         "origin": "auto", "closed_at": {"$gte": since},
-        "pnl_estimated": {"$ne": True}, "pnl_unknown": {"$ne": True},
+        "pnl_estimated": {"$ne": True}, "pnl_unknown": {"$ne": True}, "stats_excluded": {"$ne": True},
     }).to_list(5000)
     from bson import ObjectId
     sids = []

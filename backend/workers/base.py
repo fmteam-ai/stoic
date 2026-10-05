@@ -22,6 +22,8 @@ from database import get_db  # noqa: E402
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+from security_agent.redact import install_log_filter as _install_redaction  # noqa: E402
+_install_redaction()   # S5 — secrets masked in every worker process too
 logger = logging.getLogger("worker")
 
 LEASE_TTL_SEC = 45

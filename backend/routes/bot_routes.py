@@ -325,6 +325,9 @@ async def get_bot_pulse(user=Depends(get_current_user)):
     docs = await cursor.to_list(length=100)
     locked_ids = {str(a["_id"]) async for a in db.accounts.find(
         {"user_id": user["id"], "authority_lock.reason": "panic"}, {"_id": 1})}
+    # A7d — accounts under the execution-health brake (new entries paused)
+    braked = {str(a["_id"]): a.get("execution_brake") or {} async for a in db.accounts.find(
+        {"user_id": user["id"], "execution_brake.active": True}, {"_id": 1, "execution_brake": 1})}
     # Batch-resolve custom preset labels so we don't fire one query per config
     # when a user has 20+ accounts, each with a `custom:<id>` active preset.
     custom_ids: set[str] = set()
@@ -399,6 +402,8 @@ async def get_bot_pulse(user=Depends(get_current_user)):
             "label": label,
             "active": bool(d.get("active")),
             "locked": (str(acct_id) in locked_ids) if acct_id else bool(locked_ids),
+            "execution_brake": (braked.get(str(acct_id)) if acct_id
+                                else (next(iter(braked.values()), None) if braked else None)),
             "paper_shadow_mode": bool(d.get("paper_shadow_mode")),
             "symbols": d.get("symbols") or [],
             "strategy_key": active_preset or None,

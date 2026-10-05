@@ -38,6 +38,11 @@ async def ensure_indexes(db) -> None:
     await db.security_actions.create_index([("at", -1)])
     await db.security_actions.create_index([("dedup", 1), ("at", -1)])
     await db.security_reports.create_index([("kind", 1), ("built_at", -1)])
+    # S15 — the per-minute scans (B1 sightings, T2/I1 rate-limit + event windows, S12 denied counts)
+    await db.accounts.create_index([("hb_sightings.at", -1)])
+    await db.security_events.create_index([("ip", 1), ("at", -1)])
+    await db.security_denied_counts.create_index("expires_at", expireAfterSeconds=0)
+    await db.security_denied_counts.create_index([("minute", -1), ("ip", 1)])
     await db.security_reports.create_index("expires_at", expireAfterSeconds=0)
 
 
@@ -71,7 +76,8 @@ async def set_status(db, finding_id, status: str, actor: str, note: str = "") ->
 
 async def auto_resolve_cleared(db, check_id: str, active_keys: set) -> int:
     """A check ran clean for keys that still have open findings → the condition cleared."""
-    q = {"check_id": check_id, "status": {"$in": ["open", "contained", "acknowledged"]},
+    # S10 — "contained" findings stay until their action expires or is undone (actions.expire_finished)
+    q = {"check_id": check_id, "status": {"$in": ["open", "acknowledged"]},
          "dedup_key": {"$nin": list(active_keys)}}
     res = await db.security_findings.update_many(q, {"$set": {
         "status": "resolved", "resolved_at": _now(), "resolved_by": "security_agent",

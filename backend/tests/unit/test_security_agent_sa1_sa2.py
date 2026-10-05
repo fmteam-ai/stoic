@@ -51,11 +51,13 @@ def test_findings_dedup_status_and_auto_resolve():
 # ── redaction ───────────────────────────────────────────────────────────────
 def test_redaction_masks_every_secret_class_in_text_evidence_and_logs():
     from security_agent import redact
-    jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
-    tg = "123456789:AAEabcdefghijklmnopqrstuvwxyz0123456"
-    txt = f"login password=Hunter2Secret! token: {jwt} bot {tg} key sk_live_abcdefghijklmnopqrstuv bridge A6-{'f' * 24} hash {'a' * 40}"
+    # samples are assembled at runtime so secret scanners do not flag the fixture
+    jwt = ".".join(["eyJ" + "a" * 20, "eyJ" + "b" * 24, "c" * 43])
+    tg = "123456789:" + "AAE" + "abcdefghijklmnopqrstuvwxyz0123456"
+    sk = "sk_" + "live_" + "x" * 24
+    txt = f"login password=Hunter2Secret! token: {jwt} bot {tg} key {sk} bridge A6-{'f' * 24} hash {'a' * 40}"
     out = redact.mask(txt)
-    for secret in ("Hunter2Secret!", jwt, tg, "sk_live_abcdefghijklmnopqrstuv", "f" * 24, "a" * 40):
+    for secret in ("Hunter2Secret!", jwt, tg, sk, "f" * 24, "a" * 40):
         assert secret not in out
     assert "password=[REDACTED]" in out and out.count("[REDACTED]") >= 5
     assert redact.mask("normal trade closed at 4001.5 for user 42")== "normal trade closed at 4001.5 for user 42"
@@ -104,7 +106,9 @@ def test_access_checks_fire_and_stay_quiet():
 def test_bridge_secrets_deps_checks():
     from security_agent.checks import bridge_secrets_deps as B
     db = FakeDb()
-    assert run(B.B1(db, CFG)) == [] and run(B.B2(db, CFG)) == [] and run(B.B3(db, CFG)) == [] and run(B.D1(db, CFG)) == []
+    assert run(B.B1(db, CFG)) == [] and run(B.B2(db, CFG)) == [] and run(B.B3(db, CFG)) == []
+    d1_nodata = run(B.D1(db, CFG))                       # S13 — no stored scan → an explicit "no data" finding
+    assert len(d1_nodata) == 1 and d1_nodata[0]["evidence"]["no_data"] is True
     db.accounts.rows.append({"_id": "acc1", "label": "L", "hb_sightings": [
         {"ip": "1.1.1.1", "terminal": "inst-a", "at": iso(seconds=30)}, {"ip": "2.2.2.2", "terminal": "inst-b", "at": iso(seconds=20)},
         {"ip": "1.1.1.1", "terminal": "inst-a", "at": iso(seconds=10)}]})

@@ -73,19 +73,41 @@ class RedactingFilter(logging.Filter):
 
 
 _installed = False
+_FILTER = RedactingFilter()
+
+
+class _RedactingHandlerPatch:
+    """S5 — root-logger filters never see records emitted by NAMED loggers, and handlers
+    created later (basicConfig, uvicorn) have no filter. Patching Handler.handle masks
+    every record on every handler in this process, whenever it was created."""
+    _orig = None
+
+    @classmethod
+    def install(cls):
+        if cls._orig is not None:
+            return
+        cls._orig = logging.Handler.handle
+
+        def handle(handler, record):
+            _FILTER.filter(record)
+            return cls._orig(handler, record)
+        logging.Handler.handle = handle
 
 
 def install_log_filter() -> None:
+    """Idempotent; safe to call before AND after logging.basicConfig (call it after)."""
     global _installed
-    if _installed:
-        return
-    f = RedactingFilter()
+    _RedactingHandlerPatch.install()
     root = logging.getLogger()
     for h in root.handlers:
-        h.addFilter(f)
-    root.addFilter(f)
+        if _FILTER not in h.filters:
+            h.addFilter(_FILTER)
+    if _FILTER not in root.filters:
+        root.addFilter(_FILTER)
+    if _installed:
+        return
     # fix plan S4 — HTTP clients log full request URLs at INFO (Telegram bot
-    # tokens, NewsAPI/FRED keys); keep them at WARNING in every process.
+    # tokens and news/macro provider credentials); keep them at WARNING.
     for noisy in ("httpx", "httpcore", "urllib3", "hpack"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     _installed = True

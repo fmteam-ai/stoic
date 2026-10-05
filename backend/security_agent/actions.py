@@ -66,11 +66,21 @@ async def execute(db, cfg: dict, prop: dict, finding: dict) -> dict:
     row = {"kind": "containment", "dedup": f"{finding['_id']}|{prop['rule']}|{prop['target']}", "finding_id": str(finding["_id"]), "dedup_key": finding["dedup_key"],
            "check_id": finding["check_id"], "mode": cfg.get("mode"), "at": now.isoformat(), "actor": "security_agent", **prop,
            "expires_at": (now + timedelta(minutes=prop["expires_min"])).isoformat() if prop.get("expires_min") else None}
+    shared = await shared_ip_share(db, prop["target"]) if prop["action"] == "block_ip" else 0.0
     if prop.get("blocked_by") or rules.is_protected(cfg, prop["target_kind"], prop["target"]):
         row["status"] = "refused_protected"
         await open_or_update(db, f("protected_target", f"{prop['rule']}:{prop['target']}", "critical", "platform",
                                    f"{prop['rule']} would have applied {prop['action']} to protected {prop['target_kind']} {prop['target']} — refused",
                                    {"rule": prop["rule"], "target": prop["target"], "finding": finding["dedup_key"]}))
+    elif shared >= rules.SHARED_IP_MIN_SHARE:
+        # S1 — one address carrying most of the traffic is a proxy / NAT in front of
+        # every user (Caddy, cPanel, corporate NAT): blocking it locks everyone out.
+        row["status"] = "refused_shared_ip"
+        row["traffic_share"] = round(shared, 3)
+        await open_or_update(db, f("proxy_collapse_suspected", f"ip:{prop['target']}", "critical", "platform",
+                                   f"{prop['rule']} wanted to block {prop['target']}, which carries {shared:.0%} of recent auth/bridge traffic — "
+                                   "refused (a proxy is probably hiding client IPs; fix the ingress real-IP chain)",
+                                   {"ip": prop["target"], "share": round(shared, 3)}))
     elif cfg.get("mode") != "enforce":
         row["status"] = "would_have_done"
     elif prop["rule"] not in (cfg.get("rules_enabled") or []):
@@ -98,6 +108,35 @@ async def execute(db, cfg: dict, prop: dict, finding: dict) -> dict:
     return row
 
 
+async def shared_ip_share(db, ip: str) -> float:
+    """S1 — share of the last 10 min of IP-keyed security events / login attempts carried by `ip`."""
+    try:
+        since = (_now() - timedelta(minutes=10)).isoformat()
+        total = await db.security_events.count_documents({"at": {"$gte": since}, "ip": {"$nin": [None, ""]}})
+        if total < rules.SHARED_IP_MIN_EVENTS:
+            return 0.0
+        mine = await db.security_events.count_documents({"at": {"$gte": since}, "ip": str(ip)})
+        return mine / total
+    except Exception as e:  # noqa: BLE001
+        log.warning("shared-ip share unavailable: %s", type(e).__name__)
+        return 0.0
+
+
+async def _freeze_account(db, acc: dict, prop: dict, row: dict) -> dict:
+    prior = {"trading_authority": acc.get("trading_authority"), "authority_lock": acc.get("authority_lock")}
+    # S8 — the agent freeze lives in its OWN field so a PANIC and its release never lift it
+    freeze = {"rule": prop["rule"], "by": "security_agent", "at": _now().isoformat(), "dedup_key": row["dedup_key"]}
+    sets = {"security_freeze": freeze}
+    if acc.get("trading_authority") in (None, "FULL"):
+        sets.update({"trading_authority": "CLOSE_ONLY", "authority_lock": {"reason": "security_agent", **freeze}})
+        note = None
+    else:
+        note = "account already restricted — authority left unchanged (never overrides a PANIC lock); freeze recorded"
+    await db.accounts.update_one({"_id": acc["_id"]}, {"$set": sets})
+    await _notify_owner(db, acc.get("user_id"), "freeze_new_entries", acc.get("label") or str(acc["_id"]), 0)
+    return {"status": "done", "prior": prior, **({"note": note} if note else {})}
+
+
 async def _apply(db, cfg: dict, prop: dict, row: dict) -> dict:
     """Mutations per action type; returns fields to merge (status, prior, block_id…)."""
     act, target, minutes = prop["action"], prop["target"], int(prop.get("expires_min") or 0)
@@ -119,21 +158,32 @@ async def _apply(db, cfg: dict, prop: dict, row: dict) -> dict:
         acc = await db.accounts.find_one({"_id": _oid(target)}, {"bridge_token": 1, "user_id": 1, "label": 1})
         if not acc or not acc.get("bridge_token"):
             return {"status": "skipped", "note": "account or token not found"}
+        exp = (_now() + timedelta(minutes=minutes)).isoformat() if minutes else None
         await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"bridge_token_suspended": {
-            "token": acc["bridge_token"], "at": _now().isoformat(), "rule": prop["rule"], "dedup_key": row["dedup_key"]}}})
+            "token": acc["bridge_token"], "at": _now().isoformat(), "rule": prop["rule"], "dedup_key": row["dedup_key"],
+            "expires_at": exp}}})
         await _notify_owner(db, acc.get("user_id"), act, acc.get("label") or target, 0)
         return {"status": "done", "prior": {"bridge_token_suspended": None}}
     if act == "freeze_new_entries":
-        acc = await db.accounts.find_one({"_id": _oid(target)}, {"trading_authority": 1, "authority_lock": 1, "user_id": 1, "label": 1})
+        proj = {"trading_authority": 1, "authority_lock": 1, "user_id": 1, "label": 1}
+        if prop.get("target_kind") == "user":
+            # S4 — R7 on an admin/user actor: revoke the actor's sessions and freeze
+            # EVERY live account of that user (a user id is not an account id).
+            out = {"status": "done", "accounts": [], "priors": {}}
+            if prop.get("revoke_sessions"):
+                from security import revoke_all_user_sessions
+                out["revoked_sessions"] = await revoke_all_user_sessions(db, str(target), f"security_agent:{prop['rule']}")
+            async for acc in db.accounts.find({"user_id": str(target), "mode": {"$ne": "paper"}}, proj).limit(100):
+                r = await _freeze_account(db, acc, prop, row)
+                out["accounts"].append(str(acc["_id"]))
+                out["priors"][str(acc["_id"])] = r["prior"]
+            if not out["accounts"]:
+                out["note"] = "user has no live accounts — sessions revoked only"
+            return out
+        acc = await db.accounts.find_one({"_id": _oid(target)}, proj)
         if not acc:
             return {"status": "skipped", "note": "account not found"}
-        prior = {"trading_authority": acc.get("trading_authority"), "authority_lock": acc.get("authority_lock")}
-        if acc.get("trading_authority") not in (None, "FULL"):
-            return {"status": "done", "prior": prior, "note": "account already restricted — left unchanged (never overrides a PANIC lock)", "noop": True}
-        await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"trading_authority": "CLOSE_ONLY", "authority_lock": {
-            "reason": "security_agent", "rule": prop["rule"], "by": "security_agent", "at": _now().isoformat(), "dedup_key": row["dedup_key"]}}})
-        await _notify_owner(db, acc.get("user_id"), act, acc.get("label") or target, 0)
-        return {"status": "done", "prior": prior}
+        return await _freeze_account(db, acc, prop, row)
     return {"status": "skipped", "note": f"unknown action {act}"}
 
 
@@ -149,16 +199,53 @@ async def undo(db, action_id, actor: str, note: str = "") -> dict:
         await db.security_blocks.update_one({"_id": _oid(row["block_id"])}, {"$set": {"active": False, "undone_at": _now().isoformat(), "undone_by": actor}})
     elif act == "suspend_bridge_token":
         await db.accounts.update_one({"_id": _oid(row["target"]), "bridge_token_suspended.dedup_key": row["dedup_key"]}, {"$unset": {"bridge_token_suspended": ""}})
-    elif act == "freeze_new_entries" and not row.get("noop"):
-        prior = row.get("prior") or {}
-        await db.accounts.update_one({"_id": _oid(row["target"]), "authority_lock.reason": "security_agent"}, {"$set": {
-            "trading_authority": prior.get("trading_authority") or "FULL", "authority_lock": prior.get("authority_lock")}})
+    elif act == "freeze_new_entries":
+        priors = row.get("priors") or {str(row["target"]): row.get("prior") or {}}
+        for aid, prior in priors.items():
+            await _unfreeze_account(db, aid, prior or {})
     elif act == "revoke_sessions":
         raise ValueError("revoked sessions cannot be restored — the user signs in again")
     await db.security_actions.update_one({"_id": row["_id"]}, {"$set": {"status": "undone", "undone_at": _now().isoformat(), "undone_by": actor, "undo_note": mask(note)[:300]}})
     await db.security_findings.update_one({"_id": _oid(row["finding_id"]), "status": "contained"}, {"$set": {"status": "open", "fixed": "no", "action_taken": f"undone by {actor}"}})
     await _audit(db, f"security_undo_{act}", row["target"], {"action_id": str(row["_id"]), "note": mask(note)[:200]}, actor=actor)
     return await db.security_actions.find_one({"_id": row["_id"]})
+
+
+async def _unfreeze_account(db, account_id, prior: dict) -> None:
+    """S16 — restore the EXACT prior authority (unset when it was unset), never a hard-coded FULL."""
+    sets, unsets = {}, {"security_freeze": ""}
+    for k in ("trading_authority", "authority_lock"):
+        if prior.get(k) is None:
+            unsets[k] = ""
+        else:
+            sets[k] = prior[k]
+    upd = {"$unset": unsets, **({"$set": sets} if sets else {})}
+    # only touch the authority fields if they are still the agent's own lock
+    res = await db.accounts.update_one({"_id": _oid(account_id), "authority_lock.reason": "security_agent"}, upd)
+    if not res.matched_count:
+        await db.accounts.update_one({"_id": _oid(account_id)}, {"$unset": {"security_freeze": ""}})
+
+
+async def expire_finished(db) -> int:
+    """S10 — a contained finding whose block has expired is resolved (it is no longer active);
+    test alerts / protected-target / cap-reached findings expire after an hour so the Critical
+    banner and 30-min repeats do not run forever (S16)."""
+    now = _now()
+    n = 0
+    async for a in db.security_actions.find({"kind": "containment", "status": "done", "expires_at": {"$lt": now.isoformat(), "$ne": None}}).limit(200):
+        await db.security_actions.update_one({"_id": a["_id"]}, {"$set": {"status": "expired", "expired_at": now.isoformat()}})
+        if a.get("action") == "suspend_bridge_token":
+            await db.accounts.update_one({"_id": _oid(a["target"]), "bridge_token_suspended.dedup_key": a["dedup_key"]}, {"$unset": {"bridge_token_suspended": ""}})
+        r = await db.security_findings.update_one({"_id": _oid(a["finding_id"]), "status": "contained"}, {"$set": {
+            "status": "resolved", "resolved_at": now.isoformat(), "resolved_by": "security_agent", "fixed": "yes", "status_note": "containment expired"}})
+        n += r.modified_count
+    cut = (now - timedelta(hours=1)).isoformat()
+    r = await db.security_findings.update_many(
+        {"check_id": {"$in": ["test_alert", "protected_target", "containment_cap_reached", "proxy_collapse_suspected"]},
+         "status": {"$in": ["open", "acknowledged"]}, "last_seen": {"$lt": cut}},
+        {"$set": {"status": "resolved", "resolved_at": now.isoformat(), "resolved_by": "security_agent", "fixed": "yes",
+                  "status_note": "informational finding expired after 1 h"}})
+    return n + r.modified_count
 
 
 async def extend(db, action_id, minutes: int, actor: str) -> dict:
@@ -176,6 +263,7 @@ async def extend(db, action_id, minutes: int, actor: str) -> dict:
 async def sweep(db, cfg: dict) -> int:
     """Every tick: evaluate rules on open findings, execute (or dry-run) once per finding+rule+target per hour."""
     since = (_now() - timedelta(hours=1)).isoformat()
+    await expire_finished(db)
     checks = sorted({c for r in rules.RULES.values() for c in r["checks"]})
     rows = await db.security_findings.find({"status": {"$in": ["open", "contained"]}, "check_id": {"$in": checks}}).limit(500).to_list(length=500)
     n = 0

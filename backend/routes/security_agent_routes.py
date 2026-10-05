@@ -68,7 +68,11 @@ async def get_finding(finding_id: str, user=Depends(get_current_user)):
     row = await get_db().security_findings.find_one({"_id": ObjectId(finding_id)})
     if not row:
         raise HTTPException(status_code=404, detail="finding not found")
-    return _ser(row)
+    out = _ser(row)
+    # S10 — tell the UI whether a containment action is still active for this finding
+    out["action_active"] = bool(await get_db().security_actions.find_one(
+        {"kind": "containment", "finding_id": finding_id, "status": "done"}, {"_id": 1}))
+    return out
 
 
 @router.get("/check-runs")

@@ -1,3 +1,4 @@
+import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Literal
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -76,7 +77,12 @@ async def list_accounts(user=Depends(get_current_user)):
     modes = {}
     for d in docs:
         if d.get("mode") != "paper":
-            modes[str(d["_id"])] = await position_mode_resolution(db, d)
+            try:
+                modes[str(d["_id"])] = await position_mode_resolution(db, d)
+            except Exception as e:  # noqa: BLE001 — N10: a registry hiccup must not hide the account list
+                logging.getLogger("accounts").warning("position mode resolution failed for %s: %s",
+                                                      str(d["_id"]), type(e).__name__)
+                modes[str(d["_id"])] = {"mode": "unknown", "source": "error"}
     out = [_serialize(d) for d in docs]
     for d in out:
         res = modes.get(d["id"])
@@ -1564,3 +1570,31 @@ async def certify_account(account_id: str,
         {"$set": {"demo_certified_at": stamp,
                   "demo_certified_by": user.get("email")}})
     return {"ok": True, "demo_certified_at": stamp}
+
+
+# ── A7d — execution-health brake ─────────────────────────────────────────────
+@router.get("/{account_id}/execution-health")
+async def account_execution_health(account_id: str, user=Depends(get_current_user)):
+    db = get_db()
+    acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}, {"_id": 1})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    from execution_health import summary
+    return await summary(db, account_id)
+
+
+@router.post("/{account_id}/execution-brake/release")
+async def account_execution_brake_release(account_id: str, request: Request, user=Depends(get_current_user)):
+    """Manual release of the execution brake — a live-sensitive action (step-up)."""
+    db = get_db()
+    acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
+                                     {"_id": 1, "execution_brake": 1})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if not (acc.get("execution_brake") or {}).get("active"):
+        return {"ok": True, "noop": "not_braked", "brake": acc.get("execution_brake") or {"active": False}}
+    from step_up import require_step_up
+    await require_step_up(db, user, request, "execution_brake_release")
+    from execution_health import release
+    state = await release(db, account_id, actor=f"user:{user.get('email')}", reason="manual release")
+    return {"ok": True, "brake": state}

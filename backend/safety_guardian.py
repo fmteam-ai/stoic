@@ -93,6 +93,9 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     audit: list[dict] = []
     mode = (account.get("mode") or "live").lower()
     is_live = mode != "paper"
+    # main92 P4 — scope caps to THIS account when the bot config carries no
+    # account id (otherwise every account incl. paper is summed against it).
+    cfg_account_id = cfg_account_id or str(account.get("id") or account.get("_id") or "") or None
 
     equity = float(account.get("equity") or account.get("balance") or 0)
     balance = float(account.get("balance") or equity or 0)
@@ -172,7 +175,8 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     audit.append(_ok("risk_inputs_present",
                      value=f"lot={lot} entry={entry} sl={sl}"))
     sl_pips = price_to_pips(sym, abs(entry - sl))
-    pip_usd = pip_value_usd_per_lot(sym, account.get("account_type"))
+    # H8 — price-aware pip value (USD-based / cross pairs need the rate)
+    pip_usd = pip_value_usd_per_lot(sym, account.get("account_type"), price=entry)
     # FAIL CLOSED (audit E8): an unknown pip value would silently understate
     # risk — refuse the trade instead of guessing.
     if not pip_usd or pip_usd <= 0 or not sl_pips or sl_pips <= 0:
@@ -250,6 +254,9 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     open_count = 0
     stopless_count = 0
     new_sl_pips = price_to_pips(signal.get("symbol") or "", abs(entry - sl)) if entry and sl else 0.0
+    # main92 P5 — the stop-less fallback is a USD amount for the NEW trade
+    # (per lot), re-expressed in the other trade's own pips below.
+    new_sl_usd_per_lot = max(new_sl_pips, 100.0) * pip_usd
     async for t in db.trades.find(
             open_q, {"lot_size": 1, "entry_price": 1, "stop_loss": 1,
                      "symbol": 1, "sl_pips": 1}):
@@ -259,15 +266,20 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
             t_entry = float(t.get("entry_price") or 0)
             t_sl = float(t.get("stop_loss") or 0)
             t_sym = t.get("symbol") or ""
-            t_pip_usd = pip_value_usd_per_lot(t_sym, account.get("account_type"))
+            t_pip_usd = pip_value_usd_per_lot(t_sym, account.get("account_type"),
+                                              price=t_entry or None)
             if t_lot > 0 and t_entry > 0 and t_sl > 0:
                 t_pips = price_to_pips(t_sym, abs(t_entry - t_sl))
+                open_risk_usd += t_pips * t_pip_usd * t_lot
             elif t_lot > 0:
                 stopless_count += 1
-                t_pips = max(float(t.get("sl_pips") or 0), new_sl_pips, 100.0)
+                own_pips = float(t.get("sl_pips") or 0)
+                if own_pips > 0 and t_pip_usd > 0:
+                    open_risk_usd += max(own_pips * t_pip_usd, new_sl_usd_per_lot) * t_lot
+                else:
+                    open_risk_usd += new_sl_usd_per_lot * t_lot
             else:
                 continue
-            open_risk_usd += t_pips * t_pip_usd * t_lot
         except Exception:
             continue
     aggregate_risk = open_risk_usd + risk_usd

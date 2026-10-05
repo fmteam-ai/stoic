@@ -223,6 +223,25 @@ async def broker_live_price(symbol: str, user_id: str | None, max_age_s: int = 1
         return None
 
 
+async def preflight_price(symbol: str, user_id: str | None, signal: dict | None = None) -> tuple[float, str]:
+    """main92 P2 — the pre-trade price check must compare like with like: the
+    signal's entry is the broker tick (C1), so check against the broker tick
+    first; use the public quote only when the signal itself was priced from
+    it (FX daily rates / cash indices sit 20-80 pips off the broker feed)."""
+    px = await broker_live_price(symbol, user_id)
+    if px:
+        return float(px), "broker_tick"
+    if (signal or {}).get("price_source", "public_quote") != "public_quote":
+        return 0.0, "broker_tick_stale"
+    try:
+        from market import get_quote
+        q = await get_quote(symbol)
+        return float((q or {}).get("price") or 0), "public_quote"
+    except Exception:  # noqa: BLE001
+        return 0.0, "public_quote"
+
+
+
 async def fetch_intraday_pack(symbol: str, user_id: str | None = None, timeframe: str = "M15") -> dict | None:
     """Latest fresh M15 features for the symbol from the USER's EA candle stream."""
     try:

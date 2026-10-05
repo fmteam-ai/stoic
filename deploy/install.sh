@@ -197,6 +197,9 @@ ensure_signer_secrets() {
     rm -f secrets/signer_ed25519_key.pem
     echo "   generated signer_ed25519_key (+ signer_public_key)"; }
   [ -f secrets/signer_token ] || { gen > secrets/signer_token; echo "   generated signer_token"; }
+  # S14 — security-agent Telegram bot token (worker-security only). Empty placeholder until the
+  # operator pastes the BotFather token: `printf '%s' '<token>' > secrets/security_telegram_token`.
+  [ -f secrets/security_telegram_token ] || { : > secrets/security_telegram_token; chmod 600 secrets/security_telegram_token; echo "   created empty security_telegram_token (paste the BotFather token to enable security alerts)"; }
   [ -f secrets/signer_cert.pem ] || {
     openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 3650 \
       -subj "/CN=signer" -addext "subjectAltName=DNS:signer,DNS:localhost" \

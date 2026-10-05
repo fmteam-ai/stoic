@@ -14,9 +14,14 @@ async def B1(db, cfg):
     out = []
     since = iso_ago(seconds=60)
     async for a in db.accounts.find({"hb_sightings.at": {"$gte": since}}, {"hb_sightings": 1, "label": 1}).limit(2000):
-        recent = [s for s in (a.get("hb_sightings") or []) if s.get("at", "") >= since]
+        recent = sorted((s for s in (a.get("hb_sightings") or []) if s.get("at", "") >= since), key=lambda s: s.get("at", ""))
         sources = {(s.get("ip"), s.get("terminal")) for s in recent}
-        if len(sources) >= th(cfg, "B1", "distinct_sources_60s", 2) and len(recent) >= th(cfg, "B1", "repeats", 3):
+        terminals = {s.get("terminal") for s in recent if s.get("terminal")}
+        ips = [s.get("ip") for s in recent]
+        # S3 — a dynamic-IP / IPv4↔IPv6 change is ONE terminal moving once (A→B); a stolen
+        # token shows two installation ids, or the same terminal interleaving A→B→A.
+        interleaved = any(ips[i] != ips[i - 1] and ips[i] in ips[:i - 1] for i in range(2, len(ips)))
+        if (len(terminals) >= 2 or interleaved) and len(sources) >= th(cfg, "B1", "distinct_sources_60s", 2) and len(recent) >= th(cfg, "B1", "repeats", 3):
             out.append(f("B1", f"account:{a['_id']}", "critical", "bridge",
                          f"bridge token of account {a.get('label') or a['_id']} heartbeating from {len(sources)} sources within 60 s",
                          {"account_id": str(a["_id"]), "sources": [list(s) for s in sources][:10]}))
@@ -26,10 +31,17 @@ async def B1(db, cfg):
 async def B2(db, cfg):
     by_ip: dict = {}
     for e in await events(db, "bridge_invalid_token", minutes=5):
-        by_ip[e.get("ip") or "?"] = by_ip.get(e.get("ip") or "?", 0) + 1
-    lim = th(cfg, "B2", "invalid_token_5m", 30)
+        if (e.get("detail") or {}).get("retired"):
+            continue                                   # S2 — an old EA still polling with a rotated token
+        by_ip[e.get("ip") or "?"] = by_ip.get(e.get("ip") or "?", 0) + int((e.get("detail") or {}).get("count") or 1)
+    lim = th(cfg, "B2", "invalid_token_5m", 100)
+    # S2 — never block an address that ALSO heartbeats with a valid token (a VPS running several EAs)
+    since = iso_ago(minutes=5)
+    valid_ips = set()
+    async for a in db.accounts.find({"hb_sightings.at": {"$gte": since}}, {"hb_sightings": 1}).limit(2000):
+        valid_ips.update(s.get("ip") for s in (a.get("hb_sightings") or []) if s.get("at", "") >= since)
     return [f("B2", f"ip:{ip}", "high", "bridge", f"{n} bridge requests with invalid tokens from {ip} in 5 min", {"ip": ip, "requests": n})
-            for ip, n in by_ip.items() if n >= lim]
+            for ip, n in by_ip.items() if n >= lim and ip not in valid_ips]
 
 
 async def B3(db, cfg):
@@ -129,6 +141,11 @@ async def S5(db, cfg):
 async def _dep(db, check_id, kind, area_label):
     doc = await db.platform_state.find_one({"_id": f"dependency_audit_{kind}"})
     out = []
+    if not doc:
+        # S13 — no scan result stored on this host: say so instead of reporting a clean run
+        return [f(check_id, f"no_data:{kind}", "low", "dependencies",
+                  f"no {area_label} dependency scan result stored (platform_state.dependency_audit_{kind}) — the CI/daily job must publish it",
+                  {"kind": kind, "no_data": True})]
     for v in (doc or {}).get("vulnerabilities") or []:
         score = float(v.get("score") or 0)
         sev = "critical" if score >= 9 else "high" if score >= 7 else "medium" if score >= 4 else "low"

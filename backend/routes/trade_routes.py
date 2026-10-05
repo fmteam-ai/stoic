@@ -594,14 +594,13 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
     entry0 = float(signal.get("entry_price") or 0)
     sl0 = float(signal.get("stop_loss") or 0)
     if entry0 > 0 and sl0 > 0:
-        from market import get_quote
-        try:
-            px = float(((await get_quote(signal["symbol"])) or {}).get("price") or 0)
-        except Exception:  # noqa: BLE001
-            px = 0.0
+        # main92 P2 — broker tick first (the signal entry is a broker tick);
+        # the public quote only when the signal itself came from it.
+        from intraday_features import preflight_price
+        px, px_src = await preflight_price(signal["symbol"], user["id"], signal)
         if px <= 0:
             raise HTTPException(status_code=409, detail={
-                "code": "quote_unavailable",
+                "code": "quote_unavailable", "price_source": px_src,
                 "message": "No live price for this symbol right now — try again in a moment."})
         stop_dist = abs(entry0 - sl0)
         deviation = abs(px - entry0)
@@ -612,7 +611,8 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
                 "code": "entry_deviation",
                 "message": (f"Price moved too far since this signal ({signal['symbol']} now {px:g}, "
                             f"signal entry {entry0:g}, stop {sl0:g}). Generate a fresh signal."),
-                "live_price": px, "signal_entry": entry0, "deviation": round(deviation, 5)})
+                "live_price": px, "signal_entry": entry0, "deviation": round(deviation, 5),
+                "price_source": px_src})
 
     # Execution Factory — paper vs live engine
     engine = engine_for_account(account)

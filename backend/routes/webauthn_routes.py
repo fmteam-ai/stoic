@@ -61,7 +61,9 @@ async def register_complete(payload: dict, request: Request,
                             user=Depends(get_current_user)):
     _require_admin(user)
     db = get_db()
-    await require_step_up(db, user, request, "passkey_enrol")           # fix plan S1
+    # main92 frontend review — the step-up was already verified at /register/begin, which
+    # is the only way to obtain a challenge_id (user-bound, single-use, short-lived); asking
+    # for a second code here made passkey enrolment prompt for 2FA twice.
     from webauthn_mfa import complete_registration
     try:
         out = await complete_registration(

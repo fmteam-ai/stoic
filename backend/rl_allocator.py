@@ -154,7 +154,7 @@ async def compute_allocations(db, user_id: str) -> dict:
     trades = await db.trades.find({
         "user_id": user_id, "status": "closed", "origin": "auto",
         "pnl": {"$ne": None}, "closed_at": {"$gte": since},
-        "pnl_estimated": {"$ne": True}, "pnl_unknown": {"$ne": True},
+        "pnl_estimated": {"$ne": True}, "pnl_unknown": {"$ne": True}, "stats_excluded": {"$ne": True},
     }, {"pnl": 1, "scope": 1, "closed_at": 1}).to_list(5000)
     by_scope: dict = {}
     daily: dict = {}

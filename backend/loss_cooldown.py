@@ -28,6 +28,7 @@ async def loss_cooldown_block(db, user_id: str, symbol: str, action: str,
         "user_id": user_id, "status": "closed", "action": action,
         "origin": "auto",  # bot losses only — manual trades must not freeze the bot
         "pnl": {"$lt": 0}, "closed_at": {"$gte": cutoff},
+        "stats_excluded": {"$ne": True},   # late fills of expired/PANIC orders are not strategy outcomes
     }
     account_id = cfg.get("account_id")
     if account_id:

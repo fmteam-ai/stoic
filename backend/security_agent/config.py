@@ -59,7 +59,15 @@ def from_env(env: dict | None = None) -> dict:
         elif typ == "bool":
             cfg[key] = raw.strip().lower() in ("1", "true", "yes", "on")
         else:
-            cfg[key] = typ(raw)
+            try:
+                cfg[key] = typ(raw)
+            except (TypeError, ValueError):
+                # S16 — one unparsable value keeps the default and is reported, instead of
+                # raising inside the loop and silently stopping every check
+                import logging
+                logging.getLogger("security_agent.config").warning(
+                    "ignoring invalid %s=%r (expected %s) — using default %r", var, raw, typ.__name__, cfg[key])
+                cfg.setdefault("config_errors", []).append(f"{var}={raw!r} invalid")
     if cfg["mode"] not in MODES:
         cfg["mode"] = "observe"
     return cfg

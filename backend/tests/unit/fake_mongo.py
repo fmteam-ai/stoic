@@ -9,6 +9,14 @@ def _match(doc, q):
             if not any(_match(doc, sub) for sub in v):
                 return False
             continue
+        if k == "$and":
+            if not all(_match(doc, sub) for sub in v):
+                return False
+            continue
+        if k == "$nor":
+            if any(_match(doc, sub) for sub in v):
+                return False
+            continue
         cur = doc
         for part in k.split("."):
             if isinstance(cur, list):                      # dotted path through an array: any element
@@ -18,6 +26,8 @@ def _match(doc, q):
                 cur = cur.get(part) if isinstance(cur, dict) else None
         if isinstance(v, dict):
             for op, arg in v.items():
+                if op == "$exists" and bool(cur is not None) != bool(arg):
+                    return False
                 if op == "$in" and cur not in arg:
                     return False
                 if op == "$nin" and cur in arg:
@@ -97,6 +107,10 @@ class FakeCollection:
             r[k] = r.get(k, 0) + v
         for k in (upd.get("$unset") or {}):
             r.pop(k, None)
+        for k, v in (upd.get("$addToSet") or {}).items():
+            arr = r.setdefault(k, [])
+            if v not in arr:
+                arr.append(v)
         for k, v in (upd.get("$push") or {}).items():
             arr = r.setdefault(k, [])
             arr.extend(v["$each"] if isinstance(v, dict) and "$each" in v else [v])
@@ -115,6 +129,14 @@ class FakeCollection:
             self.rows.append(d)
         return _Res(matched_count=0, modified_count=0)
 
+    async def find_one_and_update(self, q, upd, projection=None, return_document=None, **kw):
+        for r in self.rows:
+            if _match(r, q):
+                before = dict(r)
+                self._apply(r, upd)
+                return dict(r) if return_document else before
+        return None
+
     async def update_many(self, q, upd):
         n = 0
         for r in self.rows:
@@ -126,6 +148,26 @@ class FakeCollection:
     async def create_index(self, *a, **kw):
         self.indexes.append((a, kw))
         return "idx"
+
+    def aggregate(self, pipeline):
+        rows = [dict(r) for r in self.rows]
+        for stage in pipeline:
+            if "$match" in stage:
+                rows = [r for r in rows if _match(r, stage["$match"])]
+            elif "$group" in stage:
+                g = stage["$group"]
+                out = {}
+                for r in rows:
+                    key = r.get(g["_id"][1:]) if isinstance(g["_id"], str) and g["_id"].startswith("$") else g["_id"]
+                    acc = out.setdefault(key, {"_id": key})
+                    for k, spec in g.items():
+                        if k == "_id":
+                            continue
+                        if "$sum" in spec:
+                            v = spec["$sum"]
+                            acc[k] = acc.get(k, 0) + (float(r.get(v[1:]) or 0) if isinstance(v, str) else v)
+                rows = list(out.values())
+        return _Cursor(rows)
 
     async def index_information(self):
         return {}

@@ -58,7 +58,7 @@ async def strategy_health(db, user_id: str, scope: str) -> dict:
     base, recent, recent_loss_primary = [], [], []
     async for t in db.trades.find(
             {"user_id": user_id, "scope": scope, "status": "closed",
-             "closed_at": {"$gte": d90}, "alpha_clean": {"$ne": False}},
+             "closed_at": {"$gte": d90}, "alpha_clean": {"$ne": False}, "stats_excluded": {"$ne": True}},
             {"pnl": 1, "entry_price": 1, "stop_loss": 1, "exit_price": 1,
              "action": 1, "closed_at": 1,
              "attribution_primary": 1}).limit(1500):

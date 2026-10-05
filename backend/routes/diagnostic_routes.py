@@ -213,7 +213,7 @@ async def _check_risk_state(db, user_id: str) -> dict:
         ath = int(tc.get("anti_tilt_freeze_hours", 4) or 0)
         if atn <= 0 or ath <= 0:
             continue
-        q = {"user_id": user_id, "status": "closed"}
+        q = {"user_id": user_id, "status": "closed", "stats_excluded": {"$ne": True}}
         if tc.get("account_id"):
             q["account_id"] = tc["account_id"]
         recent = await db.trades.find(q).sort("closed_at", -1).limit(atn).to_list(length=atn)

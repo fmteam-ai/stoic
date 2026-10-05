@@ -105,6 +105,7 @@ from routes.optimizer_routes import router as optimizer_router
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+_install_redaction()   # S5 — again AFTER basicConfig so the real handlers carry the filter
 logger = logging.getLogger("trading-bot")
 
 # iter-158 — correlation ids on every log record (API + workers)
@@ -664,6 +665,42 @@ async def _security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
     for k, v in _SECURITY_HEADERS.items():
         response.headers.setdefault(k, v)
+    return response
+
+
+# S12 — security-agent blocks with scope "all" (R8) are enforced on EVERY route, and
+# 401/403/429 responses are counted per IP (flushed to Mongo once a minute) so check A7
+# and rule R8 have real data.
+_DENIED: dict = {"minute": None, "by_ip": {}}
+
+
+async def _flush_denied_counts(force: bool = False) -> None:
+    from security_agent.events import flush_denied_counts
+    await flush_denied_counts(get_db(), _DENIED, force=force)
+
+
+@app.middleware("http")
+async def _security_agent_middleware(request: Request, call_next):
+    from fastapi.responses import JSONResponse
+    from security import client_ip, is_blocked
+    ip = client_ip(request)
+    if request.url.path.startswith("/api/"):
+        try:
+            b = await is_blocked(get_db(), "ip", ip, "all")
+        except Exception:  # noqa: BLE001 — S7: never 500 on a block lookup
+            b = None
+        if b and b.get("scope") == "all":
+            return JSONResponse(status_code=403, content={"detail": {
+                "code": "blocked_by_security_agent", "ref": str(b.get("_id")),
+                "message": "This request was blocked by the STOIC security agent. "
+                           f"Contact support with reference {str(b.get('_id'))[-8:]}."}})
+    response = await call_next(request)
+    if response.status_code in (401, 403, 429):
+        _DENIED["by_ip"][ip] = _DENIED["by_ip"].get(ip, 0) + 1
+        try:
+            await _flush_denied_counts()
+        except Exception:  # noqa: BLE001
+            pass
     return response
 
 

@@ -69,7 +69,7 @@ def test_r8_guardian_counts_pending_stopless_and_daily_loss_without_account():
     import safety_guardian as sg
     src = inspect.getsource(sg.audit_pre_trade)
     assert '"status": {"$in": ["open", "pending"]}' in src
-    assert "stopless_count" in src and 'max(float(t.get("sl_pips") or 0), new_sl_pips, 100.0)' in src
+    assert "stopless_count" in src and "new_sl_usd_per_lot" in src   # main92 P5: USD fallback per trade symbol
     i = src.index("dl_match = ")
     assert '"origin"' not in src[i:i + 400] and "if cfg_account_id:\n        dl_match[\"account_id\"]" in src
 

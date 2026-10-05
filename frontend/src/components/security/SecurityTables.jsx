@@ -35,7 +35,7 @@ export function WouldHaveDoneList({ onChanged }) {
                             <div className="text-[11px] text-[#71717A] truncate">{d.rules?.[a.rule]?.title} · from {a.check_id} {a.dedup_key}{a.note ? ` · ${a.note}` : ""}</div>
                         </div>
                         <div className={`font-mono text-[10px] text-right shrink-0 ${STATUS_CLS[a.status] || "text-[#71717A]"}`}>
-                            <div>{String(a.status).replace("_", " ").toUpperCase()}</div><div className="text-[#52525B]">{String(a.at).slice(5, 16)}Z</div>
+                            <div>{String(a.status).replace(/_/g, " ").toUpperCase()}</div><div className="text-[#52525B]">{String(a.at).slice(5, 16)}Z</div>
                         </div>
                         {a.status === "done" && a.undo && (
                             <button onClick={() => undo(a)} data-testid={`security-action-undo-${a.rule}`}
@@ -73,7 +73,7 @@ export function ActiveBlocksList({ onChanged }) {
                 {blocks.length === 0 && <div className="p-4 text-xs text-[#52525B]" data-testid="security-blocks-empty">No active IP blocks or account locks.</div>}
                 {blocks.map(bl => (
                     <div key={bl.id} className="px-4 py-2 text-xs flex items-center gap-3" data-testid={`security-block-${bl.kind}`}>
-                        <span className="font-mono text-[10px] text-[#FF3B30] shrink-0">{String(bl.kind).replace("_", " ").toUpperCase()}</span>
+                        <span className="font-mono text-[10px] text-[#FF3B30] shrink-0">{String(bl.kind).replace(/_/g, " ").toUpperCase()}</span>
                         <span className="font-mono text-white flex-1 truncate">{bl.value} <span className="text-[#52525B]">· {bl.scope} · {bl.rule}</span></span>
                         <span className="font-mono text-[10px] text-[#FFB000] shrink-0">{left(bl.seconds_left)} left</span>
                         <button className={b} disabled={!bl.action_id} onClick={() => act(bl, "extend")} data-testid="security-block-extend-btn">EXTEND</button>
@@ -102,7 +102,7 @@ export function CheckStatusTable() {
                         {checks.map(c => {
                             const a = age(c.at);
                             const stale = a != null && a > c.interval_s * 3 + 120;
-                            const cls = c.status === "failed" ? "text-[#FF3B30]" : !c.at || stale ? "text-[#FFB000]" : "text-[#00FF41]";
+                            const cls = c.status === "failed" ? "text-[#FF3B30]" : c.status === "skipped" ? "text-[#71717A]" : !c.at || stale ? "text-[#FFB000]" : "text-[#00FF41]";
                             return (
                                 <tr key={c.check_id} data-testid={`security-check-${c.check_id}`}>
                                     <td className="px-4 py-1 font-mono text-white">{c.check_id}</td>
@@ -110,7 +110,7 @@ export function CheckStatusTable() {
                                     <td className="text-[#71717A]">{a == null ? "never" : a < 90 ? `${a}s ago` : `${Math.round(a / 60)}m ago`}</td>
                                     <td className="text-right font-mono text-[#A1A1AA]">{c.duration_ms ?? "—"}</td>
                                     <td className="text-right font-mono text-[#A1A1AA]">{c.findings ?? "—"}</td>
-                                    <td className={`text-right px-4 font-mono ${cls}`}>{c.status === "failed" ? "FAILED" : !c.at ? "SILENT" : stale ? "STALE" : "OK"}</td>
+                                    <td className={`text-right px-4 font-mono ${cls}`}>{c.status === "failed" ? "FAILED" : c.status === "skipped" ? "SKIPPED" : !c.at ? "SILENT" : stale ? "STALE" : "OK"}</td>
                                 </tr>
                             );
                         })}

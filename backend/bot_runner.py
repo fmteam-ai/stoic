@@ -532,6 +532,9 @@ async def _process_user_account_locked(db, cfg: dict):
     anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
     anti_tilt_n = int(cfg.get("anti_tilt_consecutive_losses", 3))
     anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4))
+    # main92 P3 — configs without a value fall back to 1 auto trade / symbol /
+    # day (the API default); the pulse says so, so operators can review it.
+    trade_of_day_cap_default = cfg.get("trade_of_day_cap") is None
     trade_of_day_cap = int(cfg.get("trade_of_day_cap", 1) or 0)
     asia_skip_xau = bool(cfg.get("asia_session_skip_xau", True))
     sl_cooldown_enabled = bool(cfg.get("sl_cooldown_enabled", True))
@@ -619,7 +622,9 @@ async def _process_user_account_locked(db, cfg: dict):
                             user_id, sym, today_count, trade_of_day_cap)
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="info",
-                    reason=f"Daily trade cap reached ({today_count}/{trade_of_day_cap}) for {sym}. Resets at 00:00 UTC.",
+                    reason=(f"Daily trade cap reached ({today_count}/{trade_of_day_cap}"
+                            f"{' · default, not set on this config' if trade_of_day_cap_default else ''}) "
+                            f"for {sym}. Resets at 00:00 UTC."),
                 )
                 continue
 
@@ -1638,6 +1643,18 @@ async def _process_user_account_locked(db, cfg: dict):
 
         # Target account: per-account cfg pins one; default cfg picks the first connected.
         target_account = connected[0]
+
+        # A7d — execution-health brake: repeated late fills / rejects / slippage
+        # vetoes / duplicate tickets pause NEW entries on this account.
+        from execution_health import is_braked as _eh_braked, maybe_auto_release as _eh_release
+        if _eh_braked(target_account) and not await _eh_release(db, target_account):
+            _br = target_account.get("execution_brake") or {}
+            await _record_pulse(db, cfg, symbol=sym,
+                action="SKIP", level="warn",
+                reason=f"EXECUTION BRAKE — {_br.get('reason')}. New entries paused until "
+                       f"{str(_br.get('release_after') or '')[:16]} UTC or manual release.",
+            )
+            continue
 
         if spread_filter_enabled and (target_account.get("mode") or "live") == "live":
             spreads = target_account.get("current_spreads") or {}

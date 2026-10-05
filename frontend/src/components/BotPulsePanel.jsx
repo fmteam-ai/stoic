@@ -67,6 +67,12 @@ function PulseRow({ item }) {
                             <Lock className="w-3 h-3" /> PANIC LOCKED
                         </span>
                     )}
+                    {item.execution_brake?.active && (
+                        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-[#FF3B30]/50 bg-[#FF3B30]/10 text-[#FF3B30] text-[10px] font-mono tracking-widest"
+                              title={item.execution_brake.reason} data-testid={`bot-pulse-exec-brake-${item.config_id}`}>
+                            <Ban className="w-3 h-3" /> EXECUTION BRAKE
+                        </span>
+                    )}
                     {item.active && !isShadow && !item.locked && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-[#00FF41]/40 text-[#00FF41] text-[10px] font-mono tracking-widest">
                             <span className="w-1.5 h-1.5 bg-[#00FF41] rounded-full animate-pulse" /> RUNNING

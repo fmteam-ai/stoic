@@ -18,6 +18,7 @@ NEWSAPI_URL = "https://newsapi.org/v2/everything"
 
 # In-memory sentiment cache: { symbol: (expires_at, payload) }
 _sentiment_cache: dict = {}
+SENTIMENT_FAILURE_TTL_S = 120
 _sentiment_locks: dict = {}
 
 # Search query per symbol — focused on price-moving headlines
@@ -205,8 +206,10 @@ async def score_sentiment(symbol: str) -> dict:
             from llm_timeout import send_with_timeout
             resp = await send_with_timeout(chat, UserMessage(text=user_text), label=f"sentiment:{sym}")
             parsed = _parse_json(str(resp))
+            model_failed = False
         except Exception:
             parsed = {"score": 0.0, "label": "neutral", "summary": "Sentiment model failed.", "key_drivers": []}
+            model_failed = True
 
         # Fix plan A4 — a malformed model answer can never break the signal:
         # every field is type-checked and clamped, bad shapes degrade to neutral.
@@ -216,8 +219,11 @@ async def score_sentiment(symbol: str) -> dict:
             "article_count": len(headlines),
             "distinct_sources": distinct_sources,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
+            "model_failed": model_failed,
         }
-        _set_cache(ck, payload, 3600)  # 1h
+        # main92 P10 — a timed-out model must not switch news vetoes off for an
+        # hour: cache the neutral fallback for 2 minutes only.
+        _set_cache(ck, payload, SENTIMENT_FAILURE_TTL_S if model_failed else 3600)
         return {**payload, "cached": False}
 
 

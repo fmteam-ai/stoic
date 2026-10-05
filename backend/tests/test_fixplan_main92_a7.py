@@ -1,0 +1,257 @@
+"""main92 review — step A7 (the open main90–91 list) + A7d execution-health brake.
+N1  manual 'in' deals are never folded into a bot row (netting: own row + alert).
+N2  /report late fill + slippage veto never $sets and $unsets close_reason together (500 loop).
+N3  stats_excluded / late-fill stamps written directly, not only via the open-only close request.
+N4  AUTO-REVIVE never undoes a PANIC / late-fill / in-flight FULL_CLOSE close.
+N5  report path falls back to the ORDER ticket for the netting leg; merge upgrades it to the deal id.
+N6  duplicate-archive age guard reads the newest timestamp of the row.
+N8  the API integration test never borrows a real account.
+N10 account list survives a registry error.
+N11 BOLA matrix declares the admin environment / position-mode routes.
+N12 fill after a broker reject is flagged + alerted.
+N13 admin position-mode change audited BEFORE the write; wrong re-auth never refresh-retried.
+H1  EA reports margin_mode; registry lookup prefers the EA-reported server.
+stats_excluded honoured by every statistics reader.
+A7d execution-health brake: events → engage → pulse skip / execute block → auto / manual release.
+Pure unit tests (fake async db) — run with DB_NAME="".
+"""
+import asyncio
+import inspect
+import os
+import sys
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
+import pytest
+from bson import ObjectId
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "unit"))
+from fake_mongo import FakeDb  # noqa: E402
+
+pytestmark = pytest.mark.unit
+
+
+def run(coro):
+    return asyncio.new_event_loop().run_until_complete(coro)
+
+
+# ── N1 ──────────────────────────────────────────────────────────────────────
+def test_n1_merge_refuses_manual_deal_into_bot_row():
+    from routes.bridge_routes import _merge_duplicate_in_deal
+
+    class P:
+        mt5_ticket = 555
+        deal_id = 9002
+        position_volume = 0.2
+    db = FakeDb()
+    bot = {"_id": ObjectId(), "account_id": "a1", "mt5_ticket": 555, "status": "open", "origin": "auto", "position_leg": 9001, "opened_at": "2026-10-05T10:00:00+00:00"}
+    db.trades.rows.append(bot)
+    assert run(_merge_duplicate_in_deal(db, "a1", P(), {"origin": "manual", "position_leg": 9002})) is None
+    assert 9002 not in (db.trades.rows[0].get("merged_deal_ids") or [])
+    # a STOIC deal still merges
+    assert run(_merge_duplicate_in_deal(db, "a1", P(), {"origin": "auto", "position_leg": 9001})) is not None
+
+
+def test_n1_external_deal_netting_manual_add_becomes_own_row_with_alert():
+    import routes.bridge_routes as br
+    src = inspect.getsource(br.external_deal)
+    assert "shared_with_bot_row" in src and "manual_volume_on_bot_position" in src
+    assert 'existing.get("position_leg") != int(payload.deal_id)' in src and "await is_netting_account(db, acc)" in src
+
+
+# ── N2 ──────────────────────────────────────────────────────────────────────
+def test_n2_no_set_unset_path_conflict_on_late_fill_with_slippage_veto():
+    import routes.bridge_routes as br
+    src = inspect.getsource(br)
+    assert 'unset = {k: "" for k in ("error", "close_reason") if k not in update}' in src
+    update = {"status": "open", "close_reason": "slippage_veto"}
+    unset = {k: "" for k in ("error", "close_reason") if k not in update}
+    assert unset == {"error": ""}
+
+
+# ── N3 ──────────────────────────────────────────────────────────────────────
+def test_n3_late_fill_stamps_written_directly():
+    import routes.bridge_routes as br
+    s_panic = inspect.getsource(br.close_late_fill_after_panic)
+    s_exp = inspect.getsource(br.close_late_fill_after_expiry)
+    assert '"late_fill_after_panic": True, "stats_excluded": True}})' in s_panic and "await db.trades.update_one" in s_panic
+    assert '"late_fill_after_expiry": True, "stats_excluded": True}})' in s_exp
+    assert 'stamp={"late_fill_after_panic": True, "stats_excluded": True}' in s_panic
+
+
+# ── N4 ──────────────────────────────────────────────────────────────────────
+def test_n4_intentional_closes_are_never_revived():
+    from routes.bridge_routes import intentional_close, NO_REVIVE_FILTER
+    assert intentional_close({"close_reason": "panic"})
+    assert intentional_close({"late_fill_after_expiry": True})
+    assert intentional_close({"close_requested": True})
+    assert intentional_close({"pending_modification": {"type": "FULL_CLOSE"}})
+    assert not intentional_close({"close_reason": "slippage_veto", "status": "closed"})
+    assert "late_fill_after_panic" in NO_REVIVE_FILTER["close_reason"]["$nin"]
+    import routes.bridge_routes as br
+    src = inspect.getsource(br.heartbeat)
+    assert "**NO_REVIVE_FILTER" in src and "not intentional_close(existing)" in src
+
+
+# ── N5 ──────────────────────────────────────────────────────────────────────
+def test_n5_order_ticket_leg_fallback_and_upgrade():
+    import routes.bridge_routes as br
+    src = inspect.getsource(br.report_trade)
+    assert "payload.deal_ticket or payload.order_ticket" in src
+    assert '"deal_ticket" if payload.deal_ticket else "order_ticket"' in src
+    msrc = inspect.getsource(br._merge_duplicate_in_deal)
+    assert 'existing.get("position_leg_source") == "order_ticket"' in msrc
+
+
+# ── N6 ──────────────────────────────────────────────────────────────────────
+def test_n6_age_guard_reads_newest_timestamp():
+    from ops.ticket_duplicates import _ts
+    row = {"opened_at": "2026-10-01T00:00:00", "updated_at": "2026-10-01T01:00:00",
+           "live_snapshot_at": "2026-10-05T12:00:00", "pending_modification": {"requested_at": "2026-10-05T12:30:00"}}
+    assert _ts(row) == "2026-10-05T12:30:00"
+    assert _ts({}) == ""
+
+
+# ── N8 / N10 / N11 / N12 / N13 ──────────────────────────────────────────────
+def test_n8_integration_test_skips_instead_of_borrowing_real_account():
+    src = open(os.path.join(os.path.dirname(__file__), "test_a6_api_integration.py")).read()
+    assert "pytest.skip(" in src and "qa-teardown" not in src
+
+
+def test_n10_account_list_survives_registry_error():
+    import routes.account_routes as ar
+    src = inspect.getsource(ar.list_accounts)
+    assert '{"mode": "unknown", "source": "error"}' in src and "except Exception" in src
+
+
+def test_n11_bola_matrix_declares_admin_env_and_position_mode_routes():
+    from security_matrix import BOLA_MATRIX
+    for key in [("GET", "/api/admin/account-environments"), ("POST", "/api/admin/account-environments/{account_id}"),
+                ("GET", "/api/admin/account-position-modes"), ("POST", "/api/admin/account-position-modes/{account_id}"),
+                ("GET", "/api/accounts/{account_id}/execution-health"),
+                ("POST", "/api/accounts/{account_id}/execution-brake/release")]:
+        assert key in BOLA_MATRIX, key
+    md = open(os.path.join(os.path.dirname(__file__), "..", "..", "docs", "BOLA_MATRIX.md")).read()
+    assert "/api/admin/account-position-modes/{account_id}" in md
+
+
+def test_n12_fill_after_reject_is_flagged_and_alerted():
+    from execution_intents import record_late_fill
+    db = FakeDb()
+    db.execution_intents.rows.append({"intent_id": "i1", "status": "rejected", "history": []})
+    alerts = []
+
+    async def fake_alert(db_, kind, sev, msg, dedup_key=None, meta=None, **kw):
+        alerts.append(kind)
+    with patch("alerting.raise_alert", fake_alert):
+        out = run(record_late_fill(db, "i1", ticket=77, via="report", prior="rejected"))
+    assert out["status"] == "filled" and out["late_fill"] is True
+    assert db.execution_intents.rows[0].get("late_fill_anomaly") is True
+    assert alerts == ["late_fill_after_reject"]
+
+
+def test_n13_audit_before_write_and_no_refresh_retry_on_reauth_failure():
+    import routes.admin_routes as ar
+    src = inspect.getsource(ar.admin_set_account_position_mode)
+    assert src.index('"phase": "intent"') < src.index("position_mode_override") and '"phase": "applied"' in src
+    assert "account_position_mode_set_failed" in src
+    js = open(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "lib", "api.js")).read()
+    assert 'detail?.code === "reauth_failed"' in js and "!reauthFailed" in js
+
+
+# ── H1 leftover ─────────────────────────────────────────────────────────────
+def test_h1_ea_reports_margin_mode_and_registry_prefers_ea_server():
+    mq5 = open(os.path.join(os.path.dirname(__file__), "..", "static", "EmergentTradingBridge.mq5")).read()
+    assert '"margin_mode\\":\\"%s\\"' in mq5 and "ACCOUNT_MARGIN_MODE_RETAIL_HEDGING) ? \"hedging\" : \"netting\"" in mq5
+    from models import BridgeHeartbeat
+    assert "margin_mode" in BridgeHeartbeat.model_fields
+    import routes.bridge_routes as br
+    hb = inspect.getsource(br.heartbeat)
+    assert 'set_doc["margin_mode"] = hb_margin_mode' in hb
+    res_src = inspect.getsource(br.position_mode_resolution)
+    assert 'ident.get("broker_server")' in res_src and '"server_source": "ea" if ea_server else "user_typed"' in res_src
+    # EA-reported margin mode wins over the registry
+    db = FakeDb()
+    out = run(br.position_mode_resolution(db, {"margin_mode": "netting"}))
+    assert out == {"mode": "netting", "source": "ea"}
+
+
+# ── stats_excluded gaps ─────────────────────────────────────────────────────
+def test_stats_excluded_honoured_by_every_statistics_reader():
+    import loss_cooldown, strategy_decay, meta_decision, rl_policy, rl_allocator, online_learning, ai_optimizer
+    import routes.diagnostic_routes as dr, routes.analytics_routes as anr, routes.posture_routes as pr
+    for mod in (loss_cooldown, strategy_decay, meta_decision, rl_policy, rl_allocator, online_learning, ai_optimizer, dr, anr, pr):
+        assert '"stats_excluded": {"$ne": True}' in inspect.getsource(mod), mod.__name__
+
+
+# ── A7d ─────────────────────────────────────────────────────────────────────
+def _acc_row():
+    return {"_id": ObjectId(), "user_id": "u1", "label": "ICM-1", "mode": "live"}
+
+
+def test_a7d_brake_engages_after_threshold_and_blocks_new_entries():
+    import execution_health as eh
+    db = FakeDb()
+    acc = _acc_row(); db.accounts.rows.append(acc)
+    alerts = []
+
+    async def fake_alert(db_, kind, sev, msg, dedup_key=None, meta=None, **kw):
+        alerts.append((kind, sev))
+    with patch("alerting.raise_alert", fake_alert), patch.object(eh, "THRESHOLD", 3):
+        assert run(eh.record_event(db, str(acc["_id"]), "u1", "late_fill", trade_id="t1")) is None
+        assert run(eh.record_event(db, str(acc["_id"]), "u1", "reject", trade_id="t2")) is None
+        state = run(eh.record_event(db, str(acc["_id"]), "u1", "slippage_veto", trade_id="t3"))
+    assert state and state["active"] and state["event_count"] == 3 and set(state["kinds"]) == {"late_fill", "reject", "slippage_veto"}
+    assert alerts == [("execution_brake", "critical")]
+    assert eh.is_braked(db.accounts.rows[0])
+    # unknown kinds are ignored; a second evaluation is idempotent
+    assert run(eh.record_event(db, str(acc["_id"]), "u1", "nonsense")) is None
+    with patch("alerting.raise_alert", fake_alert):
+        assert run(eh.record_event(db, str(acc["_id"]), "u1", "reject")) is None
+    assert len(alerts) == 1
+    s = run(eh.summary(db, str(acc["_id"])))
+    assert s["brake"]["active"] and s["events_in_window"] == 4
+
+
+def test_a7d_auto_release_only_after_clean_period_and_manual_release():
+    import execution_health as eh
+    db = FakeDb()
+    acc = _acc_row()
+    acc["execution_brake"] = {"active": True, "since": "x",
+                              "release_after": (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()}
+    db.accounts.rows.append(acc)
+    # a fresh anomaly inside the clean window → not released, window pushed out
+    db.execution_health_events.rows.append({"account_id": str(acc["_id"]), "kind": "reject",
+                                            "at": datetime.now(timezone.utc).isoformat()})
+    assert run(eh.maybe_auto_release(db, db.accounts.rows[0])) is False
+    assert db.accounts.rows[0]["execution_brake"]["active"] is True
+    # clean → released
+    db.execution_health_events.rows.clear()
+    db.accounts.rows[0]["execution_brake"]["release_after"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    assert run(eh.maybe_auto_release(db, db.accounts.rows[0])) is True
+    assert db.accounts.rows[0]["execution_brake"]["active"] is False
+    assert db.accounts.rows[0]["execution_brake"]["released_by"] == "auto"
+    # manual release writes an audited, step-up-verified entry
+    db.accounts.rows[0]["execution_brake"] = {"active": True, "since": "y", "reason": "r"}
+    st = run(eh.release(db, str(acc["_id"]), actor="user:a@b", reason="manual release"))
+    assert st["active"] is False and st["last_reason"] == "r"
+    assert any(a["action"] == "execution_brake_released" and a["step_up_verified"] for a in db.audit_log.rows)
+
+
+def test_a7d_wired_into_runner_executor_bridge_api_and_ui():
+    import bot_runner, execution
+    import routes.bridge_routes as br
+    import routes.account_routes as ar
+    from step_up import STEP_UP_ACTIONS
+    assert "EXECUTION BRAKE" in inspect.getsource(bot_runner) and "_eh_braked(target_account)" in inspect.getsource(bot_runner)
+    assert '"blocked": "execution_brake"' in inspect.getsource(execution)
+    bsrc = inspect.getsource(br)
+    for kind in ("late_fill", "reject", "slippage_veto", "duplicate_ticket"):
+        assert f'"{kind}"' in bsrc and "record_event" in bsrc
+    assert "execution_brake_release" in STEP_UP_ACTIONS
+    assert '@router.post("/{account_id}/execution-brake/release")' in inspect.getsource(ar)
+    root = os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src")
+    assert "execution-brake-banner" in open(os.path.join(root, "components", "ExecutionBrakeBanner.jsx")).read()
+    assert "<ExecutionBrakeBanner />" in open(os.path.join(root, "pages", "Dashboard.jsx")).read()
+    assert "bot-pulse-exec-brake-" in open(os.path.join(root, "components", "BotPulsePanel.jsx")).read()

@@ -151,6 +151,19 @@ async def record_late_fill(db, intent_id: str, *, ticket: int, via: str, prior: 
     if upd is None:
         return await transition(db, intent_id, "filled", f"fill via {via} ticket={ticket}",
                                 result={"ticket": int(ticket)})
+    if upd.get("late_fill_prior_status") in ("rejected", "unknown") or str(prior) in ("rejected", "unknown"):
+        # N12 — the broker said "rejected"/we never learned the outcome, yet a fill
+        # arrived: broker truth wins, but this contradiction is surfaced, never silent.
+        await db.execution_intents.update_one({"intent_id": intent_id}, {"$set": {"late_fill_anomaly": True}})
+        try:
+            from alerting import raise_alert
+            await raise_alert(db, "late_fill_after_reject", "warning",
+                              f"intent {intent_id} was {upd.get('late_fill_prior_status') or prior} but filled "
+                              f"via {via} (ticket {ticket}) — verify the broker position and the EA journal",
+                              dedup_key=f"late_fill_after_reject:{intent_id}",
+                              meta={"intent_id": intent_id, "ticket": int(ticket), "via": via})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("late-fill anomaly alert failed: %s", type(e).__name__)
     logger.warning("intent %s: late fill via %s (was %s) ticket=%s", intent_id, via, prior, ticket)
     upd.pop("_id", None)
     return upd

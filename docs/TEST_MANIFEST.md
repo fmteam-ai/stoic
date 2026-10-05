@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 704 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3995 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4043 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4910 tests across 502 files.**
+**Total: 4958 tests across 505 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -29,6 +29,9 @@ fails when this file drifts from the tree.
 | `backend/tests/test_fixplan_c1_candles_live.py` | http-live | 6 |
 | `backend/tests/test_fixplan_c2_ai_gates.py` | http-live | 11 |
 | `backend/tests/test_fixplan_d1_d2_logs_mfa.py` | http-live | 9 |
+| `backend/tests/test_fixplan_main92_a7.py` | http-live | 17 |
+| `backend/tests/test_fixplan_main92_a8b.py` | http-live | 11 |
+| `backend/tests/test_fixplan_main92_sa5.py` | http-live | 20 |
 | `backend/tests/test_iter100_batch_a.py` | http-live | 6 |
 | `backend/tests/test_iter100_http.py` | http-live | 7 |
 | `backend/tests/test_iter100_rl_policy.py` | http-live | 17 |

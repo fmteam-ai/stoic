@@ -54,3 +54,11 @@ c92792b134e28a30e6a28de2b559023989a0593c:backend/tests/unit/test_bypass_sentinel
 a04f6a00ee22edfc6fa8cce5254d2e930ddf5acf:backend/tests/unit/test_admin_integrations.py:stripe-access-token:17
 a04f6a00ee22edfc6fa8cce5254d2e930ddf5acf:backend/tests/unit/test_admin_integrations.py:stripe-access-token:18
 a04f6a00ee22edfc6fa8cce5254d2e930ddf5acf:backend/tests/unit/test_admin_integrations.py:stripe-access-token:35
+# main92 review A8a — fake test fixtures (sample JWT / sk_live_abc… / 0123…abcdef) and a
+# redact.py comment; the tracked files now build these samples at runtime.
+8e334583f28506c8aa43828be440a982f1c7f28b:backend/security_agent/redact.py:generic-api-key:88
+8e334583f28506c8aa43828be440a982f1c7f28b:backend/tests/test_fixplan_d1_d2_logs_mfa.py:generic-api-key:32
+741897a58537ad7cb1054d847045c6395a6bf489:backend/tests/unit/test_security_agent_sa3.py:jwt:16
+618531ca5cd94a67fd49cff4a8af35ef40cdc7bb:backend/tests/unit/test_security_agent_sa1_sa2.py:stripe-access-token:56
+618531ca5cd94a67fd49cff4a8af35ef40cdc7bb:backend/tests/unit/test_security_agent_sa1_sa2.py:stripe-access-token:58
+618531ca5cd94a67fd49cff4a8af35ef40cdc7bb:backend/tests/unit/test_security_agent_sa1_sa2.py:jwt:54

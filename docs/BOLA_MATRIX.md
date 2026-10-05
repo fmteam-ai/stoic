@@ -10,6 +10,8 @@ Auto-generated from `backend/security_matrix.py`. Every route accepting `account
 | POST | `/api/accounts/{account_id}/certify` | user_scoped_query |
 | PATCH | `/api/accounts/{account_id}/credentials` | user_scoped_query |
 | POST | `/api/accounts/{account_id}/credentials/reveal` | user_scoped_query |
+| POST | `/api/accounts/{account_id}/execution-brake/release` | user_scoped_query |
+| GET | `/api/accounts/{account_id}/execution-health` | user_scoped_query |
 | POST | `/api/accounts/{account_id}/import-positions` | user_scoped_query |
 | POST | `/api/accounts/{account_id}/request-sync` | user_scoped_query |
 | POST | `/api/accounts/{account_id}/rotate-token` | user_scoped_query |
@@ -17,6 +19,22 @@ Auto-generated from `backend/security_matrix.py`. Every route accepting `account
 | GET | `/api/accounts/{account_id}/test-connection` | user_scoped_query |
 | POST | `/api/accounts/{account_id}/test-trade` | user_scoped_query |
 | POST | `/api/accounts/{account_id}/unblock` | user_scoped_query |
+| GET | `/api/admin/account-environments` | admin_only |
+| POST | `/api/admin/account-environments/{account_id}` | admin_only |
+| GET | `/api/admin/account-position-modes` | admin_only |
+| POST | `/api/admin/account-position-modes/{account_id}` | admin_only |
+| GET | `/api/admin/security/actions` | admin_only |
+| POST | `/api/admin/security/actions/{action_id}/extend` | admin_only |
+| POST | `/api/admin/security/actions/{action_id}/undo` | admin_only |
+| GET | `/api/admin/security/blocks` | admin_only |
+| GET | `/api/admin/security/check-runs` | admin_only |
+| GET | `/api/admin/security/findings` | admin_only |
+| GET | `/api/admin/security/findings/{finding_id}` | admin_only |
+| POST | `/api/admin/security/findings/{finding_id}/status` | admin_only |
+| POST | `/api/admin/security/mode` | admin_only |
+| GET | `/api/admin/security/reports/{kind}` | admin_only |
+| GET | `/api/admin/security/status` | admin_only |
+| POST | `/api/admin/security/test-alert` | admin_only |
 | GET | `/api/attribution/trades/{trade_id}` | user_scoped_query |
 | GET | `/api/bot/adaptive-status` | user_scoped_query |
 | GET | `/api/bot/config` | user_scoped_query |
@@ -61,6 +79,13 @@ Auto-generated from `backend/security_matrix.py`. Every route accepting `account
 | POST | `/api/pamm/marketplace/{program_id}/join` | program_access |
 | GET | `/api/pamm/programs/{program_id}` | program_access |
 | GET | `/api/pamm/programs/{program_id}/allocations` | program_access |
+| GET | `/api/pamm/programs/{program_id}/certification` | program_access |
+| POST | `/api/pamm/programs/{program_id}/certification/advance` | admin_only |
+| POST | `/api/pamm/programs/{program_id}/certification/checkpoint` | admin_only |
+| POST | `/api/pamm/programs/{program_id}/certification/evaluate` | admin_only |
+| GET | `/api/pamm/programs/{program_id}/certification/evidence` | program_access |
+| POST | `/api/pamm/programs/{program_id}/certification/revoke` | admin_only |
+| POST | `/api/pamm/programs/{program_id}/certification/start` | admin_only |
 | GET | `/api/pamm/programs/{program_id}/change-requests` | program_access |
 | POST | `/api/pamm/programs/{program_id}/change-requests` | program_access |
 | POST | `/api/pamm/programs/{program_id}/clear-emergency-stop` | program_access |
@@ -84,7 +109,16 @@ Auto-generated from `backend/security_matrix.py`. Every route accepting `account
 | GET | `/api/pamm/programs/{program_id}/risk-limits` | program_access |
 | PUT | `/api/pamm/programs/{program_id}/risk-limits` | program_access |
 | GET | `/api/pamm/programs/{program_id}/risk-status` | program_access |
+| GET | `/api/pamm/programs/{program_id}/strategy` | program_access |
+| POST | `/api/pamm/programs/{program_id}/strategy` | program_access |
+| PATCH | `/api/pamm/programs/{program_id}/strategy` | program_access |
+| GET | `/api/pamm/programs/{program_id}/strategy-ownership` | program_access |
+| POST | `/api/pamm/programs/{program_id}/strategy/activate` | program_access |
+| POST | `/api/pamm/programs/{program_id}/strategy/change` | program_access |
+| POST | `/api/pamm/programs/{program_id}/strategy/suspend` | program_access |
+| POST | `/api/pamm/programs/{program_id}/strategy/validate` | program_access |
 | POST | `/api/pamm/programs/{program_id}/trade-verdict` | program_access |
+| GET | `/api/pamm/strategies/nitro-eligibility` | owned_account_helper |
 | GET | `/api/portfolio/snapshot` | user_scoped_query |
 | GET | `/api/postmortem/{trade_id}` | user_scoped_query |
 | POST | `/api/postmortem/{trade_id}/regenerate` | user_scoped_query |
@@ -115,4 +149,3 @@ Auto-generated from `backend/security_matrix.py`. Every route accepting `account
 | GET | `/api/trades/{trade_id}/timeline` | user_scoped_query |
 | GET | `/api/trades/{trade_id}/trace` | user_scoped_query |
 | GET | `/api/v1/trades` | user_scoped_query |
-

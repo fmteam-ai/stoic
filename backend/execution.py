@@ -157,7 +157,7 @@ class MT5BridgeEngine(ExecutionEngine):
                     {"_id": account["_id"]},
                     {"equity": 1, "balance": 1, "free_margin": 1, "status": 1,
                      "last_heartbeat": 1, "open_positions": 1,
-                     "account_type": 1, "leverage": 1})
+                     "account_type": 1, "leverage": 1, "execution_brake": 1})
             except Exception:
                 # Refresh mechanism unavailable (isolated unit test with a
                 # non-async db mock) — proceed on the snapshot the caller
@@ -169,6 +169,9 @@ class MT5BridgeEngine(ExecutionEngine):
             elif fresh is None:
                 return {"blocked": "account_missing"}
             else:
+                if ((fresh.get("execution_brake") or {}).get("active")):   # A7d
+                    return {"blocked": "execution_brake",
+                            "reason": (fresh.get("execution_brake") or {}).get("reason")}
                 if (fresh.get("status") or "").lower() not in (
                         "connected", "ok", ""):
                     return {"blocked": "account_disconnected",
@@ -198,9 +201,10 @@ class MT5BridgeEngine(ExecutionEngine):
             # longer holds (entry deviation > 50% of stop distance, or the
             # market already traded through the stop).
             px = 0.0
+            px_src = "public_quote"
             try:
-                q = await get_quote(signal["symbol"])
-                px = float((q or {}).get("price") or 0)
+                from intraday_features import preflight_price
+                px, px_src = await preflight_price(signal["symbol"], user_id, signal)
             except Exception:
                 px = 0.0
             entry0 = float(signal.get("entry_price") or 0)
@@ -208,9 +212,10 @@ class MT5BridgeEngine(ExecutionEngine):
             if not (px > 0):
                 # Fix plan R6 — no live quote means the geometry cannot be
                 # verified against the market: block instead of trading blind.
-                logger.warning("MT5 execute blocked: no live quote user=%s sym=%s",
-                               user_id, signal.get("symbol"))
-                return {"blocked": "quote_unavailable", "signal_entry": entry0}
+                logger.warning("MT5 execute blocked: no live quote user=%s sym=%s src=%s",
+                               user_id, signal.get("symbol"), px_src)
+                return {"blocked": "quote_unavailable", "signal_entry": entry0,
+                        "price_source": px_src}
             if px > 0 and entry0 > 0 and sl0 > 0:
                 stop_dist = abs(entry0 - sl0)
                 deviation = abs(px - entry0)
@@ -225,6 +230,7 @@ class MT5BridgeEngine(ExecutionEngine):
                         deviation, stop_dist)
                     return {"blocked": "entry_deviation",
                             "live_price": px, "signal_entry": entry0,
+                            "price_source": px_src,
                             "deviation": round(deviation, 5),
                             "stop_distance": round(stop_dist, 5)}
 

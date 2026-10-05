@@ -36,8 +36,21 @@ resolve_file_secrets()
 RECENT_CREATE_S = 600
 
 
+_TS_FIELDS = ("updated_at", "closed_at", "opened_at", "live_snapshot_at", "revived_at",
+              "reconciled_at", "late_fill_at", "filled_at", "_dispatched_at", "modified_at")
+
+
 def _ts(row: dict) -> str:
-    return str(row.get("updated_at") or row.get("closed_at") or row.get("opened_at") or "")
+    """N6 — the NEWEST timestamp any write path leaves on the row (most paths never
+    set updated_at, so reading it first made recently-written rows look old)."""
+    vals = [str(row[k]) for k in _TS_FIELDS if row.get(k)]
+    pm = row.get("pending_modification") or {}
+    if isinstance(pm, dict) and pm.get("requested_at"):
+        vals.append(str(pm["requested_at"]))
+    cc = row.get("close_command") or {}
+    if isinstance(cc, dict) and cc.get("requested_at"):
+        vals.append(str(cc["requested_at"]))
+    return max(vals) if vals else ""
 
 
 def _rank(row: dict) -> tuple:

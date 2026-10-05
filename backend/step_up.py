@@ -22,6 +22,8 @@ STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_cr
                    # Security & Health Agent SA3/SA4 admin writes
                    "security_finding_status", "security_agent_mode", "security_test_alert",
                    "security_action_undo", "security_action_extend",
+                   # A7d — execution-health brake manual release
+                   "execution_brake_release",
                    # fix plan D2 — S1 passkey enrolment, S6 forced promotion, S11 VPS destructive ops
                    "passkey_enrol", "admin_promote", "vps_destroy"}
 
@@ -81,8 +83,12 @@ async def require_step_up(db, user, request, action: str) -> None:
          "action": action, "used_at": None, "expires_at": {"$gt": now_iso}},
         {"$set": {"used_at": now_iso}})
     if not doc:
-        from security_agent.events import emit as _sa_emit   # A6 — a presented step-up token that does not verify
-        await _sa_emit(db, "step_up_missing", {"user_id": str(user.get("id")), "action": action, "reason": "step_up_invalid"})
+        # S4 — an expired or already-used (double-clicked) token is a UX event, not an
+        # attack; only a token hash this user never owned is reported to the agent.
+        known = await db.step_up_tokens.find_one({"user_id": user["id"], "token_hash": _hash_token(token)}, {"_id": 1})
+        if not known:
+            from security_agent.events import emit as _sa_emit   # A6 — forged step-up token
+            await _sa_emit(db, "step_up_missing", {"user_id": str(user.get("id")), "action": action, "reason": "step_up_forged"})
         raise HTTPException(status_code=403, detail={
             "code": "step_up_invalid", "action": action,
             "message": "Step-up token expired or already used — verify your "

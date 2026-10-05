@@ -7,7 +7,24 @@ import os
 CLOUDFLARE_IPV4 = ("173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
                    "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
                    "104.24.0.0/14", "172.64.0.0/13", "131.0.72.0/22")
-ALWAYS_PROTECTED_IPS = ("127.0.0.1", "::1") + CLOUDFLARE_IPV4
+CLOUDFLARE_IPV6 = ("2400:cb00::/32", "2606:4700::/32", "2803:f800::/32", "2405:b500::/32", "2405:8100::/32",
+                   "2a06:98c0::/29", "2c0f:f248::/32")
+# S1 — loopback, RFC1918, CGNAT, link-local and docker/ULA ranges can never be blocked:
+# behind an extra proxy every user shares one of these, and R1 would lock everyone out.
+PRIVATE_RANGES = ("127.0.0.0/8", "::1/128", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+                  "100.64.0.0/10", "169.254.0.0/16", "fc00::/7", "fe80::/10")
+ALWAYS_PROTECTED_IPS = PRIVATE_RANGES + CLOUDFLARE_IPV4 + CLOUDFLARE_IPV6
+# S1 — an IP that carries this share of the recent auth/bridge traffic is a proxy, not an attacker
+SHARED_IP_MIN_SHARE = 0.5
+SHARED_IP_MIN_EVENTS = 20
+
+
+def is_cloudflare(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(str(ip).strip())
+    except ValueError:
+        return False
+    return any(a in ipaddress.ip_network(n) for n in CLOUDFLARE_IPV4 + CLOUDFLARE_IPV6)
 
 RULES = {
     "R1": {"title": "Brute force → block IP on auth routes", "checks": ("A1",), "action": "block_ip", "scope": "auth", "undo": "unblock_ip"},
@@ -71,11 +88,13 @@ def evaluate(finding: dict, cfg: dict) -> list[dict]:
     if cid == "A4":
         p("R4", "user", (ev.get("event") or {}).get("user_id"), 0, note="family already revoked by security.revoke_family; force MFA re-login")
     if cid == "B1" and len(ev.get("sources") or []) >= th.get("B1", {}).get("distinct_sources_60s", 2):
-        p("R5", "account", ev.get("account_id"), 0, note="until re-paired")
-    if cid == "B2" and int(ev.get("requests") or 0) >= th.get("B2", {}).get("invalid_token_5m", 30):
+        p("R5", "account", ev.get("account_id"), int(cfg.get("token_suspend_min") or 240), note="expires; re-pair lifts it earlier")
+    if cid == "B2" and int(ev.get("requests") or 0) >= th.get("B2", {}).get("invalid_token_5m", 100):
         p("R6", "ip", ev.get("ip"), ipm)
-    if cid == "A6":
-        p("R7", "user", (ev.get("event") or {}).get("user_id"), 0, note="until admin clears")
+    if cid == "A6" and (ev.get("event") or {}).get("reason") in (None, "step_up_forged", "step_up_missing"):
+        # S4 — only forged / absent tokens (expired or double-clicked ones never reach a finding)
+        p("R7", "user", (ev.get("event") or {}).get("user_id"), 0, note="until admin clears",
+          revoke_sessions=True)
     if cid == "B3":
         p("R7", "account", (ev.get("event") or {}).get("account_id"), 0, note="until admin clears")
     if cid == "A7" and int(ev.get("top_ip_rpm") or 0) >= 300:

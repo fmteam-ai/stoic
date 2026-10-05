@@ -27,7 +27,7 @@ async def research(days: int = 90, user=Depends(get_current_user)):
     trades = []
     async for t in db.trades.find(
             {"user_id": user["id"], "status": "closed", "origin": "auto",
-             "closed_at": {"$gte": since}, "pnl": {"$ne": None}},
+             "closed_at": {"$gte": since}, "pnl": {"$ne": None}, "stats_excluded": {"$ne": True}},
             {"pnl": 1, "closed_at": 1, "symbol": 1, "base_symbol": 1,
              "signal_id": 1}).sort("closed_at", 1).limit(3000):
         trades.append(t)
@@ -231,7 +231,7 @@ async def rr_watch(user=Depends(get_current_user)):
     async def _bucket(q: dict) -> dict:
         rrs, pnl, wins, n_closed = [], 0.0, 0, 0
         async for t in db.trades.find(
-                {"user_id": user["id"], "origin": "auto", **q},
+                {"user_id": user["id"], "origin": "auto", "stats_excluded": {"$ne": True}, **q},
                 {"entry_price": 1, "stop_loss": 1, "tp1": 1, "take_profit": 1,
                  "pnl": 1, "status": 1}).limit(1000):
             e = float(t.get("entry_price") or 0)

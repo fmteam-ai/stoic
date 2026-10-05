@@ -791,18 +791,33 @@ async def admin_set_account_position_mode(account_id: str, payload: dict, user=D
     await _reauth(db, user, str(payload.get("password") or ""), payload.get("otp"))
     now = _now_iso()
     before = (await _position_mode_row(db, acc))["resolution"]
-    if mode == "auto":
-        await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"position_mode_override": ""}})
-    else:
-        await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"position_mode_override": {
-            "mode": mode, "by": user.get("email"), "at": now, "reason": reason}}})
+    # N13 — the audit entry is written BEFORE the change (intent), so a failed
+    # or interrupted write can never leave an unaudited position-mode change.
+    await append_chained(db, {"actor_email": user.get("email"), "action": "account_position_mode_set",
+                              "target_kind": "account", "target_id": str(acc["_id"]),
+                              "target_label": acc.get("label"), "reason": reason or mode,
+                              "meta": {"mode": mode, "before": before, "reauth": True, "phase": "intent"},
+                              "at": now})
+    try:
+        if mode == "auto":
+            await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"position_mode_override": ""}})
+        else:
+            await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"position_mode_override": {
+                "mode": mode, "by": user.get("email"), "at": now, "reason": reason}}})
+    except Exception as e:  # noqa: BLE001
+        await append_chained(db, {"actor_email": user.get("email"), "action": "account_position_mode_set_failed",
+                                  "target_kind": "account", "target_id": str(acc["_id"]),
+                                  "reason": type(e).__name__, "meta": {"mode": mode, "phase": "failed"},
+                                  "at": _now_iso()})
+        raise
     acc = await db.accounts.find_one({"_id": acc["_id"]})
     row = await _position_mode_row(db, acc)
     await append_chained(db, {"actor_email": user.get("email"), "action": "account_position_mode_set",
                               "target_kind": "account", "target_id": str(acc["_id"]),
                               "target_label": acc.get("label"), "reason": reason or mode,
-                              "meta": {"mode": mode, "before": before, "after": row["resolution"], "reauth": True},
-                              "at": now})
+                              "meta": {"mode": mode, "before": before, "after": row["resolution"],
+                                       "reauth": True, "phase": "applied"},
+                              "at": _now_iso()})
     return row
 @router.get("/admin/integrations/plans")
 async def admin_plans_get(user=Depends(get_current_user)):

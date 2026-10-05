@@ -368,7 +368,7 @@ async def analyze_account(user_id: str, account_id, window_hours: int = 24,
                "origin": BOT_ORIGIN_FILTER,
                # iter-46: trades with NO P&L data would poison every stat —
                # exclude them and surface the count as a data-quality signal.
-               "pnl_unknown": {"$ne": True}}
+               "pnl_unknown": {"$ne": True}, "stats_excluded": {"$ne": True}}
     if account_id:
         trade_q["account_id"] = account_id
     trades = await db.trades.find(trade_q).sort("closed_at", -1).to_list(300)
