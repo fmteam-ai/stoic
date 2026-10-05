@@ -54,7 +54,8 @@ def test_record_reads_toolchain_from_utf16_log_and_signs(chain):
     v, ec = chain["v"], chain["ec"]
     assert v.record(_args(chain)) == 0
     rec = json.load(open(chain["rel"]))
-    assert rec["version"] == v.mq5_property_version() == ec.version_str(ec.LIVE_MIN_VERSION)
+    assert rec["version"] == v.mq5_property_version() == ec.shipped_ea_version()
+    assert ec.version_tuple(rec["version"]) >= ec.LIVE_MIN_VERSION          # shipped EA ≥ live minimum (1.58 ≥ 1.57)
     assert rec["metaeditor_version"] == "5.00 build 4620" and rec["mt5_build"] == "4620"
     assert rec["compile_log"]["errors"] == 0 and rec["source_commit"] == "a" * 40
     assert rec["compiled_by"] == "github-actions" and rec["signature"]["sig_hex"]

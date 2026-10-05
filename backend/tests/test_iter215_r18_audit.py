@@ -2,7 +2,7 @@
 Iter-215 / Round-18 security audit verification (READ-ONLY on preview).
 
 Covers:
-  - GET /api/health → status ok, ea_version == '1.57'
+  - GET /api/health → status ok, ea_version == '1.58'
   - GET /api/status → overall + trading.readiness (dominant_code present) + 6 components
   - GET /api/authority/decision (admin) → 200 with state, dominant_code, blockers list
   - GET /api/accounts (admin) → for each account report ea_version + trading_enabled;
@@ -58,7 +58,7 @@ def test_health_ea_157():
     assert r.status_code == 200
     j = r.json()
     assert j.get("status") in ("ok", "healthy"), j
-    assert j.get("ea_version") == "1.57", j
+    assert j.get("ea_version") == "1.58", j
 
 
 def test_status_shape_and_dominant_code():

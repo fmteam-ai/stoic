@@ -8,6 +8,7 @@ import re
 CAPABILITIES = {
     "command_fencing_v1": (1, 50),      # intent/seq dedupe + durable new-order journal (r4)
     "nl_close_fence_v1": (1, 57),       # close_idem_key dedupe + per-trade close_seq ordering (r17/r18)
+    "margin_mode_v1": (1, 58),          # heartbeat reports ACCOUNT_MARGIN_MODE (main92 H1)
 }
 LIVE_REQUIRED = ("command_fencing_v1", "nl_close_fence_v1")
 LIVE_MIN_VERSION = max(CAPABILITIES[c] for c in LIVE_REQUIRED)
@@ -115,12 +116,26 @@ def _demo_unattested(account: dict | None = None) -> dict:
 _EXPECTED_CACHE: dict = {}
 
 
+def shipped_ea_version(mq5_path: str | None = None) -> str:
+    """`#property version` of the MQ5 this server ships (falls back to the live minimum)."""
+    import os
+    import re
+    path = mq5_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "EmergentTradingBridge.mq5")
+    try:
+        m = re.search(r'^#property\s+version\s+"([\d.]+)"', open(path, encoding="utf-8", errors="replace").read(), re.M)
+        if m:
+            return m.group(1)
+    except OSError:
+        pass
+    return version_str(LIVE_MIN_VERSION)
+
+
 def expected_ea_sha256() -> str | None:
     """Verified EX5 hash for the CURRENT EA version. Trusted ONLY from:
       · EA_RELEASE_SHA256 env pin (set by the attested deploy), or
       · a release record (release/ea_release.json | docs/RELEASE_HASHES.json#ea) that is
         Ed25519-SIGNED, compiled by the sanctioned CI job, whose recorded MQ5 hash
-        matches the MQ5 this server ships, and whose version == LIVE_MIN_VERSION.
+        matches the MQ5 this server ships, and whose version == the shipped #property version.
     Never from account metadata; an unsigned or drifted record yields None (fail closed)."""
     import hashlib
     import json
@@ -148,7 +163,9 @@ def expected_ea_sha256() -> str | None:
             rec = rec.get("ea") if "ea" in rec and "ex5_sha256" not in rec else rec
             h = str((rec or {}).get("ex5_sha256") or "").lower()
             sig = (rec or {}).get("signature") or {}
-            ok = (len(h) == 64 and str(rec.get("version") or "") == version_str(LIVE_MIN_VERSION)
+            # the record must be for the EA this server SHIPS (its #property version),
+            # which may be newer than the live-minimum capability version (1.58 ≥ 1.57)
+            ok = (len(h) == 64 and str(rec.get("version") or "") == shipped_ea_version(mq5_path)
                   and rec.get("compiled_by") == "github-actions" and sig.get("sig_hex"))
             if ok and os.path.exists(mq5_path):
                 ok = hashlib.sha256(open(mq5_path, "rb").read()).hexdigest() == str(rec.get("mq5_sha256") or "")

@@ -170,7 +170,9 @@ def test_live_suite_is_read_only_by_default():
 
 def test_ea_parses_nl_fence_and_release_admission_pair():
     ea = open(os.path.join(ROOT, "backend", "static", "EmergentTradingBridge.mq5"), encoding="utf-8", errors="ignore").read()
-    assert '#property version   "1.57"' in ea and '#define EA_CLIENT_VERSION "1.57"' in ea
+    import re
+    v = re.search(r'#property version\s+"([\d.]+)"', ea).group(1)          # 1.58+ (main92 H1 bumped it)
+    assert tuple(int(x) for x in v.split(".")) >= (1, 57) and f'#define EA_CLIENT_VERSION "{v}"' in ea
     assert '"\\"close_idem_key\\":\\"' in ea and '"\\"close_seq\\":"' in ea
     assert "bool NlCloseAdmitted(" in ea and ea.index("NlCloseAdmitted(trade_id, nl_key, nl_seq)") < ea.index("ClosePosition(trade_id, ticket);")
     assert 'IntentDone("nlkey-" + nl_key)' in ea and "STALE NL close_seq rejected" in ea

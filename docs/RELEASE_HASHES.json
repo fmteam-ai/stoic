@@ -1,9 +1,9 @@
 {
-  "captured_at": "2026-08-29T14:30:41.468255+00:00",
-  "git_commit": "f5e1b1be5933211986c5bf06f9311564c999c822",
+  "captured_at": "2026-10-05T17:26:08.519000+00:00",
+  "git_commit": "c5db79574a939c628d82c6fd53d6e93f6c498e52",
   "ea": {
-    "version": "1.56",
-    "mq5_sha256": "513b86820c24feb119eef39459078d9952aa3b87fcd9de9174802543b3d19810",
+    "version": "1.58",
+    "mq5_sha256": "c6e822226ad436dfab431b37a9f4e0309cb9b42e74fce999570ad3f59a4bcbb5",
     "ex5_sha256": null,
     "ex5_note": "compiled ONLY by the release.yml MetaEditor gate on a real Windows runner \u2014 pending CI"
   },
@@ -14,7 +14,7 @@
   },
   "policies": {
     "guard_policy_version": "v62.8",
-    "execution_policy_version": "v56.3"
+    "execution_policy_version": "v56.4"
   },
   "strategies": {
     "fast_scalp": {

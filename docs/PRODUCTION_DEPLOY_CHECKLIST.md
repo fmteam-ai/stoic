@@ -138,6 +138,15 @@ mongosh -u "$MONGO_ROOT_USER" -p "$(cat secrets/mongo_root_password)" \
 ```
 `MONGO_URL` gains `&replicaSet=rs0`. Managed MongoDB (Atlas etc.) already qualifies.
 
+## EA v1.58 (main92 H1) — rebuild required
+EA 1.58 adds `margin_mode` (ACCOUNT_MARGIN_MODE) to every heartbeat so netting accounts are
+recognised from the terminal itself. `docs/RELEASE_HASHES.json#ea.mq5_sha256` was re-captured for
+the 1.58 source (the previous record still pointed at the 1.56 source from 2026-08-29, so the
+`ea-release` compile-record-sign job failed its "source drifted" gate on the first MQ5 push since).
+Push to main → `ea-release.yml` compiles with MetaEditor, records + signs the EX5 (needs the
+RELEASE_SIGNER_* secrets) and commits `release/ea_release.json` back; then roll 1.58 to every
+terminal. Terminals on 1.57 keep working (live minimum stays 1.57; `margin_mode_v1` is optional).
+
 ## EA v1.57 (audit r17 P0-01) — rebuild required
 `backend/static/EmergentTradingBridge.mq5` now parses `close_idem_key` /
 `close_seq` from the bridge poll and durably (terminal Global Variables)

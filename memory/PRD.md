@@ -3133,4 +3133,5 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Open decisions: P3 `trade_of_day_cap` default stays 1 (now visible in the pulse reason) — confirm or set per config; EA version bump for `margin_mode`.
 - Follow-up (same day): 14 undeclared sensitive routes added to the BOLA matrix (real gap); CI e2e runs with admin MFA enforced via `scripts/ci_enrol_admin_totp.py` + `e2e/tests/totp.ts`; iter14 gold test is a data-dependent skip, not a failure.
 - 2026-10-05: H9 live FX rates (`fx_rates.py`, `/api/diagnostic/fx-rates`) and the Observe scorecard (`/api/admin/security/scorecard`, Admin Ops → Security) shipped and tested.
+- 2026-10-05: EA bumped to 1.58 (margin_mode) + RELEASE_HASHES re-captured — fixes the ea-release compile-record-sign gate; CI will compile/sign and commit `release/ea_release.json` (needs RELEASE_SIGNER_* secrets).
 - Next: AI-latency card; brake timeline; passkey + step-up Playwright case.
