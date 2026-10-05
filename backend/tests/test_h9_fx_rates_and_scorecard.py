@@ -89,7 +89,7 @@ def test_h9_every_sizing_and_risk_path_is_wired():
     assert sg.count("pip_value_usd_per_lot_live(") == 2 and "pip_rate_live" in sg
     assert "pip_value_usd_per_lot_live(sym, \"standard\", price=price" in inspect.getsource(execution)
     from security_matrix import BOLA_MATRIX
-    assert ("GET", "/api/diagnostic/fx-rates") in BOLA_MATRIX
+    assert BOLA_MATRIX[("GET", "/api/diagnostic/fx-rates")] == "admin_only"
 
 
 # ── scorecard ───────────────────────────────────────────────────────────────

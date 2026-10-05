@@ -553,7 +553,9 @@ async def auto_fix(payload: dict, user=Depends(get_current_user)):
 
 @router.get("/fx-rates")
 async def fx_rates_view(user=Depends(get_current_user)):
-    """H9 — where today's quote-currency rates come from (broker tick / public quote / approx table)."""
+    """H9 — where today's quote-currency rates come from (broker tick / public quote / approx table). Admin only (audit P3)."""
+    from auth import require_admin
+    require_admin(user)
     from fx_rates import rates_snapshot, quote_usd
     for ccy in ("EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD"):
         await quote_usd(ccy, user["id"])
@@ -562,7 +564,9 @@ async def fx_rates_view(user=Depends(get_current_user)):
 
 @router.get("/ai-latency")
 async def ai_latency_view(hours: int = 24, user=Depends(get_current_user)):
-    """AI latency card — per provider/model p50/p95, timeouts and errors from every process."""
+    """AI latency card — per provider/model p50/p95, timeouts and errors from every process. Admin only (audit P3)."""
+    from auth import require_admin
+    require_admin(user)
     from database import get_db
     from llm_timeout import latency_summary
     return await latency_summary(get_db(), hours=max(1, min(int(hours or 24), 168)))

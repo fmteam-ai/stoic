@@ -71,8 +71,8 @@ Auto-generated from `backend/security_matrix.py`. Every route accepting `account
 | POST | `/api/crypto/accounts/{account_id}/execute` | user_scoped_query |
 | GET | `/api/crypto/accounts/{account_id}/ticker` | user_scoped_query |
 | POST | `/api/crypto/accounts/{account_id}/verify` | user_scoped_query |
-| GET | `/api/diagnostic/ai-latency` | user_scoped_query |
-| GET | `/api/diagnostic/fx-rates` | user_scoped_query |
+| GET | `/api/diagnostic/ai-latency` | admin_only |
+| GET | `/api/diagnostic/fx-rates` | admin_only |
 | GET | `/api/execution/intents` | manager_scoped |
 | GET | `/api/execution/intents/{intent_id}` | manager_scoped |
 | GET | `/api/execution/quality` | user_scoped_query |

@@ -16,17 +16,19 @@ export function AiLatencyCard() {
     const [hours, setHours] = useState(24);
     const [d, setD] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [hidden, setHidden] = useState(false);
 
     const load = useCallback(async () => {
         setLoading(true);
         try { setD((await api.get(`/diagnostic/ai-latency?hours=${hours}`)).data); }
-        catch { setD(null); }
+        catch (e) { setD(null); if ([401, 403].includes(e?.response?.status)) setHidden(true); }   // admin-only
         finally { setLoading(false); }
     }, [hours]);
 
     useEffect(() => { load(); const t = setInterval(load, 60_000); return () => clearInterval(t); }, [load]);
 
     const overall = VERDICT[d?.overall] || null;
+    if (hidden) return null;
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="ai-latency-card">
             <div className="flex flex-wrap items-center gap-2 mb-3">

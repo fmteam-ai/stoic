@@ -179,7 +179,8 @@ def test_s7_is_blocked_fails_open_with_last_good_cache():
     assert run(security.is_blocked(DB(), "ip", "9.9.9.9")) is not None     # last good list still served
     assert run(security.is_blocked(DB(), "ip", "8.8.8.8")) is None
     assert security._BLOCK_CACHE.get("error") == "RuntimeError"
-    security._BLOCK_CACHE.update(at=0.0, rows=[], error=None)
+    assert security._BLOCK_CACHE.get("alerted_at")                      # audit P3 — fail-open raised an ops alert (once/hour)
+    security._BLOCK_CACHE.update(at=0.0, rows=[], error=None, alerted_at=-1e9)
 
 
 def test_s8_panic_release_keeps_agent_freeze():

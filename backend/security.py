@@ -121,6 +121,16 @@ async def active_blocks(db) -> list:
             logging.getLogger("security").warning(
                 "security_blocks unavailable (%s) — serving the last good block list (%d rows)",
                 type(e).__name__, len(_BLOCK_CACHE["rows"]))
+            if _t.monotonic() - _BLOCK_CACHE.get("alerted_at", -1e9) > 3600:     # audit P3 — fail-open is visible
+                _BLOCK_CACHE["alerted_at"] = _t.monotonic()
+                try:
+                    from alerting import raise_alert
+                    await raise_alert(db, "security_blocks_unavailable", "warning",
+                                      f"security_blocks lookup failed ({type(e).__name__}); IP/account blocks are served "
+                                      f"from the last good cache ({len(_BLOCK_CACHE['rows'])} rows) — fail-open until Mongo recovers",
+                                      dedup_key="security_blocks_unavailable", meta={"error": type(e).__name__})
+                except Exception:  # noqa: BLE001
+                    pass
     return _BLOCK_CACHE["rows"]
 
 

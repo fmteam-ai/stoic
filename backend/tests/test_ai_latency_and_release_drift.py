@@ -81,7 +81,8 @@ def test_ai_latency_endpoint_and_card_wired():
     import routes.diagnostic_routes as dr
     assert '@router.get("/ai-latency")' in inspect.getsource(dr)
     from security_matrix import BOLA_MATRIX
-    assert ("GET", "/api/diagnostic/ai-latency") in BOLA_MATRIX
+    assert BOLA_MATRIX[("GET", "/api/diagnostic/ai-latency")] == "admin_only"       # audit P3
+    assert "require_admin(user)" in inspect.getsource(dr.ai_latency_view) and "require_admin(user)" in inspect.getsource(dr.fx_rates_view)
     fe = os.path.join(ROOT, "frontend", "src")
     assert "ai-latency-card" in open(os.path.join(fe, "components", "AiLatencyCard.jsx")).read()
     assert "<AiLatencyCard />" in open(os.path.join(fe, "pages", "BotHealth.jsx")).read()

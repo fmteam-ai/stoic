@@ -76,8 +76,14 @@ def _suspicious(value: str) -> str | None:
         return None
     if any(r in v for r in RETIRED_LITERALS):
         return "retired-literal"
-    if re.search(r"\{\{|\{[a-zA-Z_]+\}|%s|\$\(", v) or re.fullmatch(r"\$\{?[A-Z_][A-Z0-9_]*\}?", v):   # templated / shell variable
+    # templated / shell variable — only when what is left after removing the placeholders is
+    # too short to be a secret (audit P3: a real key that merely CONTAINS "{x}" must not hide)
+    if re.fullmatch(r"\$\{?[A-Z_][A-Z0-9_]*\}?", v):
         return None
+    if re.search(r"\{\{|\{[a-zA-Z_]+\}|%s|\$\(", v):
+        residue = re.sub(r"\{\{.*?\}\}|\{[a-zA-Z_]+\}|%s|\$\([^)]*\)|\$\{?[A-Z_][A-Z0-9_]*\}?", "", v)
+        if len(residue) < 16:
+            return None
     if re.search(r"\s", v) or re.fullmatch(r"[a-z][a-z\-]*", v):      # prose / kebab-case identifiers
         return None
     if re.match(r"^(text|bg|border|ring|from|to|via)-\[?#?[0-9A-Fa-f]{3,8}\]?$", v) or v.startswith(("http://", "https://")):

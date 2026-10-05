@@ -698,7 +698,7 @@ async def _security_agent_middleware(request: Request, call_next):
     if response.status_code in (401, 403, 429):
         _DENIED["by_ip"][ip] = _DENIED["by_ip"].get(ip, 0) + 1
         try:
-            await _flush_denied_counts()
+            await _flush_denied_counts(force=len(_DENIED["by_ip"]) > 5000)   # audit P3 — bounded memory
         except Exception:  # noqa: BLE001
             pass
     return response
