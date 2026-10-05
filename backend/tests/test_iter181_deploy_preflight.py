@@ -28,6 +28,7 @@ GOOD_ENV = {
     "ED25519_SIGNING_KEY_B64": None,  # round 9 P1-01: private key must be ABSENT in production
     "KEY_VAULT_MASTER": "vault-master-material",
     "SECRETS_MASTER_KEY": "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGQ=",  # 32 x 'd', dummy (audit r28 P2-02)
+    "BRIDGE_TOKEN_HASH_KEY": "b" * 40,   # A13-2 — dedicated EA token hash key (dummy)
     "RELEASE_SIGNER": "external",
     "RELEASE_SIGNER_URL": "https://signer.internal.example",
     "RELEASE_SIGNER_ALLOWED_HOSTS": "signer.internal.example",

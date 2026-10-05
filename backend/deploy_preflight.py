@@ -90,6 +90,14 @@ def run_preflight(check_signer_health: bool = False) -> dict:
         "Set ADMIN_MFA_ENFORCED=true — production refuses ADMIN_MFA_ENFORCED"
         "=false. Admins must enroll TOTP 2FA."))
 
+    # A13-2 — the deploy preflight mirrors the boot guard so update.sh refuses BEFORE the restart
+    from bridge_tokens import production_key_violation
+    _bk = production_key_violation(env)
+    checks.append(_check(
+        "bridge_hash_key", "BRIDGE_TOKEN_HASH_KEY", "pass" if not _bk else "fail",
+        "set" if (env.get("BRIDGE_TOKEN_HASH_KEY") or "").strip() else "unset", "32+ random chars, ≠ JWT_SECRET",
+        _bk or "ok"))
+
     pw = env.get("ADMIN_PASSWORD") or ""
     from seed import _is_known_default_password
     if pw and not _is_known_default_password(pw) and len(pw) >= 12:

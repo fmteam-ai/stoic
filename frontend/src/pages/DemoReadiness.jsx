@@ -96,7 +96,10 @@ export default function DemoReadiness() {
                             <div className="flex-1 min-w-[220px]">
                                 <div className="h-2 bg-[#141414]"><div className={`h-2 ${score.ready ? "bg-[#00FF41]" : "bg-[#FFB020]"}`} style={{ width: `${Math.round(100 * score.passed / Math.max(1, score.total))}%` }} /></div>
                                 <div className="font-mono text-[11px] text-[#A1A1AA] mt-1" data-testid="demo-readiness-verdict">
-                                    {score.ready ? "READY — start the demo test." : `${d.blockers.length} blocker(s) open · ${d.warnings.length} warning(s)`}
+                                    {score.ready ? "READY FOR CONTROLLED DEMO TEST — this page grants no trading authority." : `NOT READY · ${d.blockers.length} blocker(s) open · ${d.warnings.length} warning(s)`}
+                                </div>
+                                <div className="font-mono text-[10px] text-[#71717A] mt-1" data-testid="demo-readiness-authority">
+                                    canonical trading authority: {d.authority?.summary?.length ? d.authority.summary.join(" · ") : "no demo accounts"} · build {String(d.context?.build_sha || "dev").slice(0, 12)} · {d.context?.environment} · EA {d.context?.ea_version}
                                 </div>
                             </div>
                             <div className="font-mono text-[10px] text-[#52525B]">generated {String(d.generated_at).slice(11, 19)} UTC</div>
@@ -114,7 +117,7 @@ export default function DemoReadiness() {
                         </section>
 
                         <section className="border border-[#1F1F1F] bg-[#0A0A0A]">
-                            <div className="px-4 py-3 border-b border-[#1F1F1F] font-mono text-[10px] tracking-widest text-[#71717A]">03 · YOUR STEPS (tick when done — saved for every admin)</div>
+                            <div className="px-4 py-3 border-b border-[#1F1F1F] font-mono text-[10px] tracking-widest text-[#71717A]">03 · YOUR STEPS (tick when done — stored with build, environment, actor; expire after a deploy / EA / credential / account change or 7 days)</div>
                             <div className="px-4">
                                 {d.manual.map((m) => (
                                     <label key={m.id} className="flex items-start gap-3 py-2 border-b border-[#141414] last:border-0 cursor-pointer" data-testid={`demo-manual-${m.id}`}>
@@ -123,7 +126,8 @@ export default function DemoReadiness() {
                                         <div className="flex-1">
                                             <div className={`text-sm ${m.checked ? "text-[#71717A] line-through" : "text-[#E4E4E7]"}`}>{m.title}</div>
                                             <div className="font-mono text-[10px] text-[#71717A]">{m.hint}</div>
-                                            {m.checked && <div className="font-mono text-[10px] text-[#00FF41]/80" data-testid={`demo-manual-by-${m.id}`}>✓ {m.checked_by} · {String(m.checked_at).slice(0, 16).replace("T", " ")} UTC</div>}
+                                            {m.checked && <div className="font-mono text-[10px] text-[#00FF41]/80" data-testid={`demo-manual-by-${m.id}`}>✓ {m.checked_by} · {String(m.checked_at).slice(0, 16).replace("T", " ")} UTC · build {String(m.build_sha || "").slice(0, 7)} · valid until {String(m.expires_at || "").slice(0, 10)}</div>}
+                                            {!m.checked && m.expired_reason && <div className="font-mono text-[10px] text-[#FFB020]" data-testid={`demo-manual-expired-${m.id}`}>{m.expired_reason} — tick again</div>}
                                         </div>
                                     </label>
                                 ))}

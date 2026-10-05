@@ -121,10 +121,19 @@ def _live_enabled() -> bool:
     """Master env switch for live (non-testnet) crypto execution.
 
     Defaults to FALSE so a misconfigured account can't accidentally trade
-    real coin. The same env flag governs every exchange — there is only
-    one global kill switch.
+    real coin. A13-1 (P0-01 step 1): BOTH switches must be on — the operator
+    kill switch CRYPTO_LIVE_TRADING_ENABLED (default off) AND the exchange flag
+    BINANCE_LIVE_ENABLED. Engine, routes and the Crypto UI all read this one function.
     """
-    return os.environ.get("BINANCE_LIVE_ENABLED", "false").lower() == "true"
+    return (os.environ.get("CRYPTO_LIVE_TRADING_ENABLED", "false").lower() == "true"
+            and os.environ.get("BINANCE_LIVE_ENABLED", "false").lower() == "true")
+
+
+def _wants_live(account: dict) -> bool:
+    """Operator INTENT for real-money execution (ignores the kill switch — used to refuse, never downgrade)."""
+    if account.get("testnet"):
+        return False
+    return bool(account.get("live")) or account.get("mode") == "live"
 
 
 def _is_testnet(account: dict) -> bool:

@@ -129,7 +129,7 @@ async def fleet(db) -> list[dict]:
                                    "environment_attestation": 1, "account_type": 1, "broker_environment": 1,
                                    "position_mode_override": 1, "trading_enabled": 1, "execution_brake": 1,
                                    "broker_server": 1, "server": 1, "verified_identity": 1, "expected_identity": 1,
-                                   "account_number": 1}).to_list(length=FLEET_LIMIT)
+                                   "account_number": 1, "trading_authority": 1}).to_list(length=FLEET_LIMIT)
     from broker_env import attested_environment
     from routes.bridge_routes import position_mode_resolution
     from routes.diagnostic_routes import LATEST_EA
@@ -159,6 +159,7 @@ async def fleet(db) -> list[dict]:
             "trade_of_day_cap": cap, "max_concurrent_trades": cfg.get("max_concurrent_trades"),
             "caps_explicit": isinstance(cap, int) and cap > 0 and cfg.get("max_concurrent_trades") is not None,
             "braked": bool((a.get("execution_brake") or {}).get("active")),
+            "trading_authority": a.get("trading_authority"),
         })
     return out
 
@@ -185,13 +186,48 @@ def fleet_checks(rows: list[dict]) -> list[dict]:
     ]
 
 
-async def manual_state(db) -> list[dict]:
+TICK_TTL_DAYS = 7   # A13-3 — a manual tick is evidence for ONE context: build, EA, credentials, accounts
+
+
+async def tick_context(db) -> dict:
+    """A13-3 — fingerprint of everything a manual tick vouches for. Any change (deploy / build
+    SHA, EA version, credential rotation, account set or token rotation) invalidates ALL ticks."""
+    import hashlib
+    from modules.pamm.strategy_guard import GIT_COMMIT
+    from routes.diagnostic_routes import LATEST_EA
+    from auth import master_admin_email
+    admin = await db.users.find_one({"email": master_admin_email()}, {"tokens_valid_after": 1, "two_factor_enabled": 1}) or {}
+    accs = await db.accounts.find({"mode": {"$ne": "paper"}, "trading_enabled": True},
+                                  {"bridge_token_rotated_at": 1, "created_at": 1}).to_list(length=500)
+    acc_sig = "|".join(sorted(f"{a['_id']}:{a.get('bridge_token_rotated_at') or a.get('created_at')}" for a in accs))
+    parts = {"build_sha": GIT_COMMIT or "dev", "ea_version": LATEST_EA, "environment": os.environ.get("APP_ENV") or "development",
+             "admin_credentials": f"{admin.get('tokens_valid_after')}|{bool(admin.get('two_factor_enabled'))}",
+             "accounts": hashlib.sha256(acc_sig.encode()).hexdigest()[:16]}
+    parts["fingerprint"] = hashlib.sha256("|".join(f"{k}={v}" for k, v in sorted(parts.items())).encode()).hexdigest()[:24]
+    return parts
+
+
+def tick_valid(row: dict, ctx: dict, now: datetime | None = None) -> tuple[bool, str | None]:
+    if not row or not row.get("checked"):
+        return False, None
+    if row.get("context") != ctx["fingerprint"]:
+        return False, "expired: build / EA / credentials / accounts changed since the tick"
+    exp = row.get("expires_at")
+    if exp and str(exp) < (now or _now()).isoformat():
+        return False, f"expired: older than {TICK_TTL_DAYS} days"
+    return True, None
+
+
+async def manual_state(db, ctx: dict | None = None) -> list[dict]:
+    ctx = ctx or await tick_context(db)
     rows = {r["_id"]: r for r in await db.demo_readiness_checks.find({}).to_list(length=100)}
     out = []
     for cid, title, hint in MANUAL_STEPS:
         r = rows.get(cid) or {}
-        out.append({"id": cid, "title": title, "hint": hint, "checked": bool(r.get("checked")),
-                    "checked_by": r.get("checked_by"), "checked_at": r.get("checked_at")})
+        ok, why = tick_valid(r, ctx)
+        out.append({"id": cid, "title": title, "hint": hint, "checked": ok, "expired_reason": why,
+                    "checked_by": r.get("checked_by") if ok else None, "checked_at": r.get("checked_at") if ok else None,
+                    "build_sha": r.get("build_sha") if ok else None, "expires_at": r.get("expires_at") if ok else None})
     return out
 
 
@@ -199,12 +235,19 @@ async def set_manual(db, cid: str, checked: bool, actor: str) -> dict:
     if cid not in {m[0] for m in MANUAL_STEPS}:
         raise KeyError(cid)
     now = _now().isoformat()
+    ctx = await tick_context(db)
+    expires = (_now() + timedelta(days=TICK_TTL_DAYS)).isoformat() if checked else None
     await db.demo_readiness_checks.update_one(
         {"_id": cid}, {"$set": {"checked": bool(checked), "checked_by": actor if checked else None,
-                                "checked_at": now if checked else None}}, upsert=True)
+                                "checked_at": now if checked else None, "expires_at": expires,
+                                "context": ctx["fingerprint"] if checked else None,
+                                "build_sha": ctx["build_sha"] if checked else None,
+                                "environment": ctx["environment"] if checked else None}}, upsert=True)
     try:
         await db.audit_log.insert_one({"user_id": None, "action": "demo_readiness_manual",
-                                       "detail": {"step": cid, "checked": bool(checked), "actor": actor},
+                                       "detail": {"step": cid, "checked": bool(checked), "actor": actor,
+                                                  "build_sha": ctx["build_sha"], "environment": ctx["environment"],
+                                                  "expires_at": expires},
                                        "step_up_verified": False, "at": now})
     except Exception as e:  # noqa: BLE001 — audit r31 P3: never silent, surface as an ops alert
         logger.error("demo_readiness audit write failed (%s) step=%s actor=%s", type(e).__name__, cid, actor)
@@ -216,17 +259,25 @@ async def set_manual(db, cid: str, checked: bool, actor: str) -> dict:
                               meta={"step": cid, "actor": actor, "error": type(e).__name__})
         except Exception as e2:  # noqa: BLE001
             logger.error("ops alert for audit failure also failed: %s", type(e2).__name__)
-    return {"id": cid, "checked": bool(checked), "checked_by": actor if checked else None, "checked_at": now if checked else None}
+    return {"id": cid, "checked": bool(checked), "checked_by": actor if checked else None, "checked_at": now if checked else None,
+            "build_sha": ctx["build_sha"], "environment": ctx["environment"], "expires_at": expires}
 
 
 async def build(db) -> dict:
     rows = await fleet(db)
+    ctx = await tick_context(db)
     checks = env_checks() + await db_checks(db) + fleet_checks(rows)
-    manual = await manual_state(db)
+    manual = await manual_state(db, ctx)
     gating = [c for c in checks if c["status"] != "info"]
     passed = sum(1 for c in gating if c["status"] == "pass") + sum(1 for m in manual if m["checked"])
     total = len(gating) + len(manual)
     blockers = [c["title"] for c in checks if c["status"] == "fail"] + [m["title"] for m in manual if not m["checked"]]
+    # A13-3 — the CANONICAL authority result, read-only: this page never grants authority
+    authority = sorted({str(r.get("trading_authority") or "UNKNOWN") for r in rows}) if rows else []
     return {"generated_at": _now().isoformat(), "checks": checks, "fleet": rows, "manual": manual,
             "score": {"passed": passed, "total": total, "ready": not blockers},
+            "verdict": "READY FOR CONTROLLED DEMO TEST" if not blockers else "NOT READY",
+            "context": {k: v for k, v in ctx.items() if k in ("build_sha", "ea_version", "environment", "fingerprint")},
+            "authority": {"per_account": [{"id": r["id"], "label": r["label"], "trading_authority": r.get("trading_authority")} for r in rows],
+                          "summary": authority, "grants_authority": False},
             "blockers": blockers, "warnings": [c["title"] for c in checks if c["status"] == "warn"]}

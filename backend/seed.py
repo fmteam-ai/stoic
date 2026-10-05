@@ -329,6 +329,7 @@ async def ensure_indexes():
     import bridge_tokens as _bt
     await _bt.ensure_indexes(db)
     await _bt.migrate_plaintext(db)
+    await _bt.migration_report(db)    # A13-2 — counts + zero-plaintext / unique-index proof in the boot log
     await db.accounts.create_index("user_id")
     # ops collections — BSON-date native (TTL prunes acked alerts after 30d)
     await db.ops_alerts.create_index([("dedup_key", 1), ("acked_at", 1)])

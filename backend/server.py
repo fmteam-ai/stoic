@@ -842,6 +842,11 @@ async def on_startup():
         # audit r28 P2-02 — the secrets vault must use a dedicated master key in production
         from integrations_settings import _master_key as _vault_master_key
         _vault_master_key()
+        # A13-2 (P1-04) — EA token hashing needs its OWN key in production; no JWT_SECRET fallback
+        from bridge_tokens import production_key_violation
+        _bk = production_key_violation()
+        if _bk:
+            raise RuntimeError(_bk)
         # review P1-9 — local signing must FAIL at boot in production, not
         # at first runtime signature. Audit anchors / release manifests /
         # public certificates must never hit a post-boot signing failure.

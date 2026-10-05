@@ -61,6 +61,14 @@ class BinanceCCXTEngine(ExecutionEngine):
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
         db = get_db()
+        # A13-1 (P0-01 step 1) — operator kill switch: with live crypto OFF every non-testnet
+        # order is refused HERE, before any exchange call. Default off.
+        from crypto_bridge.ccxt_engine import _live_enabled, _wants_live
+        if _wants_live(account) and not _live_enabled():
+            logger.warning("binance execute refused: live crypto trading disabled user=%s sym=%s",
+                           user_id, signal.get("symbol"))
+            return {"blocked": "crypto_live_disabled",
+                    "reason": "Live crypto trading is switched off (CRYPTO_LIVE_TRADING_ENABLED / BINANCE_LIVE_ENABLED)."}
         # round 9 P0-01 — canonical trading decision: crypto is not a bypass.
         from trading_authority import gate_or_block
         _deny = await gate_or_block(db, account, "binance_engine")

@@ -24,10 +24,65 @@ PLAINTEXT_FIELDS = ("bridge_token", "bridge_token_prev", "bridge_token_retired")
 
 
 def _key() -> bytes:
-    k = os.environ.get(HASH_KEY_ENV) or os.environ.get("JWT_SECRET") or ""
+    k = os.environ.get(HASH_KEY_ENV) or ""
+    if not k:
+        # A13-2 (P1-04) — production NEVER falls back to JWT_SECRET (server.py refuses to boot);
+        # the fallback survives only for preview/CI/dev processes.
+        from app_env import is_production
+        if is_production():
+            raise RuntimeError("BRIDGE_TOKEN_HASH_KEY missing in production — refusing to hash bridge tokens")
+        k = os.environ.get("JWT_SECRET") or ""
     if not k:
         raise RuntimeError("BRIDGE_TOKEN_HASH_KEY / JWT_SECRET missing — cannot hash bridge tokens")
     return k.encode("utf-8")
+
+
+def production_key_violation(env=None) -> str | None:
+    """Boot-time guard (server.on_startup): a dedicated 32+ char hash key is mandatory in production."""
+    env = env if env is not None else os.environ
+    k = (env.get(HASH_KEY_ENV) or "").strip()
+    if not k:
+        return "APP_ENV=production requires BRIDGE_TOKEN_HASH_KEY (no fallback to JWT_SECRET — set it once, never change it)"
+    if len(k) < 32:
+        return f"BRIDGE_TOKEN_HASH_KEY must be at least 32 characters (got {len(k)})"
+    if k == (env.get("JWT_SECRET") or ""):
+        return "BRIDGE_TOKEN_HASH_KEY must differ from JWT_SECRET"
+    return None
+
+
+async def migration_report(db) -> dict:
+    """A13-2 — after boot migration: counts + proof (zero plaintext, unique hash index present)."""
+    plaintext = await db.accounts.count_documents({"$or": [{"bridge_token": {"$type": "string"}},
+                                                           {"bridge_token_prev": {"$type": "string"}},
+                                                           {"bridge_token_retired": {"$type": "string"}},
+                                                           {"bridge_token_suspended.token": {"$type": "string"}}]})
+    hashed = await db.accounts.count_documents({"bridge_token_hash": {"$type": "string"}})
+    unique_index = False
+    try:
+        info = await db.accounts.index_information()
+        unique_index = any(v.get("unique") and v.get("key") == [("bridge_token_hash", 1)] for v in info.values())
+    except Exception as e:  # noqa: BLE001
+        logger.warning("index_information unavailable: %s", type(e).__name__)
+    rep = {"hashed_accounts": hashed, "plaintext_remaining": plaintext, "unique_hash_index": unique_index,
+           "ok": plaintext == 0 and unique_index}
+    (logger.info if rep["ok"] else logger.error)(
+        "P1-01 bridge-token migration report: hashed=%d plaintext_remaining=%d unique_hash_index=%s ok=%s",
+        hashed, plaintext, unique_index, rep["ok"])
+    return rep
+
+
+async def alert_legacy_token_use(db, acc: dict, kind: str) -> None:
+    """A13-2 — previous/retired token seen on the bridge: ops alert WITHOUT token material."""
+    try:
+        from alerting import raise_alert
+        aid = str(acc.get("_id"))
+        await raise_alert(db, "bridge_legacy_token_use", "warning",
+                          f"{'Previous' if kind == 'prev' else 'Retired'} bridge token used for account "
+                          f"{acc.get('label') or aid} — an old EA/installer is still running.",
+                          dedup_key=f"bridge_legacy_token_use:{kind}:{aid}",
+                          meta={"account_id": aid, "kind": kind})
+    except Exception as e:  # noqa: BLE001
+        logger.warning("legacy token alert failed: %s", type(e).__name__)
 
 
 def token_hash(token: str) -> str:

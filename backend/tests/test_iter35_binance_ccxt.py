@@ -75,14 +75,26 @@ def test_is_testnet_global_kill_switch(monkeypatch):
 
 def test_is_testnet_can_flip_to_live(monkeypatch):
     monkeypatch.setenv("BINANCE_LIVE_ENABLED", "true")
+    monkeypatch.setenv("CRYPTO_LIVE_TRADING_ENABLED", "true")   # A13-1: both switches required
     assert _is_testnet({"testnet": False, "live": True}) is False
 
 
 def test_live_enabled_reads_env(monkeypatch):
+    monkeypatch.setenv("CRYPTO_LIVE_TRADING_ENABLED", "true")
     monkeypatch.setenv("BINANCE_LIVE_ENABLED", "true")
     assert _live_enabled() is True
     monkeypatch.setenv("BINANCE_LIVE_ENABLED", "false")
     assert _live_enabled() is False
+    monkeypatch.setenv("BINANCE_LIVE_ENABLED", "true")
+    monkeypatch.delenv("CRYPTO_LIVE_TRADING_ENABLED", raising=False)
+    assert _live_enabled() is False                               # exchange flag alone is NOT enough
+
+
+@pytest.fixture(autouse=True)
+def _paper_authority_passes():
+    """Paper-account engine tests: the canonical trading-authority gate is covered by its own suite."""
+    with patch("trading_authority.gate_or_block", new=AsyncMock(return_value=None)):
+        yield
 
 
 # ============================================================

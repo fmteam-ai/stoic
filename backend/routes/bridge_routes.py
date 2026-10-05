@@ -66,10 +66,18 @@ async def _account_by_token(token: str) -> dict:
     # EA keeps reporting while the operator swaps the new token in.
     now = datetime.now(timezone.utc).isoformat()
     acc = await bt.find_by_prev(db, token, now)
+    if acc:
+        await bt.alert_legacy_token_use(db, acc, "prev")        # A13-2 — no token material in the alert
+        return acc
     if not acc:
         from security_agent.events import emit_throttled as _sa_emit_t
         # S2 — a rotated (retired) token is an old EA, not an attacker; S15 — one event per IP per 10 s
         retired = await bt.is_retired(db, token)
+        if retired:
+            _owner = await db.accounts.find_one({"$or": [{"bridge_token_retired_hashes": bt.token_hash(token)},
+                                                         {"bridge_token_prev_hash": bt.token_hash(token)}]}, {"_id": 1, "label": 1})
+            if _owner:
+                await bt.alert_legacy_token_use(db, _owner, "retired")
         await _sa_emit_t(db, "bridge_invalid_token", {"token_prefix": str(token)[:4], "retired": retired}, window_s=10)
         raise HTTPException(status_code=401, detail="Invalid bridge token")
     return acc
