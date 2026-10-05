@@ -60,13 +60,13 @@ const SCENES = [
                             ["02", "Loss Lab",
                                 "Every single loss gets interrogated by AI — the guardrails tighten themselves. Your bot literally learns from pain."],
                             ["03", "Fail-closed safety",
-                                "The one nobody else dares to build: when health drops, STOIC demotes itself — before it ever hurts you. A trading bot with self-control."],
+                                "When health drops, STOIC demotes itself to close-only and tells you why — designed to limit damage, never to promise there is none."],
                             ["04", "Explainable AI",
                                 "Every trade tells you why. Why it entered. Why that size. What could go wrong. No black boxes. Ever."],
                             ["05", "One-command VPS",
-                                "Your bot lives on a hardened VPS, trading 24/7. One terminal. One account. Zero excuses."],
+                                "Your bot runs on a hardened VPS around the clock, inside the market hours of each instrument. One terminal. One account. Full audit trail."],
                             ["06", "Digital Twin + Research Lab",
-                                "Strategies evolve in the shadows — and only the proven ones ever touch real money."],
+                                "Strategies are tested in the shadows first — real money is reached only after a demo pass and your explicit go-live approval. Past results never guarantee future ones."],
                         ].map(([n, title, body], i) => (
                             <div className={`pillar ${i === activeBeat ? "beat" : i < activeBeat ? "lit" : ""}`}
                                  key={n} data-testid={`pillar-${n}`}>

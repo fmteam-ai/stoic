@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { matchFixShortcut } from "@/lib/fixShortcuts";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { toast } from "sonner";
@@ -522,6 +523,7 @@ function AutoHealPanel({ data, onChange }) {
 
 
 export default function BotHealth() {
+    const { user } = useAuth();
     const [data, setData] = useState({});
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState("");
@@ -634,7 +636,7 @@ export default function BotHealth() {
                 <CapitalStageCard />
                 <SubsystemHealthCard />
                 <AiLatencyCard />
-                <ReleaseIdentityCard />
+                {user?.role === "admin" && <ReleaseIdentityCard />}
                 <RealtimeRiskCard />
                 <OperatorConsole onAction={load} />
                 <ModeGuardianCard />

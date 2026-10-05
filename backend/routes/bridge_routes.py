@@ -620,15 +620,11 @@ async def heartbeat(payload: BridgeHeartbeat):
                 # missed (EA offline at TP/SL hit), the reconciler uses this
                 # last-known snapshot as the ESTIMATED exit instead of
                 # leaving the trade with no exit price and no P&L.
-                if existing.get("status") == "open" and p.current_price is not None:
-                    await db.trades.update_one(
-                        {"_id": existing["_id"]},
-                        {"$set": {
-                            "live_pnl": float(p.profit or 0.0),
-                            "live_price": float(p.current_price),
-                            "live_at": now_iso,
-                        }},
-                    )
+                if existing.get("status") == "open":
+                    _live = {"live_volume": float(p.volume), "live_at": now_iso}   # R-6 — broker position volume
+                    if p.current_price is not None:
+                        _live.update({"live_pnl": float(p.profit or 0.0), "live_price": float(p.current_price)})
+                    await db.trades.update_one({"_id": existing["_id"]}, {"$set": _live})
                 # P0-1 · protection verification: the broker position
                 # snapshot carries the ACTUAL live SL. A filled trade is
                 # only OPEN once that SL is confirmed; a missing SL first
@@ -880,6 +876,23 @@ def intentional_close(trade: dict) -> bool:
                 or trade.get("late_fill_after_expiry") or trade.get("late_fill_after_lock")
                 or trade.get("close_reason") in INTENTIONAL_CLOSE_REASONS
                 or (isinstance(pm, dict) and pm.get("type") == "FULL_CLOSE"))
+
+
+def netting_close_command(t: dict, m: dict) -> dict:
+    """R-6 — on a NETTING account one broker position carries several STOIC trades (and
+    possibly manual lots). A FULL_CLOSE by ticket would flatten the whole symbol, so when the
+    last heartbeat shows the position larger than this trade, the EA is asked for a
+    volume-limited PARTIAL_CLOSE that leaves `position − lot_size` lots open. The row keeps
+    its FULL_CLOSE intent (the ack maps back, see modification-ack). Residual: the position
+    may change between heartbeat and execution — the EA re-normalises against broker rules."""
+    cmd = {"trade_id": str(t["_id"]), "mt5_ticket": t.get("mt5_ticket"), "symbol": t["symbol"],
+           "type": m.get("type"), "new_sl": m.get("new_sl"), "new_tp": m.get("new_tp"),
+           "new_volume": m.get("new_volume"), "intent_id": m.get("intent_id"), "seq": m.get("seq")}
+    live, lots = float(t.get("live_volume") or 0), float(t.get("lot_size") or 0)
+    if m.get("type") == "FULL_CLOSE" and lots > 0 and live > lots + 1e-9:
+        cmd.update({"type": "PARTIAL_CLOSE", "new_volume": round(live - lots, 8),
+                    "netting_volume_limited": True, "close_volume": round(lots, 8)})
+    return cmd
 
 
 async def revive_and_reclose(db, trade: dict, acc: dict, now_iso: str, via: str) -> str | None:
@@ -1575,10 +1588,12 @@ async def poll_trades(payload: PollRequest):
         "pending_modification": {"$exists": True, "$ne": None},
     })
     mods = await mod_cursor.to_list(length=20)
+    netting = bool(mods) and any((m.get("pending_modification") or {}).get("type") == "FULL_CLOSE" for m in mods) \
+        and await is_netting_account(db, acc)
     modifications = []
     for t in mods:
         m = t.get("pending_modification") or {}
-        modifications.append({
+        modifications.append(netting_close_command(t, m) if netting else {
             "trade_id": str(t["_id"]),
             "mt5_ticket": t.get("mt5_ticket"),
             "symbol": t["symbol"],
@@ -1689,6 +1704,7 @@ class BridgeModificationAck(BaseModel):
     terminal: bool | None = None                 # EA v1.50 — never retry
     retryable: bool | None = None                # EA v1.50 — keep pending
     stop_confirmed: bool | None = None           # EA v1.50 — SL verified in place
+    netting_volume_limited: bool | None = None   # R-6 — server-side marker (set by the ack mapper)
 
 
 @router.post("/modification-ack")
@@ -1740,6 +1756,15 @@ async def modification_ack(payload: BridgeModificationAck):
     # the broker never actually applied.
     pending_notifs: list = []
     combo_new_sl = None   # EA v1.50 — Tier-1 follow-up MODIFY_SL (if any)
+
+    # R-6 — a netting volume-limited close was dispatched as PARTIAL_CLOSE but the row's
+    # intent is FULL_CLOSE: judge the ack as the FULL_CLOSE of THIS trade (its lots left the
+    # broker), never as a tier partial that would shrink lot_size and keep the row open.
+    _pm = trade.get("pending_modification") or {}
+    if payload.type == "PARTIAL_CLOSE" and _pm.get("type") == "FULL_CLOSE" \
+            and (not payload.intent_id or payload.intent_id == _pm.get("intent_id")):
+        payload.type = "FULL_CLOSE"
+        payload.netting_volume_limited = True
 
     update = {"pending_modification": None}
     # Round 11 item 9 — protection-ack policy lives in a dependency-free
@@ -1822,6 +1847,10 @@ async def modification_ack(payload: BridgeModificationAck):
             pending_notifs.append(("partial_close", from_lot, to_lot, r_mult))
         elif payload.type == "FULL_CLOSE":
             update["tp3_closed"] = True
+            if getattr(payload, "netting_volume_limited", False):
+                update["netting_volume_limited_close"] = True
+                if payload.remaining_volume is not None:
+                    update["netting_position_remaining"] = float(payload.remaining_volume)
     else:
         # error + emergency-state transitions already applied above via
         # apply_protection_ack (round 11 item 9)

@@ -560,6 +560,7 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         if payload.master_password:
             creds["master"] = vault_encrypt(payload.master_password)
 
+    _new_token = generate_bridge_token()
     doc = {
         "user_id": user["id"],
         "label": payload.label,
@@ -587,7 +588,7 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
                                    else None),
         "base_currency": payload.base_currency,
         "mode": payload.mode,
-        **__import__("bridge_tokens").token_fields(generate_bridge_token()),  # P1-01 — hash only; paper needs no EA token
+        **__import__("bridge_tokens").token_fields(_new_token),  # P1-01 — hash only; paper needs no EA token
         "status": "connected" if is_paper else "disconnected",
         # P0 (release review): enablement is ALWAYS an explicit boolean —
         # new accounts start OFF until the owner turns trading on.
@@ -601,7 +602,13 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
     }
     result = await db.accounts.insert_one(doc)
     doc["_id"] = result.inserted_id
-    return _serialize(doc)
+    out = _serialize(doc)
+    if not is_paper:
+        # A10-5 — the plaintext is shown exactly ONCE here (hash only in the DB); afterwards
+        # the owner must rotate (step-up) or pair via the installer.
+        out["bridge_token"] = _new_token
+        out["bridge_token_shown_once"] = True
+    return out
 
 
 @router.delete("/{account_id}")

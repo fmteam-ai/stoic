@@ -35,6 +35,7 @@ if [ -n "${STOIC_UPDATE_REEXEC:-}" ]; then
   # second stage: already fetched + checked out by the first stage; the flock
   # on fd 9 was inherited across exec. Resume with the NEW scripts.
   PREV="${STOIC_UPDATE_PREV}"
+  PRE_BACKUP="${STOIC_UPDATE_BACKUP:-}"
   echo "   deploy scripts refreshed → continuing with $(git rev-parse --short HEAD)'s deploy/update.sh"
 else
   PREV=$(git rev-parse HEAD)
@@ -44,6 +45,10 @@ else
 
   echo "-- pre-update backup"
   deploy/backup.sh backup
+  # R-1 — remember THIS archive: an auto-rollback restores code AND data together
+  # (main94 rewrites bridge tokens + indexes at first boot; old code cannot start on new data).
+  PRE_BACKUP="$(ls -t "${BACKUP_DIR:-./backups}"/stoic-mongo-*.archive.gz "${BACKUP_DIR:-./backups}"/stoic-mongo-*.archive.gz.enc 2>/dev/null | head -1 || true)"
+  [ -n "${PRE_BACKUP}" ] && echo "   rollback archive: ${PRE_BACKUP}"
 
   echo "-- fetching ${REF}"
   git fetch --all --tags --prune
@@ -56,7 +61,7 @@ else
   # the update (gates, build, verification, rollback policy) runs with the NEW
   # deploy/update.sh + deploy/lib.sh.
   # The policy is handed over EXPLICITLY (H1) — the re-exec'd script captures and scrubs it again.
-  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh "${REF}"
+  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" STOIC_UPDATE_BACKUP="${PRE_BACKUP}" STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh "${REF}"
 fi
 
 # Pre-build gates fail BEFORE anything on the host changed: restore the checkout
@@ -78,6 +83,19 @@ rollback() {
   git checkout --detach "${PREV}"
   if [ "$(deploy_mode)" = "registry" ]; then verify_attestation >/dev/null 2>&1 || true; fi
   provision_images || true
+  # R-1 — code and data roll back TOGETHER: the new release may have migrated the database
+  # at first boot (bridge-token hashes, dropped indexes), which the previous code cannot
+  # start on. Keep a safety dump of the failed state, then restore the pre-update archive.
+  # Opt out with UPDATE_ROLLBACK_RESTORE_DB=0 (data written by the new release is then kept).
+  if [ "${UPDATE_ROLLBACK_RESTORE_DB:-1}" = "1" ] && [ -n "${PRE_BACKUP:-}" ] && [ -f "${PRE_BACKUP}" ]; then
+    echo "-- safety dump of the FAILED release's database state"
+    deploy/backup.sh backup || true
+    echo "-- restoring pre-update database ${PRE_BACKUP} (code + data rolled back together)"
+    deploy/backup.sh restore "${PRE_BACKUP}" || echo "!! database restore FAILED — restore manually: deploy/rollback.sh ${PREV} --with-db ${PRE_BACKUP}"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-db-restore=${PRE_BACKUP}" >> deploy/releases.log
+  else
+    echo "!! no pre-update archive to restore (or UPDATE_ROLLBACK_RESTORE_DB=0) — database keeps the NEW release's state"
+  fi
   compose_up
   echo "!! rolled back to $(git rev-parse --short HEAD). Inspect: docker compose logs backend --tail 100"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-from=${REF}" >> deploy/releases.log

@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 
 export default function Settings() {
-    const { user, refresh } = useAuth();
+    const { user, refresh, logout } = useAuth();
     const [name, setName] = useState("");
     const [savingProfile, setSavingProfile] = useState(false);
     const [profileMsg, setProfileMsg] = useState("");
@@ -65,9 +65,9 @@ export default function Settings() {
         if (pwNew !== pwConfirm) { setPwErr("New password and confirmation don't match."); setPwSaving(false); return; }
         try {
             await api.post("/auth/change-password", { current_password: pwCurrent, new_password: pwNew });
-            setPwMsg("Password changed. You'll stay signed in on this device.");
+            setPwMsg("Password changed. Every session was signed out for safety — taking you to the login page…");
             setPwCurrent(""); setPwNew(""); setPwConfirm("");
-            await refresh();
+            setTimeout(() => logout(), 2500);
         } catch (e2) { setPwErr(formatApiError(e2)); }
         finally { setPwSaving(false); }
     };

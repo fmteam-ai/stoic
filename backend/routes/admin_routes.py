@@ -106,6 +106,14 @@ async def admin_audit_verify(user=Depends(get_current_user)):
     return await verify_chain(get_db())
 
 
+@router.get("/admin/execution-brakes")
+async def admin_execution_brakes(user=Depends(get_current_user)):
+    """R-5 — every account with an active execution brake, for the admin Resume list."""
+    _admin_only(user)
+    from execution_health import braked_accounts
+    return {"accounts": await braked_accounts(get_db())}
+
+
 @router.get("/admin/runbooks")
 async def admin_runbooks(user=Depends(get_current_user)):
     _admin_only(user)

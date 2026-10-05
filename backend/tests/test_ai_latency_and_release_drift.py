@@ -40,12 +40,18 @@ class _Chat:
 def test_every_llm_call_is_sampled_with_outcome():
     import llm_timeout as lt
     db = FakeDb()
-    with patch("database.get_db", lambda: db):
-        assert run(lt.send_with_timeout(_Chat(), "m", label="narration:XAUUSD")) == "ok"
+
+    async def _all():
+        # M5 — samples are written by background tasks: run every call on ONE loop and flush
+        assert await lt.send_with_timeout(_Chat(), "m", label="narration:XAUUSD") == "ok"
         with pytest.raises(asyncio.TimeoutError):
-            run(lt.send_with_timeout(_Chat(delay=0.3), "m", label="sentiment:EURUSD", seconds=0.05))
+            await lt.send_with_timeout(_Chat(delay=0.3), "m", label="sentiment:EURUSD", seconds=0.05)
         with pytest.raises(RuntimeError):
-            run(lt.send_with_timeout(_Chat(fail=True), "m", label="bot_doctor"))
+            await lt.send_with_timeout(_Chat(fail=True), "m", label="bot_doctor")
+        await asyncio.sleep(0.05)
+
+    with patch("database.get_db", lambda: db):
+        run(_all())
     rows = db.ai_latency_samples.rows
     assert [r["outcome"] for r in rows] == ["ok", "timeout", "error"]
     assert rows[0]["label"] == "narration" and rows[0]["provider"] == "openai" and rows[0]["model"] == "gpt-5-mini"

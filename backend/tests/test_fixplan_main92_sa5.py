@@ -65,8 +65,10 @@ def test_s1_block_ip_refused_when_one_ip_carries_most_traffic():
     from security_agent import actions
     db = FakeDb()
     now = datetime.now(timezone.utc).isoformat()
+    # M2 — share is measured against SUCCESSFUL traffic (sessions + valid heartbeats), not failures
     for i in range(30):
-        db.security_events.rows.append({"kind": "login_failed", "ip": "203.0.113.7" if i < 24 else f"198.51.100.{i}", "at": now})
+        db.auth_sessions.rows.append({"ip": "203.0.113.7" if i < 24 else f"198.51.100.{i}", "created_at": now, "revoked": False})
+    db.security_events.rows.append({"kind": "login_failed", "ip": "203.0.113.7", "at": now})
     cfg = {"mode": "enforce", "rules_enabled": ["R1"], "max_actions_per_hour": 10}
     prop = {"rule": "R1", "action": "block_ip", "scope": "auth", "target_kind": "ip", "target": "203.0.113.7", "expires_min": 60, "undo": "unblock_ip"}
     fd = {"_id": ObjectId(), "dedup_key": "A1:ip:203.0.113.7", "check_id": "A1", "what_happened": "x"}
@@ -119,7 +121,7 @@ def test_s3_r5_has_expiry_and_bridge_lifts_expired_suspension():
     assert props and props[0]["rule"] == "R5" and props[0]["expires_min"] == 240
     import routes.bridge_routes as br
     src = inspect.getsource(br._account_by_token)
-    assert 'susp.get("expires_at") and susp["expires_at"] <' in src and '"bridge_token_retired"' in src
+    assert 'susp.get("expires_at") and susp["expires_at"] <' in src and "bt.is_retired(db, token)" in src   # P1-01: retired = hash lookup
 
 
 # ── S4 ──────────────────────────────────────────────────────────────────────

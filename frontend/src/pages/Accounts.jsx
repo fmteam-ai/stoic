@@ -172,8 +172,14 @@ export default function Accounts() {
             for (const k of ["pamm_provider", "pamm_program_id", "pamm_broker_program_id"]) {
                 if (!payload[k] || payload.account_role === "STANDARD") payload[k] = null;
             }
-            await api.post("/accounts", payload);
-            setShowForm(false); setForm(empty); setMsg("Account added.");
+            const { data } = await api.post("/accounts", payload);
+            setShowForm(false); setForm(empty);
+            if (data?.bridge_token) {
+                setRevealedTokens(prev => ({ ...prev, [data.id]: data.bridge_token }));
+                setMsg("Account added. Its bridge token is shown ONCE below — copy it into the EA now (or use the installer); it cannot be retrieved later.");
+            } else {
+                setMsg("Account added.");
+            }
             await load();
         } catch (e2) { setErr(formatApiError(e2)); }
     };

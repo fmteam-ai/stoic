@@ -563,6 +563,9 @@ api_router.include_router(infra_router)
 
 
 # ---------- WebSocket ----------
+WS_REVALIDATE_SECONDS = int(os.environ.get("WS_REVALIDATE_SECONDS") or 30)
+
+
 @api_router.websocket("/ws")
 async def ws_endpoint(websocket: WebSocket):
     """Authenticated WS via the access_token cookie. Query-string tokens
@@ -621,10 +624,20 @@ async def ws_endpoint(websocket: WebSocket):
     await ws_manager.connect(user_id, websocket)
     try:
         await websocket.send_json({"type": "connected", "payload": {"user_id": user_id}})
+        # P1-02 (main94) — an OPEN socket re-validates its session periodically, so logout /
+        # revoke-all / password change / suspension close it instead of streaming on.
+        from auth import validate_access_token as _revalidate, TokenRejected as _Rejected
         while True:
-            # Keep the socket alive; we ignore client messages but consume them
             try:
-                await websocket.receive_text()
+                await asyncio.wait_for(websocket.receive_text(), timeout=WS_REVALIDATE_SECONDS)
+            except asyncio.TimeoutError:
+                try:
+                    await _revalidate(get_db(), token, path=None)
+                except _Rejected as e:
+                    await websocket.close(code=4403 if e.status == 403 else 4401)
+                    break
+                except Exception:  # noqa: BLE001 — DB hiccup: keep the socket, retry next tick
+                    pass
             except WebSocketDisconnect:
                 break
     except WebSocketDisconnect:

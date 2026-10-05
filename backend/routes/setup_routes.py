@@ -53,6 +53,7 @@ from route_utils import parse_object_id
 from security import client_ip, rate_limit
 
 router = APIRouter(tags=["setup"])
+PAIRING_PREV_TOKEN_GRACE_H = 24   # R-3 — previous EA token survives a pairing until first new heartbeat, max 24 h
 
 
 PAIRING_TTL_MINUTES = 15
@@ -252,15 +253,17 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
     backend_base = backend_base.rstrip("/")
 
     # P1-01 — the account's token is not readable any more (hash only): pairing ISSUES a fresh
-    # token, hands it to the installer exactly once, and retires the old one (one account → one
-    # installation; a stale terminal keeps the 15-min grace to report its last state).
+    # token and hands it to the installer exactly once (one account → one installation).
+    # R-3 — the PREVIOUS token stays valid until the new installation's first heartbeat
+    # retires it (bridge auth, S2), hard cap 24 h: a running EA is never silently cut off
+    # by an installer re-run that never completes.
     import bridge_tokens as _bt
     from auth import generate_bridge_token as _gen
     fresh_token = _gen()
     await db.accounts.update_one(
         {"_id": account["_id"]},
         _bt.rotation_update(account, fresh_token,
-                            grace_until=(datetime.now(timezone.utc) + timedelta(minutes=15)).isoformat(),
+                            grace_until=(datetime.now(timezone.utc) + timedelta(hours=PAIRING_PREV_TOKEN_GRACE_H)).isoformat(),
                             suspended=bool(account.get("bridge_token_suspended"))))
     return {
         "bridge_token": fresh_token,

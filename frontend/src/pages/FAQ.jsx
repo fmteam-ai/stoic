@@ -127,7 +127,7 @@ const FAQS = [
     { cat: "security", q: "What if I lose my authenticator app?",
       a: "Use any one of the 8 recovery codes you saved at enrolment — paste it as the '2FA code' on login or when disabling 2FA. Each code is single-use. If you've lost both the app AND your codes, contact support to verify identity and reset." },
     { cat: "security", q: "How do I change my password?",
-      a: "Settings → Section 02 → enter current password + new password (≥6 chars) + confirm. You stay signed in on this device after the change; other devices are forced to re-login." },
+      a: "Settings → Section 02 → enter current password + new password (≥8 chars) + confirm. For safety EVERY session is signed out afterwards — including this device — so sign in again with the new password." },
     { cat: "security", q: "Where is my data stored?",
       a: "Account credentials, MT5 tokens, and trade data are in our MongoDB cluster with encryption-at-rest. MT5 investor/master passwords (if you supply them) are encrypted via a server-side vault using a per-environment key." },
     { cat: "security", q: "Is my Stripe payment info stored on STOIC?",

@@ -15,11 +15,17 @@ export function ExecutionBrakeBanner() {
 
     const load = useCallback(async () => {
         try {
+            // R-5 — admins see EVERY braked account (any owner); owners see their own.
+            if (isAdmin) {
+                const { data } = await api.get("/admin/execution-brakes");
+                setRows(data?.accounts || []);
+                return;
+            }
             const { data } = await api.get("/accounts");
             const list = Array.isArray(data) ? data : (data?.accounts || []);
             setRows(list.filter((a) => a?.execution_brake?.active));
         } catch { /* banner is best-effort */ }
-    }, []);
+    }, [isAdmin]);
 
     useEffect(() => {
         load();
@@ -51,6 +57,7 @@ export function ExecutionBrakeBanner() {
                     </span>
                     <div className="flex-1 min-w-[200px] text-xs text-[#E4E4E7] font-mono">
                         <span className="text-white">{a.label || a.login || a.broker}</span>
+                        {a.owner_email && <span className="text-[#71717A]" data-testid={`execution-brake-owner-${a.id}`}> · {a.owner_email}</span>}
                         <span className="text-[#A1A1AA]"> · {a.execution_brake.reason}</span>
                         <div className="text-[10px] text-[#71717A] mt-0.5" data-testid={`execution-brake-note-${a.id}`}>
                             New entries paused since {String(a.execution_brake.since || "").slice(11, 16)} UTC; managed exits continue.

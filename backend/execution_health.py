@@ -69,11 +69,46 @@ def _window_floor(acc: dict | None) -> str:
 
 
 async def window_events(db, account_id: str, acc: dict | None = None) -> list[dict]:
+    """Counted anomalies since the window floor — ONE entry per trade (R-5: a late fill the
+    bridge reports twice, e.g. during PANIC, must never count as two)."""
     if acc is None:
         acc = await db.accounts.find_one({"_id": _oid(account_id)}, {"execution_brake": 1}) or {}
-    return await db.execution_health_events.find(
+    rows = await db.execution_health_events.find(
         {"account_id": str(account_id), "kind": {"$in": list(COUNTED_KINDS)}, "at": {"$gt": _window_floor(acc)}},
         {"_id": 0, "kind": 1, "trade_id": 1, "detail": 1, "at": 1}).sort("at", -1).to_list(length=200)
+    return distinct_by_trade(rows)
+
+
+def distinct_by_trade(rows: list[dict]) -> list[dict]:
+    """Newest entry per trade_id; entries without a trade_id each count once."""
+    seen: set = set()
+    out = []
+    for r in rows:
+        key = r.get("trade_id")
+        if key and key in seen:
+            continue
+        if key:
+            seen.add(key)
+        out.append(r)
+    return out
+
+
+async def braked_accounts(db) -> list[dict]:
+    """R-5 — every account whose brake is active (admin overview), newest first."""
+    rows = await db.accounts.find({"execution_brake.active": True},
+                                  {"label": 1, "login": 1, "broker": 1, "user_id": 1, "execution_brake": 1,
+                                   "account_number": 1}).to_list(length=500)
+    out = []
+    for a in rows:
+        owner = None
+        if a.get("user_id"):
+            u = await db.users.find_one({"_id": _oid(a["user_id"])}, {"email": 1})
+            owner = (u or {}).get("email")
+        out.append({"id": str(a["_id"]), "label": a.get("label"), "login": a.get("login"), "broker": a.get("broker"),
+                    "account_number": a.get("account_number"), "owner_email": owner,
+                    "execution_brake": a.get("execution_brake") or {}})
+    out.sort(key=lambda r: str(r["execution_brake"].get("since") or ""), reverse=True)
+    return out
 
 
 async def recent_events(db, account_id: str, minutes: int = 24 * 60) -> list[dict]:

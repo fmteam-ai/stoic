@@ -84,7 +84,7 @@ def test_backend_signer_health_accepts_the_signer(signer, monkeypatch):
         def json(self):
             return self._r.json()
 
-    def fake_get(url, headers=None, timeout=None):
+    def fake_get(url, headers=None, timeout=None, verify=None):
         return _Resp(c.get(url.replace("https://signer.example", ""), headers=headers))
 
     monkeypatch.setattr(requests, "get", fake_get)
