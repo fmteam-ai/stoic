@@ -255,3 +255,50 @@ def test_a7d_wired_into_runner_executor_bridge_api_and_ui():
     assert "execution-brake-banner" in open(os.path.join(root, "components", "ExecutionBrakeBanner.jsx")).read()
     assert "<ExecutionBrakeBanner />" in open(os.path.join(root, "pages", "Dashboard.jsx")).read()
     assert "bot-pulse-exec-brake-" in open(os.path.join(root, "components", "BotPulsePanel.jsx")).read()
+
+
+# ── main92 follow-up corrections ────────────────────────────────────────────
+def test_followup_bola_matrix_covers_every_sensitive_route_in_process():
+    """The matrix test builds the spec from server.app — mirror it here so the 14 formerly
+    undeclared routes (incl. the N11 admin ones) can never silently drop out again."""
+    from security_matrix import BOLA_MATRIX
+    for key in [("POST", "/api/admin/account-position-modes/{account_id}"), ("POST", "/api/admin/account-environments/{account_id}"),
+                ("GET", "/api/accounts/{account_id}/bridge-token"), ("POST", "/api/accounts/{account_id}/trust-terminal"),
+                ("DELETE", "/api/authority/inventory/orphan-bots/{bot_id}"), ("GET", "/api/pamm/investor/programs/{program_id}"),
+                ("GET", "/api/v1/accounts/{account_id}/certificate"), ("POST", "/api/infra/installations/{installation_id}/device-key/revoke")]:
+        assert key in BOLA_MATRIX, key
+    assert BOLA_MATRIX[("DELETE", "/api/authority/inventory/orphan-bots/{bot_id}")] == "admin_only"
+
+
+def test_followup_ci_admin_totp_enrolment_script_and_playwright_totp():
+    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    ci = open(os.path.join(root, ".github", "workflows", "ci.yml")).read()
+    assert 'ADMIN_MFA_ENFORCED: "true"' in ci and 'ADMIN_MFA_ENFORCED: "false"' not in ci
+    assert "scripts/ci_enrol_admin_totp.py" in ci and "::add-mask::" in ci and 'E2E_ADMIN_TOTP_SECRET="$E2E_ADMIN_TOTP_SECRET"' in ci
+    setup = open(os.path.join(root, "e2e", "tests", "auth.setup.ts")).read()
+    assert "totpCode(ADMIN_TOTP_SECRET)" in setup and 'getByTestId("login-2fa-input")' in setup
+    # the script refuses production and non-CI databases
+    import subprocess, sys as _sys
+    env = {**os.environ, "APP_ENV": "production", "DB_NAME": "stoic_e2e", "ADMIN_EMAIL": "x@y"}
+    assert subprocess.run([_sys.executable, os.path.join(root, "scripts", "ci_enrol_admin_totp.py")], env=env, capture_output=True).returncode == 2
+    env = {**os.environ, "APP_ENV": "preview", "DB_NAME": "ai_trading_bot", "ADMIN_EMAIL": "x@y"}
+    assert subprocess.run([_sys.executable, os.path.join(root, "scripts", "ci_enrol_admin_totp.py")], env=env, capture_output=True).returncode == 2
+
+
+def test_followup_playwright_totp_matches_pyotp():
+    """e2e/tests/totp.ts must produce the same code as the backend's pyotp for the same secret + time."""
+    import json, shutil, subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not available")
+    import pyotp
+    secret = pyotp.random_base32()
+    now_ms = 1_750_000_000_000
+    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    ts = open(os.path.join(root, "e2e", "tests", "totp.ts")).read()
+    js = ts.replace('import { createHmac } from "node:crypto";', 'const { createHmac } = require("node:crypto");')
+    js = js.replace("export function", "function").replace(": Buffer", "").replace(": string", "").replace(": number[]", "")
+    js += f'\nprocess.stdout.write(JSON.stringify(totpCode({json.dumps(secret)}, {now_ms})));\n'
+    out = subprocess.run([node, "-e", js], capture_output=True, text=True, timeout=30)
+    assert out.returncode == 0, out.stderr
+    assert json.loads(out.stdout) == pyotp.TOTP(secret).at(now_ms // 1000)

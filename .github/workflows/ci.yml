@@ -322,12 +322,9 @@ jobs:
       DB_NAME: stoic_e2e
       CORS_ORIGINS: http://127.0.0.1:3000
       BACKGROUND_WORKERS_IN_PROCESS: "false"
-      # main92 A8a — fix plan D2 gates every admin read (/ops/*, /authority/*)
-      # behind enrolled admin TOTP. The per-run CI admin has no authenticator,
-      # so the documented preview/CI escape hatch is used here (server.py
-      # refuses it under APP_ENV=production). Admin-MFA enforcement itself is
-      # covered by the unit + integration lanes.
-      ADMIN_MFA_ENFORCED: "false"
+      # main92 — admin MFA stays ENFORCED here: the per-run CI admin gets a generated
+      # TOTP secret (scripts/ci_enrol_admin_totp.py) and Playwright computes the code.
+      ADMIN_MFA_ENFORCED: "true"
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
@@ -391,6 +388,11 @@ jobs:
             sleep 2
           done
           echo "frontend never became reachable"; tail -20 /tmp/serve.log; exit 1
+      - name: Enrol TOTP on the CI admin (admin MFA enforced in the UI tests)
+        run: |
+          SECRET=$(python scripts/ci_enrol_admin_totp.py)
+          echo "::add-mask::$SECRET"
+          echo "E2E_ADMIN_TOTP_SECRET=$SECRET" >> "$GITHUB_ENV"
       - name: Install Playwright
         run: |
           cd e2e
@@ -400,6 +402,7 @@ jobs:
         run: |
           cd e2e
           E2E_ADMIN_EMAIL="$ADMIN_EMAIL" E2E_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+            E2E_ADMIN_TOTP_SECRET="$E2E_ADMIN_TOTP_SECRET" \
             E2E_BASE_URL=http://127.0.0.1:3000 npx playwright test
       - name: Backend log on failure
         if: failure()

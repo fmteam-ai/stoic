@@ -76,7 +76,7 @@ def _suspicious(value: str) -> str | None:
         return None
     if any(r in v for r in RETIRED_LITERALS):
         return "retired-literal"
-    if re.search(r"\{\{|\{[a-zA-Z_]+\}|%s|\$\(", v):        # templated
+    if re.search(r"\{\{|\{[a-zA-Z_]+\}|%s|\$\(", v) or re.fullmatch(r"\$\{?[A-Z_][A-Z0-9_]*\}?", v):   # templated / shell variable
         return None
     if re.search(r"\s", v) or re.fullmatch(r"[a-z][a-z\-]*", v):      # prose / kebab-case identifiers
         return None

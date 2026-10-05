@@ -10,6 +10,7 @@ authorization decision (the recurring-BOLA class dies here).
 Mechanisms:
   user_scoped_query    — Mongo query includes {"user_id": caller}
   owned_account_helper — _owned_account() 404s on non-owned (admin bypass)
+  public_signed_view   — intentionally public; returns only a signed/public projection (no owner data)
 """
 
 USQ = "user_scoped_query"
@@ -17,6 +18,7 @@ OAH = "owned_account_helper"
 PGA = "program_access"        # PAMM require_program_access permission model
 MGR = "manager_scoped"        # require_manager + scope filter
 ADM = "admin_only"            # role==admin gate (403 otherwise)
+PUB = "public_signed_view"    # intentionally public, returns only a signed/public projection
 
 BOLA_MATRIX: dict[tuple[str, str], str] = {
     # accounts
@@ -177,6 +179,21 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     # A7d — execution-health brake (owner-scoped read + step-up release)
     ("GET", "/api/accounts/{account_id}/execution-health"): USQ,
     ("POST", "/api/accounts/{account_id}/execution-brake/release"): USQ,
+    # main92 follow-up (N11 round 2) — every sensitive route the in-process OpenAPI scan finds
+    ("GET", "/api/accounts/{account_id}/bridge-token"): USQ,
+    ("POST", "/api/accounts/{account_id}/bridge-token/revoke"): USQ,
+    ("GET", "/api/accounts/{account_id}/installations"): USQ,
+    ("POST", "/api/accounts/{account_id}/installations/{installation_id}/revoke"): USQ,
+    ("POST", "/api/accounts/{account_id}/trust-terminal"): USQ,
+    ("GET", "/api/authority/decision/{account_id}"): USQ,          # admin bypass via _admin_ok
+    ("DELETE", "/api/authority/inventory/orphan-bots/{bot_id}"): ADM,
+    ("GET", "/api/certification/center"): OAH,
+    ("GET", "/api/connect/{account_id}/status"): USQ,              # admin bypass; account_id query-scoped
+    ("GET", "/api/v1/connect/accounts/{account_id}/status"): USQ,
+    ("GET", "/api/ledger/statements"): USQ,                        # ledger_rows(user_id, account_id)
+    ("GET", "/api/pamm/investor/programs/{program_id}"): PGA,      # investor_program_view → linked programs only
+    ("GET", "/api/v1/accounts/{account_id}/certificate"): PUB,     # public certificate — signed, non-sensitive view
+    ("POST", "/api/infra/installations/{installation_id}/device-key/revoke"): USQ,   # admin bypass
     # N11 — admin account environment / position-mode overrides (re-auth + audit chain)
     ("GET", "/api/admin/account-environments"): ADM,
     ("POST", "/api/admin/account-environments/{account_id}"): ADM,

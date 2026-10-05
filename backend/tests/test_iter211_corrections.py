@@ -118,7 +118,8 @@ class TestBolaMatrix:
     def test_matrix_mechanisms_valid(self):
         from security_matrix import BOLA_MATRIX
         assert all(m in ("user_scoped_query", "owned_account_helper",
-                         "program_access", "manager_scoped", "admin_only")
+                         "program_access", "manager_scoped", "admin_only",
+                         "public_signed_view")          # main92: intentionally public signed certificate view
                    for m in BOLA_MATRIX.values())
 
 

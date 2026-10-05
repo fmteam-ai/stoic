@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 704 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4059 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4062 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4974 tests across 506 files.**
+**Total: 4977 tests across 507 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -29,7 +29,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_fixplan_c1_candles_live.py` | http-live | 6 |
 | `backend/tests/test_fixplan_c2_ai_gates.py` | http-live | 11 |
 | `backend/tests/test_fixplan_d1_d2_logs_mfa.py` | http-live | 9 |
-| `backend/tests/test_fixplan_main92_a7.py` | http-live | 17 |
+| `backend/tests/test_fixplan_main92_a7.py` | http-live | 20 |
 | `backend/tests/test_fixplan_main92_a8b.py` | http-live | 11 |
 | `backend/tests/test_fixplan_main92_sa5.py` | http-live | 20 |
 | `backend/tests/test_iter100_batch_a.py` | http-live | 6 |
@@ -468,6 +468,7 @@ fails when this file drifts from the tree.
 | `e2e/tests/helpers.ts` | ui-e2e | 0 |
 | `e2e/tests/pages.spec.ts` | ui-e2e | 2 |
 | `e2e/tests/settings.spec.ts` | ui-e2e | 2 |
+| `e2e/tests/totp.ts` | ui-e2e | 0 |
 | `backend/tests/unit/pamm/test_hardening_v627.py` | unit | 17 |
 | `backend/tests/unit/pamm/test_iter144_p0_p1_verification.py` | unit | 18 |
 | `backend/tests/unit/pamm/test_iter146_corrections.py` | unit | 10 |
