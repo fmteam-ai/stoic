@@ -41,6 +41,16 @@ async def security_status(user=Depends(get_current_user)):
             "protected_ips_count": len(cfg["protected_ips"])}
 
 
+@router.get("/scorecard")
+async def observe_scorecard(days: int = 14, user=Depends(get_current_user)):
+    """Observe scorecard — per rule: proposals in the window and how many would have hit a real user."""
+    require_admin(user)
+    db = get_db()
+    days = max(1, min(int(days or 14), 90))
+    from security_agent.scorecard import build
+    return await build(db, await config.load(db), days=days)
+
+
 @router.get("/findings")
 async def list_findings(status: str | None = None, severity: str | None = None, area: str | None = None,
                         limit: int = 100, user=Depends(get_current_user)):

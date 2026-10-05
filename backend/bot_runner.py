@@ -1823,6 +1823,8 @@ async def _process_user_account_locked(db, cfg: dict):
                         user_id)
         sizing_conf = (float(_cal["p_win_lb"]) * 100.0 if _kelly_on
                        else float(signal.get("confidence") or 0))
+        from fx_rates import quote_usd_for_symbol
+        _qusd, _qsrc = await quote_usd_for_symbol(signal["symbol"], user_id)   # H9 — today's cross rate
         sized = compute_lot_for_account(
             account=target_account,
             symbol=signal["symbol"],
@@ -1830,6 +1832,7 @@ async def _process_user_account_locked(db, cfg: dict):
             stop_loss=signal["stop_loss"],
             confidence_pct=sizing_conf,
             profile=profile,
+            quote_usd=_qusd,
             locked_profit=locked,
             kelly_enabled=_kelly_on,
         )

@@ -734,11 +734,12 @@ async def settle_paper_trades_against_price() -> int:
         # Fix plan B1/B11 — P&L in account USD through the instrument contract:
         # pips moved × USD per pip per lot (price-aware) × lots. The old
         # `(price − entry) × lot` ignored contract size entirely.
-        from pip_utils import price_to_pips, pip_value_usd_per_lot
+        from pip_utils import price_to_pips
+        from fx_rates import pip_value_usd_per_lot_live
         direction = 1 if action == "BUY" else -1
         pips = price_to_pips(sym, price - float(t["entry_price"]))
-        pnl = round(direction * pips * pip_value_usd_per_lot(sym, "standard", price=price)
-                    * float(t["lot_size"] or 0), 2)
+        _pip_usd, _ = await pip_value_usd_per_lot_live(sym, "standard", price=price, user_id=t.get("user_id"))   # H9
+        pnl = round(direction * pips * _pip_usd * float(t["lot_size"] or 0), 2)
         now_iso = datetime.now(timezone.utc).isoformat()
         # settle exactly once: a concurrent sweep that already closed it must
         # not credit the virtual balance a second time

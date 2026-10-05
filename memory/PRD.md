@@ -3132,4 +3132,5 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Operator checklist before deploy: review step 1 items (RESEND_API_KEY, WEBAUTHN_*, admin 2FA), paste the security Telegram token into `secrets/security_telegram_token`, keep the agent in observe; after deploy retrain ML, check `candle_feed_health.offset_source`, watch `entry_deviation` with `price_source`, enable R4 first.
 - Open decisions: P3 `trade_of_day_cap` default stays 1 (now visible in the pulse reason) — confirm or set per config; EA version bump for `margin_mode`.
 - Follow-up (same day): 14 undeclared sensitive routes added to the BOLA matrix (real gap); CI e2e runs with admin MFA enforced via `scripts/ci_enrol_admin_totp.py` + `e2e/tests/totp.ts`; iter14 gold test is a data-dependent skip, not a failure.
-- Next: B1-fix (H9 rate table); 14-day observe scorecard; AI-latency card.
+- 2026-10-05: H9 live FX rates (`fx_rates.py`, `/api/diagnostic/fx-rates`) and the Observe scorecard (`/api/admin/security/scorecard`, Admin Ops → Security) shipped and tested.
+- Next: AI-latency card; brake timeline; passkey + step-up Playwright case.

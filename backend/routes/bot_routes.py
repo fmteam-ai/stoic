@@ -211,12 +211,14 @@ async def sizing_preview(
     entry, sl = typical_entry_sl.get(symbol.upper(), (1.0, 0.985))
 
     rows = []
+    from fx_rates import quote_usd_for_symbol
+    _qusd, _qsrc = await quote_usd_for_symbol(symbol, user["id"])              # H9
     for conf in (55, 60, 65, 70, 75, 80, 85, 90):
         sized = compute_lot_for_account(
             account=acct, symbol=symbol,
             entry_price=entry, stop_loss=sl,
             confidence_pct=float(conf), profile=profile,
-            kelly_enabled=kelly_on,
+            kelly_enabled=kelly_on, quote_usd=_qusd,
         )
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)

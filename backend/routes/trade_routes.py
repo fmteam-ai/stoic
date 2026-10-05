@@ -562,6 +562,8 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
     # risk cap. Honour any user-set `max_lot_size` cap on the matching bot_cfg.
     risk_level = signal.get("risk_level") or "medium"
     profile = get_profile(risk_level)
+    from fx_rates import quote_usd_for_symbol
+    _qusd, _qsrc = await quote_usd_for_symbol(signal["symbol"], user["id"])     # H9 — today's cross rate
     sized = compute_lot_for_account(
         account=account,
         symbol=signal["symbol"],
@@ -569,7 +571,9 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
         stop_loss=signal.get("stop_loss") or 0,
         confidence_pct=float(signal.get("confidence") or 0),
         profile=profile,
+        quote_usd=_qusd,
     )
+    sized["quote_rate_source"] = _qsrc
     # iter-144 C5 · fail-closed sizing on the manual execute path too
     if not sized.get("sizing_valid", True):
         raise HTTPException(

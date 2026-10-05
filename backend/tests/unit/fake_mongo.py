@@ -28,6 +28,10 @@ def _match(doc, q):
             for op, arg in v.items():
                 if op == "$exists" and bool(cur is not None) != bool(arg):
                     return False
+                if op == "$elemMatch":
+                    if not isinstance(cur, list) or not any(isinstance(e, dict) and _match(e, arg) for e in cur):
+                        return False
+                    continue
                 if op == "$in" and cur not in arg:
                     return False
                 if op == "$nin" and cur in arg:

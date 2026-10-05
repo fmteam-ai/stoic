@@ -175,8 +175,11 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     audit.append(_ok("risk_inputs_present",
                      value=f"lot={lot} entry={entry} sl={sl}"))
     sl_pips = price_to_pips(sym, abs(entry - sl))
-    # H8 — price-aware pip value (USD-based / cross pairs need the rate)
-    pip_usd = pip_value_usd_per_lot(sym, account.get("account_type"), price=entry)
+    # H8/H9 — price-aware pip value with today's quote-currency rate
+    from fx_rates import pip_value_usd_per_lot_live
+    pip_usd, pip_rate_source = await pip_value_usd_per_lot_live(sym, account.get("account_type"), price=entry, user_id=user_id)
+    if pip_rate_source == "approx_table":
+        audit.append(_ok("pip_rate_live", value=f"{sym}: approximate quote rate (no live tick/quote) — risk sized from the fallback table"))
     # FAIL CLOSED (audit E8): an unknown pip value would silently understate
     # risk — refuse the trade instead of guessing.
     if not pip_usd or pip_usd <= 0 or not sl_pips or sl_pips <= 0:
@@ -266,8 +269,8 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
             t_entry = float(t.get("entry_price") or 0)
             t_sl = float(t.get("stop_loss") or 0)
             t_sym = t.get("symbol") or ""
-            t_pip_usd = pip_value_usd_per_lot(t_sym, account.get("account_type"),
-                                              price=t_entry or None)
+            t_pip_usd, _ = await pip_value_usd_per_lot_live(t_sym, account.get("account_type"),
+                                                            price=t_entry or None, user_id=user_id)   # H9
             if t_lot > 0 and t_entry > 0 and t_sl > 0:
                 t_pips = price_to_pips(t_sym, abs(t_entry - t_sl))
                 open_risk_usd += t_pips * t_pip_usd * t_lot

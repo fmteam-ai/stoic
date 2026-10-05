@@ -105,7 +105,8 @@ def derive_sl_tp(action: str, entry: float, atr: float, profile: dict) -> tuple:
 def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                             stop_loss: float, confidence_pct: float,
                             profile: dict, locked_profit: float = 0.0,
-                            kelly_enabled: bool = False) -> dict:
+                            kelly_enabled: bool = False,
+                            quote_usd: float | None = None) -> dict:
     """Account-aware position sizing — the ONE authoritative stage, run at
     execute time (quant review C1/C2).
 
@@ -153,7 +154,9 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
                 "reject_reason": "stop distance is zero — risk undefined"}
 
     # B1/R10 — price-aware pip value (USDCHF/USDCAD/USDJPY use the entry price)
-    pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"), price=float(entry_price))
+    # H9 — `quote_usd` is today's quote-currency rate (fx_rates.quote_usd_for_symbol);
+    # without it the approximate table is used for non-USD crosses.
+    pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"), price=float(entry_price), quote_usd=quote_usd)
     if pip_usd <= 0:
         return {"lot_size": 0.0, "sizing_valid": False,
                 "method": "rejected_zero_pip_value",

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
+import { ObserveScorecard } from "./ObserveScorecard";
 import { ShieldAlert, ShieldCheck, Loader2, RefreshCw, Send, FileDown } from "lucide-react";
 import { FindingDetail, SEV_CLS, SevPill } from "./FindingDetail";
 import { ActiveBlocksList, CheckStatusTable, WouldHaveDoneList } from "./SecurityTables";
@@ -118,6 +119,8 @@ export function SecurityHealthPanel({ initialFindingId }) {
                 })}
                 <span className="font-mono text-[10px] text-[#52525B] ml-auto">switch on one at a time · R1 and R4 first · step-up required</span>
             </div>
+
+            <ObserveScorecard status={status} onToggleRule={toggleRule} busy={busy} />
 
             <div className="grid xl:grid-cols-3 gap-3">
                 <div className="xl:col-span-2 bg-[#0A0A0A] border border-[#1F1F1F]" data-testid="security-findings-panel">

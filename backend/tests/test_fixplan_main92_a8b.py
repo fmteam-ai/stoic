@@ -129,7 +129,8 @@ def test_p5_stopless_trade_fallback_uses_its_own_symbol_in_usd():
 def test_h8_guardian_pip_value_is_price_aware():
     import safety_guardian as sg
     src = inspect.getsource(sg.audit_pre_trade)
-    assert 'pip_value_usd_per_lot(sym, account.get("account_type"), price=entry)' in src
+    # H9 superseded the direct call with the live-rate wrapper (same price-aware maths underneath)
+    assert 'pip_value_usd_per_lot_live(sym, account.get("account_type"), price=entry, user_id=user_id)' in src
     assert "price=t_entry or None" in src
     # USDCHF at 0.80: a pip is worth 12.50, not 10 → risk 25% higher
     from pip_utils import pip_value_usd_per_lot

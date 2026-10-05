@@ -549,3 +549,12 @@ async def auto_fix(payload: dict, user=Depends(get_current_user)):
             results[c] = {"error": "autofix_failed"}
     return {"applied_at": datetime.now(timezone.utc).isoformat(),
             "results": results}
+
+
+@router.get("/fx-rates")
+async def fx_rates_view(user=Depends(get_current_user)):
+    """H9 — where today's quote-currency rates come from (broker tick / public quote / approx table)."""
+    from fx_rates import rates_snapshot, quote_usd
+    for ccy in ("EUR", "GBP", "JPY", "CHF", "AUD", "CAD", "NZD"):
+        await quote_usd(ccy, user["id"])
+    return rates_snapshot()
