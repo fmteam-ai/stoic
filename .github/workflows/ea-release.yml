@@ -61,7 +61,7 @@ jobs:
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
-          pip install -q cryptography httpx
+          pip install -q cryptography requests
           $win = (Get-CimInstance Win32_OperatingSystem).Version
           python scripts/verify_ea_release.py --ex5 backend/static/EmergentTradingBridge.ex5 `
             --compile-log compile.log --windows-build $win `

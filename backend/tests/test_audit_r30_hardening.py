@@ -109,3 +109,14 @@ def test_production_boot_warns_when_trusted_proxy_cidrs_unset():
     src = inspect.getsource(server.on_startup)
     assert "TRUSTED_PROXY_CIDRS" in src and "warning(" in src
     assert "TRUSTED_PROXY_CIDRS" in open(os.path.join(os.path.dirname(server.__file__), ".env.example")).read()
+
+
+# ── CI: every workflow step that SIGNS via release_signing must install `requests` ─
+def test_signing_workflow_steps_install_requests():
+    import re
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..")
+    for wf in ("ea-release.yml", "release.yml"):
+        text = open(os.path.join(root, ".github", "workflows", wf), encoding="utf-8").read()
+        for step in re.split(r"\n\s+- name:", text):
+            if "verify_ea_release.py" in step and "--sign" in step:
+                assert re.search(r"pip install[^\n]*\brequests\b", step), f"{wf}: --sign step lacks `requests` (release_signing._external_sign)"
