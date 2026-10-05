@@ -609,7 +609,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 "user_id": user_id,
                 "symbol": symbol_match(sym),   # step 5: broker-suffixed spellings count too
                 "origin": "auto",
-                "created_at": {"$gte": day_start.isoformat()},
+                "opened_at": {"$gte": day_start.isoformat()},   # fix plan R2: trades carry opened_at, not created_at
             }
             if cfg_account_id:
                 tod_q["account_id"] = cfg_account_id
@@ -2208,19 +2208,25 @@ async def _process_user_account_locked(db, cfg: dict):
         # metadata (e.g. a standard account stored as 'microcent' made pip
         # value 1000× too small and inflated lots). Worst-case USD at the
         # stop must stay within the trade's risk budget.
+        _clamp_error = None
         try:
             _slp = signal.get("stop_loss")
             _ep = signal.get("entry_price")
-            if _slp and _ep:
+            if not (_slp and _ep):
+                _clamp_error = "signal has no stop_loss/entry_price"
+            else:
                 from pip_utils import price_to_pips as _p2p, \
                     pip_value_usd_per_lot as _pvpl
                 _pips = _p2p(sym, abs(float(_ep) - float(_slp)))
-                _pip_std = _pvpl(sym, "standard")
+                _pip_std = _pvpl(sym, "standard", price=float(_ep))
                 _eq = float(target_account.get("equity")
                             or target_account.get("balance") or 0)
                 _cap_pct = float(signal.get("risk_pct_cap")
                                  or profile.get("risk_pct") or 1.0)
-                if _eq > 0 and _pips > 0 and _pip_std > 0:
+                if not (_eq > 0 and _pips > 0 and _pip_std > 0):
+                    _clamp_error = (f"risk clamp inputs invalid (equity {_eq}, "
+                                    f"sl {_pips} pips, pip value {_pip_std})")
+                else:
                     _max_risk_lot = (_eq * _cap_pct / 100.0) / (_pips * _pip_std)
                     if effective_lot > _max_risk_lot:
                         # FAIL CLOSED (audit E6): floor to the broker step; if
@@ -2243,7 +2249,16 @@ async def _process_user_account_locked(db, cfg: dict):
                         effective_lot = _floored
                         sizing_method = sizing_method + "+std_risk_clamp"
         except Exception as e:  # noqa: BLE001
-            logger.debug("std risk clamp skipped: %s", e)
+            _clamp_error = f"{type(e).__name__}: {e}"
+        if _clamp_error:
+            # Fix plan R5 — FAIL CLOSED: a clamp that cannot run must block THIS
+            # symbol (never open an unclamped lot) and move on to the next one.
+            logger.warning("Std-contract risk clamp blocked acct=%s sym=%s: %s",
+                           cfg_account_id or "default", sym, _clamp_error)
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn",
+                                reason=f"Risk clamp could not verify lot size — trade blocked ({_clamp_error[:120]}).")
+            await inc_intel_counter(user_id, "risk_clamp_block")
+            continue
 
         # Phase-1 · VALUE-DRIVEN GATE: every autonomous trade carries a $
         # Expected Value (calibrated p_win × geometry − costs) and a 0-100

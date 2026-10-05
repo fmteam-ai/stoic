@@ -88,7 +88,8 @@ Fingerprint rule per step: `python scripts/generate_test_manifest.py` → `pytho
 - **A5 review fixes (first-dispatch expiry anchor, late-fill duplicate absorb, user vs admin lock, --archive actually archives, test DB safety) — DONE 2026-10-03**
 - **B1 sizing (R1 JPY-cross notional, R9 trims skip below min, R10 price-aware pip + broker volume step, B10 authority floor, B11 paper P&L/single settlement) — DONE 2026-10-03**
 - **A4 PANIC, locks & exit guards (late-fill close, scoped release + /admin/panic/release, demo w/o MFA, lock on dashboard/Telegram/copilot, TP1 banked through reconciler) — DONE 2026-10-03**
-- B1 sizing (R1 JPY-cross exposure 150×, R9, R10 price-aware pip value + volume step, B10, B11) · B2 safety guards (R2 opened_at, R5, R6 stale heartbeat/quote block, R7, R8, B6, R14)
+- **B2 safety guards (R2 opened_at, R5 clamp fails closed, R6 heartbeat/quote block, R7, R8, B6 manual price check, R14) — DONE 2026-10-05**
+- **Security & Health Agent SA1–SA4 — DONE 2026-10-05** (observe mode until operator sets SECURITY_AGENT_PROTECTED_IPS + Telegram secrets and enables rules one at a time; SA5 hardening extras pending)
 - C1 candle data (A1 per-user/timeframe, R3 broker UTC offset, A3, A10, A11, R11) · C2 AI calls/gates (A2 timeouts, A4, A5, A6, A7, A8, A9, A12, A13, A14, R12) — covers roadmap step 8
 - D1 logs/small fixes (S4, S5, S8 needs RESEND_API_KEY, S9) · D2 2FA/passkeys/admin (S1, S2, S6, S10, S11; set WEBAUTHN_RP_ID/ORIGIN)
 - E1 sessions/navigation (F1, F5, F6, F12) · E2 pages/data freshness (F2, F3, F4, F7, F8, F9, F10, F11)

@@ -216,13 +216,17 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     # never silently truncated by a fixed to_list cap.
     day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
     realized_today = 0.0
+    # Fix plan R8 — equity-level guard: scoped to the account when known,
+    # otherwise the whole user (never skipped), and counts EVERY origin —
+    # a losing manual day must also stop the bot from adding risk.
+    dl_match = {"user_id": user_id, "status": "closed",
+                "closed_at": {"$gte": day_start}}
     if cfg_account_id:
-        async for g in db.trades.aggregate([
-                {"$match": {"user_id": user_id, "status": "closed",
-                            "origin": "auto", "account_id": cfg_account_id,
-                            "closed_at": {"$gte": day_start}}},
-                {"$group": {"_id": None, "pnl": {"$sum": "$pnl"}}}]):
-            realized_today = float(g.get("pnl") or 0)
+        dl_match["account_id"] = cfg_account_id
+    async for g in db.trades.aggregate([
+            {"$match": dl_match},
+            {"$group": {"_id": None, "pnl": {"$sum": "$pnl"}}}]):
+        realized_today = float(g.get("pnl") or 0)
     max_daily_loss = -(balance * (MAX_DAILY_LOSS_PCT / 100.0))
     if realized_today < max_daily_loss:
         audit.append(_fail("daily_loss_cap",
@@ -236,24 +240,34 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
 
     # 7. Total open risk (sum of remaining SL risk on all open trades + this
     # trade) — uncapped cursor scan (audit E7): no silent truncation.
-    open_q = {"user_id": user_id, "status": "open"}
+    # Fix plan R8 — pending (dispatched, not yet filled) orders are exposure
+    # too, and a trade WITHOUT a stop is charged the new trade's stop distance
+    # (floor 100 pips) instead of counting as zero risk.
+    open_q = {"user_id": user_id, "status": {"$in": ["open", "pending"]}}
     if cfg_account_id:
         open_q["account_id"] = cfg_account_id
     open_risk_usd = 0.0
     open_count = 0
+    stopless_count = 0
+    new_sl_pips = price_to_pips(signal.get("symbol") or "", abs(entry - sl)) if entry and sl else 0.0
     async for t in db.trades.find(
             open_q, {"lot_size": 1, "entry_price": 1, "stop_loss": 1,
-                     "symbol": 1}):
+                     "symbol": 1, "sl_pips": 1}):
         open_count += 1
         try:
             t_lot = float(t.get("lot_size") or 0)
             t_entry = float(t.get("entry_price") or 0)
             t_sl = float(t.get("stop_loss") or 0)
             t_sym = t.get("symbol") or ""
+            t_pip_usd = pip_value_usd_per_lot(t_sym, account.get("account_type"))
             if t_lot > 0 and t_entry > 0 and t_sl > 0:
                 t_pips = price_to_pips(t_sym, abs(t_entry - t_sl))
-                t_pip_usd = pip_value_usd_per_lot(t_sym, account.get("account_type"))
-                open_risk_usd += t_pips * t_pip_usd * t_lot
+            elif t_lot > 0:
+                stopless_count += 1
+                t_pips = max(float(t.get("sl_pips") or 0), new_sl_pips, 100.0)
+            else:
+                continue
+            open_risk_usd += t_pips * t_pip_usd * t_lot
         except Exception:
             continue
     aggregate_risk = open_risk_usd + risk_usd
@@ -261,7 +275,8 @@ async def audit_pre_trade(*, db, account: dict, signal: dict,
     if aggregate_risk > max_total_risk:
         audit.append(_fail("total_open_risk_cap",
                            f"Aggregate risk ${aggregate_risk:.2f} > cap ${max_total_risk:.2f} "
-                           f"({MAX_TOTAL_OPEN_RISK_PCT}% of equity, {open_count} open + new)",
+                           f"({MAX_TOTAL_OPEN_RISK_PCT}% of equity, {open_count} open/pending"
+                           f"{f', {stopless_count} without stop' if stopless_count else ''} + new)",
                            aggregate_risk))
         return {"ok": False, "blocked_by": "total_open_risk_cap", "audit": audit,
                 "evaluated_at": datetime.now(timezone.utc).isoformat(),

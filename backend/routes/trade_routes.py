@@ -588,6 +588,32 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
     max_lot_cap = float(bot_cfg.get("max_lot_size") or 0.0)
     effective_lot = min(absolute_lot, max_lot_cap) if max_lot_cap > 0 else absolute_lot
 
+    # Fix plan B6 — executing an old signal by hand must pass the same live
+    # price check as the bot: refuse when price moved > 50% of the stop
+    # distance or already traded through the stop (no quote = refuse).
+    entry0 = float(signal.get("entry_price") or 0)
+    sl0 = float(signal.get("stop_loss") or 0)
+    if entry0 > 0 and sl0 > 0:
+        from market import get_quote
+        try:
+            px = float(((await get_quote(signal["symbol"])) or {}).get("price") or 0)
+        except Exception:  # noqa: BLE001
+            px = 0.0
+        if px <= 0:
+            raise HTTPException(status_code=409, detail={
+                "code": "quote_unavailable",
+                "message": "No live price for this symbol right now — try again in a moment."})
+        stop_dist = abs(entry0 - sl0)
+        deviation = abs(px - entry0)
+        through_stop = ((signal["action"] == "BUY" and px <= sl0)
+                        or (signal["action"] == "SELL" and px >= sl0))
+        if through_stop or deviation > 0.5 * stop_dist:
+            raise HTTPException(status_code=409, detail={
+                "code": "entry_deviation",
+                "message": (f"Price moved too far since this signal ({signal['symbol']} now {px:g}, "
+                            f"signal entry {entry0:g}, stop {sl0:g}). Generate a fresh signal."),
+                "live_price": px, "signal_entry": entry0, "deviation": round(deviation, 5)})
+
     # Execution Factory — paper vs live engine
     engine = engine_for_account(account)
     trade_doc = await engine.execute(
@@ -603,6 +629,7 @@ async def execute_signal(signal_id: str, payload: dict, user=Depends(get_current
             "take_profit": signal.get("take_profit", 0),
             "origin": "manual",
         },
+        cfg_account_id=str(account["_id"]),   # fix plan B6: daily-loss / caps scoped to THIS account
     )
     await db.signals.update_one(
         {"_id": parse_object_id(signal_id, "Signal"), "user_id": user["id"]},

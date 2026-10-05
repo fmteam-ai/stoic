@@ -87,12 +87,12 @@ def trade_eval(symbol: str, action: str, entry, sl, tp1, fc: dict) -> dict | Non
         p_tp = 1.0 - cdf_at(tp1, levels, values)   # P(end beyond TP1)
         p_sl = cdf_at(sl, levels, values)          # P(end beyond SL)
         suggested_sl = values[0]                   # q10 — only 10% of paths below
-        tighter = suggested_sl > sl
+        tighter = sl < suggested_sl < entry        # fix plan R7: bounded by entry, never at/above it
     else:
         p_tp = cdf_at(tp1, levels, values)
         p_sl = 1.0 - cdf_at(sl, levels, values)
         suggested_sl = values[-1]                  # q90
-        tighter = suggested_sl < sl
+        tighter = entry < suggested_sl < sl        # fix plan R7: bounded by entry
     tp_pips = abs(price_to_pips(symbol, tp1 - entry))
     sl_pips = abs(price_to_pips(symbol, sl - entry))
     prob_expectancy = p_tp * tp_pips - p_sl * sl_pips

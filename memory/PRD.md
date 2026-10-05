@@ -3106,4 +3106,10 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## 2026-10-05 — Security & Health Agent SA3 — DONE, user verification pending
 - Alerts (Critical/High → security Telegram + admin email, dedup per dedup_key, Critical repeats 30 min), rules R1–R8 logged as would_have_done (protected list + hourly cap already evaluated), daily/weekly reports, admin writes (ack/resolve/false-positive, mode switch, test alert; step-up + audit chain), Security & Health tab in Ops Console + Critical banner. Details: memory/CHANGELOG.md. Tests unit (7) + live (23); manifest + rc_lock refrozen.
 - Operator: set `SECURITY_AGENT_TELEGRAM_BOT_TOKEN` / `SECURITY_AGENT_TELEGRAM_CHAT_ID` as Docker secrets (new BotFather bot + private group); verify stoicaibot.com in Resend; run 14 days in observe, tune thresholds (<1 FP/week/rule) from the weekly report.
-- Next: SA4 containment (actions.py, is_blocked in auth/bridge, undo/extend, user notifications) — BLOCKED on `SECURITY_AGENT_PROTECTED_IPS` from user; then Fix plan B2 (safety guards).
+- SA4 containment DONE 2026-10-05 (see below).
+
+## 2026-10-05 — Security & Health Agent SA4 (enforce mode) + Fix plan B2 — DONE, user verification pending
+- SA4: actions.py (block_ip / lock_login / lock_otp / revoke_sessions / suspend_bridge_token / freeze_new_entries, undo/extend, protected list, hourly cap, audit chain), is_blocked hooks in auth + bridge, RULES strip + ACTIVE BLOCKS panel + UNDO in the Security tab. Live-verified R6 cycle. Mode stays OBSERVE with no rules until the operator enables them. Details: memory/CHANGELOG.md.
+- B2: R2 (opened_at cap), R5 (clamp fails closed), R6 (heartbeat/quote block), R7 (forecast stop bounded), R8 (guardian pending/stop-less/daily-loss scope), B6 (manual execute price check + account id), R14 (no 500 reproducible). Details: memory/CHANGELOG.md.
+- Still needed from user: `SECURITY_AGENT_PROTECTED_IPS`, `SECURITY_AGENT_TELEGRAM_BOT_TOKEN` / `SECURITY_AGENT_TELEGRAM_CHAT_ID` (Docker secrets), Resend domain verification.
+- Next: Fix plan Batch C1 (candle data), then C2; SA5 hardening extras (pip-audit job, npm audit, backup restore test, TLS/header/port checks).

@@ -174,16 +174,21 @@ class MT5BridgeEngine(ExecutionEngine):
                     return {"blocked": "account_disconnected",
                             "account_status": fresh.get("status")}
                 hb = fresh.get("last_heartbeat")
-                if hb:
-                    try:
-                        age = (datetime.now(timezone.utc)
-                               - datetime.fromisoformat(str(hb))).total_seconds()
-                        if age > float(os.environ.get(
-                                "EXEC_MAX_HEARTBEAT_AGE_SEC", "120")):
-                            return {"blocked": "stale_heartbeat",
-                                    "heartbeat_age_sec": int(age)}
-                    except (TypeError, ValueError):
-                        pass
+                # Fix plan R6 — FAIL CLOSED: no heartbeat, or one we cannot
+                # read, blocks the order exactly like a stale one.
+                if not hb:
+                    return {"blocked": "stale_heartbeat", "heartbeat_age_sec": None,
+                            "detail": "terminal never sent a heartbeat"}
+                try:
+                    age = (datetime.now(timezone.utc)
+                           - datetime.fromisoformat(str(hb))).total_seconds()
+                except (TypeError, ValueError):
+                    return {"blocked": "stale_heartbeat", "heartbeat_age_sec": None,
+                            "detail": "unreadable heartbeat timestamp"}
+                if age > float(os.environ.get(
+                        "EXEC_MAX_HEARTBEAT_AGE_SEC", "120")):
+                    return {"blocked": "stale_heartbeat",
+                            "heartbeat_age_sec": int(age)}
                 if not (fresh.get("equity") or fresh.get("balance")):
                     return {"blocked": "equity_unknown"}
                 account = {**account, **fresh}
@@ -200,6 +205,12 @@ class MT5BridgeEngine(ExecutionEngine):
                 px = 0.0
             entry0 = float(signal.get("entry_price") or 0)
             sl0 = float(signal.get("stop_loss") or 0)
+            if not (px > 0):
+                # Fix plan R6 — no live quote means the geometry cannot be
+                # verified against the market: block instead of trading blind.
+                logger.warning("MT5 execute blocked: no live quote user=%s sym=%s",
+                               user_id, signal.get("symbol"))
+                return {"blocked": "quote_unavailable", "signal_entry": entry0}
             if px > 0 and entry0 > 0 and sl0 > 0:
                 stop_dist = abs(entry0 - sl0)
                 deviation = abs(px - entry0)
