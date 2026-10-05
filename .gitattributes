@@ -25,3 +25,8 @@ e2e/playwright-report export-ignore
 e2e/playwright-report/** export-ignore
 e2e/test-results export-ignore
 e2e/test-results/** export-ignore
+
+# EA release chain — the MQ5 is hashed into docs/RELEASE_HASHES.json; keep its bytes identical
+# on every platform (the Windows MetaEditor runner would otherwise check it out with CRLF).
+backend/static/EmergentTradingBridge.mq5 text eol=lf
+backend/static/*.mqh text eol=lf

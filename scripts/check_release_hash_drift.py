@@ -24,11 +24,9 @@ FIX = "fix: bump the EA version if the source changed, then `python scripts/capt
 
 
 def sha256_file(path: str) -> str:
-    h = hashlib.sha256()
+    """MQ5 source hash independent of line endings — identical on the CRLF Windows runner and LF Linux."""
     with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1 << 16), b""):
-            h.update(chunk)
-    return h.hexdigest()
+        return hashlib.sha256(fh.read().replace(b"\r\n", b"\n")).hexdigest()
 
 
 def mq5_version(path: str = MQ5) -> str | None:

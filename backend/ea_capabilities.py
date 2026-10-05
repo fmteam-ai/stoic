@@ -168,7 +168,8 @@ def expected_ea_sha256() -> str | None:
             ok = (len(h) == 64 and str(rec.get("version") or "") == shipped_ea_version(mq5_path)
                   and rec.get("compiled_by") == "github-actions" and sig.get("sig_hex"))
             if ok and os.path.exists(mq5_path):
-                ok = hashlib.sha256(open(mq5_path, "rb").read()).hexdigest() == str(rec.get("mq5_sha256") or "")
+                # line-ending independent (CRLF Windows runner vs LF server)
+                ok = hashlib.sha256(open(mq5_path, "rb").read().replace(b"\r\n", b"\n")).hexdigest() == str(rec.get("mq5_sha256") or "")
             if ok:
                 from release_signing import verify_hex
                 body = {k: rec.get(k) for k in ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",

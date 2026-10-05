@@ -62,6 +62,14 @@ def sha256_file(p):
     return h.hexdigest()
 
 
+def sha256_source(p):
+    """MQ5 source hash independent of line endings (the Windows runner checks out CRLF,
+    Linux/preview LF — the recorded RC hash must match on both)."""
+    with open(p, "rb") as f:
+        data = f.read()
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def _canonical_payload(ea: dict) -> bytes:
     body = {k: ea.get(k) for k in
             ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
@@ -87,7 +95,7 @@ def record(args):
                          "the chain requires 0 errors.")
     doc = json.load(open(HASHES))
     ea = doc.get("ea") or {}
-    mq5_now = sha256_file(MQ5)
+    mq5_now = sha256_source(MQ5)
     if ea.get("mq5_sha256") and ea["mq5_sha256"] != mq5_now:
         raise SystemExit(
             "FAIL: backend/static/EmergentTradingBridge.mq5 does not match the "
@@ -146,7 +154,7 @@ def check_entry(ea: dict) -> list:
         fails.append("no EX5 hash recorded — MQL5 is externally UNVERIFIED "
                      "(compile on Windows, then scripts/verify_ea_release.py)")
     if os.path.exists(MQ5) and ea.get("mq5_sha256"):
-        if sha256_file(MQ5) != ea["mq5_sha256"]:
+        if sha256_source(MQ5) != ea["mq5_sha256"]:
             fails.append("MQ5 source drifted since the recorded compile — "
                          "re-run the Windows compile chain for this exact RC")
     log = ea.get("compile_log") or {}

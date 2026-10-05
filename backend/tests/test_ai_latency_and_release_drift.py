@@ -114,3 +114,24 @@ def test_drift_guard_runs_in_the_first_ci_job():
     assert ci.index("check_release_hash_drift.py") < ci.index("ea-compile:")
     out = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "check_release_hash_drift.py")], capture_output=True, text=True)
     assert out.returncode == 0 and out.stdout.startswith("OK:")
+
+
+def test_mq5_hash_is_line_ending_independent(tmp_path):
+    """The Windows MetaEditor runner checks the MQ5 out with CRLF; every hash in the release
+    chain (record, check, drift guard, server pin) must still equal the recorded LF hash."""
+    import hashlib
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import check_release_hash_drift as g
+    import verify_ea_release as v
+    import capture_release_hashes as c
+    import ea_capabilities as ec
+    src = open(os.path.join(ROOT, "backend", "static", "EmergentTradingBridge.mq5"), "rb").read()
+    assert b"\r\n" not in src
+    crlf = tmp_path / "EA.mq5"; crlf.write_bytes(src.replace(b"\n", b"\r\n"))
+    lf_hash = hashlib.sha256(src).hexdigest()
+    recorded = json.load(open(os.path.join(ROOT, "docs", "RELEASE_HASHES.json")))["ea"]["mq5_sha256"]
+    assert lf_hash == recorded
+    assert g.sha256_file(str(crlf)) == v.sha256_source(str(crlf)) == c.sha256_source(str(crlf)) == lf_hash
+    assert hashlib.sha256(crlf.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == lf_hash   # ea_capabilities pin
+    assert "backend/static/EmergentTradingBridge.mq5 text eol=lf" in open(os.path.join(ROOT, ".gitattributes")).read()
+    assert ec.shipped_ea_version() == "1.58"

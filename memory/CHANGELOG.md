@@ -1895,3 +1895,7 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - Audit (read-only + live unauthenticated probes): no P0–P2; every main92 control traced to enforced server-side code; earlier fixes (nginx headers, admin user-id protection) hold.
 - P3 fixes: secret_scan templated rule now requires the non-placeholder residue to be < 16 chars (a real key containing `{x}` is flagged again); `/api/diagnostic/fx-rates` + `/ai-latency` admin-only (BOLA matrix ADM, AiLatencyCard hides on 401/403); block-cache fail-open raises `security_blocks_unavailable` ops alert (hourly dedup); per-IP denied counter force-flushes above 5000 entries.
 - Verified by testing agent iteration_228 (scanner, unit lane, 9 live checks, Bot Health card) — 100 % pass.
+
+## 2026-10-05 — ea-release compile-record-sign failure #2 (CRLF) — FIXED
+- Root cause: the Windows MetaEditor runner checks the MQ5 out with CRLF (git autocrlf); `sha256(LF→CRLF)` of our file is exactly the `207fe7…` the job saw, so the recorded LF hash `c6e822…` never matched on Windows.
+- Fix: `.gitattributes` pins `backend/static/EmergentTradingBridge.mq5` (and `*.mqh`) to `text eol=lf`; every MQ5 hash in the chain is now line-ending independent (`sha256_source` in verify_ea_release.py + capture_release_hashes.py, `check_release_hash_drift.sha256_file`, `ea_capabilities.expected_ea_sha256` pin). Recorded hash unchanged. Test `test_mq5_hash_is_line_ending_independent` hashes a CRLF copy through all four paths.

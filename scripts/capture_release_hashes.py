@@ -21,6 +21,14 @@ def sha256_file(p):
     return h.hexdigest()
 
 
+def sha256_source(p):
+    """MQ5 source hash independent of line endings (the Windows runner checks out CRLF,
+    Linux/preview LF — the recorded RC hash must match on both)."""
+    with open(p, "rb") as f:
+        data = f.read()
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
+
+
 def host_agent_hash():
     """Identical walk to release.yml manifest generation."""
     ha = hashlib.sha256()
@@ -55,7 +63,7 @@ def main():
     out = {
         "captured_at": datetime.now(timezone.utc).isoformat(),
         "git_commit": commit,
-        "ea": {"version": ea_version, "mq5_sha256": sha256_file(mq5),
+        "ea": {"version": ea_version, "mq5_sha256": sha256_source(mq5),
                "ex5_sha256": (sha256_file(ex5) if os.path.exists(ex5)
                               else None),
                "ex5_note": None if os.path.exists(ex5) else
