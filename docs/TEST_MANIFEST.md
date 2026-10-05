@@ -8,10 +8,10 @@ fails when this file drifts from the tree.
 |-------|---------|---------|-------|
 | unit | pure logic, no external I/O | every CI job | 704 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4141 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4143 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 5056 tests across 516 files.**
+**Total: 5058 tests across 516 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -22,7 +22,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_audit_r30_hardening.py` | http-live | 6 |
 | `backend/tests/test_bot_health_ack_all.py` | http-live | 5 |
 | `backend/tests/test_chaos_soak.py` | http-live | 2 |
-| `backend/tests/test_demo_readiness.py` | http-live | 5 |
+| `backend/tests/test_demo_readiness.py` | http-live | 6 |
 | `backend/tests/test_e2e_v56_authority.py` | http-live | 12 |
 | `backend/tests/test_fixplan_a2_order_lifecycle.py` | http-live | 11 |
 | `backend/tests/test_fixplan_a3_a4_panic_locks.py` | http-live | 34 |
@@ -37,7 +37,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_fixplan_main92_a8b.py` | http-live | 11 |
 | `backend/tests/test_fixplan_main92_sa5.py` | http-live | 20 |
 | `backend/tests/test_fixplan_main93_a9.py` | http-live | 21 |
-| `backend/tests/test_fixplan_main94_a10.py` | http-live | 11 |
+| `backend/tests/test_fixplan_main94_a10.py` | http-live | 12 |
 | `backend/tests/test_h9_fx_rates_and_scorecard.py` | http-live | 7 |
 | `backend/tests/test_iter100_batch_a.py` | http-live | 6 |
 | `backend/tests/test_iter100_http.py` | http-live | 7 |

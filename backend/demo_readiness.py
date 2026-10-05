@@ -196,8 +196,16 @@ async def set_manual(db, cid: str, checked: bool, actor: str) -> dict:
         await db.audit_log.insert_one({"user_id": None, "action": "demo_readiness_manual",
                                        "detail": {"step": cid, "checked": bool(checked), "actor": actor},
                                        "step_up_verified": False, "at": now})
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception as e:  # noqa: BLE001 — audit r31 P3: never silent, surface as an ops alert
+        logger.error("demo_readiness audit write failed (%s) step=%s actor=%s", type(e).__name__, cid, actor)
+        try:
+            from alerting import raise_alert
+            await raise_alert(db, "audit_write_failed", "critical",
+                              f"Audit log write failed for demo-readiness step {cid} by {actor} ({type(e).__name__}).",
+                              dedup_key=f"audit_write_failed:demo_readiness:{cid}",
+                              meta={"step": cid, "actor": actor, "error": type(e).__name__})
+        except Exception as e2:  # noqa: BLE001
+            logger.error("ops alert for audit failure also failed: %s", type(e2).__name__)
     return {"id": cid, "checked": bool(checked), "checked_by": actor if checked else None, "checked_at": now if checked else None}
 
 

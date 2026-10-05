@@ -38,6 +38,34 @@ def test_ci_setup_fixes_present():
     assert "pip install -q cryptography requests" in _read(".github", "workflows", "ea-release.yml")
 
 
+def test_compose_config_stubs_both_env_files_in_ci_and_cleans_up(tmp_path, monkeypatch):
+    """CI checkout: neither ./.env nor backend/.env exists — compose `env_file: backend/.env` must
+    still resolve, and no stub may survive the run."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("ccs", os.path.join(ROOT, "scripts", "check_compose_secrets.py"))
+    ccs = importlib.util.module_from_spec(spec); spec.loader.exec_module(ccs)
+    (tmp_path / "backend").mkdir()
+    (tmp_path / ".env.example").write_text("DB_NAME=\nMONGO_ROOT_USER=\n")
+    (tmp_path / "backend" / ".env.example").write_text("APP_ENV=\nJWT_SECRET=\n")
+    (tmp_path / "docker-compose.yml").write_text("services: {}\n")
+    fake_bin = tmp_path / "bin"; fake_bin.mkdir()
+    probe = tmp_path / "probe.txt"
+    (fake_bin / "docker").write_text(
+        "#!/bin/sh\n"
+        f"test -f '{tmp_path}/backend/.env' || exit 7\n"
+        "while [ $# -gt 0 ]; do if [ \"$1\" = --env-file ]; then shift; test -f \"$1\" || exit 8; "
+        f"grep -q 'DB_NAME=ci-stub' \"$1\" || exit 9; fi; shift; done\n"
+        f"cat '{tmp_path}/backend/.env' > '{probe}'\n")
+    os.chmod(fake_bin / "docker", 0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{os.environ['PATH']}")
+    monkeypatch.setattr(ccs, "ROOT", str(tmp_path))
+    r = ccs._compose_config()
+    assert r.returncode == 0, (r.returncode, r.stderr)
+    assert "APP_ENV=ci-stub" in probe.read_text() and "JWT_SECRET=ci-stub" in probe.read_text()
+    assert not (tmp_path / "backend" / ".env").exists()                       # stub removed
+    assert not [p for p in os.listdir("/tmp") if p.endswith(".env") and p.startswith("tmp") and os.path.getmtime(os.path.join("/tmp", p)) > time.time() - 2]
+
+
 # ── R-1 rollback restores the pre-update database ────────────────────────────
 def test_update_sh_rollback_restores_pre_update_backup():
     src = _read("deploy", "update.sh")

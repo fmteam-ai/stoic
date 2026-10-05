@@ -40,6 +40,45 @@ def created_by_deploy_scripts() -> set[str]:
     return files
 
 
+def _stub_from_example(example: str) -> str:
+    lines = []
+    for ln in open(example, encoding="utf-8").read().splitlines():
+        if re.match(r"^[A-Z0-9_]+=\s*$", ln):
+            ln = ln.rstrip() + "ci-stub"
+        lines.append(ln)
+    return "\n".join(lines) + "\n"
+
+
+def _compose_config() -> "subprocess.CompletedProcess":
+    """`docker compose config` against stubs for every env file a CI checkout lacks:
+    ./.env (--env-file, `${VAR:?}` contract) and backend/.env (compose `env_file:` — the
+    path must exist). Stubs are built from the .env.example files only and removed after."""
+    import tempfile
+    env = {**os.environ, "COMPOSE_FILE": "docker-compose.yml"}
+    cmd = ["docker", "compose"]
+    cleanup = []
+    try:
+        if not os.path.exists(os.path.join(ROOT, ".env")) and os.path.exists(os.path.join(ROOT, ".env.example")):
+            stub = tempfile.NamedTemporaryFile("w", suffix=".env", delete=False)
+            stub.write(_stub_from_example(os.path.join(ROOT, ".env.example")))
+            stub.close()
+            cleanup.append(stub.name)
+            cmd += ["--env-file", stub.name]
+        backend_env = os.path.join(ROOT, "backend", ".env")
+        if not os.path.exists(backend_env):
+            example = os.path.join(ROOT, "backend", ".env.example")
+            with open(backend_env, "w", encoding="utf-8") as fh:
+                fh.write(_stub_from_example(example) if os.path.exists(example) else "APP_ENV=ci-stub\n")
+            cleanup.append(backend_env)
+        return subprocess.run(cmd + ["config", "--quiet"], cwd=ROOT, env=env, capture_output=True, text=True)
+    finally:
+        for p in cleanup:
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
 def main() -> int:
     want = compose_file_secrets()
     have = created_by_deploy_scripts()
@@ -60,25 +99,7 @@ def main() -> int:
         print("FAIL: deploy/lib.sh::ensure_release_secrets does not create secrets/security_telegram_token (N-R2)")
         rc = 1
     if shutil.which("docker"):
-        # CI checkouts carry no ./.env — `docker compose config` must still validate the
-        # `${VAR:?}` contract, so render against a stub built from .env.example.
-        env = {**os.environ, "COMPOSE_FILE": "docker-compose.yml"}
-        cmd = ["docker", "compose"]
-        stub = None
-        if not os.path.exists(os.path.join(ROOT, ".env")) and os.path.exists(os.path.join(ROOT, ".env.example")):
-            import tempfile
-            lines = []
-            for ln in open(os.path.join(ROOT, ".env.example"), encoding="utf-8").read().splitlines():
-                if re.match(r"^[A-Z0-9_]+=\s*$", ln):
-                    ln = ln.rstrip() + "ci-stub"
-                lines.append(ln)
-            stub = tempfile.NamedTemporaryFile("w", suffix=".env", delete=False)
-            stub.write("\n".join(lines) + "\n")
-            stub.close()
-            cmd += ["--env-file", stub.name]
-        r = subprocess.run(cmd + ["config", "--quiet"], cwd=ROOT, env=env, capture_output=True, text=True)
-        if stub:
-            os.unlink(stub.name)
+        r = _compose_config()
         if r.returncode != 0:
             print("FAIL: docker compose config:", (r.stderr or r.stdout).strip()[:800])
             rc = 1

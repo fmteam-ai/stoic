@@ -102,6 +102,26 @@ def test_empty_fleet_is_a_blocker():
     assert dr.fleet_checks([])[0]["status"] == "fail"
 
 
+def test_audit_write_failure_raises_ops_alert_not_silence():
+    import demo_readiness as dr
+    db = FakeDb()
+
+    class _Broken:
+        async def insert_one(self, *_a, **_k):
+            raise RuntimeError("mongo down")
+
+    db.audit_log = _Broken()
+    raised = []
+
+    async def _fake_alert(_db, kind, severity, message, dedup_key=None, meta=None, **_k):
+        raised.append((kind, severity, dedup_key))
+
+    with patch("alerting.raise_alert", _fake_alert):
+        out = run(dr.set_manual(db, "ci_green", True, actor="admin@x.io"))
+    assert out["checked"] is True
+    assert raised == [("audit_write_failed", "critical", "audit_write_failed:demo_readiness:ci_green")]
+
+
 def test_routes_admin_only_and_ui_wired():
     from routes import admin_routes
     for fn in (admin_routes.admin_demo_readiness, admin_routes.admin_demo_readiness_manual):
