@@ -21,6 +21,8 @@ async def _bridge_ip_throttle(request: Request) -> None:
     """r22: per-IP volume guard on the unauthenticated bridge surface (token
     guessing / probing). Generous enough for a VPS running many terminals."""
     from security import client_ip, rate_limit
+    from security_agent.events import request_ip as _sa_ip
+    _sa_ip.set(client_ip(request))
     await rate_limit(get_db(), "bridge", client_ip(request), BRIDGE_IP_LIMIT_PER_MIN, 60,
                      "Too many bridge requests from this address", request=request)
 
@@ -56,8 +58,18 @@ async def _account_by_token(token: str) -> dict:
         {"bridge_token_prev": token,
          "bridge_token_prev_expires": {"$gt": now}})
     if not acc:
+        from security_agent.events import emit as _sa_emit
+        await _sa_emit(db, "bridge_invalid_token", {"token_prefix": str(token)[:4]})   # B2 — IP from the request contextvar
         raise HTTPException(status_code=401, detail="Invalid bridge token")
     return acc
+
+
+async def record_heartbeat_sighting(db, acc: dict, payload) -> None:
+    """B1 — where this bridge token heartbeats from (IP + terminal), last 20 sightings on the account."""
+    from security_agent.events import request_ip as _sa_ip
+    sight = {"ip": _sa_ip.get(), "terminal": payload.installation_id or (str(payload.terminal_build) if getattr(payload, "terminal_build", None) else None),
+             "at": datetime.now(timezone.utc).isoformat()}
+    await db.accounts.update_one({"_id": acc["_id"]}, {"$push": {"hb_sightings": {"$each": [sight], "$slice": -20}}})
 
 
 STOIC_MAGIC_HB = 901234
@@ -95,6 +107,10 @@ def _backfill_doc(acc: dict, account_id: str, p, opened_iso: str) -> dict:
 async def heartbeat(payload: BridgeHeartbeat):
     db = get_db()
     acc = await _account_by_token(payload.bridge_token)
+    try:
+        await record_heartbeat_sighting(db, acc, payload)
+    except Exception as _sw:  # noqa: BLE001 — telemetry must never break the heartbeat
+        record_swallow("bridge", "hb_sighting", _sw)
     now_iso = datetime.now(timezone.utc).isoformat()
     # Diagnostic: log the position snapshot size on every heartbeat so we can
     # tell whether the EA is sending the v1.25 `positions` field at all.

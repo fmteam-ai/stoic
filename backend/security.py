@@ -269,6 +269,8 @@ async def consume_and_rotate(db, payload: dict, presented_token: str,
         head = await _grace_successor(db, sess, presented_token, _trusted)
         if head is None:
             await revoke_family(db, sess["family"], reason="refresh_token_reuse")
+            from security_agent.events import emit as _sa_emit
+            await _sa_emit(db, "refresh_token_reuse", {"user_id": str(sess.get("user_id")), "family": str(sess.get("family"))[:12]})
             raise HTTPException(status_code=401,
                                 detail="Refresh token reuse detected — all "
                                        "sessions in this chain were revoked")

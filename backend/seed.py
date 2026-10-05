@@ -378,6 +378,8 @@ async def ensure_indexes():
     await db.trades.create_index([("user_id", 1), ("closed_at", -1)])
     await db.trades.create_index([("account_id", 1), ("status", 1)])
     await ensure_unique_ticket_index(db)
+    from security_agent.findings import ensure_indexes as _sa_indexes
+    await _sa_indexes(db)   # Security & Health Agent collections (SA1)
     # Round 15 item 10 — decision updates key on decision_id everywhere;
     # without this index every update is a collection scan (caught by
     # dependency_health_check on first deploy). Partial: legacy docs

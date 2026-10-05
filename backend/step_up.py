@@ -76,6 +76,8 @@ async def require_step_up(db, user, request, action: str) -> None:
          "action": action, "used_at": None, "expires_at": {"$gt": now_iso}},
         {"$set": {"used_at": now_iso}})
     if not doc:
+        from security_agent.events import emit as _sa_emit   # A6 — a presented step-up token that does not verify
+        await _sa_emit(db, "step_up_missing", {"user_id": str(user.get("id")), "action": action, "reason": "step_up_invalid"})
         raise HTTPException(status_code=403, detail={
             "code": "step_up_invalid", "action": action,
             "message": "Step-up token expired or already used — verify your "

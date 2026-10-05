@@ -13,6 +13,8 @@ resolve_file_secrets()
 import os
 import asyncio
 import logging
+from security_agent.redact import install_log_filter as _install_redaction  # noqa: E402
+_install_redaction()
 import uuid
 from datetime import datetime, timedelta, timezone
 from fastapi import FastAPI, APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
@@ -466,6 +468,8 @@ api_router.include_router(affiliate_router)
 api_router.include_router(support_router)
 api_router.include_router(portal_router)
 api_router.include_router(ops_console_router)
+from routes.security_agent_routes import router as security_agent_router  # noqa: E402
+api_router.include_router(security_agent_router)
 api_router.include_router(broker_registry_router)
 api_router.include_router(notification_router)
 api_router.include_router(telegram_router)
@@ -855,6 +859,8 @@ async def on_startup():
         _scalp_reconcile_task = asyncio.create_task(_scalp_reconcile_loop())
         _eod_flatten_task = asyncio.create_task(_eod_flatten_loop())
         asyncio.create_task(_soak_sampler_loop())
+        from security_agent.runner import loop as _security_agent_loop
+        asyncio.create_task(_security_agent_loop())   # Security & Health Agent (SA1/SA2)
         asyncio.create_task(_soak_tracker_loop())
         asyncio.create_task(_billing_loop())
         asyncio.create_task(_mode_guardian_loop())

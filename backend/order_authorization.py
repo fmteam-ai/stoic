@@ -57,6 +57,12 @@ async def mint(db, *, user_id, account_id, symbol, side,
     return {"nonce": nonce, "signature": sig, **fields}
 
 
+async def _sa_order_event(db, account_id, user_id, reason: str, nonce) -> None:
+    """B3 — an order reached execution without a valid, unused authorisation."""
+    from security_agent.events import emit
+    await emit(db, "order_auth_invalid", {"account_id": str(account_id), "user_id": str(user_id), "reason": reason, "nonce": str(nonce)[:8]})
+
+
 async def consume(db, *, nonce, user_id, account_id, symbol, side) -> dict:
     """Atomically consume the authorization. Returns {ok, reason}. A second
     call with the same nonce returns ok=False (replay/duplicate blocked)."""
@@ -68,8 +74,10 @@ async def consume(db, *, nonce, user_id, account_id, symbol, side) -> dict:
          "symbol": fields["symbol"], "side": fields["side"]},
         {"$set": {"status": "consumed", "consumed_at": _now().isoformat()}})
     if not doc:
+        await _sa_order_event(db, account_id, user_id, "not_found_or_replayed", nonce)
         return {"ok": False, "reason": "not_found_or_replayed"}
     if not hmac.compare_digest(str(doc.get("signature", "")), expected):
+        await _sa_order_event(db, account_id, user_id, "bad_signature", nonce)
         return {"ok": False, "reason": "bad_signature"}
     try:
         exp = datetime.fromisoformat(str(doc["expires_at"]))

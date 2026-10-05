@@ -130,6 +130,10 @@ services:
     <<: *app-common
     command: ["python", "-m", "workers.analytics"]
 
+  worker-security:
+    <<: *app-common
+    command: ["python", "-m", "workers.security"]
+
   worker-model:
     <<: *app-common
     command: ["python", "-m", "workers.model"]
