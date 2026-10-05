@@ -3114,3 +3114,7 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Security audit #5 PASS 2026-10-05 (2 P3 fixed, see CHANGELOG).
 - Still needed from user: `SECURITY_AGENT_PROTECTED_IPS`, `SECURITY_AGENT_TELEGRAM_BOT_TOKEN` / `SECURITY_AGENT_TELEGRAM_CHAT_ID` (Docker secrets), Resend domain verification.
 - Next: Fix plan Batch C1 (candle data), then C2; SA5 hardening extras (pip-audit job, npm audit, backup restore test, TLS/header/port checks).
+
+## 2026-10-05 — Fix plan Step C1 (candle data) — DONE, user verification pending
+- Per-user/timeframe candle reads with validated ingest (A1), broker-offset UTC normalisation (R3), no VWAP before first bar of day (A3), broker tick as live price + `price_source` on every signal (A10), per-user forecast cache (A11), training rows with UTC open-time anchor / entry-time stop / scoped signals (R11). Details: memory/CHANGELOG.md. Tests unit 7 + live 5 (iteration_225 100%).
+- Next: Fix plan C2 (AI calls/gates), then D1/D2; SA5 hardening extras; Telegram secrets + protected IPs still pending from user.

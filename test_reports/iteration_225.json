@@ -1,0 +1,39 @@
+{
+  "summary": "Live backend verification of Fix plan C1 (candle ingest R3/A1/A3/A10/A11). Wrote /app/backend/tests/test_fixplan_c1_candles_live.py (5 tests, 4 passed, 1 xfail documenting a minor gap). All regression suites requested pass. Seeded a throwaway user + paper account via Mongo; cleaned up on teardown.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {
+        "endpoint": "/api/signals/generate (ai_signals.analyze_symbol _hold path)",
+        "issue": "price_source field is omitted from the response when the signal exits via the cheap_hold / _hold() early-return (market closure, macro freeze, MTF cascade not aligned, 'no fresh M15 stream', regime dispatch no-op, engine note hold). A10 contract says the broker-tick vs public-quote source should be surfaced; it currently only appears on the full-run path where an actionable action is produced. Consider setting price_source inside _hold() (price_source is already resolved at line 142 before any _hold() call)."
+      }
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_fixplan_c1_candles_live.py",
+    "/app/backend/tests/test_fixplan_c1_candles.py",
+    "/app/backend/tests/test_fixplan_b2_safety_guards.py"
+  ],
+  "action_items": [
+    "Minor: attach price_source to the _hold() early-exit shape in ai_signals.analyze_symbol so A10 is observable on every signal response, not only on actionable paths."
+  ],
+  "critical_code_review_comments": [
+    "bridge_routes.py receive_candles correctly applies broker_offset_sec BEFORE validate_bars/split_forming_bar and persists t_basis='utc', broker_offset_sec, offset_source — verified against live DB.",
+    "validate_bars correctly rejects bad geometry, misaligned timestamps, non-positive/NaN prices and bars older than ~30 days, counted into candle_feed_health.dropped_bars.",
+    "intraday_candles merge keeps newest 800 bars by timestamp (OK for 8+ days of M15).",
+    "ai_signals._hold() short-circuit shape omits a few 'universal' telemetry fields (price_source, and potentially others needed by downstream consumers)."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (verified paths); 1 xfail on minor known gap"},
+  "test_credentials": "admin env creds via TEST_ADMIN_EMAIL/PASSWORD; throwaway test user auto-seeded per module run and torn down (email stoic-qa.dev domain, no real inbox).",
+  "seed_data_creation": "Per module run: 1 users doc (role=user, status=active, email_verified=true), 1 accounts doc (mode=paper, bridge_token hex16, broker_time_info.server_gmt_offset_sec=10800, trading_enabled=false). Both deleted + intraday_candles/candle_feed_health/signals/sessions scoped to the user_id cleaned on fixture teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "regression_results": {
+    "test_fixplan_c1_candles.py + test_fixplan_b2_safety_guards.py (DB_NAME='')": "14 passed",
+    "iter125/126/127/101/108 (DB_NAME=ai_trading_bot_test)": "56 passed, 4 skipped (pre-existing env-conditional skips)",
+    "note": "test_iter14_gold_edge was NOT run per request (pre-existing, out of scope)."
+  },
+  "context_for_next_testing_agent": "Live-ingest regression lives at tests/test_fixplan_c1_candles_live.py. It needs STOIC_TESTS_ALLOW_DB_NAME=1 to run against the preview DB (ai_trading_bot). The .test TLD is reserved by email_validator — use .dev or similar. Signals cheap_hold path drops price_source — expected xfail until main agent fixes _hold() to carry it."
+}
