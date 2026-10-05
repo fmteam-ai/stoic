@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-10-05T11:38:02.467425+00:00",
-  "git_commit": "1206035318ebe76396c81853be7198eb9f718470",
-  "source_sha": "1206035318ebe76396c81853be7198eb9f718470",
+  "captured_at": "2026-10-05T12:04:10.983305+00:00",
+  "git_commit": "618531ca5cd94a67fd49cff4a8af35ef40cdc7bb",
+  "source_sha": "618531ca5cd94a67fd49cff4a8af35ef40cdc7bb",
   "images": {
     "backend": null,
     "frontend": null
@@ -12,7 +12,7 @@
   "signer_key_id": "stoic-release-ed25519-v1",
   "migrations_sha256": "9d5e137fa0fd8bfa5658435dff724140e6ed8b022067d5e001d4d3741415b94a",
   "frontend_asset_digest": null,
-  "test_manifest_sha256": "209c928997177095c582226c10e7ec2c5c613d8eec2474442fbf1ffe597fb58f",
+  "test_manifest_sha256": "bab3664ea17abc8a335d3c3923db2f512e28de9beaa7f87acfd3616873b2b5c6",
   "model_manifest_sha256": "b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6",
   "python": {
     "version": "3.11.16",
@@ -148,6 +148,7 @@
       "pyflakes==3.4.0",
       "pymongo==4.6.3",
       "pyparsing==3.3.2",
+      "pypdf==6.19.0",
       "pytest-asyncio==1.4.0",
       "pytest==9.1.1",
       "python-dateutil==2.9.0.post0",
@@ -201,7 +202,7 @@
       "yarl==1.24.2",
       "zipp==4.1.0"
     ],
-    "packages_sha256": "3b3d266a109f25ab2af6fe047643085b06231e3b894214aadb3925156c4d0d88",
+    "packages_sha256": "d854d62b8583a852eeab8d7d6a18ddca1be5bee44658a9bf39df3340fe9bde85",
     "requirements_txt_sha256": "2b39983a4299afcbc1a825b790401594a56e3cc7011f8eb42164eb546915f654"
   },
   "node": {

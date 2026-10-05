@@ -5,6 +5,10 @@ from bson import ObjectId
 
 def _match(doc, q):
     for k, v in q.items():
+        if k == "$or":
+            if not any(_match(doc, sub) for sub in v):
+                return False
+            continue
         cur = doc
         for part in k.split("."):
             if isinstance(cur, list):                      # dotted path through an array: any element

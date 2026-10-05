@@ -1,11 +1,18 @@
-"""Security & Health Agent — admin API (SA1: read-only; SA3/SA4 add writes with step-up)."""
-from fastapi import APIRouter, Depends, HTTPException
+"""Security & Health Agent — admin API (SA1 read-only; SA3 writes with step-up + audit chain)."""
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from bson import ObjectId
+from pydantic import BaseModel
 
 from auth import get_current_user, require_admin
 from database import get_db
-from security_agent import config
+from security_agent import alerts, config, reports, rules
 from security_agent.checks import CHECKS
+from security_agent.checks.common import f
+from security_agent.findings import open_or_update, set_status
+from step_up import require_step_up
 
 router = APIRouter(prefix="/admin/security", tags=["security-agent"])
 
@@ -69,3 +76,92 @@ async def check_runs(user=Depends(get_current_user)):
     latest = {r["check_id"]: r async for r in db.security_check_runs.find({"_id": {"$regex": "^latest:"}})}
     return {"checks": [{"check_id": cid, "interval_s": iv, **{k: v for k, v in (latest.get(cid) or {}).items() if k != "_id"}}
                        for cid, (_, iv) in CHECKS.items()]}
+
+
+# ── SA3: actions log, reports, writes (step-up MFA + audit chain) ───────────
+async def _audit(db, user, action: str, target: str, meta: dict) -> None:
+    from audit_chain import append_chained
+    await append_chained(db, {"actor_email": user.get("email"), "actor_id": user.get("id"), "action": action, "target_kind": "security_agent",
+                              "target_id": target, "target_label": "", "reason": "", "meta": meta, "at": datetime.now(timezone.utc).isoformat()})
+
+
+@router.get("/actions")
+async def list_actions(limit: int = 100, kind: str | None = None, user=Depends(get_current_user)):
+    require_admin(user)
+    q = {"kind": kind} if kind else {}
+    rows = await get_db().security_actions.find(q).sort([("at", -1)]).limit(max(1, min(int(limit), 500))).to_list(length=500)
+    return {"actions": [_ser(r) for r in rows], "rules": {k: {"title": v["title"], "checks": list(v["checks"]), "action": v["action"]} for k, v in rules.RULES.items()}}
+
+
+class StatusBody(BaseModel):
+    status: str
+    note: str = ""
+
+
+@router.post("/findings/{finding_id}/status")
+async def finding_status(finding_id: str, body: StatusBody, request: Request, user=Depends(get_current_user)):
+    require_admin(user)
+    db = get_db()
+    await require_step_up(db, user, request, "security_finding_status")
+    if body.status not in ("acknowledged", "resolved", "false_positive") or not ObjectId.is_valid(finding_id):
+        raise HTTPException(status_code=400, detail="status must be acknowledged|resolved|false_positive")
+    ok = await set_status(db, ObjectId(finding_id), body.status, user.get("email") or user["id"], body.note)
+    if not ok:
+        raise HTTPException(status_code=404, detail="finding not open")
+    await _audit(db, user, f"security_finding_{body.status}", finding_id, {"note": body.note[:200]})
+    return _ser(await db.security_findings.find_one({"_id": ObjectId(finding_id)}))
+
+
+class ModeBody(BaseModel):
+    mode: str
+    rules_enabled: list[str] | None = None
+
+
+@router.post("/mode")
+async def set_mode(body: ModeBody, request: Request, user=Depends(get_current_user)):
+    require_admin(user)
+    db = get_db()
+    await require_step_up(db, user, request, "security_agent_mode")
+    if body.mode not in config.MODES:
+        raise HTTPException(status_code=400, detail="mode must be observe|enforce")
+    sets = {"mode": body.mode}
+    if body.rules_enabled is not None:
+        bad = [r for r in body.rules_enabled if r not in rules.RULES]
+        if bad:
+            raise HTTPException(status_code=400, detail=f"unknown rules {bad}")
+        sets["rules_enabled"] = body.rules_enabled
+    await db.platform_state.update_one({"_id": config.STATE_ID}, {"$set": sets}, upsert=True)
+    await _audit(db, user, "security_agent_mode", body.mode, sets)
+    cfg = await config.load(db)
+    return {"mode": cfg["mode"], "rules_enabled": cfg["rules_enabled"]}
+
+
+@router.post("/test-alert")
+async def test_alert(request: Request, user=Depends(get_current_user)):
+    """Opens a Critical test finding; the next tick delivers it (acceptance: Telegram + email within 30 s)."""
+    require_admin(user)
+    db = get_db()
+    await require_step_up(db, user, request, "security_test_alert")
+    fd = f("agent_test_alert", f"by:{user['id']}", "critical", "platform", f"test alert requested by {user.get('email')}", {"actor": user.get("email")})
+    res = await open_or_update(db, fd)
+    await _audit(db, user, "security_test_alert", res["id"], {})
+    return {"finding_id": res["id"], "created": res["created"], "telegram_configured": alerts.telegram_creds() is not None}
+
+
+@router.get("/reports/{kind}")
+async def get_report(kind: str, format: str = "json", build: bool = False, user=Depends(get_current_user)):
+    require_admin(user)
+    if kind not in ("daily", "weekly"):
+        raise HTTPException(status_code=404, detail="kind must be daily|weekly")
+    db = get_db()
+    if build:
+        cfg = await config.load(db)
+        rep = await (reports.build_daily if kind == "daily" else reports.build_weekly)(db, cfg)
+        rep = {**rep, "html": reports.render_html(rep), "text": reports.render_text(rep), "_id": "preview"}
+    else:
+        rep = await db.security_reports.find_one({"kind": kind}, sort=[("built_at", -1)])
+        if not rep:
+            raise HTTPException(status_code=404, detail="no report built yet — use ?build=true for a live preview")
+    if format == "html":
+        return HTMLResponse(rep["html"])
+    return _ser(rep)

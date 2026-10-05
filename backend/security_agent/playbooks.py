@@ -64,6 +64,14 @@ PLAYBOOKS = {
            ["Check the EA on the account; the protection guard escalates to FULL_CLOSE after 90 s unprotected."], "ops_alerts cleared."),
     "agent_check_failed": ("A security check failed to run", "A silent check is a blind spot.",
                            ["Read the traceback in the evidence; fix the check."], "The check runs clean."),
+    "protected_target": ("Containment refused: protected target", "A rule would have locked the master admin or a protected IP — either the allow-list is wrong or the attack comes from inside it.",
+                         ["Check SECURITY_AGENT_PROTECTED_IPS and the source in the evidence.", "If the source is really hostile, block it at Cloudflare manually."],
+                         "No new protected_target findings for this target."),
+    "containment_cap_reached": ("Containment cap reached", "The agent hit its hourly action cap and is alert-only — a large attack or a misfiring rule.",
+                                ["Review security_actions for the last hour; raise SECURITY_AGENT_MAX_ACTIONS_PER_HOUR only if every action was right.",
+                                 "Block the dominant source at Cloudflare."], "Actions per hour back under the cap."),
+    "agent_test_alert": ("Security alert pipeline test", "Confirms Telegram and email delivery for Critical findings.",
+                         ["Mark this finding resolved once the alert arrived."], "Alert received within 30 s."),
 }
 
 

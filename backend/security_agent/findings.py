@@ -36,6 +36,9 @@ async def ensure_indexes(db) -> None:
     await db.security_check_runs.create_index([("check_id", 1), ("at", -1)])
     await db.security_check_runs.create_index("expires_at", expireAfterSeconds=0)
     await db.security_actions.create_index([("at", -1)])
+    await db.security_actions.create_index([("dedup", 1), ("at", -1)])
+    await db.security_reports.create_index([("kind", 1), ("built_at", -1)])
+    await db.security_reports.create_index("expires_at", expireAfterSeconds=0)
 
 
 async def open_or_update(db, finding: dict, *, retention_days: int = 180) -> dict:

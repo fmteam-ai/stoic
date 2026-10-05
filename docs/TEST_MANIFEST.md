@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 691 |
+| unit | pure logic, no external I/O | every CI job | 698 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3900 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 3913 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 4802 tests across 492 files.**
+**Total: 4822 tests across 494 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -407,6 +407,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_sec_iter206_brain_hardening.py` | http-live | 5 |
 | `backend/tests/test_sec_iter206_brain_hardening_http.py` | http-live | 8 |
 | `backend/tests/test_sec_iter210_costs_bola.py` | http-live | 7 |
+| `backend/tests/test_security_agent_sa1_sa2_live.py` | http-live | 13 |
 | `backend/tests/test_signer_service_contract.py` | http-live | 5 |
 | `backend/tests/test_step3_reconciliation_stale_orders.py` | http-live | 9 |
 | `backend/tests/integration/scalp/test_iter56_ta_capacity_integrity.py` | integration | 1 |
@@ -499,6 +500,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_r30_ea_release_chain.py` | unit | 4 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
 | `backend/tests/unit/test_security_agent_sa1_sa2.py` | unit | 7 |
+| `backend/tests/unit/test_security_agent_sa3.py` | unit | 7 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 24 |
 | `backend/tests/unit/test_step2_position_sizing.py` | unit | 10 |
 | `backend/tests/unit/test_step4_fail_closed_risk.py` | unit | 5 |

@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { GlobalPanicCard } from "@/components/GlobalPanicCard";
+import { SecurityHealthPanel } from "@/components/security/SecurityHealthPanel";
 import { toast } from "sonner";
 import { Loader2, RefreshCw, Server, Plug, Cpu, AlertTriangle, Activity, Database, CreditCard, Users, ListOrdered, ShieldCheck, Receipt, FlaskConical, Play, TrendingDown, Gauge } from "lucide-react";
 
@@ -459,6 +461,9 @@ function RuntimeHealth() {
 export default function AdminOps() {
     const [d, setD] = useState(null);
     const [refreshing, setRefreshing] = useState(false);
+    const [searchParams, setSearchParams] = useSearchParams();
+    const tab = searchParams.get("tab") === "security" || searchParams.get("finding") ? "security" : "ops";
+    const setTab = (t) => setSearchParams(t === "security" ? { tab: "security" } : {});
 
     const load = useCallback(async (manual = false) => {
         if (manual) setRefreshing(true);
@@ -473,9 +478,29 @@ export default function AdminOps() {
         return () => clearInterval(t);
     }, [load]);
 
+    const tabs = (
+        <div className="px-4 md:px-8 pt-4 flex gap-1 border-b border-[#1F1F1F]" data-testid="ops-tabs">
+            {[["ops", "OPS CONSOLE"], ["security", "SECURITY & HEALTH"]].map(([k, label]) => (
+                <button key={k} onClick={() => setTab(k)} data-testid={`ops-tab-${k}`}
+                    className={`px-4 py-2 font-mono text-[11px] tracking-widest border-b-2 -mb-px ${tab === k ? "border-[#00FF41] text-[#00FF41]" : "border-transparent text-[#71717A] hover:text-white"}`}>
+                    {label}
+                </button>
+            ))}
+        </div>
+    );
+
+    if (tab === "security") return (
+        <AppLayout>
+            <PageHeader title="Ops Console" subtitle="Security & Health Agent · findings, rules, checks, reports" testid="ops-console-header" />
+            {tabs}
+            <div className="px-4 md:px-8 py-4"><SecurityHealthPanel initialFindingId={searchParams.get("finding")} /></div>
+        </AppLayout>
+    );
+
     if (!d) return (
         <AppLayout>
             <PageHeader title="Ops Console" subtitle="Loading fleet telemetry…" />
+            {tabs}
             <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-[#52525B]" /></div>
         </AppLayout>
     );
@@ -493,8 +518,9 @@ export default function AdminOps() {
                         <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} /> REFRESH
                     </button>
                 } />
+            {tabs}
 
-            <div className="mb-4"><GlobalPanicCard onDone={() => load(true)} /></div>
+            <div className="mb-4 mt-4"><GlobalPanicCard onDone={() => load(true)} /></div>
 
             {/* Top strip */}
             <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2 mb-4" data-testid="ops-stat-strip">

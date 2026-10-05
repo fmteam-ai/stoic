@@ -10,6 +10,7 @@ import OnboardingWizard from "@/components/OnboardingWizard";
 import { StepUpDialog } from "@/components/StepUpDialog";
 import { TourRunner } from "@/components/GuidedTour";
 import { TradingReadinessStrip } from "@/components/TradingReadinessStrip";
+import { SecurityCriticalBanner } from "@/components/security/SecurityCriticalBanner";
 import { useEffect } from "react";
 import { useLocation } from "react-router-dom";
 
@@ -52,6 +53,7 @@ export function AppLayout({ children }) {
                 <AuthorityStrip />
                 <TickerTape />
                 <SubscriptionBanner />
+                <SecurityCriticalBanner />
                 <div className="px-4 md:px-8 pt-3">
                     <OnboardingBanner />
                     <OnboardingWizard />

@@ -192,10 +192,12 @@ def test_routes_are_admin_only_and_in_security_matrix():
     import routes.security_agent_routes as r
     from security_matrix import BOLA_MATRIX, ADM
     paths = {p for (m, p) in BOLA_MATRIX if p.startswith("/api/admin/security/")}
-    assert paths == {"/api/admin/security/status", "/api/admin/security/findings", "/api/admin/security/findings/{finding_id}", "/api/admin/security/check-runs"}
-    assert all(BOLA_MATRIX[("GET", p)] == ADM for p in paths)
-    for fn in (r.security_status, r.list_findings, r.get_finding, r.check_runs):
+    assert paths >= {"/api/admin/security/status", "/api/admin/security/findings", "/api/admin/security/findings/{finding_id}", "/api/admin/security/check-runs"}
+    assert all(v == ADM for (m, p), v in BOLA_MATRIX.items() if p in paths)
+    for fn in (r.security_status, r.list_findings, r.get_finding, r.check_runs, r.list_actions, r.finding_status, r.set_mode, r.test_alert, r.get_report):
         assert "require_admin(user)" in inspect.getsource(fn)
+    for fn in (r.finding_status, r.set_mode, r.test_alert):                       # SA3 writes need step-up MFA
+        assert "require_step_up(" in inspect.getsource(fn)
     with pytest.raises(HTTPException) as ei:
         run(r.get_finding("abc", user={"id": "u", "role": "user"}))
     assert ei.value.status_code == 403

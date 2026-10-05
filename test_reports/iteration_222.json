@@ -1,0 +1,28 @@
+{
+  "summary": "SA1+SA2 Security & Health Agent verified end-to-end (backend only). Unit suite tests/unit/test_security_agent_sa1_sa2.py passes (7/7, no Mongo). New live HTTP+DB suite tests/test_security_agent_sa1_sa2_live.py passes (13/13) against the preview backend: admin status endpoint returns {mode:'observe', rules_enabled:[], checks_total:28, worker_lease, open_by_severity, light}; findings list items contain all required keys (check_id/dedup_key/severity/area/title/what_happened/why_it_matters/evidence/solution/verify/status/occurrences); findings/{id} returns 200 for a real id and 404 for an unknown one; /api/admin/security/check-runs returns 28 checks (each with interval_s, none with status='failed'); backend.err.log contains the expected 'security agent tick: 28 check(s) ran' line (10 occurrences); security_check_runs collection has latest:<check_id> docs for all 28 ids; T1 ('EA heartbeats stale platform-wide') is open as expected (no EA terminals connected in preview); dedup aggregation shows AT MOST one open row per dedup_key; POST /api/bridge/heartbeat with bogus bridge_token returns 401 and a security_events row kind='bridge_invalid_token' with ip is recorded within a few seconds; observe-mode invariants hold — security_blocks and security_actions collections are empty; auth gates: unauthenticated → 401, non-admin (seeded verified user) → 403. Regression smoke: /api/ops/release-readiness returns checks.unique_ticket_index (status 503 ready=false in preview due to known workers alive=false, response body still correct), /api/admin/ops-console returns 200. No PANIC endpoints were called; no admin settings mutated.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_security_agent_sa1_sa2_live.py",
+    "/app/backend/tests/unit/test_security_agent_sa1_sa2.py",
+    "/app/test_reports/pytest/sa1_sa2_live.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "security_agent/events.py writes security_events with `at` as an ISO-8601 string; downstream consumers (and any future retention/TTL sweep) must therefore use string comparison rather than numeric timestamps — fine today, but worth documenting on the schema. TTL is handled via expires_at which is a BSON datetime, so that path is correct.",
+    "routes/bridge_routes.py:62 emits only the first 4 characters of the token prefix; good minimisation, matches S* secret-handling guidance.",
+    "T1 heartbeat check is correctly OPEN in observe mode. Confirm SA3 won't auto-contain this preview-wide finding; otherwise every preview will auto-trip the EA bridge."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_security_agent_sa1_sa2_live.py (new, 13 tests)",
+    "/app/docs/TEST_MANIFEST.md (regenerated)",
+    "/app/release/rc_lock.json (regenerated)"
+  ],
+  "success_rate": {"backend": "100% (20/20: 7 unit + 13 live HTTP+DB)", "frontend": "not tested — backend only"},
+  "test_credentials": "admin@stoicaibot.com — password read from /app/memory/test_credentials.md via backend/.env (TEST_ADMIN_* / ADMIN_* env vars); never written to any report or test file.",
+  "seed_data_creation": "test_security_findings_non_admin_403 inserts one verified non-admin user into users (_sa_probe:true) and deletes it in a finally block. One extra security_events row kind='bridge_invalid_token' created by the dedup/event test — benign, TTL via expires_at.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run: `cd /app/backend && env -u MONGO_URL DB_NAME= python -m pytest tests/unit/test_security_agent_sa1_sa2.py -q` for the Mongo-less unit suite. Run: `cd /app/backend && STOIC_TESTS_ALLOW_DB_NAME=1 DB_NAME=ai_trading_bot python -m pytest tests/test_security_agent_sa1_sa2_live.py -v` for the live HTTP+DB suite. The non-admin 403 test seeds a user directly in Mongo (users collection, bcrypt password) because /api/auth/register requires turnstile + email verification; this is cleaner than wiring verification mail. The 'at' field in security_events is an ISO string, so when probing recency, use an ISO cutoff with $gte rather than epoch floats. release-readiness returns 503 in preview because trading-worker loops read null — unrelated to SA1/SA2.",
+  "rca of the issue": "n/a — no bugs."
+}
