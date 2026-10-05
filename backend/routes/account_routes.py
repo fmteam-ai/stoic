@@ -54,6 +54,7 @@ def _serialize(doc: dict) -> dict:
     doc["environment_attested"] = attested_environment(doc) != "LIVE"
     doc["environment_attestation_state"] = attestation_state(doc)
     doc.pop("environment_attestation", None)
+    doc.pop("position_mode_override", None)   # audit A6 SEC-001 — admin-only (who/when/why); owner sees mode+source only
     creds = doc.pop("creds", {}) or {}
     doc["has_investor_password"] = bool(creds.get("investor"))
     doc["has_master_password"] = bool(creds.get("master"))
@@ -69,15 +70,19 @@ async def list_accounts(user=Depends(get_current_user)):
     db = get_db()
     cursor = db.accounts.find({"user_id": user["id"]}).sort("created_at", -1)
     docs = await cursor.to_list(length=100)
-    out = [_serialize(d) for d in docs]
-    # A6/H1 — netting/hedging verdict + where it came from (admin | ea | registry | default)
+    # A6/H1 — netting/hedging verdict + where it came from (admin | ea | registry | default);
+    # resolved on the RAW doc (the serializer strips the admin-only override object)
     from routes.bridge_routes import position_mode_resolution
+    modes = {}
+    for d in docs:
+        if d.get("mode") != "paper":
+            modes[str(d["_id"])] = await position_mode_resolution(db, d)
+    out = [_serialize(d) for d in docs]
     for d in out:
-        if d.get("mode") == "paper":
-            continue
-        res = await position_mode_resolution(db, d)
-        d["position_mode"] = res["mode"]
-        d["position_mode_source"] = res["source"]
+        res = modes.get(d["id"])
+        if res:
+            d["position_mode"] = res["mode"]
+            d["position_mode_source"] = res["source"]
     return out
 
 

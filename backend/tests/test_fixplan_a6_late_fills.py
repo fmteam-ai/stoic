@@ -109,6 +109,14 @@ def test_h1_admin_sets_and_clears_position_mode(db, seeded, monkeypatch):
     with patch("broker_registry.resolve_registry", AsyncMock(return_value=None)):
         accs = _arun(acr.list_accounts(user={"id": seeded["user_id"], "role": "user"}))
     assert accs[0]["position_mode"] == "hedging" and accs[0]["position_mode_source"] == "default"
+    # audit A6 SEC-001 — the admin-only override object (who/when/why) never reaches the owner,
+    # while the verdict still reflects the admin setting
+    db.accounts.update_one({"_id": seeded["acc_oid"]}, {"$set": {"position_mode_override": {
+        "mode": "netting", "by": "admin@test.local", "at": _iso(), "reason": "internal note"}}})
+    with patch("broker_registry.resolve_registry", AsyncMock(return_value=None)):
+        accs = _arun(acr.list_accounts(user={"id": seeded["user_id"], "role": "user"}))
+    assert accs[0]["position_mode"] == "netting" and accs[0]["position_mode_source"] == "admin"
+    assert "position_mode_override" not in accs[0] and "internal note" not in str(accs[0])
 
 
 # ------------------------------------------------------------------ H4
