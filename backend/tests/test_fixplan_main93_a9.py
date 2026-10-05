@@ -141,7 +141,7 @@ def test_nr6_current_and_previous_signed_hash_accepted(tmp_path):
                "broker_env": {"attested_environment": "LIVE"}}
         with patch("broker_env.attested_environment", lambda a: "LIVE"), patch("broker_env.broker_environment", lambda a: "LIVE"):
             src = inspect.getsource(ec)
-            assert 'if reported not in accepted_ea_sha256s():' in src       # previous hash never → EA_BINARY_HASH_MISMATCH
+            assert 'if reported not in {expected.lower(), *accepted_ea_sha256s()}:' in src       # previous hash never → EA_BINARY_HASH_MISMATCH
     with patch.dict(os.environ, {"EA_RELEASE_SHA256": "", "EA_RELEASE_SHA256_PREVIOUS": ""}):
         ec._EXPECTED_CACHE.clear()
         assert ec.expected_ea_sha256() is None or len(ec.expected_ea_sha256()) == 64

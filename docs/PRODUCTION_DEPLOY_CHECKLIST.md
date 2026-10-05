@@ -138,6 +138,26 @@ mongosh -u "$MONGO_ROOT_USER" -p "$(cat secrets/mongo_root_password)" \
 ```
 `MONGO_URL` gains `&replicaSet=rs0`. Managed MongoDB (Atlas etc.) already qualifies.
 
+
+## main93 / A9 — before and after `deploy/update.sh` (2026-10-05)
+Before:
+- `cd /opt/stoic && (umask 077; : > secrets/security_telegram_token)` (or paste the BotFather token); remove
+  `SECURITY_AGENT_TELEGRAM_BOT_TOKEN` from `backend/.env` (the worker reads the Docker secret). `update.sh` now creates
+  the empty file itself (N-R2) — this is only needed if you paste the real token.
+- `TRUSTED_PROXY_CIDRS` is defaulted by `update.sh` to the docker ranges (N-R1); with `TRUST_CF_CONNECTING_IP=true`
+  every user now resolves to their own IP. Verify after deploy by logging in from two networks (Settings → Sessions).
+- `EA_RELEASE_SHA256=<current 1.57 EX5 hash>` — until the signed 1.59 record exists live accounts are CLOSE_ONLY
+  without it. After 1.59 is signed, move the 1.57 hash to `EA_RELEASE_SHA256_PREVIOUS` for the rollout window.
+- `BRIDGE_TOKEN_HASH_KEY` (optional, 32+ random chars). Bridge tokens are now stored as HMAC hashes under this key
+  (fallback: `JWT_SECRET`). Rotating the key invalidates every paired EA until re-paired — set it ONCE before the
+  first boot of this release; the boot migration hashes existing plaintext tokens and deletes them.
+- Keep the security agent in `observe` with no rules enabled; `RESEND_API_KEY`, `WEBAUTHN_*`, admin 2FA as in main92.
+After:
+- `docker compose logs worker-security` shows one lease holder (the API log says "standing by" when the worker owns it).
+- Admin → Bot Health → Release Identity shows BUILD SHA / IMAGE DIGEST / EA 1.59 / accepted EX5 hashes.
+- Every user must sign in again once (access tokens are now revocable; pre-upgrade tokens are refused).
+- Confirm P3 (1 trade per symbol per day) in Bot Pulse; retrain ML models.
+
 ## EA v1.59 (main92 H1 / main93 decision 1) — rebuild required
 EA 1.59 (the `margin_mode` change, renamed from the interim 1.58 as agreed — no signed 1.58 EX5
 was ever produced) adds `margin_mode` (ACCOUNT_MARGIN_MODE) to every heartbeat so netting accounts

@@ -74,7 +74,7 @@ def live_gate(account: dict) -> dict | None:
             return {"code": "EA_BINARY_PROOF_MISSING",
                     "reason": "terminal has not reported its EX5 hash over a verified installation chain — "
                               "pair the terminal and let the signed binary proof arrive on the heartbeat"}
-        if reported not in accepted_ea_sha256s():
+        if reported not in {expected.lower(), *accepted_ea_sha256s()}:
             return {"code": "EA_BINARY_HASH_MISMATCH",
                     "reason": "terminal-reported EX5 hash matches neither the current nor the previous signed release hash"}
         # r22/r25: only an INSTALLER-MEASURED hash bound to the same installation

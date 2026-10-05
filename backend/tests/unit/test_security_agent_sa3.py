@@ -107,7 +107,7 @@ def test_rules_evaluate_each_rule_and_protected_list():
     r2 = rules.evaluate(ev("A1", "A1:account:v@x.com", {"account": "v@x.com", "failures": 50, "ips": ["1", "2", "3"]}), c)
     assert r2[0]["rule"] == "R2" and r2[0]["action"] == "lock_login" and r2[0]["expires_min"] == 30 and r2[0]["notify_owner"]
     assert rules.evaluate(ev("A1", "A1:account:v@x.com", {"account": "v@x.com", "failures": 50, "ips": ["1", "2"]}), c) == []
-    assert rules.evaluate(ev("A3", "A3:ip:5.5.5.5", {"ip": "5.5.5.5", "accounts": 5}), c)[0]["rule"] == "R2"
+    assert rules.evaluate(ev("A3", "A3:ip:5.5.5.5", {"ip": "5.5.5.5", "accounts": 5}), c)[0]["rule"] == "R9"   # P1-04 — credential stuffing targets the IP (R9), not lock_login
     assert rules.evaluate(ev("A2", "A2:2fa:v@x.com", {"target": "v@x.com", "failures": 10}), c)[0]["action"] == "lock_otp"
     assert rules.evaluate(ev("A4", "A4:user:u1", {"event": {"user_id": "u1"}}), c)[0]["action"] == "revoke_sessions"
     assert rules.evaluate(ev("B1", "B1:account:a1", {"account_id": "a1", "sources": [["1", "t1"], ["2", "t2"]]}), c)[0]["action"] == "suspend_bridge_token"

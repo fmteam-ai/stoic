@@ -128,7 +128,8 @@ def test_account_actions_lock_login_otp_freeze_suspend_revoke_with_prior_state_r
     assert run(is_blocked(db, "account_login", "V@X.COM")) and run(is_blocked(db, "account_otp", "v@x.com"))
     acc1 = db.accounts.rows[0]
     assert acc1["trading_authority"] == "CLOSE_ONLY" and acc1["authority_lock"]["reason"] == "security_agent"      # frozen, closes allowed
-    assert acc1["bridge_token_suspended"]["token"] == "tok-live"
+    from bridge_tokens import token_hash as _th
+    assert acc1["bridge_token_suspended"]["token_hash"] == _th("tok-live") and "token" not in acc1["bridge_token_suspended"]   # P1-01
     acc2 = db.accounts.rows[1]
     assert acc2["trading_authority"] == "LOCKED" and acc2["authority_lock"]["reason"] == "panic" and "never overrides a PANIC lock" in by[("freeze_new_entries", "acc2")]["note"] and acc2["security_freeze"]   # never overrides PANIC (S8: freeze kept in its own field)
     assert db.auth_sessions.rows[0]["revoked"] is True and db.auth_sessions.rows[1]["revoked"] is False

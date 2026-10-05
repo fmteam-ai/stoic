@@ -28,3 +28,9 @@ build + fresh DB. The `ADMIN_MFA_ENFORCED=false` stopgap was replaced the same d
 `scripts/ci_enrol_admin_totp.py` (generated base32 secret written on the per-run admin, masked, exported as
 `E2E_ADMIN_TOTP_SECRET`) and `e2e/tests/auth.setup.ts` computes the RFC 6238 code (`e2e/tests/totp.ts`) when the
 login asks for it — 13/13 pass with `ADMIN_MFA_ENFORCED=true` (verified locally against the production build).
+
+## main93 / A9 note (2026-10-05)
+- `tests/test_main93_live_iter229.py` (http lane, written by the testing agent) reads `TEST_ADMIN_PASSWORD` and
+  `STEP_UP_BYPASS_TOKEN` from the environment and SKIPS at module level when they are absent — never embed them.
+- `tests/integration/test_r26_device_attestation.py::test_concurrent_submissions_of_one_nonce_admit_exactly_one`
+  flaked once in a full-lane run (timing), passes alone and on re-run — not a regression.

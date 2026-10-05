@@ -1,0 +1,38 @@
+{
+  "summary": "main93 corrections verification (iter 229). Backend unit suite (test_fixplan_main93_a9.py) and new live HTTP suite (/app/backend/tests/test_main93_live_iter229.py, 8 tests) PASS 100% against preview. P1-02 access-token revocation (logout + sessions/revoke-all → session_revoked), P1-03 forced password-change gate (403 code 'password_change_required' on /api/accounts, 200 on /me, change-password unblocks), P1-01 hashed bridge tokens (rotate step-up gate 403 → 200 with bypass, plaintext returned once, mongo stores only bridge_token_hash + bridge_token_last4 with NO plaintext bridge_token, heartbeat auths with plaintext, list exposes only has_bridge_token/bridge_token_masked, revoke requires step-up and kills heartbeat with 401), A7d execution-brake release works for admin + step-up. GET /api/health exposes ea_version '1.59' and release_identity {image_digest, ea_shipped_version='1.59', ea_accepted_sha256s []}. Frontend verified via Playwright: Bot Health /bot-health renders release-identity-card showing EA SHIPPED 1.59 and ai-latency-card; Admin → Admin Ops → Security & Health renders security-health-panel with 10 finding rows, clicking a row renders finding-detail with ACKNOWLEDGE and MARK RESOLVED buttons; R9 rule toggle present; scorecard row R1 expands to security-scorecard-checklist-R1; Dashboard loads (ExecutionBrakeBanner correctly hidden when brake inactive).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "pytest tests/test_fixplan_main92_sa5.py", "issue": "Two pre-existing SA5 unit tests fail (test_s1_block_ip_refused_when_one_ip_carries_most_traffic and test_s3_r5_has_expiry_and_bridge_lifts_expired_suspension). The main93_a9 suite, test_fixplan_main92_a7.py and test_fixplan_main92_a8b.py all pass (71 passed). These SA5 failures are NOT part of A9 fixes but the review request names SA5 explicitly in the sanity suite — flagging for main agent."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_main93_live_iter229.py",
+    "/app/test_reports/pytest/iter229_main93.xml"
+  ],
+  "action_items": [
+    "Address the two pre-existing SA5 unit-test failures referenced above (not blocking A9 but part of the review's sanity suite)."
+  ],
+  "critical_code_review_comments": [
+    "backend/step_up.py require_step_up() correctly short-circuits on X-Step-Up-Bypass with secrets.compare_digest, is-production guard, mfa_enrollment_required path when 2FA/passkey missing, and token hash+expiry+single-use check — verified live.",
+    "backend/routes/account_routes.py rotate_token() and revoke_bridge_token() both call require_step_up BEFORE mutating; audit_log records step_up_verified=True — verified live.",
+    "accounts collection schema is clean: live doc inspected after rotate carries bridge_token_hash + bridge_token_last4 only; the field 'bridge_token' is NOT present in the mongo doc nor in the GET /api/accounts list payload (only has_bridge_token=true and bridge_token_masked='••••••••••••<last4>').",
+    "GET /api/health response wiring: release_identity.image_digest reports 'not injected (local build)' in preview — expected in non-prod but worth confirming CI/CD injects it on real deployments."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_main93_live_iter229.py",
+    "/app/docs/TEST_MANIFEST.md (via generate_test_manifest.py)"
+  ],
+  "success_rate": {"backend": "100% (A9 live + unit)", "frontend": "100%"},
+  "test_credentials": "admin@stoicaibot.com (password assembled at runtime from fragments in /app/memory/test_credentials.md). STEP_UP_BYPASS_TOKEN read from /app/backend/.env.",
+  "seed_data_creation": "Created one short-lived security finding via POST /api/admin/security/test-alert (admin + step-up) to populate the Security & Health panel for the UI finding-detail check. Created ephemeral per-test accounts labelled TEST_acct_* (cleaned up in fixture teardown + regex delete). Created ephemeral user test_pwchg_<uuid>@example.com directly in Mongo (bcrypt hash) and deleted on teardown.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Live suite at /app/backend/tests/test_main93_live_iter229.py (pytestmark=http). Run with: cd /app/backend && STOIC_TESTS_ALLOW_DB_NAME=1 DB_NAME=ai_trading_bot STEP_UP_BYPASS_TOKEN=<env value> python -m pytest tests/test_main93_live_iter229.py -v. NOTE: conftest.py autoinjects X-Step-Up-Bypass + X-CSRF-Token on every requests call via a session-scoped monkeypatch (see conftest.py L210-258). To exercise the REAL step-up gate, set session.headers['X-Step-Up-Bypass']=''. The P1-02 revocation tests must capture cookies BEFORE logout/revoke-all and manually resend them with requests.get(cookies=...) because the server clears the client cookies on logout. The two SA5 unit-test failures look like a selector mismatch (the test expects status=='refused_shared_ip' but action returns 'done', and expects a specific source-string in bridge_routes._account_by_token that is no longer there) — likely the implementation drifted from the test; worth main agent reviewing security_agent/actions.py and routes/bridge_routes.py:_account_by_token.",
+  "rca of the issue": "N/A — review items pass. SA5 side-note above."
+}

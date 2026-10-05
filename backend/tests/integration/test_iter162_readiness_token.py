@@ -135,11 +135,16 @@ async def _bridge_token_scenario():
         assert out["has_bridge_token"] is True
         assert out["last_used_at"] == "2026-08-30T10:00:00+00:00"
 
-        # revoke kills EA auth immediately and is audited
-        res = await revoke_bridge_token(str(acc), user={"id": uid})
+        # revoke kills EA auth immediately and is audited (P1-01: step-up protected — bypass header)
+        from unittest.mock import patch as _patch
+
+        async def _no_step_up(*a, **k):
+            return None
+        with _patch("step_up.require_step_up", _no_step_up):
+            res = await revoke_bridge_token(str(acc), request=None, user={"id": uid})
         assert res["revoked"] is True
         doc = await db.accounts.find_one({"_id": acc})
-        assert "bridge_token" not in doc
+        assert "bridge_token" not in doc and "bridge_token_hash" not in doc
         assert doc.get("bridge_token_revoked_at")
         audit = await db.audit_log.find_one(
             {"action": "bridge_token_revoked"})
