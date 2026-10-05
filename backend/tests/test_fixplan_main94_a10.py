@@ -191,7 +191,7 @@ def test_netting_full_close_becomes_volume_limited_partial_close():
 def test_netting_ack_maps_back_to_full_close_and_heartbeat_records_volume():
     from routes import bridge_routes
     src = inspect.getsource(bridge_routes.modification_ack)
-    assert 'payload.type == "PARTIAL_CLOSE" and _pm.get("type") == "FULL_CLOSE"' in src
+    assert '_pm.get("type") == "FULL_CLOSE" and (not payload.intent_id or payload.intent_id == _pm.get("intent_id"))' in src
     assert 'payload.type = "FULL_CLOSE"' in src and 'update["netting_volume_limited_close"] = True' in src
     hb = inspect.getsource(bridge_routes.heartbeat)
     assert '"live_volume": float(p.volume)' in hb

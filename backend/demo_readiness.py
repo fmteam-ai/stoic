@@ -12,6 +12,7 @@ logger = logging.getLogger("demo_readiness")
 HEARTBEAT_FRESH_SEC = 120
 FLEET_WINDOW_H = 24
 FLEET_LIMIT = 50
+DEMO_ACCEPTED_EA = ("1.57", "1.58")   # D-1 — accepted on attested DEMO accounts until a signed 1.59 ships
 
 MANUAL_STEPS = [
     ("telegram_revoked", "Leaked security-bot token revoked in @BotFather; new token created",
@@ -144,13 +145,17 @@ async def fleet(db) -> list[dict]:
         cfg = await _cap_config(db, a) or {}
         cap = cfg.get("trade_of_day_cap")
         pm = await position_mode_resolution(db, a)
+        demo = attested_environment(a) == "DEMO"
+        ea_v = str(a.get("ea_version") or "")
         out.append({
             "id": str(a["_id"]), "label": a.get("label") or a.get("account_number"),
             "heartbeat_fresh": fresh, "last_heartbeat": hb,
-            "ea_version": a.get("ea_version"), "ea_current": str(a.get("ea_version") or "") == LATEST_EA,
-            "attested_demo": attested_environment(a) == "DEMO",
+            # D-1 — until a signed 1.59 exists, attested DEMO terminals legitimately run 1.57/1.58
+            "ea_version": a.get("ea_version"), "ea_current": ea_v == LATEST_EA or (demo and ea_v in DEMO_ACCEPTED_EA),
+            "attested_demo": demo,
             "position_mode": pm.get("mode"), "position_mode_source": pm.get("source"),
             "position_mode_explicit": pm.get("source") in ("admin", "registry", "ea"),
+            "netting": pm.get("mode") == "netting",
             "trade_of_day_cap": cap, "max_concurrent_trades": cfg.get("max_concurrent_trades"),
             "caps_explicit": isinstance(cap, int) and cap > 0 and cfg.get("max_concurrent_trades") is not None,
             "braked": bool((a.get("execution_brake") or {}).get("active")),
@@ -166,12 +171,17 @@ def fleet_checks(rows: list[dict]) -> list[dict]:
         bad = [r["label"] for r in rows if not r.get(key)]
         return _check(cid, title, "pass" if not bad else "fail",
                       f"{len(rows) - len(bad)}/{len(rows)} ok" + (f" · missing: {', '.join(map(str, bad[:5]))}" if bad else ""), hint)
+    netting = [r["label"] for r in rows if r.get("netting")]
     return [
         agg("fleet_heartbeat", "Every demo EA heartbeat fresh (≤ 2 min)", "heartbeat_fresh", "re-attach the EA / restart MT5 within 15 min after any installer run"),
-        agg("fleet_ea", "Every demo account runs the current EA", "ea_current", "attach the shipped EA build on each terminal"),
+        agg("fleet_ea", "Every demo account runs the current EA (1.57/1.58 accepted on attested DEMO accounts)", "ea_current", "attach the shipped EA build on each terminal"),
         agg("fleet_attested", "Every demo account admin-attested as DEMO", "attested_demo", "Accounts → admin attestation (needs the EA identity proof)"),
         agg("fleet_position_mode", "Position mode known for every demo account (netting for Demo 3)", "position_mode_explicit", "Accounts → Position Mode (admin) or let the EA report margin_mode"),
         agg("fleet_caps", "trade_of_day_cap and max open trades set explicitly on each config", "caps_explicit", "Bot Config → apply preset, then set both caps per the Demo Test Plan"),
+        # D-2 / Q-1 — netting is the main open risk: whole-position closes
+        _check("fleet_netting", "Netting accounts (whole-position close risk — Q-1)", "warn" if netting else "pass",
+               (f"{len(netting)} netting: {', '.join(map(str, netting[:5]))}" if netting else "none — all hedging"),
+               "closes are volume-limited one leg per poll; keep max 1 open trade per symbol on netting demos"),
     ]
 
 

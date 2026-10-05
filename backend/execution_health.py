@@ -57,7 +57,11 @@ async def record_event(db, account_id: str, user_id: str | None, kind: str, *,
     if not acc:
         return None
     events = await window_events(db, str(account_id), acc)
-    await _alert_late_fill(db, acc, str(account_id), len(events), detail)
+    # A12-5 — one alert per TRADE: a re-reported late fill (PANIC re-dispatch, revive) never re-alerts
+    already = bool(trade_id) and await db.execution_health_events.count_documents(
+        {"account_id": str(account_id), "kind": kind, "trade_id": str(trade_id), "at": {"$lt": now.isoformat()}}) > 0
+    if not already:
+        await _alert_late_fill(db, acc, str(account_id), len(events), detail)
     return await evaluate(db, str(account_id), acc=acc, events=events)
 
 

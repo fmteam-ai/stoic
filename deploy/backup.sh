@@ -104,6 +104,12 @@ case "${1:-backup}" in
     echo "-- 3/5 restoring (drop + replace)"
     docker compose exec -T "${MONGO_SVC}" sh -c "mongorestore ${MONGO_AUTH} --archive --gzip --drop" < "${PLAIN}"
 
+    if [ "${RESTORE_NO_START:-0}" = "1" ]; then
+      # Q-3 — caller (rollback.sh / update.sh) brings the matching CODE up afterwards; the new
+      # release's containers must never start on the restored (old) data.
+      echo "-- 4/5 skipped (RESTORE_NO_START=1): stack left stopped for the caller to start the matching code"
+      exit 0
+    fi
     echo "-- 4/5 starting API only (workers stay stopped until reconciliation is verified)"
     docker compose start backend
 

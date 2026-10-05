@@ -15,7 +15,7 @@ import hashlib
 import hmac
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger("bridge_tokens")
 
@@ -109,6 +109,35 @@ async def retire_prev(db, acc: dict) -> None:
     if prev_hash:
         upd["$addToSet"] = {"bridge_token_retired_hashes": prev_hash}
     await db.accounts.update_one({"_id": acc["_id"]}, upd)
+    await promote_pending_installation(db, acc)
+
+
+async def promote_pending_installation(db, acc: dict) -> str | None:
+    """Q-2 — the installer's new registration becomes authoritative ONLY now (first heartbeat
+    with the new token): older installations are revoked and the execution lease moves over.
+    Until this moment the running terminal kept full authority."""
+    account_id = str(acc["_id"])
+    pending = await db.installations.find_one({"account_id": account_id, "revoked": {"$ne": True},
+                                               "pending_first_heartbeat": True})
+    if not pending:
+        return None
+    now = datetime.now(timezone.utc)
+    await db.installations.update_many(
+        {"account_id": account_id, "revoked": {"$ne": True}, "installation_id": {"$ne": pending["installation_id"]}},
+        {"$set": {"revoked": True, "revoked_reason": "superseded: new installation heartbeated",
+                  "revoked_at": now.isoformat()}})
+    await db.installations.update_one({"_id": pending["_id"]},
+                                      {"$unset": {"pending_first_heartbeat": ""}, "$set": {"first_heartbeat_at": now.isoformat()}})
+    try:
+        from vps_agent import LEASE_SECONDS
+        await db.execution_leases.update_one(
+            {"account_id": account_id},
+            {"$set": {"installation_id": pending["installation_id"], "user_id": acc.get("user_id"), "revoked": False,
+                      "acquired_at": now, "expires_at": now + timedelta(seconds=LEASE_SECONDS)}}, upsert=True)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("lease hand-over skipped: %s", type(e).__name__)
+    logger.info("Q-2 — installation %s promoted for account %s (previous revoked)", pending["installation_id"], account_id)
+    return pending["installation_id"]
 
 
 async def ensure_indexes(db) -> None:

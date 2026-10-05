@@ -744,7 +744,7 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                             Max new trades per symbol per UTC day. Forces selectivity — bot waits for the A-grade
                             setup instead of churning. Set to <span className="text-[#52525B]">0</span> for unlimited.
                         </p>
-                        <PPNumInput cfg={cfg} setCfg={setCfg} field="trade_of_day_cap" label="MAX TRADES PER SYMBOL / DAY" suffix="trades" step={1} min={0} max={100} />
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="trade_of_day_cap" label="MAX TRADES PER SYMBOL / DAY" suffix="trades" step={1} min={0} max={100} fallback={1} />
                     </div>
                 </div>
 
@@ -905,12 +905,13 @@ function PPToggle({ cfg, setCfg, field, label, icon: Icon, desc, color = "#FFD70
     );
 }
 
-function PPNumInput({ cfg, setCfg, field, label, suffix, step = 0.1, min = 0, max = 100 }) {
+function PPNumInput({ cfg, setCfg, field, label, suffix, step = 0.1, min = 0, max = 100, fallback = 0 }) {
+    // `fallback` mirrors the SERVER default for an unset field (main92 P3: empty cap = 1/symbol/day), never a misleading 0
     return (
         <div>
             <label htmlFor={`input-${field}`} className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{label}</label>
             <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#FFD700]">
-                <input type="number" step={step} min={min} max={max} value={cfg[field] ?? 0}
+                <input type="number" step={step} min={min} max={max} value={cfg[field] ?? fallback}
                     onChange={e => setCfg({ ...cfg, [field]: parseFloat(e.target.value) || 0 })}
                     data-testid={`input-${field}`}
                     id={`input-${field}`} name={field}

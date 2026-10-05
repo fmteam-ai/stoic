@@ -895,6 +895,25 @@ def netting_close_command(t: dict, m: dict) -> dict:
     return cmd
 
 
+def plan_netting_close_legs(close_rows: list[dict], netting: bool) -> tuple[list, list, set]:
+    """Q-1 — split `close_requested` rows into (by-ticket passthrough, volume-limited legs,
+    tickets used). On netting accounts a row whose shared position is larger than its own lots
+    becomes ONE PARTIAL_CLOSE leg per position per poll; the rest wait for the next heartbeat."""
+    passthrough, legs, seen = [], [], set()
+    for t in close_rows:
+        if netting:
+            cmd = netting_close_command(t, {"type": "FULL_CLOSE", "intent_id": t.get("close_idem_key"),
+                                            "seq": t.get("close_seq", 0), "reason": "close_requested"})
+            if cmd["type"] == "PARTIAL_CLOSE":
+                if cmd["mt5_ticket"] in seen:
+                    continue
+                seen.add(cmd["mt5_ticket"])
+                legs.append(cmd)
+                continue
+        passthrough.append(t)
+    return passthrough, legs, seen
+
+
 async def revive_and_reclose(db, trade: dict, acc: dict, now_iso: str, via: str) -> str | None:
     """N4 / M6 — the broker still holds a position STOIC closed ON PURPOSE (PANIC, late fill,
     FULL_CLOSE in flight) and the row shows closed with no exit price. A plain revive would
@@ -1566,12 +1585,18 @@ async def poll_trades(payload: PollRequest):
     # EA's fenced ClosePosition path (close_idem_key + durable close_seq) closes them.
     close_cursor = db.trades.find({
         "account_id": str(acc["_id"]), "status": "open", "close_requested": {"$eq": True},
-        "mt5_ticket": {"$nin": [None, 0]},
+        "mt5_ticket": {"$nin": [None, 0]}, "netting_close_acked": {"$ne": True},
         "$or": [{"pending_modification": None}, {"pending_modification": {"$exists": False}},
                 {"pending_modification.type": {"$ne": "FULL_CLOSE"}}],
     }, {"symbol": 1, "action": 1, "lot_size": 1, "entry_price": 1, "stop_loss": 1, "take_profit": 1,
-        "close_idem_key": 1, "close_seq": 1, "mt5_ticket": 1})
-    for t in await close_cursor.to_list(length=50):
+        "close_idem_key": 1, "close_seq": 1, "mt5_ticket": 1, "live_volume": 1})
+    close_rows = await close_cursor.to_list(length=50)
+    # Q-1 — on NETTING accounts a by-ticket ClosePosition flattens the shared position, so the
+    # close path too becomes a volume-limited PARTIAL_CLOSE; ONE leg per position per poll
+    # (the next heartbeat refreshes live_volume before the next leg is dispatched).
+    netting_acc = (bool(close_rows) and await is_netting_account(db, acc))
+    passthrough, netting_mods, seen_tickets = plan_netting_close_legs(close_rows, netting_acc)
+    for t in passthrough:
         out.append({
             "trade_id": str(t["_id"]), "symbol": t["symbol"], "action": t.get("action"),
             "lot_size": t.get("lot_size"), "entry_price": t.get("entry_price"),
@@ -1589,11 +1614,19 @@ async def poll_trades(payload: PollRequest):
     })
     mods = await mod_cursor.to_list(length=20)
     netting = bool(mods) and any((m.get("pending_modification") or {}).get("type") == "FULL_CLOSE" for m in mods) \
-        and await is_netting_account(db, acc)
-    modifications = []
+        and (netting_acc or await is_netting_account(db, acc))
+    modifications = list(netting_mods)
     for t in mods:
         m = t.get("pending_modification") or {}
-        modifications.append(netting_close_command(t, m) if netting else {
+        if netting:
+            cmd = netting_close_command(t, m)
+            if cmd.get("netting_volume_limited"):
+                if cmd["mt5_ticket"] in seen_tickets:
+                    continue
+                seen_tickets.add(cmd["mt5_ticket"])
+            modifications.append(cmd)
+            continue
+        modifications.append({
             "trade_id": str(t["_id"]),
             "mt5_ticket": t.get("mt5_ticket"),
             "symbol": t["symbol"],
@@ -1761,8 +1794,11 @@ async def modification_ack(payload: BridgeModificationAck):
     # intent is FULL_CLOSE: judge the ack as the FULL_CLOSE of THIS trade (its lots left the
     # broker), never as a tier partial that would shrink lot_size and keep the row open.
     _pm = trade.get("pending_modification") or {}
-    if payload.type == "PARTIAL_CLOSE" and _pm.get("type") == "FULL_CLOSE" \
-            and (not payload.intent_id or payload.intent_id == _pm.get("intent_id")):
+    _close_path = bool(trade.get("close_requested")) and bool(payload.intent_id) \
+        and payload.intent_id == trade.get("close_idem_key")
+    if payload.type == "PARTIAL_CLOSE" and (
+            (_pm.get("type") == "FULL_CLOSE" and (not payload.intent_id or payload.intent_id == _pm.get("intent_id")))
+            or _close_path):
         payload.type = "FULL_CLOSE"
         payload.netting_volume_limited = True
 
@@ -1849,6 +1885,8 @@ async def modification_ack(payload: BridgeModificationAck):
             update["tp3_closed"] = True
             if getattr(payload, "netting_volume_limited", False):
                 update["netting_volume_limited_close"] = True
+                if _close_path:
+                    update["netting_close_acked"] = True   # Q-1 — never re-dispatch; the OUT deal closes the row
                 if payload.remaining_volume is not None:
                     update["netting_position_remaining"] = float(payload.remaining_volume)
     else:

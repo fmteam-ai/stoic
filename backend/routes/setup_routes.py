@@ -219,11 +219,16 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         except (ValueError, TypeError) as e:
             raise HTTPException(status_code=422, detail={"code": "invalid_device_key",
                                                          "message": f"device public key rejected: {e}"})
+    # Q-2 — superseded installations are revoked ONLY when the new one heartbeats (see below);
+    # stale pending registrations from earlier installer runs are cleared here.
     await db.installations.update_many(
-        {"account_id": account_id_str, "revoked": {"$ne": True}},
+        {"account_id": account_id_str, "revoked": {"$ne": True}, "pending_first_heartbeat": True},
         {"$set": {"revoked": True,
-                  "revoked_reason": "superseded by new installer pairing",
+                  "revoked_reason": "superseded by newer installer pairing (never heartbeated)",
                   "revoked_at": now}})
+    # Q-2 — the RUNNING installation stays authoritative: the new one is registered as
+    # pending and only its first heartbeat (bridge auth, first use of the new token) revokes
+    # the others (bridge_tokens.promote_installation). The lease is NOT handed over here.
     await db.installations.insert_one({
         "installation_id": installation_id,
         "user_id": account.get("user_id"),
@@ -231,17 +236,21 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "terminal_path": "installer",
         "host_fingerprint": payload.hostname or "unknown-host",
         "device_key": device_key,
+        "pending_first_heartbeat": True,
         "revoked": False, "created_at": now})
     from vps_agent import LEASE_SECONDS
-    await db.execution_leases.update_one(
-        {"account_id": account_id_str},
-        {"$set": {"installation_id": installation_id,
-                  "user_id": account.get("user_id"), "revoked": False,
-                  "broker_server": account.get("server"),
-                  "account_number": account.get("account_number"),
-                  "acquired_at": now,
-                  "expires_at": now + timedelta(seconds=LEASE_SECONDS)}},
-        upsert=True)
+    _has_live = await db.installations.count_documents(
+        {"account_id": account_id_str, "revoked": {"$ne": True}, "pending_first_heartbeat": {"$ne": True}}) > 0
+    if not _has_live:
+        await db.execution_leases.update_one(
+            {"account_id": account_id_str},
+            {"$set": {"installation_id": installation_id,
+                      "user_id": account.get("user_id"), "revoked": False,
+                      "broker_server": account.get("server"),
+                      "account_number": account.get("account_number"),
+                      "acquired_at": now,
+                      "expires_at": now + timedelta(seconds=LEASE_SECONDS)}},
+            upsert=True)
 
     backend_base = os.environ.get(
         "PUBLIC_BACKEND_URL"

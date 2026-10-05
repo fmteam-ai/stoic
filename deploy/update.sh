@@ -80,22 +80,20 @@ rollback() {
     exit 1
   fi
   echo "!! verification failed — rolling back to ${PREV}"
-  git checkout --detach "${PREV}"
-  if [ "$(deploy_mode)" = "registry" ]; then verify_attestation >/dev/null 2>&1 || true; fi
-  provision_images || true
-  # R-1 — code and data roll back TOGETHER: the new release may have migrated the database
-  # at first boot (bridge-token hashes, dropped indexes), which the previous code cannot
-  # start on. Keep a safety dump of the failed state, then restore the pre-update archive.
+  # Q-3 / R-1 — order: safety dump → stop + restore pre-update DATA (no restart) → old CODE → start.
   # Opt out with UPDATE_ROLLBACK_RESTORE_DB=0 (data written by the new release is then kept).
   if [ "${UPDATE_ROLLBACK_RESTORE_DB:-1}" = "1" ] && [ -n "${PRE_BACKUP:-}" ] && [ -f "${PRE_BACKUP}" ]; then
     echo "-- safety dump of the FAILED release's database state"
     deploy/backup.sh backup || true
-    echo "-- restoring pre-update database ${PRE_BACKUP} (code + data rolled back together)"
-    deploy/backup.sh restore "${PRE_BACKUP}" || echo "!! database restore FAILED — restore manually: deploy/rollback.sh ${PREV} --with-db ${PRE_BACKUP}"
+    echo "-- restoring pre-update database ${PRE_BACKUP} (stack stopped; old code starts on it next)"
+    RESTORE_NO_START=1 deploy/backup.sh restore "${PRE_BACKUP}" || echo "!! database restore FAILED — restore manually: deploy/rollback.sh ${PREV} --with-db ${PRE_BACKUP}"
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-db-restore=${PRE_BACKUP}" >> deploy/releases.log
   else
     echo "!! no pre-update archive to restore (or UPDATE_ROLLBACK_RESTORE_DB=0) — database keeps the NEW release's state"
   fi
+  git checkout --detach "${PREV}"
+  if [ "$(deploy_mode)" = "registry" ]; then verify_attestation >/dev/null 2>&1 || true; fi
+  provision_images || true
   compose_up
   echo "!! rolled back to $(git rev-parse --short HEAD). Inspect: docker compose logs backend --tail 100"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-from=${REF}" >> deploy/releases.log

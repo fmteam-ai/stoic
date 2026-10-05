@@ -28,6 +28,14 @@ echo "== STOIC rollback: ${CURRENT} -> ${REF} =="
 echo "-- safety backup of the CURRENT database state"
 deploy/backup.sh backup
 
+# Q-3 — order: stop → restore DATA → old CODE → start. The database is restored while the
+# stack is stopped and BEFORE the old code comes up, so neither release ever runs on the
+# other one's data.
+if [ -n "${WITH_DB}" ]; then
+  echo "-- restoring database from ${WITH_DB} (stack stopped, no restart)"
+  RESTORE_NO_START=1 deploy/backup.sh restore "${WITH_DB}" || { echo "ERROR: database restore failed — stack left stopped; nothing else changed"; exit 1; }
+fi
+
 echo "-- checking out ${REF}"
 git fetch --all --tags --quiet || true
 git checkout --detach "${REF}"
@@ -38,11 +46,6 @@ if [ "$(deploy_mode)" = "registry" ]; then
 fi
 provision_images || { echo "ERROR: image provisioning failed during rollback"; exit 1; }
 compose_up
-
-if [ -n "${WITH_DB}" ]; then
-  echo "-- restoring database from ${WITH_DB}"
-  deploy/backup.sh restore "${WITH_DB}"
-fi
 
 echo "-- verifying API health"
 wait_api_health 30 || { echo "!! API never became healthy after rollback — inspect: docker compose logs backend"; exit 1; }
