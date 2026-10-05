@@ -196,7 +196,7 @@ async def compute_adaptive_risk(db, user_id: str, cfg: dict, signal: dict,
 
     base = base_symbol(signal.get("symbol") or "")
     cdoc = await db.intraday_candles.find_one(
-        {"user_id": user_id, "symbol": base}, {"bars": 1})
+        {"user_id": user_id, "symbol": base, "timeframe": "M15"}, {"bars": 1})
     comps["volatility"] = volatility_mult((cdoc or {}).get("bars"))
 
     q = {"user_id": user_id, "status": "closed", "pnl": {"$ne": None},

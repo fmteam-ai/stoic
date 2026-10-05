@@ -53,8 +53,7 @@ async def run_gate_ablation(db, user_id: str, days: int = 30) -> dict:
     async def bars_after(symbol: str, ts_iso: str) -> list:
         if symbol not in candle_cache:
             doc = await db.intraday_candles.find_one(
-                {"symbol": symbol, "timeframe": "M15"}) or \
-                await db.intraday_candles.find_one({"symbol": symbol})
+                {"user_id": user_id, "symbol": symbol, "timeframe": "M15"})  # fix plan A1
             candle_cache[symbol] = (doc or {}).get("bars") or []
         try:
             epoch = datetime.fromisoformat(ts_iso).timestamp()

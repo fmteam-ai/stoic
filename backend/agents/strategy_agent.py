@@ -50,6 +50,7 @@ class StrategyAgent:
             min_conf_override=int(cfg.get("min_confidence_override") or 0),
             strategy=cfg.get("active_preset"),
             engine_params=eng_params,
+            user_id=cfg.get("user_id"),            # fix plan A1 — own candle stream
         )
         if canary_used and isinstance(signal, dict):
             signal["canary"] = canary_used

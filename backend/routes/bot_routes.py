@@ -296,7 +296,7 @@ async def mtf_confluence_report(symbol: str = "XAUUSD", user=Depends(get_current
         live = float(quote.get("price") or 0)
     except Exception:
         live = 0.0
-    report = await fetch_mtf_confluence(symbol, live)
+    report = await fetch_mtf_confluence(symbol, live, user_id=user["id"])
     if not report:
         return {"available": False, "symbol": symbol,
                 "note": "M15 stream missing or stale (EA offline?)"}

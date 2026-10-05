@@ -143,8 +143,7 @@ async def market_state(db, user_id: str, symbol: str,
     base = base_symbol(symbol)
     doc = await db.intraday_candles.find_one(
         {"user_id": user_id, "symbol": base, "timeframe": "M15"},
-        {"bars": 1}) or await db.intraday_candles.find_one(
-        {"symbol": base, "timeframe": "M15"}, {"bars": 1})
+        {"bars": 1})          # fix plan A1 — own stream only, no cross-user fallback
     bars = (doc or {}).get("bars") or []
     news = await _news_hits_next_2h(db, base)
     corr_stress = 0.0

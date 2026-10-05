@@ -74,38 +74,8 @@ async def freeze_check(db, user_id: str) -> dict:
 
 # ---------------------------------------------------- candidate evaluation
 async def _build_xy(db, user_id: str, trades: list):
-    from bson import ObjectId
-    from ml_ensemble import featurize
-    sids = []
-    for t in trades:
-        try:
-            sids.append(ObjectId(t["signal_id"]))
-        except Exception:
-            continue
-    sigs = {}
-    if sids:
-        async for s in db.signals.find(
-                {"_id": {"$in": sids}},
-                {"session": 1, "regime": 1, "mtf_tiers": 1, "stop_loss": 1,
-                 "confidence": 1, "entry_price": 1, "tp1": 1, "take_profit": 1}):
-            sigs[str(s["_id"])] = s
-    X, y = [], []
-    for t in trades:
-        if not t.get("pnl"):
-            continue
-        sig = sigs.get(str(t.get("signal_id") or "")) or {}
-        sig = {**sig,
-               "entry_price": t.get("entry_price") or sig.get("entry_price"),
-               "stop_loss": t.get("stop_loss") or sig.get("stop_loss")}
-        when = None
-        try:
-            when = datetime.fromisoformat(
-                str(t.get("opened_at") or t.get("created_at")))
-        except (ValueError, TypeError):
-            pass
-        X.append(featurize(t.get("action"), t.get("symbol"), sig, when))
-        y.append(1 if float(t["pnl"]) > 0 else 0)
-    return X, y
+    from ml_ensemble import build_training_rows
+    return await build_training_rows(db, user_id, trades)
 
 
 def _holdout_auc_sync(X_train, y_train, X_hold, y_hold, uid: str) -> dict:

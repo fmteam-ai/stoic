@@ -272,7 +272,7 @@ async def risk_engine_evaluate(db, user_id, cfg, account, signal,
                           or DEF_MONTHLY_DD_PCT)))
 
     cdoc = await db.intraday_candles.find_one(
-        {"user_id": user_id, "symbol": base}, {"bars": 1})
+        {"user_id": user_id, "symbol": base, "timeframe": "M15"}, {"bars": 1})
     bars = (cdoc or {}).get("bars") or []
     checks.append(abnormal_market_check(bars, symbol=base))
 

@@ -108,6 +108,10 @@ def hf_scalp_signal(feats: dict, fast: bool = False,
     ema20 = float(feats.get("ema20") or 0)
     slope = float(feats.get("ema20_slope_pct_2h") or 0)
     mom = float(feats.get("momentum_3h_pct") or 0)
+    if feats.get("vwap_dist_pct") is None:
+        # Fix plan A3 — no session VWAP before the first closed bar of the UTC
+        # day: a missing VWAP must never read as "price exactly at VWAP".
+        return None, "no session VWAP yet (first bar of the day) — VWAP bounce/fade engine idle"
     vdist = float(feats.get("vwap_dist_pct") or 0)
     pos = feats.get("range_pos_pct")
     dch = feats.get("donchian20")

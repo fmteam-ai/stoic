@@ -986,7 +986,7 @@ async def _process_user_account_locked(db, cfg: dict):
             from pip_utils import base_symbol as _bs
             _base = _bs(sym)
             cdoc = await db.intraday_candles.find_one(
-                {"user_id": user_id, "symbol": _base})
+                {"user_id": user_id, "symbol": _base, "timeframe": "M15"})
             snap = structure_snapshot((cdoc or {}).get("bars") or [])
             signal["market_structure"] = snap
             # fade-style scalps oppose fresh structure BY DESIGN; their
@@ -1433,7 +1433,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 from monte_carlo import simulate_trade, mc_gate, typical_cost
                 from pip_utils import base_symbol as _bs_mc
                 _cdoc_mc = await db.intraday_candles.find_one(
-                    {"user_id": user_id, "symbol": _bs_mc(sym)}, {"bars": 1})
+                    {"user_id": user_id, "symbol": _bs_mc(sym), "timeframe": "M15"}, {"bars": 1})
                 # simulate the BLENDED target (50%@TP1+25%@TP2+25%@TP3 =
                 # rr_ratio × SL) — simulating TP1 alone (0.8×SL) wrongly
                 # tags every 3-TP trade as negative EV
@@ -2334,7 +2334,7 @@ async def _process_user_account_locked(db, cfg: dict):
             from pip_utils import base_symbol as _bs_ts
             from trend_score import trend_report
             _cd = await db.intraday_candles.find_one(
-                {"user_id": user_id, "symbol": _bs_ts(sym)}, {"bars": 1})
+                {"user_id": user_id, "symbol": _bs_ts(sym), "timeframe": "M15"}, {"bars": 1})
             _tbars = (_cd or {}).get("bars") or []
             if len(_tbars) >= 40:
                 _ts = trend_report(_tbars[-96:], symbol=sym)

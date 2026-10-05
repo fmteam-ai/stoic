@@ -106,7 +106,8 @@ def test_hf_scalp_buy_on_uptrend_burst():
 
 
 def test_hf_scalp_hold_when_flat():
-    feats = {"atr15": 5, "trend": "FLAT", "last_price": 100, "ema20": 100}
+    # fix plan A3: a missing VWAP now idles the engine, so this fixture states "at VWAP" explicitly
+    feats = {"atr15": 5, "trend": "FLAT", "last_price": 100, "ema20": 100, "vwap_dist_pct": 0.0}
     sig, note = hf_scalp_signal(feats)
     assert sig is None and "flat" in note.lower()
 

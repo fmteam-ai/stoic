@@ -63,7 +63,7 @@ async def trade_replay(db, trade: dict) -> dict:
     if len(ticks) < 10:
         source = "m15_bars"
         cdoc = await db.intraday_candles.find_one(
-            {"user_id": trade["user_id"], "symbol": sym})
+            {"user_id": trade["user_id"], "symbol": sym, "timeframe": "M15"})
         ticks = [{"t": float(b["t"]), "price": float(b["c"]),
                   "high": b["h"], "low": b["l"]}
                  for b in (cdoc or {}).get("bars") or []
@@ -326,7 +326,7 @@ async def what_if(db, user_id: str, *, days: int = 30,
         sym = base_symbol(t.get("symbol") or "")
         if sym not in bar_cache:
             cdoc = await db.intraday_candles.find_one(
-                {"user_id": user_id, "symbol": sym}, {"bars": 1})
+                {"user_id": user_id, "symbol": sym, "timeframe": "M15"}, {"bars": 1})
             bar_cache[sym] = (cdoc or {}).get("bars") or []
         t0 = _ts(t.get("opened_at"))
         bars = [b for b in bar_cache[sym] if t0 and float(b["t"]) >= t0][:288]

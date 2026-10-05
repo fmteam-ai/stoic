@@ -13,7 +13,6 @@ iter-127: three strictness modes so per-account presets map to real engines:
   relaxed  (Trend Rider) — 1H boss, wider pullback window, softer impulse
 """
 import logging
-from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger("mtf-confluence")
 
@@ -163,24 +162,13 @@ def analyze_mtf_confluence(m15_bars: list, live_price: float, atr15: float,
 
 
 async def fetch_mtf_confluence(symbol: str, live_price: float,
-                               mode: str = "strict") -> dict | None:
-    """Cascade report from the freshest EA M15 stream (≤30 min old)."""
+                               mode: str = "strict", user_id: str | None = None) -> dict | None:
+    """Cascade report from the USER's fresh EA M15 stream (≤30 min old; fix plan A1)."""
     try:
-        from database import get_db
-        from pip_utils import base_symbol
-        from intraday_features import _atr
-        doc = await get_db().intraday_candles.find_one(
-            {"symbol": base_symbol(symbol)},
-            {"bars": {"$slice": -800}, "updated_at": 1},
-            sort=[("updated_at", -1)],
-        )
+        from intraday_features import _atr, load_user_candles
+        doc = await load_user_candles(symbol, user_id, "M15", last_n=800, max_age_min=30)
         if not doc:
             return None
-        upd = doc.get("updated_at")
-        if upd:
-            u = datetime.fromisoformat(str(upd).replace("Z", "+00:00"))
-            if datetime.now(timezone.utc) - u > timedelta(minutes=30):
-                return None
         bars = doc.get("bars") or []
         if len(bars) < 24:
             return None

@@ -166,18 +166,19 @@ async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
         return None
     base = base_symbol(symbol)
     now = time.time()
-    hit = _cache.get(base)
+    ckey = f"{user_id}:{base}"            # fix plan A11 — forecast cache per user (own candle stream)
+    hit = _cache.get(ckey)
     if hit and hit[0] > now:
         _stats["cache_hits"] += 1
         return hit[1]
     async with _lock:
-        hit = _cache.get(base)
+        hit = _cache.get(ckey)
         if hit and hit[0] > now:
             _stats["cache_hits"] += 1
             return hit[1]
         _stats["cache_misses"] += 1
         closes, source, horizon = None, None, None
-        cdoc = await db.intraday_candles.find_one({"user_id": user_id, "symbol": base})
+        cdoc = await db.intraday_candles.find_one({"user_id": user_id, "symbol": base, "timeframe": "M15"})
         bars = (cdoc or {}).get("bars") or []
         if len(bars) >= MIN_CONTEXT:
             closes = [float(b["c"]) for b in bars]
@@ -209,7 +210,7 @@ async def get_forecast(db, user_id: str, symbol: str) -> dict | None:
                 logger.warning("forecast inference failed: %s", e)
                 _stats["inference_errors"] += 1
                 _stats["last_error"] = f"{type(e).__name__}: {str(e)[:200]}"
-        _cache[base] = (now + CACHE_TTL, payload)
+        _cache[ckey] = (now + CACHE_TTL, payload)
         await _persist_status(db)
         return payload
 

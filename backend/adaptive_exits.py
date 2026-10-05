@@ -180,7 +180,7 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
     if not cfg.get("adaptive_exits_enabled", True):
         return False
     cdoc = await db.intraday_candles.find_one(
-        {"user_id": trade["user_id"], "symbol": base_symbol(trade["symbol"])},
+        {"user_id": trade["user_id"], "symbol": base_symbol(trade["symbol"]), "timeframe": "M15"},
         {"bars": 1, "updated_at": 1})
     bars = (cdoc or {}).get("bars") or []
     if bars:

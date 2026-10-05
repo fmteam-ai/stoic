@@ -274,7 +274,7 @@ async def sweep_self_evaluation(db) -> int:
                 pass
             cdoc = await db.intraday_candles.find_one(
                 {"user_id": t["user_id"],
-                 "symbol": base_symbol(t.get("symbol") or "")}, {"bars": 1})
+                 "symbol": base_symbol(t.get("symbol") or ""), "timeframe": "M15"}, {"bars": 1})
             ev = evaluate_trade(t, sig, (cdoc or {}).get("bars") or [])
             if ev["outcome"] == "loss":
                 try:

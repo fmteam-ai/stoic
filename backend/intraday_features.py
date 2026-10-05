@@ -92,6 +92,8 @@ def compute_intraday_features(bars: list) -> dict | None:
         v = float(b.get("v") or 1)
         pv += tp * v
         vol += v
+    # Fix plan A3 — before the first bar of the UTC day there is NO session
+    # VWAP: leave it None (callers must not read "None" as "price at VWAP").
     vwap = pv / vol if vol else None
     vwap_dist_pct = (last - vwap) / vwap * 100 if vwap else None
 
@@ -181,23 +183,52 @@ def intraday_alignment(action: str, feats: dict | None) -> tuple[int, str]:
     return score, ", ".join(notes)
 
 
-async def fetch_intraday_pack(symbol: str) -> dict | None:
-    """Latest fresh M15 features for the symbol from the EA candle stream."""
+async def load_user_candles(symbol: str, user_id: str | None, timeframe: str = "M15",
+                            last_n: int = 120, max_age_min: int = FRESHNESS_MIN) -> dict | None:
+    """Fix plan A1 — the ONLY reader of intraday_candles: scoped to the user's own
+    EA stream and the requested timeframe; never falls back to another user's bars.
+    Returns the doc (bars UTC-normalised at ingest) or None when missing/stale."""
+    if not user_id:
+        return None
+    from database import get_db
+    from pip_utils import base_symbol
+    doc = await get_db().intraday_candles.find_one(
+        {"user_id": str(user_id), "symbol": base_symbol(symbol), "timeframe": timeframe},
+        {"bars": {"$slice": -int(last_n)}, "updated_at": 1, "last_tick": 1, "t_basis": 1},
+    )
+    if not doc:
+        return None
+    upd = doc.get("updated_at")
+    if upd:
+        u = datetime.fromisoformat(str(upd).replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) - u > timedelta(minutes=max_age_min):
+            return None
+    return doc
+
+
+async def broker_live_price(symbol: str, user_id: str | None, max_age_s: int = 180) -> float | None:
+    """Fix plan A10 — the user's broker tick (forming-bar close relayed by the EA),
+    preferred over futures/daily public quotes when ≤ max_age_s old."""
     try:
-        from database import get_db
-        from pip_utils import base_symbol
-        doc = await get_db().intraday_candles.find_one(
-            {"symbol": base_symbol(symbol)},
-            {"bars": {"$slice": -120}, "updated_at": 1},
-            sort=[("updated_at", -1)],
-        )
+        doc = await load_user_candles(symbol, user_id, last_n=1, max_age_min=max(1, max_age_s // 60 + 1))
+        tick = (doc or {}).get("last_tick") or {}
+        at = tick.get("at")
+        if not at:
+            return None
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(str(at).replace("Z", "+00:00"))).total_seconds()
+        px = float(tick.get("price") or 0)
+        return px if px > 0 and age <= max_age_s else None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("broker tick unavailable for %s: %s", symbol, e)
+        return None
+
+
+async def fetch_intraday_pack(symbol: str, user_id: str | None = None, timeframe: str = "M15") -> dict | None:
+    """Latest fresh M15 features for the symbol from the USER's EA candle stream."""
+    try:
+        doc = await load_user_candles(symbol, user_id, timeframe, last_n=120)
         if not doc:
             return None
-        upd = doc.get("updated_at")
-        if upd:
-            u = datetime.fromisoformat(str(upd).replace("Z", "+00:00"))
-            if datetime.now(timezone.utc) - u > timedelta(minutes=FRESHNESS_MIN):
-                return None
         return compute_intraday_features(doc.get("bars") or [])
     except Exception as e:  # noqa: BLE001
         logger.debug("intraday pack failed for %s: %s", symbol, e)

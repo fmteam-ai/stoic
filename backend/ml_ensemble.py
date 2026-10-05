@@ -86,6 +86,65 @@ def featurize(action, symbol, sig, when=None) -> list:
     ]
 
 
+def entry_time_stop(trade: dict, sig: dict) -> float | None:
+    """Fix plan R11/H9 — the stop AS PLACED AT ENTRY, never the trailed/BE stop
+    the trade carries at close: signal stop → entry-time sl_pips → trade stop."""
+    if sig.get("stop_loss"):
+        return float(sig["stop_loss"])
+    try:
+        entry, pips = float(trade.get("entry_price") or 0), float(trade.get("sl_pips") or 0)
+        if entry > 0 and pips > 0:
+            from pip_utils import pips_to_price
+            d = pips_to_price(trade.get("symbol") or "", pips)
+            return entry - d if trade.get("action") == "BUY" else entry + d
+    except (TypeError, ValueError):
+        pass
+    return float(trade["stop_loss"]) if trade.get("stop_loss") else None
+
+
+def trade_open_time(trade: dict) -> datetime | None:
+    """Fix plan R11/H8 — the bar/open time that anchors hour & weekday features,
+    normalised to UTC. None (→ sample skipped) instead of 'now' when unknown."""
+    raw = trade.get("opened_at") or trade.get("created_at")
+    try:
+        when = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    return when.replace(tzinfo=timezone.utc) if when.tzinfo is None else when.astimezone(timezone.utc)
+
+
+async def build_training_rows(db, user_id: str, trades: list) -> tuple[list, list]:
+    """Shared by training and candidate evaluation. Signals are read scoped to
+    the user (fix plan R11 — no unscoped reads); rows without an open time are skipped."""
+    from bson import ObjectId
+    sids = []
+    for t in trades:
+        try:
+            sids.append(ObjectId(t["signal_id"]))
+        except Exception:
+            continue
+    sigs = {}
+    if sids:
+        async for s in db.signals.find(
+                {"_id": {"$in": sids}, "user_id": user_id},
+                {"session": 1, "regime": 1, "mtf_tiers": 1, "stop_loss": 1,
+                 "confidence": 1, "entry_price": 1, "tp1": 1, "take_profit": 1}):
+            sigs[str(s["_id"])] = s
+    X, y = [], []
+    for t in trades:
+        if not t.get("pnl"):
+            continue
+        when = trade_open_time(t)
+        if when is None:
+            continue
+        sig = sigs.get(str(t.get("signal_id") or "")) or {}
+        sig = {**sig, "entry_price": t.get("entry_price") or sig.get("entry_price"),
+               "stop_loss": entry_time_stop(t, sig)}
+        X.append(featurize(t.get("action"), t.get("symbol"), sig, when))
+        y.append(1 if float(t["pnl"]) > 0 else 0)
+    return X, y
+
+
 def _gbm_zoo():
     from sklearn.ensemble import GradientBoostingClassifier
     from xgboost import XGBClassifier
@@ -198,34 +257,7 @@ async def train_ensemble(db, user_id: str) -> dict:
     if len(trades) < MIN_TRADES:
         meta["status"] = "insufficient_data"
         return public_state(await _persist_training(db, user_id, meta, None))
-    sids = []
-    for t in trades:
-        try:
-            sids.append(ObjectId(t["signal_id"]))
-        except Exception:
-            continue
-    sigs = {}
-    if sids:
-        async for s in db.signals.find(
-                {"_id": {"$in": sids}},
-                {"session": 1, "regime": 1, "mtf_tiers": 1, "stop_loss": 1,
-                 "confidence": 1, "entry_price": 1, "tp1": 1, "take_profit": 1}):
-            sigs[str(s["_id"])] = s
-    X, y = [], []
-    for t in trades:
-        if not t.get("pnl"):
-            continue
-        sig = sigs.get(str(t.get("signal_id") or "")) or {}
-        sig = {**sig, "entry_price": t.get("entry_price") or sig.get("entry_price"),
-               "stop_loss": t.get("stop_loss") or sig.get("stop_loss")}
-        when = None
-        try:
-            when = datetime.fromisoformat(
-                str(t.get("opened_at") or t.get("created_at")))
-        except (ValueError, TypeError):
-            pass
-        X.append(featurize(t.get("action"), t.get("symbol"), sig, when))
-        y.append(1 if t["pnl"] > 0 else 0)
+    X, y = await build_training_rows(db, user_id, trades)
     window = {"from": str(trades[0].get("closed_at")), "until": str(trades[-1].get("closed_at"))}
     result = await asyncio.to_thread(train_sync, X, y, user_id, window=window)
     import model_store

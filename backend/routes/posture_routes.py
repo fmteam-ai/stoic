@@ -69,7 +69,7 @@ async def trend_score_endpoint(symbol: str = "XAUUSD",
     db = get_db()
     uid = str(user.get("id") or user.get("_id"))
     cdoc = await db.intraday_candles.find_one(
-        {"user_id": uid, "symbol": base_symbol(symbol)}, {"bars": 1})
+        {"user_id": uid, "symbol": base_symbol(symbol), "timeframe": "M15"}, {"bars": 1})
     bars = (cdoc or {}).get("bars") or []
     if len(bars) < 40:
         return {"ready": False, "symbol": base_symbol(symbol),
@@ -99,7 +99,7 @@ async def market_posture(user=Depends(get_current_user)):
             {"symbol": {"$regex": f"^{re.escape(base)}"}}, sort=[("_id", -1)]) or {}
         vetoes = [ln.strip() for ln in (sig.get("reasoning") or "").split("\n")
                   if ln.strip().startswith("VETO")]
-        cdoc = await db.intraday_candles.find_one({"user_id": uid, "symbol": base})
+        cdoc = await db.intraday_candles.find_one({"user_id": uid, "symbol": base, "timeframe": "M15"})
         fc = None
         try:
             from forecast_agent import get_forecast

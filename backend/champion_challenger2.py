@@ -244,8 +244,7 @@ async def qualify(db, user_id: str, model_id: str) -> dict:
     _rate_check(user_id)
     doc = await db.intraday_candles.find_one(
         {"user_id": user_id, "symbol": m["symbol"], "timeframe": "M15"},
-        {"bars": 1}) or await db.intraday_candles.find_one(
-        {"symbol": m["symbol"], "timeframe": "M15"}, {"bars": 1})
+        {"bars": 1})          # fix plan A1 — own stream only
     bars = (doc or {}).get("bars") or []
     scorecard: dict
     if len(bars) < WARMUP + 80:

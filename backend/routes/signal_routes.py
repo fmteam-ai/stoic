@@ -221,7 +221,7 @@ async def generate_signal(payload: dict, account_id: Optional[str] = None,
     risk_level = payload.get("risk_level") or cfg.get("risk_level", "medium")
 
     try:
-        signal = await analyze_symbol(symbol, risk_level)
+        signal = await analyze_symbol(symbol, risk_level, user_id=user["id"])
     except Exception as e:
         from errors import api_error
         raise api_error(502, "ai_analysis_failed", "AI analysis is temporarily unavailable.", exc=e)
@@ -252,7 +252,7 @@ async def generate_all(account_id: Optional[str] = None,
     results = []
     for sym in cfg["symbols"]:
         try:
-            sig = await analyze_symbol(sym, risk_level)
+            sig = await analyze_symbol(sym, risk_level, user_id=user["id"])
             sig["user_id"] = user["id"]
             sig["consumed"] = False
             sig["created_at"] = datetime.now(timezone.utc).isoformat()

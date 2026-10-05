@@ -78,8 +78,7 @@ async def replay_rejections(db, user_id: str, since: str,
         sym = d["symbol"]
         if sym not in cache:
             doc = await db.intraday_candles.find_one(
-                {"symbol": sym, "timeframe": "M15"}) or \
-                await db.intraday_candles.find_one({"symbol": sym})
+                {"user_id": user_id, "symbol": sym, "timeframe": "M15"})  # fix plan A1
             cache[sym] = (doc or {}).get("bars") or []
         try:
             epoch = datetime.fromisoformat(d["ts"]).timestamp()

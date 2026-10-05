@@ -12,7 +12,7 @@ import json
 import uuid
 import re
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 logger = logging.getLogger("ai_signals")
 
@@ -100,24 +100,14 @@ def _apply_dual_veto(action: str, confidence: float, sentiment: dict) -> tuple:
     return action, ""
 
 
-async def _intraday_entropy_override(symbol: str, daily: dict) -> dict:
-    """When daily entropy says NOISY, check the EA's fresh M15 stream.
+async def _intraday_entropy_override(symbol: str, daily: dict, user_id: str | None = None) -> dict:
+    """When daily entropy says NOISY, check the USER's fresh M15 stream (fix plan A1).
     An organized intraday market (clean trend) outranks stale daily noise."""
     try:
-        from database import get_db
-        from pip_utils import base_symbol
-        doc = await get_db().intraday_candles.find_one(
-            {"symbol": base_symbol(symbol)},
-            {"bars": {"$slice": -80}, "updated_at": 1},
-            sort=[("updated_at", -1)],
-        )
+        from intraday_features import load_user_candles
+        doc = await load_user_candles(symbol, user_id, "M15", last_n=80, max_age_min=30)
         if not doc:
             return daily
-        upd = doc.get("updated_at")
-        if upd:
-            u = datetime.fromisoformat(str(upd).replace("Z", "+00:00"))
-            if datetime.now(timezone.utc) - u > timedelta(minutes=30):
-                return daily  # stale stream — keep the daily verdict
         closes = [float(b.get("c") or 0) for b in (doc.get("bars") or []) if b.get("c")]
         if len(closes) < 31:
             return daily
@@ -139,10 +129,20 @@ async def _intraday_entropy_override(symbol: str, daily: dict) -> dict:
 async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
                          strategy: str | None = None,
-                         engine_params: dict | None = None) -> dict:
+                         engine_params: dict | None = None,
+                         user_id: str | None = None) -> dict:
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
+    # Fix plan A10 — the user's broker tick (EA forming-bar close, ≤3 min old)
+    # beats the public quote: gold history is futures vs spot, FX quotes are
+    # daily. Falls back to the public quote when no EA stream is fresh.
+    from intraday_features import broker_live_price, fetch_intraday_pack
+    broker_px = await broker_live_price(symbol, user_id)
+    price_source = "public_quote"
+    if broker_px:
+        quote = {**quote, "price": broker_px, "public_price": quote.get("price")}
+        price_source = "broker_tick"
     # iter-117 · Live-price patch — refresh the in-flight daily bar with the
     # live quote so intraday indicators track the real market instead of the
     # history cache (bot missed a 60-pt gold drop analyzing a stale close).
@@ -168,11 +168,9 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # a fresh intraday trend forming inside a single day. When the EA's live
     # M15 stream shows an ORGANIZED market, it outranks the daily verdict.
     if not entropy.get("tradeable", True):
-        entropy = await _intraday_entropy_override(symbol, entropy)
-    # iter-120 · Intraday M15 feature pack — live EA-stream vision so the
-    # strategy engine can trade clean intraday days the daily tiers can't see.
-    from intraday_features import fetch_intraday_pack
-    intraday_pack = await fetch_intraday_pack(symbol)
+        entropy = await _intraday_entropy_override(symbol, entropy, user_id)
+    # iter-120 · Intraday M15 feature pack — the USER's live EA stream (fix plan A1).
+    intraday_pack = await fetch_intraday_pack(symbol, user_id)
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
 
@@ -329,7 +327,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
     market_closure = is_market_closed(symbol)
     mtf_conf = None
     if mtf_mode and not market_closure:
-        mtf_conf = await fetch_mtf_confluence(symbol, current_price, mode=mtf_mode)
+        mtf_conf = await fetch_mtf_confluence(symbol, current_price, mode=mtf_mode, user_id=user_id)
 
     def _hold(reason: str, closure: dict | None = None) -> dict:
         return {
@@ -557,6 +555,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "chart_action": action,
         "confidence": round(confidence, 1),
         "entry_price": None if is_hold else round(current_price, 5),
+        "price_source": price_source,
         "stop_loss": None if is_hold else sl,
         "take_profit": None if is_hold else tp,
         "tp1": None if is_hold else tp1,

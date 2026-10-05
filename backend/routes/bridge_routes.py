@@ -923,6 +923,55 @@ def timeframe_seconds(tf: str) -> int:
     return _TF_SECONDS.get(str(tf or "").upper(), 900)
 
 
+def broker_offset_sec(acc: dict) -> tuple[int, str]:
+    """Fix plan R3 — seconds to SUBTRACT from a broker-time epoch to get UTC.
+    Source order: EA v1.54 broker_time.server_gmt_offset_sec → offset learned
+    from live deals (broker_utc_offset_sec) → 0 (unknown; recorded in health)."""
+    bt = acc.get("broker_time_info") or {}
+    try:
+        if bt.get("server_gmt_offset_sec") is not None:
+            off = int(bt["server_gmt_offset_sec"])
+            if abs(off) <= 50400:
+                return off, "ea_broker_time"
+    except (TypeError, ValueError):
+        pass
+    try:
+        off = int(acc.get("broker_utc_offset_sec") or 0)
+        if off and abs(off) <= 50400:
+            return off, "learned_from_deals"
+    except (TypeError, ValueError):
+        pass
+    return 0, "unknown"
+
+
+def validate_bars(raw: list, timeframe: str) -> tuple[list[dict], int]:
+    """Fix plan A1 — bars validated at ingest: numeric, finite, positive prices,
+    high ≥ max(open, close), low ≤ min(open, close), epoch aligned to the
+    timeframe and within ±30 days of now, de-duplicated by timestamp."""
+    import math
+    tf_s = timeframe_seconds(timeframe)
+    now = int(datetime.now(timezone.utc).timestamp())
+    out: dict[int, dict] = {}
+    dropped = 0
+    for b in raw:
+        try:
+            t = int(b["t"])
+            o, h, lo, c = float(b["o"]), float(b["h"]), float(b["l"]), float(b["c"])
+            v = float(b.get("v") or 0)
+            vals = (o, h, lo, c, v)
+            if any(math.isnan(x) or math.isinf(x) for x in vals) or min(o, h, lo, c) <= 0 or v < 0:
+                raise ValueError("non-finite or non-positive")
+            if h < max(o, c) or lo > min(o, c) or h < lo:
+                raise ValueError("ohlc geometry")
+            if t % tf_s != 0 or abs(now - t) > 30 * 86400 + 50400:
+                raise ValueError("timestamp")
+        except (KeyError, TypeError, ValueError):
+            dropped += 1
+            continue
+        out[t] = {"t": t, "o": o, "h": h, "l": lo, "c": c, "v": v}
+    return [out[t] for t in sorted(out)], dropped
+
+
 def split_forming_bar(bars: list[dict], timeframe: str, now_ts: int) -> tuple[list[dict], int]:
     """H10 (roadmap step 6): a bar whose close time (t + tf) is still in the future
     is the CURRENTLY FORMING candle — its O/H/L/C keep changing until it closes.
@@ -947,18 +996,18 @@ async def receive_candles(payload: BridgeCandles):
     now_iso = datetime.now(timezone.utc).isoformat()
     health_key = {"user_id": account["user_id"], "symbol": base,
                   "timeframe": payload.timeframe}
-    bars = []
-    dropped = 0
-    for b in (payload.bars or [])[-200:]:
-        try:
-            bars.append({"t": int(b["t"]), "o": float(b["o"]), "h": float(b["h"]),
-                         "l": float(b["l"]), "c": float(b["c"]),
-                         "v": float(b.get("v") or 0)})
-        except (KeyError, TypeError, ValueError):
-            dropped += 1
-            continue
-    bars, forming_dropped = split_forming_bar(
-        bars, payload.timeframe, int(datetime.now(timezone.utc).timestamp()))
+    # Fix plan R3 — EA bar times are BROKER server time; normalise to UTC
+    # before the forming-bar check, VWAP day anchors and storage.
+    offset, offset_source = broker_offset_sec(account)
+    raw = [dict(b, t=int(b["t"]) - offset) if isinstance(b, dict) and str(b.get("t", "")).lstrip("-").isdigit() else b
+           for b in (payload.bars or [])[-200:]]
+    bars, dropped = validate_bars(raw, payload.timeframe)
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    # Fix plan A10 — the forming bar's close IS the broker's live tick.
+    forming = [b for b in bars if int(b["t"]) + timeframe_seconds(payload.timeframe) > now_ts]
+    last_tick = ({"price": float(forming[-1]["c"]), "bar_t": int(forming[-1]["t"]), "at": now_iso}
+                 if forming else None)
+    bars, forming_dropped = split_forming_bar(bars, payload.timeframe, now_ts)
     if not bars:
         await db.candle_feed_health.update_one(health_key, {"$set": {
             "last_received_at": now_iso, "source_symbol": payload.symbol,
@@ -970,25 +1019,37 @@ async def receive_candles(payload: BridgeCandles):
         }, "$inc": {"payloads_received": 1, "payloads_rejected": 1}},
             upsert=True)
         if forming_dropped:
+            if last_tick:
+                await db.intraday_candles.update_one(
+                    {"user_id": account["user_id"], "symbol": base, "timeframe": payload.timeframe},
+                    {"$set": {"last_tick": last_tick}})
             return {"status": "ok", "stored": 0, "forming_dropped": forming_dropped}
         raise HTTPException(status_code=422, detail="No valid bars")
     # iter-125 · Accumulate history server-side (EA only sends ~96 bars):
     # merge by timestamp, keep the newest 800 (8+ days of M15 → real 4H data).
     existing = await db.intraday_candles.find_one(
         {"user_id": account["user_id"], "symbol": base,
-         "timeframe": payload.timeframe}, {"bars": 1})
+         "timeframe": payload.timeframe}, {"bars": 1, "t_basis": 1})
     if existing and existing.get("bars"):
-        merged = {int(b["t"]): b for b in existing["bars"]}
+        old_bars = existing["bars"]
+        if existing.get("t_basis") != "utc" and offset:
+            # one-off migration of a legacy broker-time doc to UTC
+            old_bars = [dict(b, t=int(b["t"]) - offset) for b in old_bars]
+        merged = {int(b["t"]): b for b in old_bars}
         merged.update({int(b["t"]): b for b in bars})
         bars = [merged[t] for t in sorted(merged)][-800:]
     write_ok = True
     try:
+        set_doc = {"bars": bars, "source_symbol": payload.symbol,
+                   "account_id": str(account["_id"]),
+                   "updated_at": now_iso, "t_basis": "utc",
+                   "broker_offset_sec": offset, "offset_source": offset_source}
+        if last_tick:
+            set_doc["last_tick"] = last_tick
         await db.intraday_candles.update_one(
             {"user_id": account["user_id"], "symbol": base,
              "timeframe": payload.timeframe},
-            {"$set": {"bars": bars, "source_symbol": payload.symbol,
-                      "account_id": str(account["_id"]),
-                      "updated_at": now_iso}},
+            {"$set": set_doc},
             upsert=True)
     except Exception:
         write_ok = False
@@ -1004,6 +1065,7 @@ async def receive_candles(payload: BridgeCandles):
             "valid_bars": len(bars), "dropped_bars": dropped, "forming_dropped": forming_dropped,
             "last_bar_ts": last_bar_ts, "bar_lag_s": bar_lag_s,
             "stored_total": len(bars), "last_write_ok": write_ok,
+            "broker_offset_sec": offset, "offset_source": offset_source,
             "last_error": None,
         }, "$inc": {"payloads_received": 1}}, upsert=True)
     return {"status": "ok", "stored": len(bars)}
