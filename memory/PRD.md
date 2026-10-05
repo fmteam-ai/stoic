@@ -3102,3 +3102,8 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - Operator "Check after deploy": Admin → Broker Registry → Position Modes lists every account with MODE + SOURCE (set NETTING for netting brokers); account card shows `POSITIONS · …`; Admin Ops → Mongo panel "Unique ticket index OK"; readiness pill TICKET INDEX PASS; soak: expire an order (block the EA 120s) then let it fill → row closes with close_reason `late_fill_after_expiry`, ops alert + audit entry, Bot Pulse / streak unaffected.
 - Tests locally: `cd backend && DB_NAME=ai_trading_bot_test python -m pytest tests -m "not http and not broker and not external and not chaos and not soak"` (H7: the suite refuses a non-test DB_NAME).
 - Next: Fix plan B2 (safety guards).
+
+## 2026-10-05 — Security & Health Agent SA3 — DONE, user verification pending
+- Alerts (Critical/High → security Telegram + admin email, dedup per dedup_key, Critical repeats 30 min), rules R1–R8 logged as would_have_done (protected list + hourly cap already evaluated), daily/weekly reports, admin writes (ack/resolve/false-positive, mode switch, test alert; step-up + audit chain), Security & Health tab in Ops Console + Critical banner. Details: memory/CHANGELOG.md. Tests unit (7) + live (23); manifest + rc_lock refrozen.
+- Operator: set `SECURITY_AGENT_TELEGRAM_BOT_TOKEN` / `SECURITY_AGENT_TELEGRAM_CHAT_ID` as Docker secrets (new BotFather bot + private group); verify stoicaibot.com in Resend; run 14 days in observe, tune thresholds (<1 FP/week/rule) from the weekly report.
+- Next: SA4 containment (actions.py, is_blocked in auth/bridge, undo/extend, user notifications) — BLOCKED on `SECURITY_AGENT_PROTECTED_IPS` from user; then Fix plan B2 (safety guards).

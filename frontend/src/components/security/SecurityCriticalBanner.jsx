@@ -19,7 +19,8 @@ export function SecurityCriticalBanner() {
         return () => { live = false; clearInterval(t); };
     }, [isAdmin]);
     const critical = s?.open_by_severity?.critical || 0;
-    if (!isAdmin || !critical || location.pathname === "/admin/ops") return null;
+    const onSecurityTab = location.pathname === "/admin/ops" && /tab=security|finding=/.test(location.search);
+    if (!isAdmin || !critical || onSecurityTab) return null;
     return (
         <div className="mx-4 md:mx-8 mt-3 border border-[#FF3B30]/60 bg-[#FF3B30]/10 px-3 py-2 flex items-center gap-3" data-testid="security-critical-banner">
             <ShieldAlert className="w-4 h-4 text-[#FF3B30] shrink-0" />
