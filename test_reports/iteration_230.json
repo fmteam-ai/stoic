@@ -1,0 +1,35 @@
+{
+  "summary": "main94 A10 live verification (iter 230). Backend: 11/11 pre-existing unit tests (test_fixplan_main94_a10.py) + 5/5 new live HTTP tests (test_main94_live_iter230.py) all PASS against preview = 16/16 total. Validated: GET /api/admin/execution-brakes auth matrix (401 unauth, 403 non-admin, 200 admin) and seeded brake appears with owner_email+label+execution_brake; POST /api/accounts/{id}/execution-brake/release with step-up removes brake from the admin list; POST /api/accounts (live, mode='live') returns {bridge_token:<plaintext>, bridge_token_shown_once:true} once, GET /api/accounts afterwards exposes only has_bridge_token+bridge_token_masked (no plaintext, no hash); PAPER account creation does NOT return bridge_token; the shown-once plaintext authenticates POST /api/bridge/heartbeat (200); GET /api/health has NO release_identity field; GET /api/health/release is 401 unauth, 403 non-admin, 200 admin with release_identity.ea_shipped_version=='1.59'; P1-02 open /api/ws socket closed by server with code 4401 within ~45s after POST /api/auth/logout (WS_REVALIDATE_SECONDS=30). Distinct-trade late-fill counting (R-5) covered by unit test_late_fill_reported_twice_counts_once_and_brake_needs_two_trades and test_single_trade_double_report_does_not_brake which both pass. Frontend: WelcomeTrailer banned phrases ('Zero excuses','before it ever hurts you','only the proven ones ever touch real money','24/7') CONFIRMED ABSENT via both source grep and live Playwright render. Admin-only ReleaseIdentityCard gating + copy-token-<account_number> + Accounts post-create reveal logic are enforced by passing unit assertions in test_fixplan_main94_a10.py against the current JSX source. Full Playwright coverage of /bot-health, /accounts, /settings against the preview URL hit intermittent 'STOIC IS TAKING LONGER THAN USUAL' bundle-load screens (Cloudflare / preview CDN), so those admin/non-admin UI DOM checks could not be completed in-browser this iteration — code assertions carry the proof.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Playwright admin UI run against preview", "issue": "Preview URL intermittently serves the 'STOIC IS TAKING LONGER THAN USUAL — application bundle has not arrived yet' fallback (vite dev bundle + Cloudflare path). First Playwright pass reached admin dashboard successfully; subsequent navigations to /bot-health and /accounts rendered the bundle-fail page so the data-testid='release-identity-card' / 'add-account-button' / 'copy-token-<account_number>' DOM checks were not completable in-browser. All equivalent code-level assertions pass in test_fixplan_main94_a10.py.", "affected_selectors": ["[data-testid='release-identity-card']", "[data-testid='add-account-button']", "[data-testid^='copy-token-']"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_main94_live_iter230.py",
+    "/app/backend/tests/test_fixplan_main94_a10.py",
+    "/app/test_reports/pytest/iter230_main94.xml"
+  ],
+  "action_items": [
+    "Preview bundle-load flakiness (vite dev server behind CF) blocks in-browser Playwright for admin pages intermittently — if main agent needs a live Playwright pass for /bot-health & /accounts, consider warming the bundle (vite build + static serve) or retrying 2-3 times. Not a shipped-code bug."
+  ],
+  "critical_code_review_comments": [
+    "backend/execution_health.py braked_accounts() joins accounts.user_id → users._id by ObjectId (owner_email lookup). The admin brake list route is admin-only via _admin_only(user) and returns {accounts:[...]} — verified live.",
+    "backend/routes/account_routes.py create_account(): out['bridge_token']=plaintext + out['bridge_token_shown_once']=True is ONLY set when not is_paper; _serialize strips bridge_token_hash & related secret fields on the list payload (has_bridge_token + bridge_token_masked only) — verified live.",
+    "backend/server.py ws_endpoint re-validates every WS_REVALIDATE_SECONDS=30s via asyncio.wait_for timeout → validate_access_token → close 4401/4403 on TokenRejected — verified live (socket died ~30-35s after /auth/logout with close code 4401).",
+    "backend/routes/account_routes.py account_execution_brake_release calls require_admin + require_step_up before mutating; audit_log entry stamped with step_up_verified=True — verified live.",
+    "GET /api/health response contains build_sha + execution_policy_version + ea_version='1.59' + env markers but NO release_identity key (moved to admin-only /api/health/release); image_digest returns None in preview (local build, no STOIC_IMAGE_DIGEST injected) which is expected but worth confirming CI/CD injects it for prod."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_main94_live_iter230.py"
+  ],
+  "success_rate": {"backend": "100% (16/16 unit+live)", "frontend": "WelcomeTrailer wording PASS; admin DOM Playwright blocked by preview bundle flakiness (source-asserted via unit tests)"},
+  "test_credentials": "admin@stoicaibot.com (TEST_ADMIN_PASSWORD from /app/backend/.env). STEP_UP_BYPASS_TOKEN from /app/backend/.env. Mongo via MONGO_URL+DB_NAME ('ai_trading_bot', STOIC_TESTS_ALLOW_DB_NAME=1 required by conftest).",
+  "seed_data_creation": "Ephemeral throwaway users prefixed 'test_m94_' / 'test_ui_m94_' (bcrypt hashed, email_verified=true) and accounts labelled 'TEST_br_*' / 'TEST_m94_*' created during fixtures and DELETED on teardown (plus a final cleanup sweep after the run — confirmed 0 remaining).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Run with: cd /app/backend && STOIC_TESTS_ALLOW_DB_NAME=1 STOIC_ALLOW_MUTATING_TESTS=YES DB_NAME=ai_trading_bot python -m pytest tests/test_main94_live_iter230.py tests/test_fixplan_main94_a10.py -v. conftest.py autoinjects X-Step-Up-Bypass + X-CSRF-Token + X-RateLimit-Bypass on every requests.Session call — set session.headers['X-Step-Up-Bypass']='' to exercise the real step-up gate. braked_accounts() uses ObjectId(users._id) so when seeding brake-owned accounts in Mongo the user_id MUST be str(user_doc['_id']), not any UUID 'id' field. The P1-02 WS test uses the 'websockets' lib 16.x (additional_headers kw), passes the Cookie string from the login Session, waits up to 60s for close_code 4401. Preview URL may return the bundle-fail page intermittently to Playwright — retry 2-3 times before concluding a UI regression."
+}

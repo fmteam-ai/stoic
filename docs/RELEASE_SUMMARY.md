@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `e90eb69a5433351b5898ac84f64a769d89e606cf`
-- rc_lock: `e90eb69a5433351b5898ac84f64a769d89e606cf` authoritative=False
+- Source commit: `bb1bd49918784792b941177e9308805291a7678e`
+- rc_lock: `bb1bd49918784792b941177e9308805291a7678e` authoritative=False
 - Model manifest sha256: `b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6`
-- Test manifest sha256: `6dd6838255214013d83ebd76142e00324900ffcfbb4ecc2de1c3aa44e74b1ab6`
+- Test manifest sha256: `f6e30d99da8e385287704d21f7a3992c3ff0e8869eb0c72799f32086bf9ffe23`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 5046 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 5051 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -72,4 +72,4 @@
 - tighten to the production hosts only in the Secrets tab. — owner: operator
 - P3-r24-provenance-image-digest [P3] Managed publish: code identity is the self-computed source-tree digest (now covers py/json/yml/toml/sh/txt/Dockerfile, symlinks + dotfiles excluded). Inject STOIC_IMAGE_DIGEST/STOIC_BUILD_SHA if the platform exposes them. — owner: operator
 
-_generated 2026-10-05T21:33:56.463088+00:00 — regenerate on every release commit_
+_generated 2026-10-05T21:47:32.709774+00:00 — regenerate on every release commit_
