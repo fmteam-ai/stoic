@@ -1,0 +1,28 @@
+{
+  "summary": "A13 Part 2 backend verification: unit lane (149 tests across test_a13_part2 + test_a13_part1 + test_iter35_binance_ccxt + unit/test_authority_matrix) all green with DB_NAME=''. Wrote tests/test_iter232_a13_part2_http.py — 8 HTTP tests pass against preview (admin cookie + CSRF): GET /api/admin/release-gate returns 200 enforced=false with failures+lock_commit+image_digest; GET /api/admin/acceptance/current returns 200 required=false with release+reason; POST /api/admin/acceptance/bundle returns verdict FAIL (stale preview fleet) with failures/digest/signature and per-account payload blocks ea_session+reconciliation+positions+authority+statement; GET /api/admin/acceptance/bundles returns a list with no payload; non-admin (verified user) → 403 on all four. Regression suite (DB_NAME=ai_trading_bot_test) ran 7 files: 62 passed, 9 failed — all 9 match the known pre-existing failures listed in the agent-to-agent context note (iter198/iter238/max_concurrent_race/safety_guardian hitting account_not_enabled under round-9 authority rules). No NEW failures introduced by A13 Part 2.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iter232_a13_part2_http.py",
+    "/app/backend/tests/test_a13_part2.py",
+    "/app/backend/tests/test_a13_part1.py",
+    "/app/backend/tests/test_iter35_binance_ccxt.py",
+    "/app/backend/tests/unit/test_authority_matrix.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "crypto_execution.begin ordering is correct: durable ExecutionIntent + deterministic client_order_id persisted BEFORE any CCXT call — restart recovery is sound.",
+    "account_reservations centralises caps across MT5/paper/crypto under a lease lock; scalp passes its own _reservation_id correctly.",
+    "acceptance_bundle HMAC + bundle_covers correctly binds to build_sha + image_digest; preview verdict FAIL is expected because fleet is legitimately stale.",
+    "release_gate_domain is preview-gated (returns FULL) — behaves as spec'd for preview and remains strict in production.",
+    "No source files were modified; only a new HTTP test file was added under backend/tests/."
+  ],
+  "updated_files": ["/app/backend/tests/test_iter232_a13_part2_http.py"],
+  "success_rate": {"backend": "100% (A13 Part 2 scope); 87% (62/71) on regression suite matching known baseline", "frontend": "N/A (not in scope)"},
+  "test_credentials": "Admin creds from /app/memory/test_credentials.md (TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD read from backend/.env). Non-admin test user minted per run and marked email_verified via direct Mongo update to the preview DB; test cleanup not performed (ephemeral test accounts).",
+  "seed_data_creation": "Per-run non-admin test user created in preview DB (ai_trading_bot) with random email t2_<hex>@example.com and marked email_verified=true to exercise the 403-authorization paths.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "A13 Part 2 unit + HTTP paths fully green on commit under test. The 9 regression failures in iter198/iter238/max_concurrent_race/safety_guardian are pre-existing per iteration_231 and the agent-to-agent context note (fixtures predate round-9 authority — account_not_enabled). CI test manifest was NOT regenerated here (new test file added); main agent should run `python scripts/generate_test_manifest.py` from /app before committing. Run unit lane with DB_NAME='' and the HTTP file with STOIC_TESTS_ALLOW_DB_NAME=1 against the real preview DB.",
+  "rca of the issue": "No new issues — A13 Part 2 implementation (crypto execution truth, account reservation service, signed acceptance bundle, release gate, three new authority domains) verifies end-to-end at both unit and HTTP layers in preview."
+}
