@@ -4,7 +4,7 @@ import { useAuth } from "@/context/AuthContext";
 import { StoicMark } from "@/components/StoicLogo";
 import api from "@/lib/api";
 import {
-    LineChart as ChartLineUp, Activity, Plug, Sliders, Wallet, ListChecks,
+    LineChart as ChartLineUp, Activity, Plug, Sliders, Wallet, ListChecks, ClipboardCheck,
     DollarSign as CurrencyCircleDollar, LogOut as SignOut,
     MessageSquare, Sparkles, Users, Bell, BarChart3, Settings as SettingsIcon,
     CreditCard, HelpCircle, BookOpen, Cpu, LifeBuoy, ExternalLink, ShieldCheck,
@@ -123,6 +123,7 @@ const ADMIN_SECTION = {
         { to: "/managed", label: "PAMM Accounts", icon: Briefcase, testid: "nav-admin-pamm" },
         { to: "/admin/command-center", label: "Command Center", icon: Activity, testid: "nav-admin-command-center" },
         { to: "/admin/ops", label: "Ops Console", icon: Activity, testid: "nav-admin-ops" },
+        { to: "/admin/demo-readiness", label: "Demo Readiness", icon: ClipboardCheck, testid: "nav-admin-demo-readiness" },
         { to: "/admin/preflight", label: "Deploy Preflight", icon: Rocket, testid: "nav-admin-preflight" },
         { to: "/admin/brokers", label: "Broker Registry", icon: Store, testid: "nav-admin-brokers" },
         { to: "/admin/users", label: "User Management", icon: Users, testid: "nav-admin-users" },

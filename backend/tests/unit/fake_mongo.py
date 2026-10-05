@@ -38,6 +38,8 @@ def _match(doc, q):
                     return False
                 if op == "$ne" and cur == arg:
                     return False
+                if op == "$type" and arg == "string" and not isinstance(cur, str):
+                    return False
                 if op == "$gte" and (cur is None or cur < arg):
                     return False
                 if op == "$gt" and (cur is None or cur <= arg):

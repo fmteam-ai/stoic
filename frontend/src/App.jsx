@@ -67,6 +67,7 @@ const AdminAffiliates = lazyImport(() => import("@/pages/AdminAffiliates"));
 const AdminMigration = lazyImport(() => import("@/pages/AdminMigration"));
 const AdminSupport = lazyImport(() => import("@/pages/AdminSupport"));
 const AdminOps = lazyImport(() => import("@/pages/AdminOps"));
+const DemoReadiness = lazyImport(() => import("@/pages/DemoReadiness"));
 const CommandCenter = lazyImport(() => import("@/pages/CommandCenter"));
 const CertificationCenter = lazyImport(() => import("@/pages/CertificationCenter"));
 const PublicCertificate = lazyImport(() => import("@/pages/PublicCertificate"));
@@ -125,6 +126,7 @@ function App() {
                         <Route path="/admin/affiliates" element={<ProtectedRoute requireAdmin><AdminAffiliates /></ProtectedRoute>} />
                         <Route path="/admin/migration" element={<ProtectedRoute requireAdmin><AdminMigration /></ProtectedRoute>} />
                         <Route path="/admin/ops" element={<ProtectedRoute requireAdmin><AdminOps /></ProtectedRoute>} />
+                        <Route path="/admin/demo-readiness" element={<ProtectedRoute requireAdmin><DemoReadiness /></ProtectedRoute>} />
                         <Route path="/admin/repair-ledger" element={<ProtectedRoute requireAdmin><AdminRepairLedger /></ProtectedRoute>} />
                         <Route path="/admin/host-migration" element={<ProtectedRoute requireAdmin><AdminHostMigration /></ProtectedRoute>} />
                         <Route path="/admin/command-center" element={<ProtectedRoute requireAdmin><CommandCenter /></ProtectedRoute>} />

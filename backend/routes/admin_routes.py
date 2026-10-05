@@ -114,6 +114,25 @@ async def admin_execution_brakes(user=Depends(get_current_user)):
     return {"accounts": await braked_accounts(get_db())}
 
 
+@router.get("/admin/demo-readiness")
+async def admin_demo_readiness(user=Depends(get_current_user)):
+    """One-page demo-readiness checklist (main94 deploy checklist): auto checks + manual ticks."""
+    _admin_only(user)
+    from demo_readiness import build
+    return await build(get_db())
+
+
+@router.post("/admin/demo-readiness/manual")
+async def admin_demo_readiness_manual(payload: dict, user=Depends(get_current_user)):
+    _admin_only(user)
+    from demo_readiness import set_manual
+    try:
+        return await set_manual(get_db(), str(payload.get("id") or ""), bool(payload.get("checked")),
+                                actor=str(user.get("email") or user["id"]))
+    except KeyError:
+        raise HTTPException(status_code=404, detail="unknown checklist step")
+
+
 @router.get("/admin/runbooks")
 async def admin_runbooks(user=Depends(get_current_user)):
     _admin_only(user)

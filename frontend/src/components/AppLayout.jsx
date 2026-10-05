@@ -30,7 +30,7 @@ const TITLES = {
     "/marketplace": "Marketplace", "/vps": "VPS", "/analytics": "Analytics",
     "/subscription": "Subscription", "/settings": "Settings",
     "/notifications": "Notifications", "/help": "Help", "/support": "Support",
-    "/status": "System Status", "/admin/command-center": "Command Center",
+    "/status": "System Status", "/admin/command-center": "Command Center", "/admin/demo-readiness": "Demo Readiness",
 };
 
 export function AppLayout({ children }) {
