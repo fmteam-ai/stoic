@@ -824,12 +824,15 @@ async def rotate_token(account_id: str, user=Depends(get_current_user)):
     new_token = generate_bridge_token()
     grace_until = (datetime.now(timezone.utc)
                    + timedelta(minutes=15)).isoformat()
+    suspended = (acc.get("bridge_token_suspended") or {}).get("token") == acc.get("bridge_token")
     await db.accounts.update_one(
         {"_id": acc["_id"]},
         {"$set": {"bridge_token": new_token,
-                  "bridge_token_prev": acc.get("bridge_token"),
+                  # SA4 R5 — a suspended token gets no grace window: re-pairing is the reinstatement
+                  "bridge_token_prev": None if suspended else acc.get("bridge_token"),
                   "bridge_token_prev_expires": grace_until,
-                  "status": "disconnected"}},
+                  "status": "disconnected"},
+         "$unset": {"bridge_token_suspended": ""}},
     )
     return {"bridge_token": new_token, "prev_token_grace_until": grace_until}
 

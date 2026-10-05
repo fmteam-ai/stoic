@@ -43,6 +43,12 @@ export function FindingDetail({ id, onChanged, onClose }) {
     if (!id) return <div className={`${box} p-6 text-xs text-[#52525B]`} data-testid="finding-detail-empty">Select a finding to see the full report.</div>;
     if (!f) return <div className={`${box} p-6 flex justify-center`}><Loader2 className="w-5 h-5 animate-spin text-[#52525B]" /></div>;
     const isOpen = ["open", "contained", "acknowledged"].includes(f.status);
+    const actionId = (String(f.action_taken || "").match(/\[action ([0-9a-f]{24})\]/) || [])[1];
+    const undo = async () => {
+        setBusy(true);
+        try { await api.post(`/admin/security/actions/${actionId}/undo`, { note: "undone from finding" }); toast.success("Containment action undone"); const { data } = await api.get(`/admin/security/findings/${id}`); setF(data); onChanged?.(); }
+        catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
+    };
     const b = "px-2.5 py-1 text-[10px] font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#00FF41]/50 hover:text-[#00FF41] disabled:opacity-40";
     return (
         <div className={box} data-testid="finding-detail">
@@ -70,7 +76,8 @@ export function FindingDetail({ id, onChanged, onClose }) {
                         {f.status !== "acknowledged" && <button className={b} disabled={busy} onClick={() => act("acknowledged")} data-testid="finding-ack-btn">ACKNOWLEDGE</button>}
                         <button className={b} disabled={busy} onClick={() => act("resolved")} data-testid="finding-resolve-btn">MARK RESOLVED</button>
                         <button className={b} disabled={busy} onClick={() => act("false_positive")} data-testid="finding-fp-btn">FALSE POSITIVE</button>
-                        <button className={`${b} opacity-40 cursor-not-allowed`} disabled title="Containment actions arrive with SA4 (enforce mode)" data-testid="finding-undo-btn">UNDO ACTION</button>
+                        <button className={`${b} ${actionId && f.status === "contained" ? "" : "opacity-40 cursor-not-allowed"}`} disabled={busy || !actionId || f.status !== "contained"}
+                            onClick={undo} title={actionId ? "Undo the automatic containment action" : "No containment action on this finding"} data-testid="finding-undo-btn">UNDO ACTION</button>
                     </div>
                 )}
             </div>

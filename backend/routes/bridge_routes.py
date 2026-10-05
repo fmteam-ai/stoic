@@ -20,9 +20,10 @@ from silent_failures import record_swallow
 async def _bridge_ip_throttle(request: Request) -> None:
     """r22: per-IP volume guard on the unauthenticated bridge surface (token
     guessing / probing). Generous enough for a VPS running many terminals."""
-    from security import client_ip, rate_limit
+    from security import client_ip, deny_if_blocked, rate_limit
     from security_agent.events import request_ip as _sa_ip
     _sa_ip.set(client_ip(request))
+    await deny_if_blocked(get_db(), "ip", client_ip(request), "bridge")   # SA4 R6/R8
     await rate_limit(get_db(), "bridge", client_ip(request), BRIDGE_IP_LIMIT_PER_MIN, 60,
                      "Too many bridge requests from this address", request=request)
 
@@ -34,6 +35,12 @@ router = APIRouter(prefix="/bridge", tags=["bridge"], dependencies=[Depends(_bri
 async def _account_by_token(token: str) -> dict:
     db = get_db()
     acc = await db.accounts.find_one({"bridge_token": token})
+    if acc and (acc.get("bridge_token_suspended") or {}).get("token") == token:
+        # SA4 R5 — token seen from two places: suspended until the owner re-pairs
+        # (rotation issues a new token, which is not the suspended one).
+        raise HTTPException(status_code=401, detail={
+            "code": "bridge_token_suspended",
+            "message": "Bridge token suspended by the security agent — rotate the token and re-pair the EA."})
     if acc:
         # First use of a rotated token retires the old one immediately —
         # no need to keep the grace window open once the EA switched over.

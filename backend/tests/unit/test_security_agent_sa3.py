@@ -125,24 +125,18 @@ def test_rules_evaluate_each_rule_and_protected_list():
     assert all(r["action"] not in rules.FORBIDDEN_ACTIONS for r in rules.RULES.values())
 
 
-def test_rules_sweep_observe_mode_records_would_have_done_cap_and_protected():
-    from security_agent import rules
+def test_rules_sweep_observe_mode_records_would_have_done_and_protected():
+    from security_agent import actions
     db, c = FakeDb(), cfg(max_actions_per_hour=3)
     seed(db, "A1", "ip:9.9.9.9", "high", {"ip": "9.9.9.9", "failures": 25})
     seed(db, "A1", "ip:127.0.0.1", "high", {"ip": "127.0.0.1", "failures": 25})
-    seed(db, "A5", "user:x", "medium")                                                         # no rule
-    assert run(rules.sweep(db, c)) == 2
+    seed(db, "A5", "user:x", "medium")                                                            # no rule
+    assert run(actions.sweep(db, c)) == 2
     acts = {a["target"]: a for a in db.security_actions.rows}
     assert acts["9.9.9.9"]["status"] == "would_have_done" and acts["9.9.9.9"]["mode"] == "observe" and acts["9.9.9.9"]["expires_at"]
     assert acts["127.0.0.1"]["status"] == "refused_protected"
     assert any(r["check_id"] == "protected_target" and r["severity"] == "critical" for r in db.security_findings.rows)
-    assert run(rules.sweep(db, c)) == 0                                                           # dedup within the hour
-    for i in range(5):
-        seed(db, "B2", f"ip:7.7.7.{i}", "high", {"ip": f"7.7.7.{i}", "requests": 40})
-    run(rules.sweep(db, c))
-    statuses = [a["status"] for a in db.security_actions.rows if a["check_id"] == "B2"]
-    assert statuses.count("refused_cap") >= 1 and statuses.count("would_have_done") >= 1
-    assert any(r["check_id"] == "containment_cap_reached" for r in db.security_findings.rows)
+    assert run(actions.sweep(db, c)) == 0                                                         # dedup within the hour
     # observe mode never writes blocks or touches trades
     assert db.security_blocks.rows == [] and db.trades.rows == [] and db.accounts.rows == []
 

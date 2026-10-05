@@ -8,10 +8,11 @@ from pydantic import BaseModel
 
 from auth import get_current_user, require_admin
 from database import get_db
-from security_agent import alerts, config, reports, rules
+from security_agent import actions, alerts, config, reports, rules
 from security_agent.checks import CHECKS
 from security_agent.checks.common import f
 from security_agent.findings import open_or_update, set_status
+from security import invalidate_block_cache
 from step_up import require_step_up
 
 router = APIRouter(prefix="/admin/security", tags=["security-agent"])
@@ -20,7 +21,8 @@ router = APIRouter(prefix="/admin/security", tags=["security-agent"])
 def _ser(d: dict) -> dict:
     d = dict(d)
     d["id"] = str(d.pop("_id"))
-    d.pop("expires_at", None)
+    if not isinstance(d.get("expires_at"), str):
+        d.pop("expires_at", None)                        # TTL datetimes are internal; ISO strings are informative
     return d
 
 
@@ -91,6 +93,61 @@ async def list_actions(limit: int = 100, kind: str | None = None, user=Depends(g
     q = {"kind": kind} if kind else {}
     rows = await get_db().security_actions.find(q).sort([("at", -1)]).limit(max(1, min(int(limit), 500))).to_list(length=500)
     return {"actions": [_ser(r) for r in rows], "rules": {k: {"title": v["title"], "checks": list(v["checks"]), "action": v["action"]} for k, v in rules.RULES.items()}}
+
+
+@router.get("/blocks")
+async def list_blocks(user=Depends(get_current_user)):
+    require_admin(user)
+    now = datetime.now(timezone.utc)
+    rows = await get_db().security_blocks.find({"active": True, "expires_at": {"$gt": now}}).sort([("expires_at", 1)]).limit(500).to_list(length=500)
+    out = []
+    for r in rows:
+        exp = r.get("expires_at")
+        if hasattr(exp, "tzinfo") and exp.tzinfo is None:
+            exp = exp.replace(tzinfo=timezone.utc)          # motor returns naive UTC datetimes
+        d = {k: v for k, v in r.items() if k not in ("_id", "expires_at")}
+        d.update(id=str(r["_id"]), expires_at=exp.isoformat() if hasattr(exp, "isoformat") else str(exp),
+                 seconds_left=max(0, int((exp - now).total_seconds())) if hasattr(exp, "timestamp") else None)
+        out.append(d)
+    return {"blocks": out}
+
+
+class UndoBody(BaseModel):
+    note: str = ""
+
+
+@router.post("/actions/{action_id}/undo")
+async def undo_action(action_id: str, body: UndoBody, request: Request, user=Depends(get_current_user)):
+    require_admin(user)
+    db = get_db()
+    await require_step_up(db, user, request, "security_action_undo")
+    try:
+        row = await actions.undo(db, action_id, user.get("email") or user["id"], body.note)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    invalidate_block_cache()
+    return _ser(row)
+
+
+class ExtendBody(BaseModel):
+    minutes: int
+
+
+@router.post("/actions/{action_id}/extend")
+async def extend_action(action_id: str, body: ExtendBody, request: Request, user=Depends(get_current_user)):
+    require_admin(user)
+    db = get_db()
+    await require_step_up(db, user, request, "security_action_extend")
+    if not 0 <= body.minutes <= 7 * 24 * 60:
+        raise HTTPException(status_code=400, detail="minutes must be 0..10080")
+    try:
+        row = await actions.extend(db, action_id, body.minutes, user.get("email") or user["id"])
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    invalidate_block_cache()
+    return _ser(row)
 
 
 class StatusBody(BaseModel):

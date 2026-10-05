@@ -100,6 +100,47 @@ async def clear_failures(db, scope: str, identifier: str) -> None:
         {"_id": {"$regex": f"^{_re.escape(f'{scope}:{identifier}')}:"}})
 
 
+# ------------------------------------------------ Security agent blocks (SA4)
+_BLOCK_CACHE: dict = {"at": 0.0, "rows": []}
+_BLOCK_TTL_S = 10.0
+
+
+async def active_blocks(db) -> list:
+    """security_blocks rows (ip / account_login / account_otp) cached 10 s per process."""
+    import time as _t
+    if _t.monotonic() - _BLOCK_CACHE["at"] > _BLOCK_TTL_S:
+        now = datetime.now(timezone.utc)
+        rows = await db.security_blocks.find(
+            {"active": True, "expires_at": {"$gt": now}},
+            {"kind": 1, "value": 1, "scope": 1}).limit(5000).to_list(length=5000)
+        _BLOCK_CACHE.update(at=_t.monotonic(), rows=rows)
+    return _BLOCK_CACHE["rows"]
+
+
+def invalidate_block_cache() -> None:
+    _BLOCK_CACHE["at"] = 0.0
+
+
+async def is_blocked(db, kind: str, value: str, scope: str = "all") -> dict | None:
+    """kind: ip | account_login | account_otp. Block scope 'all' matches every surface;
+    'auth' / 'bridge' match only their own. Returns the block row or None."""
+    v = str(value or "").lower()
+    for b in await active_blocks(db):
+        if b.get("kind") == kind and str(b.get("value") or "").lower() == v \
+                and (b.get("scope") in (None, "all", scope) or scope == "all"):
+            return b
+    return None
+
+
+async def deny_if_blocked(db, kind: str, value: str, scope: str = "all") -> None:
+    b = await is_blocked(db, kind, value, scope)
+    if b:
+        raise HTTPException(status_code=403, detail={
+            "code": "blocked_by_security_agent", "ref": str(b.get("_id")),
+            "message": "This request was blocked by the STOIC security agent. "
+                       f"Contact support with reference {str(b.get('_id'))[-8:]}."})
+
+
 def client_ip(request: Request) -> str:
     """Client IP for rate-limit keying. When TRUST_CF_CONNECTING_IP=true
     (origin reachable only via Cloudflare — e.g. behind cloudflared Tunnel),

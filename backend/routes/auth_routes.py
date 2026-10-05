@@ -208,6 +208,11 @@ async def login(payload: LoginRequest, request: Request, response: Response):
                           request_id=request.headers.get("x-request-id"))
     if gate.error is not None:
         raise gate.error
+    # SA4 — security-agent containment: IP blocks on auth routes (R1/R2/R8) and
+    # per-account password-login locks (R2). MFA-verified sessions are untouched.
+    from security import deny_if_blocked
+    await deny_if_blocked(db, "ip", ip, "auth")
+    await deny_if_blocked(db, "account_login", email)
     # Failed-attempt lockout: 5 wrong passwords per ip+email per 10 min.
     # Successful logins never count toward the limit.
     await check_failure_limit(db, "login", f"{ip}:{email}", 5, 600,
@@ -266,6 +271,7 @@ async def login(payload: LoginRequest, request: Request, response: Response):
         provided = (payload.totp_code or "").strip()
         if not provided:
             raise HTTPException(status_code=401, detail="2FA code required")
+        await deny_if_blocked(db, "account_otp", email)          # SA4 R3 — OTP verify locked
         await check_failure_limit(db, "2fa", email, 5, 600,
                                   "Too many failed 2FA attempts. "
                                   "Try again in a few minutes.")
@@ -289,6 +295,8 @@ async def login(payload: LoginRequest, request: Request, response: Response):
         else:
             # Email OTP gate (admin-toggled) — TOTP-enrolled users skip it.
             from login_otp import otp_gate
+            if payload.email_otp:
+                await deny_if_blocked(db, "account_otp", email)  # SA4 R3
             await otp_gate(db, user, payload.email_otp)
 
     uid = str(user["_id"])

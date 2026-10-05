@@ -1,13 +1,8 @@
 """SA3 — containment rules R1–R8: map open findings to proposed actions with proof thresholds.
-In observe mode (SA3) every proposal is recorded in security_actions as `would_have_done`; SA4 adds
-actions.py that executes them. The protected list and the hourly cap are evaluated here too, so the
-observe log already shows what enforce mode would refuse."""
+actions.py executes them (observe mode = would_have_done). The protected list is evaluated here so
+the observe log already shows what enforce mode would refuse."""
 import ipaddress
 import os
-from datetime import datetime, timedelta, timezone
-
-from security_agent.checks.common import f
-from security_agent.findings import open_or_update
 
 CLOUDFLARE_IPV4 = ("173.245.48.0/20", "103.21.244.0/22", "103.22.200.0/22", "103.31.4.0/22", "141.101.64.0/18", "108.162.192.0/18",
                    "190.93.240.0/20", "188.114.96.0/20", "197.234.240.0/22", "198.41.128.0/17", "162.158.0.0/15", "104.16.0.0/13",
@@ -89,35 +84,3 @@ def evaluate(finding: dict, cfg: dict) -> list[dict]:
         if is_protected(cfg, prop["target_kind"], prop["target"]):
             prop.update(blocked_by="protected_target", severity_escalation="critical")
     return out
-
-
-async def sweep(db, cfg: dict) -> int:
-    """Observe mode: record proposals as would_have_done (one row per finding+rule+target per hour)."""
-    now = datetime.now(timezone.utc)
-    since = (now - timedelta(hours=1)).isoformat()
-    cap = int(cfg.get("max_actions_per_hour") or 10)
-    recorded = 0
-    rows = await db.security_findings.find({"status": {"$in": ["open", "contained"]}, "check_id": {"$in": sorted({c for r in RULES.values() for c in r["checks"]})}}).limit(500).to_list(length=500)
-    for fd in rows:
-        for prop in evaluate(fd, cfg):
-            dedup = f"{fd['_id']}|{prop['rule']}|{prop['target']}"
-            if await db.security_actions.find_one({"dedup": dedup, "at": {"$gte": since}}):
-                continue
-            n_hour = await db.security_actions.count_documents({"kind": "containment", "at": {"$gte": since}})
-            status = "would_have_done" if cfg.get("mode") == "observe" else "pending"
-            if prop.get("blocked_by"):
-                status = "refused_protected"
-                await open_or_update(db, f("protected_target", f"{prop['rule']}:{prop['target']}", "critical", "platform",
-                                           f"{prop['rule']} would have applied {prop['action']} to protected {prop['target_kind']} {prop['target']} — refused",
-                                           {"rule": prop["rule"], "target": prop["target"], "finding": fd["dedup_key"]}))
-            elif n_hour >= cap:
-                status = "refused_cap"
-                await open_or_update(db, f("containment_cap_reached", "platform", "critical", "platform",
-                                           f"{n_hour} containment actions in the last hour reached the cap of {cap}; agent is alert-only",
-                                           {"actions_last_hour": n_hour, "cap": cap}))
-            await db.security_actions.insert_one({"kind": "containment", "dedup": dedup, "finding_id": str(fd["_id"]), "dedup_key": fd["dedup_key"],
-                                                  "check_id": fd["check_id"], "status": status, "mode": cfg.get("mode"), "at": now.isoformat(),
-                                                  "actor": "security_agent", "expires_at": (now + timedelta(minutes=prop["expires_min"])).isoformat() if prop["expires_min"] else None,
-                                                  **prop})
-            recorded += 1
-    return recorded

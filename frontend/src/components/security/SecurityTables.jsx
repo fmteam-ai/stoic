@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import api from "@/lib/api";
-import { ListChecks, Scale } from "lucide-react";
+import api, { formatApiError } from "@/lib/api";
+import { toast } from "sonner";
+import { Ban, ListChecks, Scale } from "lucide-react";
 
 const Head = ({ icon: Icon, title, testid }) => (
     <div className="px-4 py-2.5 border-b border-[#1F1F1F] flex items-center gap-2" data-testid={testid}>
@@ -13,13 +14,17 @@ const STATUS_CLS = {
     pending: "text-[#3B82F6]", done: "text-[#00FF41]", undone: "text-[#71717A]",
 };
 
-export function WouldHaveDoneList() {
+export function WouldHaveDoneList({ onChanged }) {
     const [d, setD] = useState({ actions: [], rules: {} });
     const load = useCallback(async () => { try { setD((await api.get("/admin/security/actions?kind=containment&limit=50")).data); } catch { /* ignore */ } }, []);
     useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+    const undo = async (a) => {
+        try { await api.post(`/admin/security/actions/${a.id}/undo`, { note: "undone from Ops Console" }); toast.success(`${a.rule} ${a.action} on ${a.target} undone`); await load(); onChanged?.(); }
+        catch (e) { toast.error(formatApiError(e)); }
+    };
     return (
         <div className="bg-[#0A0A0A] border border-[#1F1F1F]" data-testid="security-actions-panel">
-            <Head icon={Scale} title={`Rules R1–R8 · would have done (${d.actions.length})`} />
+            <Head icon={Scale} title={`Rules R1–R8 · actions (${d.actions.length})`} />
             <div className="max-h-[320px] overflow-y-auto divide-y divide-[#141414]">
                 {d.actions.length === 0 && <div className="p-4 text-xs text-[#52525B]" data-testid="security-actions-empty">No rule has met its proof threshold yet. Observe mode logs every proposal here before enforce mode is switched on.</div>}
                 {d.actions.map(a => (
@@ -32,6 +37,47 @@ export function WouldHaveDoneList() {
                         <div className={`font-mono text-[10px] text-right shrink-0 ${STATUS_CLS[a.status] || "text-[#71717A]"}`}>
                             <div>{String(a.status).replace("_", " ").toUpperCase()}</div><div className="text-[#52525B]">{String(a.at).slice(5, 16)}Z</div>
                         </div>
+                        {a.status === "done" && a.undo && (
+                            <button onClick={() => undo(a)} data-testid={`security-action-undo-${a.rule}`}
+                                className="shrink-0 px-2 py-1 text-[9px] font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#FFB000]/60 hover:text-[#FFB000]">UNDO</button>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+}
+
+export function ActiveBlocksList({ onChanged }) {
+    const [blocks, setBlocks] = useState([]);
+    const load = useCallback(async () => { try { setBlocks((await api.get("/admin/security/blocks")).data.blocks || []); } catch { /* ignore */ } }, []);
+    useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+    const act = async (b, kind) => {
+        try {
+            if (kind === "undo") await api.post(`/admin/security/actions/${b.action_id}/undo`, { note: "unblocked from Ops Console" });
+            else {
+                const m = window.prompt("Block should expire in how many minutes from now? (0 = now)", "60");
+                if (m == null) return;
+                await api.post(`/admin/security/actions/${b.action_id}/extend`, { minutes: Number(m) });
+            }
+            toast.success(kind === "undo" ? `${b.value} unblocked` : `${b.value} block updated`);
+            await load(); onChanged?.();
+        } catch (e) { toast.error(formatApiError(e)); }
+    };
+    const left = (s) => s == null ? "—" : s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m` : `${Math.max(1, Math.round(s / 60))}m`;
+    const b = "px-2 py-1 text-[9px] font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] hover:border-[#00FF41]/50 hover:text-[#00FF41] disabled:opacity-40";
+    return (
+        <div className="bg-[#0A0A0A] border border-[#1F1F1F]" data-testid="security-blocks-panel">
+            <Head icon={Ban} title={`Active blocks · ${blocks.length}`} />
+            <div className="max-h-[260px] overflow-y-auto divide-y divide-[#141414]">
+                {blocks.length === 0 && <div className="p-4 text-xs text-[#52525B]" data-testid="security-blocks-empty">No active IP blocks or account locks.</div>}
+                {blocks.map(bl => (
+                    <div key={bl.id} className="px-4 py-2 text-xs flex items-center gap-3" data-testid={`security-block-${bl.kind}`}>
+                        <span className="font-mono text-[10px] text-[#FF3B30] shrink-0">{String(bl.kind).replace("_", " ").toUpperCase()}</span>
+                        <span className="font-mono text-white flex-1 truncate">{bl.value} <span className="text-[#52525B]">· {bl.scope} · {bl.rule}</span></span>
+                        <span className="font-mono text-[10px] text-[#FFB000] shrink-0">{left(bl.seconds_left)} left</span>
+                        <button className={b} disabled={!bl.action_id} onClick={() => act(bl, "extend")} data-testid="security-block-extend-btn">EXTEND</button>
+                        <button className={b} disabled={!bl.action_id} onClick={() => act(bl, "undo")} data-testid="security-block-unblock-btn">UNBLOCK</button>
                     </div>
                 ))}
             </div>

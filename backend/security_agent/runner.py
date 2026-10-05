@@ -5,7 +5,7 @@ import time
 import traceback
 from datetime import datetime, timedelta, timezone
 
-from security_agent import alerts, config, reports, rules
+from security_agent import actions, alerts, config, reports
 from security_agent.checks import BOOT_CHECKS, CHECKS
 from security_agent.findings import auto_resolve_cleared, build, ensure_indexes, open_or_update
 from security_agent.playbooks import playbook
@@ -60,7 +60,7 @@ async def tick(db, *, boot: bool = False) -> list[dict]:
     for cid, (fn, interval) in CHECKS.items():
         if due(cid, interval, boot=boot):
             runs.append(await run_check(db, cid, fn, cfg))
-    for name, step in (("rules", rules.sweep), ("alerts", alerts.sweep), ("reports", reports.scheduler_tick)):
+    for name, step in (("actions", actions.sweep), ("alerts", alerts.sweep), ("reports", reports.scheduler_tick)):
         try:
             await asyncio.wait_for(step(db, cfg), timeout=60)
         except Exception as e:  # noqa: BLE001 — SA3 stages are isolated from detection and from each other

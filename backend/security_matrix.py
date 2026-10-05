@@ -170,6 +170,10 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     ("POST", "/api/admin/security/mode"): ADM,
     ("POST", "/api/admin/security/test-alert"): ADM,
     ("GET", "/api/admin/security/reports/{kind}"): ADM,
+    # SA4 — containment: blocks list, undo / extend (step-up)
+    ("GET", "/api/admin/security/blocks"): ADM,
+    ("POST", "/api/admin/security/actions/{action_id}/undo"): ADM,
+    ("POST", "/api/admin/security/actions/{action_id}/extend"): ADM,
 }
 
 SENSITIVE_PARAMS = {"account_id", "bot_id",

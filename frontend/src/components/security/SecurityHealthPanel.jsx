@@ -3,7 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { ShieldAlert, ShieldCheck, Loader2, RefreshCw, Send, FileDown } from "lucide-react";
 import { FindingDetail, SEV_CLS, SevPill } from "./FindingDetail";
-import { CheckStatusTable, WouldHaveDoneList } from "./SecurityTables";
+import { ActiveBlocksList, CheckStatusTable, WouldHaveDoneList } from "./SecurityTables";
 
 const LIGHT = {
     green: { cls: "bg-[#00FF41]", label: "NO OPEN HIGH / CRITICAL" },
@@ -33,10 +33,19 @@ export function SecurityHealthPanel({ initialFindingId }) {
     }, [filters]);
     useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
 
-    const setMode = async (mode) => {
+    const setMode = async (mode, rulesEnabled) => {
         setBusy(true);
-        try { const { data } = await api.post("/admin/security/mode", { mode }); toast.success(`Agent mode: ${data.mode.toUpperCase()}`); await load(); }
-        catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
+        try {
+            const body = { mode };
+            if (rulesEnabled) body.rules_enabled = rulesEnabled;
+            const { data } = await api.post("/admin/security/mode", body);
+            toast.success(`Agent mode: ${data.mode.toUpperCase()} · rules ${data.rules_enabled.length ? data.rules_enabled.join(", ") : "none"}`);
+            await load();
+        } catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
+    };
+    const toggleRule = (r) => {
+        const cur = status.rules_enabled || [];
+        setMode(status.mode, cur.includes(r) ? cur.filter(x => x !== r) : [...cur, r]);
     };
     const testAlert = async () => {
         setBusy(true);
@@ -86,6 +95,19 @@ export function SecurityHealthPanel({ initialFindingId }) {
                     OBSERVE MODE — rules R1–R8 are evaluated and logged as “would have done”; nothing is blocked. Worker lease: {status.worker_lease?.holder || "—"} · {status.checks_total} checks · {status.protected_ips_count} protected IPs/CIDRs configured.
                 </div>
             )}
+            <div className="bg-[#0A0A0A] border border-[#1F1F1F] px-3 py-2 flex flex-wrap items-center gap-2" data-testid="security-rules-strip">
+                <span className="font-mono text-[10px] tracking-widest text-[#71717A]">RULES {status.mode === "enforce" ? "ENFORCED" : "ARMED FOR ENFORCE"}</span>
+                {["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8"].map(r => {
+                    const on = (status.rules_enabled || []).includes(r);
+                    return (
+                        <button key={r} disabled={busy} onClick={() => toggleRule(r)} data-testid={`security-rule-toggle-${r}`} data-on={on}
+                            className={`px-2.5 py-1 font-mono text-[10px] tracking-widest border ${on ? "border-[#00FF41]/60 text-[#00FF41] bg-[#00FF41]/10" : "border-[#1F1F1F] text-[#52525B] hover:text-white"}`}>
+                            {r}
+                        </button>
+                    );
+                })}
+                <span className="font-mono text-[10px] text-[#52525B] ml-auto">switch on one at a time · R1 and R4 first · step-up required</span>
+            </div>
 
             <div className="grid xl:grid-cols-3 gap-3">
                 <div className="xl:col-span-2 bg-[#0A0A0A] border border-[#1F1F1F]" data-testid="security-findings-panel">
@@ -126,8 +148,11 @@ export function SecurityHealthPanel({ initialFindingId }) {
             </div>
 
             <div className="grid xl:grid-cols-2 gap-3">
-                <WouldHaveDoneList />
-                <CheckStatusTable />
+                <WouldHaveDoneList onChanged={load} />
+                <div className="space-y-3">
+                    <ActiveBlocksList onChanged={load} />
+                    <CheckStatusTable />
+                </div>
             </div>
         </div>
     );
