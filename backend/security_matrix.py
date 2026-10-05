@@ -165,6 +165,7 @@ BOLA_MATRIX: dict[tuple[str, str], str] = {
     ("GET", "/api/admin/security/status"): ADM,
     ("GET", "/api/admin/security/scorecard"): ADM,
     ("GET", "/api/diagnostic/fx-rates"): USQ,
+    ("GET", "/api/diagnostic/ai-latency"): USQ,
     ("GET", "/api/admin/security/findings"): ADM,
     ("GET", "/api/admin/security/findings/{finding_id}"): ADM,
     ("GET", "/api/admin/security/check-runs"): ADM,

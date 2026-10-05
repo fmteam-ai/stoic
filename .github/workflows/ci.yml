@@ -243,6 +243,8 @@ jobs:
           python-version: "3.11"
       - name: EA structural + version-consistency check
         run: python scripts/check_ea_structure.py
+      - name: EA release-hash drift guard (MQ5 vs docs/RELEASE_HASHES.json)
+        run: python scripts/check_release_hash_drift.py
 
   ea-compile:
     # Real MetaEditor compile gate — fails the pipeline on any MQL error and
