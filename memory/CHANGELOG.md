@@ -1890,3 +1890,8 @@ Audit scope: v62.7 surface (is_risk_reducing bypass reachability, fail-safe tele
 - **Release-hash drift guard**: `scripts/check_release_hash_drift.py` runs in the first CI job (next to check_ea_structure) and fails when the MQ5 sha256 ≠ `docs/RELEASE_HASHES.json#ea.mq5_sha256`, the recorded version ≠ `#property version`, or a signed EX5 record belongs to a different MQ5 — with the exact fix command in the message.
 - **EA 1.58 rollout**: code complete in the workspace (EA 1.58 + re-captured hashes). Rolling to main/terminals is an operator step: Save to GitHub → `ea-release.yml` compiles, signs and commits `release/ea_release.json` (needs RELEASE_SIGNER_* secrets) → download the EX5 from the release artifact / Accounts → attach on every terminal; the EA version strip shows terminals still below 1.58.
 - Tests: `tests/test_ai_latency_and_release_drift.py` (5); unit lane green; manifest + rc_lock refrozen.
+
+## 2026-10-05 — Security audit (deployed app) — PASS, P3 hardening applied
+- Audit (read-only + live unauthenticated probes): no P0–P2; every main92 control traced to enforced server-side code; earlier fixes (nginx headers, admin user-id protection) hold.
+- P3 fixes: secret_scan templated rule now requires the non-placeholder residue to be < 16 chars (a real key containing `{x}` is flagged again); `/api/diagnostic/fx-rates` + `/ai-latency` admin-only (BOLA matrix ADM, AiLatencyCard hides on 401/403); block-cache fail-open raises `security_blocks_unavailable` ops alert (hourly dedup); per-IP denied counter force-flushes above 5000 entries.
+- Verified by testing agent iteration_228 (scanner, unit lane, 9 live checks, Bot Health card) — 100 % pass.

@@ -3135,4 +3135,5 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 - 2026-10-05: H9 live FX rates (`fx_rates.py`, `/api/diagnostic/fx-rates`) and the Observe scorecard (`/api/admin/security/scorecard`, Admin Ops → Security) shipped and tested.
 - 2026-10-05: EA bumped to 1.58 (margin_mode) + RELEASE_HASHES re-captured — fixes the ea-release compile-record-sign gate; CI will compile/sign and commit `release/ea_release.json` (needs RELEASE_SIGNER_* secrets).
 - 2026-10-05: AI latency card (`/api/diagnostic/ai-latency`, Bot Health) + CI release-hash drift guard shipped. EA 1.58 ready; rollout = Save to GitHub → ea-release signs → attach EX5 on terminals.
+- 2026-10-05: Security audit of the deployed app PASSED (no P0–P2); P3 hardening applied (scanner residue rule, admin-only diagnostics, fail-open alert, bounded denied counter), verified by testing agent iteration_228.
 - Next: brake timeline; passkey + step-up Playwright case; scorecard digest in the weekly report.
