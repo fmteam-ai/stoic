@@ -26,7 +26,10 @@ def _fresh_email(prefix="qa_2fa"):
     return f"{prefix}_{uuid.uuid4().hex[:8]}@example.com"
 
 
-def _register(email: str, password: str = "Kd5#Zt9mW2xVpR7c"):
+ENROLL_PW = "Kd5#Zt9mW2xVpR7c"   # fix plan S2: /2fa/enroll now needs the current password
+
+
+def _register(email: str, password: str = ENROLL_PW):
     from helpers import register_and_login
     return register_and_login(email, password, name="QA")
 
@@ -108,7 +111,7 @@ class TestTwoFactor:
 
     def test_enroll_returns_secret_uri_qr_and_reissues_on_repeat(self):
         s = _register(_fresh_email())
-        r = s.post(f"{API}/auth/2fa/enroll", timeout=10)
+        r = s.post(f"{API}/auth/2fa/enroll", json={"current_password": ENROLL_PW}, timeout=10)
         assert r.status_code == 200, r.text
         body = r.json()
         assert "secret" in body and len(body["secret"]) >= 16
@@ -117,21 +120,21 @@ class TestTwoFactor:
         first_secret = body["secret"]
 
         # Re-enroll (pre-verify) — should re-issue a new pending secret
-        r2 = s.post(f"{API}/auth/2fa/enroll", timeout=10)
+        r2 = s.post(f"{API}/auth/2fa/enroll", json={"current_password": ENROLL_PW}, timeout=10)
         assert r2.status_code == 200
         second_secret = r2.json()["secret"]
         assert second_secret != first_secret, "re-enroll should issue a NEW pending secret"
 
     def test_verify_enroll_wrong_code_401(self):
         s = _register(_fresh_email())
-        r1 = s.post(f"{API}/auth/2fa/enroll", timeout=10)
+        r1 = s.post(f"{API}/auth/2fa/enroll", json={"current_password": ENROLL_PW}, timeout=10)
         assert r1.status_code == 200
         r2 = s.post(f"{API}/auth/2fa/verify-enroll", json={"code": "000000"}, timeout=10)
         assert r2.status_code == 401
 
     def test_verify_enroll_correct_code_enables_and_returns_recovery_codes(self):
         s = _register(_fresh_email())
-        r1 = s.post(f"{API}/auth/2fa/enroll", timeout=10)
+        r1 = s.post(f"{API}/auth/2fa/enroll", json={"current_password": ENROLL_PW}, timeout=10)
         secret = r1.json()["secret"]
         code = pyotp.TOTP(secret).now()
         r2 = s.post(f"{API}/auth/2fa/verify-enroll", json={"code": code}, timeout=10)
@@ -158,7 +161,7 @@ class TestLoginWith2FA:
     def _enroll_2fa_user(self):
         email = _fresh_email()
         s = _register(email, "Kd5#Zt9mW2xVpR7c")
-        r1 = s.post(f"{API}/auth/2fa/enroll", timeout=10)
+        r1 = s.post(f"{API}/auth/2fa/enroll", json={"current_password": ENROLL_PW}, timeout=10)
         secret = r1.json()["secret"]
         code = pyotp.TOTP(secret).now()
         r2 = s.post(f"{API}/auth/2fa/verify-enroll", json={"code": code}, timeout=10)
@@ -212,7 +215,7 @@ class TestTwoFactorDisable:
     def _enroll_2fa(self, password="Kd5#Zt9mW2xVpR7c"):
         email = _fresh_email()
         s = _register(email, password)
-        r1 = s.post(f"{API}/auth/2fa/enroll", timeout=10)
+        r1 = s.post(f"{API}/auth/2fa/enroll", json={"current_password": ENROLL_PW}, timeout=10)
         secret = r1.json()["secret"]
         code = pyotp.TOTP(secret).now()
         r2 = s.post(f"{API}/auth/2fa/verify-enroll", json={"code": code}, timeout=10)

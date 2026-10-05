@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from auth import get_current_user
 from database import get_db
 from security import check_failure_limit, clear_failures, record_failure
-from step_up import STEP_UP_ACTIONS, audit_event, issue_step_up_token
+from step_up import STEP_UP_ACTIONS, audit_event, issue_step_up_token, require_step_up
 
 router = APIRouter(prefix="/auth/webauthn", tags=["webauthn"])
 
@@ -23,9 +23,17 @@ def _origin(request: Request, payload: dict | None = None) -> str:
     credentials are RP-scoped — a challenge minted for a foreign origin can
     only ever create/assert credentials for THAT RP ID, never ours — and the
     challenge pins rp_id+origin for the verify step."""
+    # fix plan S1 — when WEBAUTHN_ORIGIN is pinned it is the ONLY accepted
+    # origin (client-declared / header values are ignored); production
+    # refuses the ceremony without a pinned origin and RP ID.
+    pinned = (os.environ.get("WEBAUTHN_ORIGIN") or "").strip()
+    if pinned:
+        return pinned
+    from app_env import is_production
+    if is_production():
+        raise HTTPException(status_code=503, detail="Passkeys unavailable: WEBAUTHN_RP_ID and WEBAUTHN_ORIGIN must be configured")
     declared = str((payload or {}).get("origin") or "").strip()
-    return (declared or request.headers.get("origin")
-            or os.environ.get("WEBAUTHN_ORIGIN") or "").strip()
+    return (declared or request.headers.get("origin") or "").strip()
 
 
 @router.get("/credentials")
@@ -39,6 +47,7 @@ async def my_passkeys(user=Depends(get_current_user)):
 async def register_begin(request: Request, payload: dict | None = None,
                          user=Depends(get_current_user)):
     _require_admin(user)
+    await require_step_up(get_db(), user, request, "passkey_enrol")     # fix plan S1
     from webauthn_mfa import begin_registration
     try:
         return await begin_registration(get_db(), user,
@@ -52,6 +61,7 @@ async def register_complete(payload: dict, request: Request,
                             user=Depends(get_current_user)):
     _require_admin(user)
     db = get_db()
+    await require_step_up(db, user, request, "passkey_enrol")           # fix plan S1
     from webauthn_mfa import complete_registration
     try:
         out = await complete_registration(
@@ -73,6 +83,7 @@ async def delete_passkey(credential_id: str, request: Request,
                          user=Depends(get_current_user)):
     _require_admin(user)
     db = get_db()
+    await require_step_up(db, user, request, "passkey_enrol")           # fix plan S1
     from webauthn_mfa import remove_credential
     if not await remove_credential(db, user["id"], credential_id):
         raise HTTPException(status_code=404, detail="Passkey not found")

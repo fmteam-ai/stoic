@@ -56,6 +56,10 @@ class TOTPVerifyRequest(BaseModel):
     code: str = Field(min_length=6, max_length=16)
 
 
+class TOTPEnrollRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=256)   # fix plan S2
+
+
 class StepUpRequest(BaseModel):
     code: str = Field(min_length=6, max_length=16)
     action: str = Field(min_length=1, max_length=40)

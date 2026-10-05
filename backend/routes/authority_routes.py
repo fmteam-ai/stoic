@@ -9,6 +9,17 @@ from trading_authority import (LEVELS, compute_authority, level_severity,
                                set_platform_level)
 
 logger = logging.getLogger("trading.authority.api")
+def _admin_ok(u) -> bool:
+    """fix plan S6 — admin privilege = admin role AND enrolled admin 2FA (same rule as auth.require_admin)."""
+    if not u or u.get("role") != "admin":
+        return False
+    try:
+        from auth import require_admin
+        require_admin(u)
+        return True
+    except Exception:
+        return False
+
 
 router = APIRouter(prefix="/authority", tags=["authority"])
 
@@ -105,7 +116,7 @@ async def account_decision_ep(account_id: str, user=Depends(get_current_user)):
         q = {"_id": ObjectId(account_id)}
     except InvalidId:
         raise HTTPException(status_code=404, detail="account not found")
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         q["user_id"] = user["id"]
     acc = await db.accounts.find_one(q)
     if not acc:
@@ -118,7 +129,7 @@ async def inventory_ep(user=Depends(get_current_user)):
     """Round 9 P0-02 — canonical inventory projection (admin: platform scope; user: own accounts)."""
     from inventory_projection import projection
     db = get_db()
-    if user.get("role") == "admin":
+    if _admin_ok(user):
         exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
         return await projection(db, exp.get("scope_user_id"))
     return await projection(db, user["id"])
@@ -126,7 +137,7 @@ async def inventory_ep(user=Depends(get_current_user)):
 
 @router.post("/inventory/expectation")
 async def inventory_expectation_ep(payload: dict, request: Request, user=Depends(get_current_user)):
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     """Round 10 P1-01: PROPOSE the desired 6/3/3 state (step-up). A second admin approves."""
     from inventory_projection import propose_expectation
@@ -143,7 +154,7 @@ async def inventory_expectation_ep(payload: dict, request: Request, user=Depends
 @router.post("/inventory/expectation/approve")
 async def inventory_expectation_approve_ep(request: Request, user=Depends(get_current_user)):
     """Second-admin approval of the pending expectation (step-up, proposer ≠ approver)."""
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     db = get_db()
     from step_up import require_step_up
@@ -156,7 +167,7 @@ async def inventory_expectation_approve_ep(request: Request, user=Depends(get_cu
 async def inventory_approve_ep(payload: dict, request: Request, user=Depends(get_current_user)):
     """PROPOSE the CURRENT inventory hash as the configured state (step-up MFA).
     Round 12 P2-05: a DIFFERENT step-up admin must confirm (/inventory/approve/confirm)."""
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     db = get_db()
     from step_up import require_step_up
@@ -169,7 +180,7 @@ async def inventory_approve_ep(payload: dict, request: Request, user=Depends(get
 @router.post("/inventory/approve/confirm")
 async def inventory_approve_confirm_ep(request: Request, user=Depends(get_current_user)):
     """Second-admin confirmation of the pending inventory-hash proposal (hash + ids recomputed before commit)."""
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     db = get_db()
     from step_up import require_step_up
@@ -181,7 +192,7 @@ async def inventory_approve_confirm_ep(request: Request, user=Depends(get_curren
 @router.get("/inventory/pending")
 async def inventory_pending_ep(user=Depends(get_current_user)):
     """Admin go-live view: expectation (current + pending), hash approval pending, orphan bot configs."""
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     from inventory_projection import pending_hash_approval
     db = get_db()
@@ -207,7 +218,7 @@ async def inventory_pending_ep(user=Depends(get_current_user)):
 async def inventory_delete_orphan_bot_ep(bot_id: str, request: Request, user=Depends(get_current_user)):
     """Delete ONE bot config that has no account id (inventory defect). Step-up + audited.
     Refuses to touch a bot that is bound to an account — those are deleted via the account flow."""
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     db = get_db()
     from bson import ObjectId
@@ -235,7 +246,7 @@ async def set_platform_ep(payload: dict, request: Request,
     single admin action; RELAXING (riskier) additionally requires
     step-up MFA."""
     db = get_db()
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     level = str(payload.get("level") or "").upper()
     if level not in LEVELS:

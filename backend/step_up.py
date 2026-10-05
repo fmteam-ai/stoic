@@ -18,7 +18,12 @@ STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_cr
                    "release_promote", "release_rollback", "agent_config_push",
                    "canary_set", "release_trust", "audit_anchor",
                    # round 10–12 — two-admin governance + model promotion
-                   "authority_relax", "model_promotion"}
+                   "authority_relax", "model_promotion",
+                   # Security & Health Agent SA3/SA4 admin writes
+                   "security_finding_status", "security_agent_mode", "security_test_alert",
+                   "security_action_undo", "security_action_extend",
+                   # fix plan D2 — S1 passkey enrolment, S6 forced promotion, S11 VPS destructive ops
+                   "passkey_enrol", "admin_promote", "vps_destroy"}
 
 
 def _hash_token(token: str) -> str:

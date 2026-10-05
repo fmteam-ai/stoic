@@ -16,6 +16,18 @@ EXPECTED_WORKERS = ("trading", "protection", "reconciliation",
                     "analytics", "model", "tuning")
 
 
+def _admin_ok(u) -> bool:
+    """fix plan S6 — admin privilege = admin role AND enrolled admin 2FA (same rule as auth.require_admin)."""
+    if not u or u.get("role") != "admin":
+        return False
+    try:
+        from auth import require_admin
+        require_admin(u)
+        return True
+    except Exception:
+        return False
+
+
 async def _ops_actor(request: Request):
     """(allowed, actor) — METRICS_TOKEN scraper or an admin session."""
     try:
@@ -26,7 +38,7 @@ async def _ops_actor(request: Request):
     try:
         from auth import get_current_user
         u = await get_current_user(request)
-        if u.get("role") == "admin":
+        if _admin_ok(u):
             return True, u.get("email") or "admin"
     except Exception:
         pass
@@ -48,7 +60,7 @@ async def _ops_admin_step_up(request: Request, action: str):
         u = await get_current_user(request)
     except Exception:
         return False, None
-    if (u or {}).get("role") != "admin":
+    if not _admin_ok(u):
         return False, None
     from step_up import audit_event, require_step_up
     db = get_db()
@@ -87,7 +99,7 @@ async def release_readiness(request: Request):
         try:
             from auth import get_current_user
             u = await get_current_user(request)
-            allowed = u.get("role") == "admin"
+            allowed = _admin_ok(u)
         except Exception:
             pass
     if not allowed:
@@ -848,7 +860,7 @@ async def trade_timeline_ep(trade_id: str, request: Request):
     tl = await assemble_timeline(db, trade_id)
     if not tl:
         return JSONResponse(status_code=404, content={"detail": "trade not found"})
-    if tl["user_id"] != user["id"] and user.get("role") != "admin":
+    if tl["user_id"] != user["id"] and not _admin_ok(user):
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     return tl
 

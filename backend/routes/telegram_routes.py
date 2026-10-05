@@ -298,9 +298,15 @@ async def _dispatch_command(token, chat_id, user_id, text: str) -> None:
 
 @router.post("/incoming/{secret}")
 async def telegram_webhook(secret: str, request: Request):
-    """Receive an Update from Telegram. Best-effort: always return 200 so Telegram doesn't retry."""
+    """Receive an Update from Telegram. Best-effort: always return 200 so Telegram doesn't retry.
+    fix plan S5: the per-user secret is read from Telegram's
+    X-Telegram-Bot-Api-Secret-Token header (path is the opaque literal `hook`);
+    legacy path secrets keep working until the user re-enables the webhook."""
     try:
-        user_doc = await _load_user_by_secret(secret)
+        hdr = (request.headers.get("x-telegram-bot-api-secret-token") or "").strip()
+        user_doc = await _load_user_by_secret(hdr) if hdr else None
+        if not user_doc and secret != "hook":
+            user_doc = await _load_user_by_secret(secret)
         if not user_doc:
             return {"ok": True}  # silently ignore unknown secret
         if not user_doc.get("telegram_bot_token") or not user_doc.get("telegram_chat_id"):
@@ -354,13 +360,16 @@ async def enable_webhook(payload: WebhookEnableRequest, user=Depends(get_current
 
     new_secret = secrets.token_urlsafe(32)
     base = payload.base_url.rstrip("/")
-    webhook_url = f"{base}/api/telegram/incoming/{new_secret}"
+    # fix plan S5 — the secret travels in Telegram's secret_token HEADER
+    # (X-Telegram-Bot-Api-Secret-Token), not in the logged URL path.
+    webhook_url = f"{base}/api/telegram/incoming/hook"
 
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
             r = await client.post(
                 f"{TELEGRAM_API}/bot{token}/setWebhook",
-                json={"url": webhook_url, "allowed_updates": ["message"]},
+                json={"url": webhook_url, "allowed_updates": ["message"],
+                      "secret_token": new_secret},
             )
         except httpx.HTTPError as e:
             from errors import api_error

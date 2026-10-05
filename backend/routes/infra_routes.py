@@ -8,6 +8,18 @@ from fastapi.responses import PlainTextResponse
 from auth import get_current_user
 from database import get_db
 
+
+def _admin_ok(u) -> bool:
+    """fix plan S6 — admin privilege = admin role AND enrolled admin 2FA (same rule as auth.require_admin)."""
+    if not u or u.get("role") != "admin":
+        return False
+    try:
+        from auth import require_admin
+        require_admin(u)
+        return True
+    except Exception:
+        return False
+
 router = APIRouter(prefix="/infra", tags=["infrastructure"])
 
 
@@ -185,10 +197,13 @@ async def issue_bootstrap(deployment_id: str,
 
 
 @router.post("/deployments/{deployment_id}/actions")
-async def server_action(deployment_id: str, payload: dict,
+async def server_action(deployment_id: str, payload: dict, request: Request,
                         user=Depends(get_current_user)):
     from entitlements import enforce_feature
     await enforce_feature(user, "vps_management")
+    if str(payload.get("action") or "") in ("rebuild", "delete"):
+        from step_up import require_step_up
+        await require_step_up(get_db(), user, request, "vps_destroy")     # fix plan S11
     from vps_providers import PartnerRequiredError
     db = get_db()
     dep = await db.vps_deployments.find_one(
@@ -364,7 +379,7 @@ async def revoke_agent_mtls(agent_id: str, payload: dict = None,
     from agent_mtls import revoke_agent_cert
     db = get_db()
     q = {"agent_id": agent_id}
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         q["user_id"] = user["id"]
     if not await db.vps_agents.find_one(q):
         raise HTTPException(status_code=404, detail="agent not found")
@@ -675,7 +690,7 @@ async def rotate_agent_credentials(agent_id: str,
     import secrets as _secrets
     db = get_db()
     q = {"agent_id": agent_id, "revoked": {"$ne": True}}
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         q["user_id"] = user["id"]
     new_token = f"agt_tok_{_secrets.token_urlsafe(32)}"
     new_key = _secrets.token_hex(32)
@@ -704,7 +719,7 @@ async def revoke_installation(installation_id: str,
     db = get_db()
     now = datetime.now(timezone.utc)
     q = {"installation_id": installation_id, "revoked": {"$ne": True}}
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         q["user_id"] = user["id"]
     inst = await db.installations.find_one_and_update(
         q, {"$set": {"revoked": True, "revoked_at": now,
@@ -906,7 +921,7 @@ async def revoke_device_key(installation_id: str, user=Depends(get_current_user)
     heartbeat method for the installation degrades to `device_key_revoked`."""
     db = get_db()
     q = {"installation_id": installation_id, "device_key": {"$exists": True}}
-    if user.get("role") != "admin":
+    if not _admin_ok(user):
         q["user_id"] = user["id"]
     now_iso = datetime.now(timezone.utc).isoformat()
     res = await db.installations.update_one(q, {"$set": {"device_key.revoked": True, "device_key.revoked_at": now_iso,

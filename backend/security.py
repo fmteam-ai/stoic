@@ -373,6 +373,15 @@ async def _grace_successor(db, sess: dict, presented_token: str,
     return cur
 
 
+
+async def revoke_user_api_keys(db, user_id: str, reason: str) -> int:
+    """fix plan S10 — programmatic keys die with the credential they were minted under."""
+    res = await db.api_keys.update_many(
+        {"user_id": str(user_id), "revoked_at": None},
+        {"$set": {"revoked_at": datetime.now(timezone.utc).isoformat(), "revoked_reason": reason}})
+    return int(res.modified_count or 0)
+
+
 async def revoke_family(db, family: str, reason: str) -> int:
     res = await db.auth_sessions.update_many(
         {"family": family, "revoked": False},

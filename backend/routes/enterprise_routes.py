@@ -301,6 +301,8 @@ async def _key_user(db, key: dict) -> dict:
     u = await db.users.find_one({"_id": ObjectId(key["user_id"])})
     if not u:
         raise HTTPException(status_code=401, detail="key owner not found")
+    if (u.get("status") or "active") in ("suspended", "terminated"):
+        raise HTTPException(status_code=403, detail="key owner account suspended")   # fix plan S10
     return {"id": str(u["_id"]), "role": u.get("role"),
             "email": u.get("email")}
 

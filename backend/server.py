@@ -757,6 +757,11 @@ async def on_startup():
             raise RuntimeError(
                 "APP_ENV=production forbids ADMIN_MFA_ENFORCED=false — "
                 "admin accounts must enroll TOTP 2FA.")
+        # fix plan S8 — activation / reset links must only ever travel by email
+        if not (os.environ.get("RESEND_API_KEY") or "").strip():
+            raise RuntimeError(
+                "APP_ENV=production requires RESEND_API_KEY — without it "
+                "activation and password-reset links would be exposed.")
         # audit r28 P2-02 — the secrets vault must use a dedicated master key in production
         from integrations_settings import _master_key as _vault_master_key
         _vault_master_key()

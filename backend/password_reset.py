@@ -106,12 +106,12 @@ def _email_text(*, link: str) -> str:
 async def send_reset_email(*, recipient: str, name: str, token: str) -> dict:
     link = _reset_link(token)
     if not email_is_configured():
-        logger.warning(
-            "RESEND_API_KEY not configured — reset link for %s: %s",
-            recipient, link,
-        )
-        return {"ok": False, "error": "email_not_configured",
-                "reset_link_dev_only": link}
+        from app_env import is_production
+        logger.warning("RESEND_API_KEY not configured — reset email for %s not sent", recipient)   # fix plan S8: link never logged
+        out = {"ok": False, "error": "email_not_configured"}
+        if not is_production():
+            out["reset_link_dev_only"] = link
+        return out
     return await send_email(
         recipient=recipient,
         subject="Reset your STOIC password",

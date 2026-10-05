@@ -25,6 +25,7 @@ export default function Settings() {
     const [twoFa, setTwoFa] = useState({ enabled: false, recovery_codes_remaining: 0 });
     const [enrollment, setEnrollment] = useState(null); // { qr_png_data_url, secret, otpauth_uri }
     const [enrollCode, setEnrollCode] = useState("");
+    const [enrollPw, setEnrollPw] = useState("");
     const [recoveryCodes, setRecoveryCodes] = useState(null);
     const [twoFaErr, setTwoFaErr] = useState("");
     const [twoFaMsg, setTwoFaMsg] = useState("");
@@ -74,7 +75,9 @@ export default function Settings() {
     const startEnroll = async () => {
         setTwoFaErr(""); setTwoFaMsg(""); setRecoveryCodes(null);
         try {
-            const { data } = await api.post("/auth/2fa/enroll");
+            if (!enrollPw) { setTwoFaErr("Enter your current password to start 2FA enrolment."); return; }
+            const { data } = await api.post("/auth/2fa/enroll", { current_password: enrollPw });
+            setEnrollPw("");
             setEnrollment(data);
         } catch (e) { setTwoFaErr(formatApiError(e)); }
     };
@@ -228,6 +231,10 @@ export default function Settings() {
                                     Add an extra layer of security by requiring a 6-digit code from your
                                     authenticator app (Google Authenticator, Authy, 1Password) every time you sign in.
                                 </p>
+                                <input type="password" value={enrollPw} onChange={e => setEnrollPw(e.target.value)}
+                                    placeholder="Current password (required to enrol)" autoComplete="current-password"
+                                    data-testid="enable-2fa-password"
+                                    className="w-full bg-black border border-[#1F1F1F] px-3 py-2 text-xs font-mono text-white placeholder:text-[#52525B] focus:outline-none focus:border-[#00FF41]/50" />
                                 <button onClick={startEnroll}
                                     data-testid="enable-2fa-button"
                                     className="bg-[#00FF41] hover:bg-[#00E53A] text-black font-medium px-5 py-2 text-xs tracking-widest flex items-center gap-2 transition-colors">

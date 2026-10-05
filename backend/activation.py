@@ -169,14 +169,14 @@ async def send_activation_email(*, recipient: str, name: str, token: str) -> dic
     """Fire the activation email. Returns the Resend send result."""
     link = _activation_link(token)
     if not email_is_configured():
-        # In dev, surface the link in logs so the user can still complete
-        # the flow without configuring Resend.
-        logger.warning(
-            "RESEND_API_KEY not configured — activation link for %s: %s",
-            recipient, link,
-        )
-        return {"ok": False, "error": "email_not_configured",
-                "activation_link_dev_only": link}
+        # fix plan S8 — never log the link; the dev-only response field is
+        # the ONLY channel, and only outside production.
+        from app_env import is_production
+        logger.warning("RESEND_API_KEY not configured — activation email for %s not sent", recipient)
+        out = {"ok": False, "error": "email_not_configured"}
+        if not is_production():
+            out["activation_link_dev_only"] = link
+        return out
     return await send_email(
         recipient=recipient,
         subject="Activate your STOIC account",

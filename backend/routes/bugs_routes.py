@@ -56,7 +56,7 @@ async def create_bug(payload: dict, user=Depends(get_current_user)):
 
 
 def _is_admin(user) -> bool:
-    return user.get("role") == "admin" or user.get("email") == "admin@trading.bot"
+    return user.get("role") == "admin"          # fix plan S9 — role only, never an email address
 
 
 @router.get("")

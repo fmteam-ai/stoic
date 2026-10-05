@@ -12,7 +12,7 @@ below small_live.
 import os
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -259,6 +259,16 @@ async def promote_stage(payload: StageChangeIn, request: Request):
     if failed and payload.force and not (payload.reason or "").strip():
         return JSONResponse(status_code=422, content={
             "detail": "forced promotion requires a reason"})
+    if failed and payload.force:
+        # fix plan S6 — overriding failed criteria is a step-up action for a
+        # real admin session (the metrics scraper token can never force).
+        from auth import get_current_user
+        from step_up import require_step_up
+        try:
+            admin_user = await get_current_user(request)
+        except HTTPException:
+            return JSONResponse(status_code=403, content={"detail": "forced promotion requires an admin session"})
+        await require_step_up(db, admin_user, request, "admin_promote")
     entry = {"from": doc["stage"], "to": next_stage, "by": actor,
              "at": _now_utc(), "forced": bool(failed),
              "reason": payload.reason}

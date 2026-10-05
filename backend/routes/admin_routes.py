@@ -345,6 +345,8 @@ async def admin_suspend_user(user_id: str, payload: dict,
     if not reason:
         raise HTTPException(status_code=400, detail="reason required")
     db = get_db()
+    from security import revoke_user_api_keys
+    await revoke_user_api_keys(db, user_id, "account_suspended")          # fix plan S10
     result = await _set_user_status(
         db, user_id=user_id, new_status="suspended",
         reason=reason, actor_email=user.get("email") or "",

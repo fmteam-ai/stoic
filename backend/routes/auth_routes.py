@@ -16,7 +16,7 @@ from hibp import is_password_breached, BREACHED_DETAIL
 from models import (
     RegisterRequest, LoginRequest, UserOut,
     ProfileUpdateRequest, ChangePasswordRequest,
-    TOTPVerifyRequest, TOTPDisableRequest,
+    TOTPVerifyRequest, TOTPEnrollRequest, TOTPDisableRequest,
     VerifyEmailRequest, ResendActivationRequest,
     ForgotPasswordRequest, ResetPasswordRequest,
 )
@@ -554,6 +554,8 @@ async def reset_password(payload: ResetPasswordRequest):
         },
     )
     await revoke_all_user_sessions(db, str(user["_id"]), "password_reset")
+    from security import revoke_user_api_keys
+    await revoke_user_api_keys(db, str(user["_id"]), "password_reset")      # fix plan S10
     return {"ok": True,
             "message": "Password updated. You can now sign in with your new password.",
             "email": user["email"]}
@@ -669,8 +671,11 @@ async def change_password(payload: ChangePasswordRequest, user=Depends(get_curre
         {"$set": {"password_hash": hash_password(payload.new_password),
                   "must_change_password": False}},
     )
-    # Password change kills every existing session (stolen-cookie defense).
+    # Password change kills every existing session (stolen-cookie defense)
+    # and every API key (fix plan S10).
     await revoke_all_user_sessions(db, user["id"], "password_change")
+    from security import revoke_user_api_keys
+    await revoke_user_api_keys(db, user["id"], "password_change")
     return {"ok": True}
 
 
@@ -686,16 +691,23 @@ async def two_fa_status(user=Depends(get_current_user)):
 
 
 @router.post("/2fa/enroll")
-async def two_fa_enroll(user=Depends(get_current_user)):
+async def two_fa_enroll(payload: TOTPEnrollRequest, request: Request, user=Depends(get_current_user)):
     """Issue a NEW secret (overwrites pending) and return QR + URI.
 
     The secret is stored on the user but `two_factor_enabled` stays false
-    until verify-enroll succeeds.
+    until verify-enroll succeeds. Fix plan S2: a stolen session alone cannot
+    enrol an authenticator — the current password is required.
     """
     db = get_db()
     full = await db.users.find_one({"_id": ObjectId(user["id"])})
     if full.get("two_factor_enabled"):
         raise HTTPException(status_code=400, detail="2FA already enabled — disable it first to re-enroll")
+    ip = client_ip(request)
+    await check_failure_limit(db, "2fa_enroll", f"{ip}:{full['email']}", 5, 600,
+                              "Too many attempts — try again in 10 minutes")
+    if not verify_password(payload.current_password, full["password_hash"]):
+        await record_failure(db, "2fa_enroll", f"{ip}:{full['email']}", 600)
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
     secret = new_secret()
     uri = provisioning_uri(secret, full["email"])
     qr = qr_png_data_url(uri)
@@ -730,6 +742,15 @@ async def two_fa_verify_enroll(payload: TOTPVerifyRequest, user=Depends(get_curr
             "$unset": {"totp_secret_pending": ""},
         },
     )
+    # fix plan S2 — security-posture change → notify the account owner by email.
+    try:
+        from email_sender import is_configured as _mail_ok, send_email as _send_mail
+        if _mail_ok():
+            await _send_mail(full["email"], "Two-factor authentication enabled on your STOIC account",
+                             "<p>Two-factor authentication (authenticator app) was just <b>enabled</b> on your STOIC account.</p>"
+                             "<p>If this wasn't you, reset your password immediately and contact support.</p>")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("2FA enable notice not sent: %s", type(e).__name__)
     # Plaintext recovery codes are returned ONCE.
     return {"ok": True, "recovery_codes": recovery_plain}
 

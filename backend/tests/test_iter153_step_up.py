@@ -95,7 +95,7 @@ def _fresh_code(secret):
 
 
 def _enroll_2fa(s):
-    r = s.post(f"{BASE}/api/auth/2fa/enroll", json={}, timeout=15)
+    r = s.post(f"{BASE}/api/auth/2fa/enroll", json={"current_password": PASSWORD}, timeout=15)   # fix plan S2
     assert r.status_code == 200, r.text
     secret = r.json()["secret"]
     code = _fresh_code(secret)
