@@ -1744,6 +1744,7 @@ class ScalpRunner:
                         "stop_loss": round_to_tick(sl, tick),
                         "take_profit": round_to_tick(tp, tick),
                         "origin": "auto", "scope": "scalp_fast",
+                        "_reservation_id": _resv["reservation_id"],
                         "scalp_decision_id": decision["decision_id"],
                         "scalp_lease_epoch": lease_epoch,
                         "model_version": decision.get("model_version"),

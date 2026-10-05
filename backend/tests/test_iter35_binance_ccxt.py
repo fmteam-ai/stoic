@@ -11,6 +11,7 @@ Covers:
   - smart router: limit-hint → limit order placed
 """
 import os
+import sys
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from bson import ObjectId
@@ -90,6 +91,16 @@ def test_live_enabled_reads_env(monkeypatch):
     assert _live_enabled() is False                               # exchange flag alone is NOT enough
 
 
+def _mock_db():
+    """MagicMock db with REAL in-memory collections for the A13 reservation / intent paths."""
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "unit"))
+    from fake_mongo import FakeCollection
+    db = MagicMock()
+    for name in ("risk_reservations", "account_reservation_locks", "execution_intents", "bot_configs"):
+        setattr(db, name, FakeCollection())
+    return db
+
+
 @pytest.fixture(autouse=True)
 def _paper_authority_passes():
     """Paper-account engine tests: the canonical trading-authority gate is covered by its own suite."""
@@ -145,7 +156,7 @@ def _make_account(**over):
 
 @pytest.mark.asyncio
 async def test_engine_blocks_when_max_concurrent_hit():
-    db = MagicMock()
+    db = _mock_db()
     db.trades.count_documents = AsyncMock(return_value=3)
 
     with patch("crypto_bridge.binance_engine.get_db", return_value=db):
@@ -161,7 +172,7 @@ async def test_engine_blocks_when_max_concurrent_hit():
 @pytest.mark.asyncio
 async def test_engine_routes_through_safety_guardian():
     """Safety guardian refusal → engine returns 'safety_guardian' block, persists block."""
-    db = MagicMock()
+    db = _mock_db()
     db.trades.count_documents = AsyncMock(return_value=0)
     db.safety_blocks.insert_one = AsyncMock()
 
@@ -184,7 +195,7 @@ async def test_engine_routes_through_safety_guardian():
 async def test_engine_blocks_when_crypto_risk_cap_exceeded(monkeypatch):
     """Even if MT5-style guardian passes, the crypto-specific 0.5% cap can refuse."""
     monkeypatch.setenv("CRYPTO_MAX_RISK_PCT_PER_TRADE", "0.5")
-    db = MagicMock()
+    db = _mock_db()
     db.trades.count_documents = AsyncMock(return_value=0)
 
     # SL distance $1000 × amount 1 BTC = $1000 risk; 0.5% of $10k = $50 cap → blocked
@@ -203,7 +214,7 @@ async def test_engine_blocks_when_crypto_risk_cap_exceeded(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_engine_places_market_order_and_persists_trade():
-    db = MagicMock()
+    db = _mock_db()
     db.trades.count_documents = AsyncMock(return_value=0)
     inserted_id = ObjectId()
     db.trades.insert_one = AsyncMock(return_value=MagicMock(inserted_id=inserted_id))
@@ -213,6 +224,7 @@ async def test_engine_places_market_order_and_persists_trade():
     fake_client.create_market_order = AsyncMock(return_value={
         "id": "ORDER123", "status": "closed", "average": 60010.5, "price": 60010.5,
     })
+    fake_client.place_oco_protection = AsyncMock(return_value={"list_id": "L1"})   # A13 P0-01
     fake_client.__aenter__ = AsyncMock(return_value=fake_client)
     fake_client.__aexit__ = AsyncMock(return_value=False)
 
@@ -230,8 +242,13 @@ async def test_engine_places_market_order_and_persists_trade():
         )
 
     fake_client.create_market_order.assert_awaited_once()
+    assert fake_client.create_market_order.await_args.kwargs["client_order_id"].startswith("stoic-")
+    fake_client.place_oco_protection.assert_awaited_once()                        # exchange-side SL/TP
     db.trades.insert_one.assert_awaited_once()
     persisted = db.trades.insert_one.await_args[0][0]
+    assert persisted["client_order_id"] == fake_client.create_market_order.await_args.kwargs["client_order_id"]
+    assert persisted["execution_intent_id"].startswith("xin_") and persisted["reservation_id"]
+    assert result["protection"]["status"] == "placed"
     assert persisted["broker"] == "BINANCE_SPOT"
     assert persisted["broker_kind"] == "binance"
     assert persisted["source"] == "binance"
@@ -245,7 +262,7 @@ async def test_engine_places_market_order_and_persists_trade():
 
 @pytest.mark.asyncio
 async def test_engine_places_limit_order_when_hinted():
-    db = MagicMock()
+    db = _mock_db()
     db.trades.count_documents = AsyncMock(return_value=0)
     db.trades.insert_one = AsyncMock(return_value=MagicMock(inserted_id=ObjectId()))
     db.trades.update_one = AsyncMock()
@@ -271,9 +288,9 @@ async def test_engine_places_limit_order_when_hinted():
             signal=sig, cfg_account_id="acc1",
         )
 
-    fake_client.create_limit_order.assert_awaited_once_with(
-        "BTC/USDT", "buy", 0.001, 59500.0,
-    )
+    fake_client.create_limit_order.assert_awaited_once()
+    assert fake_client.create_limit_order.await_args.args == ("BTC/USDT", "buy", 0.001, 59500.0)
+    assert fake_client.create_limit_order.await_args.kwargs["client_order_id"].startswith("stoic-")
     persisted = db.trades.insert_one.await_args[0][0]
     assert persisted["status"] == "pending"  # limit order not filled yet
     assert result.get("exchange_order_id") == "LIM456"
@@ -281,11 +298,12 @@ async def test_engine_places_limit_order_when_hinted():
 
 @pytest.mark.asyncio
 async def test_engine_handles_exchange_error_gracefully():
-    db = MagicMock()
+    db = _mock_db()
     db.trades.count_documents = AsyncMock(return_value=0)
 
     fake_client = MagicMock()
-    fake_client.create_market_order = AsyncMock(side_effect=Exception("insufficient funds"))
+    import ccxt
+    fake_client.create_market_order = AsyncMock(side_effect=ccxt.InsufficientFunds("insufficient funds"))
     fake_client.__aenter__ = AsyncMock(return_value=fake_client)
     # __aexit__ must NOT return truthy or it would swallow the exception
     fake_client.__aexit__ = AsyncMock(return_value=False)
@@ -301,6 +319,18 @@ async def test_engine_handles_exchange_error_gracefully():
 
     assert result["blocked"] == "exchange_error"
     assert "insufficient funds" in result["error"]
+    # A13 P0-01 — a NETWORK failure may have reached the exchange: UNKNOWN, never resent
+    fake_client.create_market_order = AsyncMock(side_effect=ccxt.RequestTimeout("timeout"))
+    with patch("crypto_bridge.binance_engine.get_db", return_value=db), \
+         patch("crypto_bridge.binance_engine.audit_pre_trade",
+               new=AsyncMock(return_value={"ok": True, "audit": [], "context": {}})), \
+         patch("crypto_bridge.binance_engine.BinanceClient", return_value=fake_client):
+        result2 = await BinanceCCXTEngine().execute(
+            user_id="u1", account=_make_account(),
+            signal=_make_signal(entry_price=60001.0), cfg_account_id="acc1",
+        )
+    assert result2["blocked"] == "exchange_unknown" and "NOT be resent" in result2["reason"]
+    assert [i["status"] for i in db.execution_intents.rows] == ["rejected", "unknown"]
 
 
 import pytest as _pytest  # noqa: E402

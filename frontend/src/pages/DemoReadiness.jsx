@@ -3,6 +3,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { CheckCircle2, XCircle, AlertTriangle, Info, RefreshCw, Printer, Loader2 } from "lucide-react";
+import { AcceptanceBundleCard } from "@/components/AcceptanceBundleCard";
 
 const ICON = {
     pass: <CheckCircle2 className="w-4 h-4 text-[#00FF41]" />,
@@ -133,6 +134,8 @@ export default function DemoReadiness() {
                                 ))}
                             </div>
                         </section>
+
+                        <AcceptanceBundleCard />
                     </>
                 )}
             </div>

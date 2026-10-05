@@ -474,6 +474,11 @@ async def ensure_indexes():
         # safety guarantee (one active reservation per decision / trade).
         from scalp.risk_reservations import ensure_reservation_indexes
         await ensure_reservation_indexes(db)
+        # A13 P1-02 / P0-01 — account-wide entry lease + unique crypto client order ids
+        from account_reservations import ensure_reservation_lock_indexes
+        await ensure_reservation_lock_indexes(db)
+        from crypto_bridge.crypto_execution import ensure_crypto_indexes
+        await ensure_crypto_indexes(db)
         # Phase A — transactional-outbox durability for critical events
         from scalp.outbox import ensure_outbox_indexes
         await ensure_outbox_indexes(db)

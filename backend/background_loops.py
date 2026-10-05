@@ -212,6 +212,12 @@ async def _scalp_reconcile_loop():
                 # review item 2 — resolve stale provisional risk reservations
                 from scalp.risk_reservations import sweep_stale
                 await sweep_stale(get_db())
+                # A13 P0-01 — crypto execution truth: orders by client id, protection, balances
+                try:
+                    from crypto_bridge.crypto_execution import reconcile_all
+                    await reconcile_all(get_db())
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("crypto reconcile sweep failed: %s", type(e).__name__)
                 # Phase A — transactional-outbox relay: publish any critical
                 # events a crash left pending (producers awaited the insert).
                 from scalp.outbox import relay_once

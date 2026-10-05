@@ -245,14 +245,62 @@ class CCXTClient:
         return await self.exchange.fetch_open_orders(symbol)
 
     # ------- write -------
-    async def create_market_order(self, symbol: str, side: str, amount: float) -> dict:
-        return await self.exchange.create_order(symbol, "market", side.lower(), amount)
+    async def create_market_order(self, symbol: str, side: str, amount: float,
+                                  client_order_id: str | None = None) -> dict:
+        params = {"clientOrderId": client_order_id} if client_order_id else {}
+        return await self.exchange.create_order(symbol, "market", side.lower(), amount, None, params)
 
-    async def create_limit_order(self, symbol: str, side: str, amount: float, price: float) -> dict:
-        return await self.exchange.create_order(symbol, "limit", side.lower(), amount, price)
+    async def create_limit_order(self, symbol: str, side: str, amount: float, price: float,
+                                 client_order_id: str | None = None) -> dict:
+        params = {"clientOrderId": client_order_id} if client_order_id else {}
+        return await self.exchange.create_order(symbol, "limit", side.lower(), amount, price, params)
 
     async def cancel_order(self, order_id: str, symbol: str) -> dict:
         return await self.exchange.cancel_order(order_id, symbol)
+
+    # ------- A13 P0-01: truth + protection -------
+    async def fetch_order_by_client_id(self, symbol: str, client_order_id: str) -> dict | None:
+        """Broker truth for a deterministic client order id (None = never reached the exchange)."""
+        try:
+            return await self.exchange.fetch_order(None, symbol, {"clientOrderId": client_order_id})
+        except Exception as e:  # noqa: BLE001
+            if "OrderNotFound" in type(e).__name__ or "does not exist" in str(e).lower():
+                return None
+            raise
+
+    async def place_oco_protection(self, symbol: str, position_side: str, amount: float,
+                                   stop_loss: float, take_profit: float, client_order_id: str) -> dict:
+        """Exchange-side SL/TP as ONE OCO list on the opposite side (Binance spot).
+        Other venues have no uniform OCO → raise so the caller fails closed."""
+        eid = (self.account.get("exchange_id") or DEFAULT_EXCHANGE_ID).lower()
+        if eid != "binance" or not hasattr(self.exchange, "privatePostOrderOco"):
+            raise RuntimeError(f"{eid}: exchange-side OCO protection unsupported")
+        market = self.exchange.market(symbol)
+        close_side = "SELL" if position_side.lower() == "buy" else "BUY"
+        stop_limit = stop_loss * (0.998 if close_side == "SELL" else 1.002)
+        params = {
+            "symbol": market["id"], "side": close_side,
+            "quantity": self.exchange.amount_to_precision(symbol, amount),
+            "price": self.exchange.price_to_precision(symbol, take_profit),
+            "stopPrice": self.exchange.price_to_precision(symbol, stop_loss),
+            "stopLimitPrice": self.exchange.price_to_precision(symbol, stop_limit),
+            "stopLimitTimeInForce": "GTC",
+            "listClientOrderId": f"{client_order_id}-oco",
+            "limitClientOrderId": f"{client_order_id}-tp",
+            "stopClientOrderId": f"{client_order_id}-sl",
+        }
+        resp = await self.exchange.privatePostOrderOco(params)
+        return {"list_id": str(resp.get("orderListId") or ""), "list_client_order_id": params["listClientOrderId"],
+                "tp_client_order_id": params["limitClientOrderId"], "sl_client_order_id": params["stopClientOrderId"],
+                "raw_status": resp.get("listOrderStatus")}
+
+    async def fetch_oco_status(self, list_client_order_id: str) -> dict | None:
+        if not hasattr(self.exchange, "privateGetOrderList"):
+            return None
+        try:
+            return await self.exchange.privateGetOrderList({"origClientOrderId": list_client_order_id})
+        except Exception:  # noqa: BLE001
+            return None
 
 
 # Backwards-compat alias — old code calls BinanceClient(account).

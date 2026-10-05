@@ -133,6 +133,48 @@ async def admin_demo_readiness_manual(payload: dict, user=Depends(get_current_us
         raise HTTPException(status_code=404, detail="unknown checklist step")
 
 
+@router.get("/admin/acceptance/current")
+async def admin_acceptance_current(user=Depends(get_current_user)):
+    """A13 P1-01 — latest signed operational acceptance bundle vs the running release."""
+    _admin_only(user)
+    from acceptance_bundle import current_status
+    return await current_status(get_db())
+
+
+@router.post("/admin/acceptance/bundle")
+async def admin_acceptance_generate(user=Depends(get_current_user)):
+    """A13 P1-01 — collect, evaluate and HMAC-sign a new acceptance bundle (audited)."""
+    _admin_only(user)
+    from acceptance_bundle import build_bundle
+    db = get_db()
+    actor = str(user.get("email") or user["id"])
+    try:
+        doc = await build_bundle(db, actor=actor)
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    await _audit(db, actor_email=actor, action="acceptance_bundle_generated", target_kind="release",
+                 target_id=str(doc["build_sha"])[:12], target_label=doc["verdict"],
+                 meta={"bundle_id": doc["bundle_id"], "failures": len(doc["failures"])})
+    return doc
+
+
+@router.get("/admin/acceptance/bundles")
+async def admin_acceptance_list(user=Depends(get_current_user)):
+    _admin_only(user)
+    rows = await get_db().acceptance_bundles.find(
+        {}, {"_id": 0, "payload": 0}).sort("created_at", -1).to_list(20)
+    return {"bundles": rows}
+
+
+@router.get("/admin/release-gate")
+async def admin_release_gate(user=Depends(get_current_user)):
+    """A13 P0-02 — authoritative lock / digest / signed EX5 check for the running process."""
+    _admin_only(user)
+    from release_gate import evaluate
+    from app_env import is_production
+    return {"enforced": is_production(), **evaluate()}
+
+
 @router.get("/admin/runbooks")
 async def admin_runbooks(user=Depends(get_current_user)):
     _admin_only(user)

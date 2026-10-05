@@ -14,8 +14,9 @@ A few crypto-specific rules:
   • The crypto safety floor is INDEPENDENT of MT5's pip-derived floor;
     we keep the same audit_pre_trade call but in addition apply a
     tighter per-trade cap (`CRYPTO_MAX_RISK_PCT_PER_TRADE`, default 0.5%).
-  • SL/TP are stamped on the trade doc but NOT placed as OCO orders in
-    v1 — those will land in iter-36 (Profitability Pack phase 2).
+  • A13 P0-01: a durable ExecutionIntent + deterministic client order id precede
+    every exchange call; filled positions get exchange-side OCO protection or are
+    flattened (fail closed). See crypto_bridge/crypto_execution.py.
   • Defence-in-depth: any account that hasn't been explicitly flipped to
     `live=true` AND `BINANCE_LIVE_ENABLED=true` runs against the sandbox.
 """
@@ -60,6 +61,17 @@ class BinanceCCXTEngine(ExecutionEngine):
 
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
+        # A13 P1-02 — account-wide entry reservation wraps the engine stage.
+        from account_reservations import guard_entry
+
+        async def _stage(reservation_id):
+            return await self._engine_stage(user_id=user_id, account=account, signal=signal,
+                                            cfg_account_id=cfg_account_id, reservation_id=reservation_id)
+        return await guard_entry(get_db(), account=account, user_id=user_id, signal=signal,
+                                 source="crypto", max_concurrent=max_concurrent,
+                                 cfg_account_id=cfg_account_id, run=_stage)
+
+    async def _engine_stage(self, *, user_id, account, signal, cfg_account_id, reservation_id) -> dict:
         db = get_db()
         # A13-1 (P0-01 step 1) — operator kill switch: with live crypto OFF every non-testnet
         # order is refused HERE, before any exchange call. Default off.
@@ -91,20 +103,7 @@ class BinanceCCXTEngine(ExecutionEngine):
         side = "buy" if action == "BUY" else "sell"
         amount = float(signal.get("lot_size") or 0)
 
-        # 1. Max-concurrent guard (same pattern as MT5BridgeEngine).
-        if max_concurrent > 0:
-            cap_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
-            if cfg_account_id:
-                cap_q["account_id"] = cfg_account_id
-            live_inflight = await db.trades.count_documents(cap_q)
-            if live_inflight >= max_concurrent:
-                logger.warning(
-                    "binance execute blocked by max_concurrent user=%s "
-                    "sym=%s inflight=%d cap=%d",
-                    user_id, ccxt_symbol, live_inflight, max_concurrent,
-                )
-                return {"blocked": "max_concurrent_cap",
-                        "inflight": live_inflight, "cap": max_concurrent}
+        # 1. Concurrency / daily caps were enforced by the account-wide reservation (A13 P1-02).
 
         # 2. Safety Guardian (same audit as MT5 — equity, daily-loss, etc.).
         safety = await audit_pre_trade(
@@ -166,23 +165,33 @@ class BinanceCCXTEngine(ExecutionEngine):
                     "cap_pct_used": cap_pct_used,
                     "cap_source": "per_account" if per_account_cap is not None else "env_default"}
 
-        # 4. Smart-routed order.
+        # 4. A13 P0-01 — durable intent + deterministic client order id BEFORE the
+        #    exchange call; failures classify to rejected / UNKNOWN (never resent).
+        from crypto_bridge import crypto_execution as cx
         order_type, limit_price = _smart_route(signal)
+        intent = await cx.begin(db, account_id=str(account["_id"]), user_id=user_id, signal=signal,
+                                order_type=order_type, ccxt_symbol=ccxt_symbol, side=side, amount=amount)
+        if intent.get("blocked"):
+            return intent
+        cid = intent["client_order_id"]
         order_resp: dict = {}
+        client = BinanceClient(account)
         try:
-            async with BinanceClient(account) as client:
-                if order_type == "limit":
-                    order_resp = await client.create_limit_order(
-                        ccxt_symbol, side, amount, limit_price,
-                    )
-                else:
-                    order_resp = await client.create_market_order(
-                        ccxt_symbol, side, amount,
-                    )
+            await client.__aenter__()
+            if order_type == "limit":
+                order_resp = await client.create_limit_order(ccxt_symbol, side, amount, limit_price,
+                                                             client_order_id=cid)
+            else:
+                order_resp = await client.create_market_order(ccxt_symbol, side, amount, client_order_id=cid)
         except Exception as e:  # noqa: BLE001
             logger.exception("Binance order placement failed: %s", e)
-            return {"blocked": "exchange_error",
-                    "error": str(e)[:200]}
+            await client.__aexit__(None, None, None)
+            return await cx.record_failure(db, intent["intent_id"], e)
+        intent_state = await cx.record_outcome(db, intent["intent_id"], order_resp or {})
+        if intent_state == "rejected":
+            await client.__aexit__(None, None, None)
+            return {"blocked": "exchange_rejected", "intent_id": intent["intent_id"],
+                    "exchange_order_status": (order_resp or {}).get("status")}
 
         # 5. Persist trade doc.
         fill_price = (
@@ -215,7 +224,11 @@ class BinanceCCXTEngine(ExecutionEngine):
             "exit_price": None,
             "pnl": 0.0,
             # Order types: market → 'open' immediately; limit → 'pending'.
-            "status": "open" if order_type == "market" else "pending",
+            "status": "open" if intent_state == "filled" else "pending",
+            "execution_intent_id": intent["intent_id"],
+            "client_order_id": cid,
+            "reservation_id": reservation_id,
+            "protection": {"status": cx.PROTECTION_MISSING, "reason": "not yet placed"},
             "mode": "live" if not _is_testnet(account) else "paper",
             "broker": "BINANCE_SPOT",
             "broker_kind": "binance",
@@ -257,6 +270,16 @@ class BinanceCCXTEngine(ExecutionEngine):
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)
+        # 6. Exchange-side protection for filled positions (fail closed → flatten + alert).
+        try:
+            if intent_state == "filled":
+                trade_doc["protection"] = await cx.protect(
+                    db, client, trade_id=r.inserted_id, ccxt_symbol=ccxt_symbol, side=side, amount=amount,
+                    stop_loss=sl_px or None, take_profit=trade_doc["take_profit"], cid=cid, account=account)
+                if trade_doc["protection"]["status"] == cx.PROTECTION_FLATTENED:
+                    trade_doc["status"] = "closed"
+        finally:
+            await client.__aexit__(None, None, None)
         await ws_manager.broadcast(user_id, "trade_created", trade_doc)
 
         try:

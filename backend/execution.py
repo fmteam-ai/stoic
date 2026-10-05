@@ -104,6 +104,21 @@ class MT5BridgeEngine(ExecutionEngine):
                 "sym=%s", _refusal, user_id, signal.get("symbol"))
             return {"blocked": "unauthorized_execution_path",
                     "reason": _refusal}
+        # A13 P1-02 — account-wide entry reservation (caps checked under the
+        # per-account lease) BEFORE the engine stage; released on refusal.
+        from account_reservations import guard_entry
+
+        async def _stage(reservation_id):
+            return await self._engine_stage(
+                user_id=user_id, account=account, signal=signal,
+                max_concurrent=max_concurrent, cfg_account_id=cfg_account_id,
+                intent=intent, reservation_id=reservation_id)
+        return await guard_entry(get_db(), account=account, user_id=user_id, signal=signal,
+                                 source="mt5", max_concurrent=max_concurrent,
+                                 cfg_account_id=cfg_account_id, run=_stage)
+
+    async def _engine_stage(self, *, user_id, account, signal, max_concurrent, cfg_account_id,
+                            intent, reservation_id):
         db = get_db()
 
         # FINAL ENTITLEMENT CHECK (iter-122 Phase 2) — the dispatcher never
@@ -237,27 +252,12 @@ class MT5BridgeEngine(ExecutionEngine):
         # Atomic last-line-of-defense cap check (audit E4 — consistent
         # semantics with the runner): the config cap limits AUTOMATED trades;
         # a separate hard total-positions cap bounds the whole account.
-        if max_concurrent > 0:
-            cap_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]},
-                     "origin": "auto"}
-            if cfg_account_id:
-                cap_q["account_id"] = cfg_account_id
-            live_inflight = await db.trades.count_documents(cap_q)
-            total_q = {k: v for k, v in cap_q.items() if k != "origin"}
-            total_inflight = await db.trades.count_documents(total_q)
-            max_total = max_concurrent + int(os.environ.get(
-                "EXEC_TOTAL_POSITIONS_BUFFER", "2"))
-            if live_inflight >= max_concurrent or total_inflight >= max_total:
-                logger.warning(
-                    "execute blocked by concurrency cap user=%s acct=%s sym=%s "
-                    "auto=%d/%d total=%d/%d",
-                    user_id, cfg_account_id or "default", signal.get("symbol"),
-                    live_inflight, max_concurrent, total_inflight, max_total,
-                )
-                return {"blocked": "max_concurrent_cap",
-                        "inflight": live_inflight, "cap": max_concurrent,
-                        "total_inflight": total_inflight,
-                        "total_cap": max_total}
+        # Caps (automated / hard total / daily) were enforced atomically by the
+        # account-wide reservation taken in execute_authorized (A13 P1-02);
+        # the reservation id is stamped on the trade below.
+        if not reservation_id:
+            return {"blocked": "reservation_missing",
+                    "reason": "engine stage reached without an entry reservation"}
 
         # SAFETY GUARDIAN — server-side hard floors for live accounts. CANNOT be
         # disabled by user config. Refuses any trade that would breach equity,
@@ -538,6 +538,7 @@ class MT5BridgeEngine(ExecutionEngine):
                         "original_result": _intent.get("result")}
         if _intent:
             trade_doc["execution_intent_id"] = _intent["intent_id"]
+        trade_doc["reservation_id"] = reservation_id
         stamp_pamm_identity(trade_doc, signal)
         if signal.get("_authority_reduced"):
             trade_doc["authority_reduced"] = True
@@ -560,6 +561,16 @@ class PaperEngine(ExecutionEngine):
 
     async def execute(self, *, user_id, account, signal,
                       max_concurrent: int = 0, cfg_account_id: str = None) -> dict:
+        from account_reservations import guard_entry
+
+        async def _stage(reservation_id):
+            return await self._engine_stage(user_id=user_id, account=account, signal=signal,
+                                            cfg_account_id=cfg_account_id, reservation_id=reservation_id)
+        return await guard_entry(get_db(), account=account, user_id=user_id, signal=signal,
+                                 source="paper", max_concurrent=max_concurrent,
+                                 cfg_account_id=cfg_account_id, run=_stage)
+
+    async def _engine_stage(self, *, user_id, account, signal, cfg_account_id, reservation_id):
         db = get_db()
         # round 9 P0-01 — the canonical decision gates EVERY new-order path.
         from trading_authority import gate_or_block
@@ -606,20 +617,7 @@ class PaperEngine(ExecutionEngine):
                 user_id, cfg_account_id or "default", signal.get("symbol"), closure["reason"],
             )
             return {"blocked": "market_closed", **closure}
-        if max_concurrent > 0:
-            cap_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]}}
-            if cfg_account_id:
-                cap_q["account_id"] = cfg_account_id
-            live_inflight = await db.trades.count_documents(cap_q)
-            if live_inflight >= max_concurrent:
-                logger.warning(
-                    "paper execute blocked by max_concurrent cap user=%s acct=%s "
-                    "sym=%s inflight=%d cap=%d",
-                    user_id, cfg_account_id or "default",
-                    signal.get("symbol"), live_inflight, max_concurrent,
-                )
-                return {"blocked": "max_concurrent_cap",
-                        "inflight": live_inflight, "cap": max_concurrent}
+        # caps enforced by the account-wide reservation (A13 P1-02)
         quote = await get_quote(signal["symbol"])
         fill_price = quote.get("price") or signal["entry_price"]
 
@@ -669,6 +667,7 @@ class PaperEngine(ExecutionEngine):
         stamp_pamm_identity(trade_doc, signal)
         if signal.get("latency_trace"):
             trade_doc["latency_trace"] = dict(signal["latency_trace"])
+        trade_doc["reservation_id"] = reservation_id
         r = await db.trades.insert_one(trade_doc)
         trade_doc["id"] = str(r.inserted_id)
         trade_doc.pop("_id", None)

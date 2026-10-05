@@ -302,6 +302,47 @@ async def inventory_domain(db, account: dict | None = None) -> dict:
     return {"level": "FULL", "reason": "inventory matches approved configuration"}
 
 
+# ── A13 Part 2 domains ───────────────────────────────────────────────────────
+async def acceptance_domain(db, account: dict | None = None) -> dict:
+    """P1-01 — live (real-money) authority opens only after a PASSING signed
+    operational acceptance bundle for the CURRENT release covers the account."""
+    from acceptance_bundle import bundle_covers, latest_bundle, release_identity, required
+    if account is None or account.get("mode") == "paper" or "_id" not in account:
+        return {"level": "FULL", "reason": "acceptance applies to live accounts"}
+    if not required():
+        return {"level": "FULL", "reason": "acceptance bundle not required outside production"}
+    from broker_env import demo_proof
+    if demo_proof(account).get("ok"):
+        return {"level": "FULL", "reason": "attested DEMO account — acceptance applies to real money"}
+    ok, why = bundle_covers(await latest_bundle(db), _acct_id(account), release_identity())
+    if ok:
+        return {"level": "FULL", "reason": "operational acceptance bundle PASS for this release"}
+    return {"level": "CLOSE_ONLY", "reason": f"operational acceptance missing — {why}", "code": "ACCEPTANCE_REQUIRED"}
+
+
+async def release_gate_domain(db, account: dict | None = None) -> dict:
+    """P0-02 — production must run an authoritative, digest-pinned, signed release."""
+    from app_env import is_production
+    if not is_production():
+        return {"level": "FULL", "reason": "release gate enforced in production only"}
+    from release_gate import evaluate
+    r = evaluate()
+    if r["ok"]:
+        return {"level": "FULL", "reason": f"authoritative release {str(r['lock_commit'])[:12]}"}
+    return {"level": "CLOSE_ONLY", "reason": "release not authoritative — " + "; ".join(r["failures"][:2]),
+            "code": "RELEASE_NOT_AUTHORITATIVE"}
+
+
+async def crypto_protection_domain(db, account: dict | None = None) -> dict:
+    """P0-01 — an open crypto position without exchange-side protection closes new exposure."""
+    from crypto_bridge.crypto_execution import unprotected_open_count
+    n = await unprotected_open_count(db, _acct_id(account) if account is not None else None)
+    if n:
+        return {"level": "CLOSE_ONLY", "reason": f"{n} open crypto position(s) without exchange-side protection",
+                "code": "CRYPTO_UNPROTECTED_POSITION"}
+    return {"level": "FULL", "reason": "every open crypto position is protected at the exchange"}
+
+
 async def _track_stability(db, account: dict | None, domains: dict) -> None:
     if account is None or "_id" not in account or account.get("mode") == "paper":
         return
@@ -328,6 +369,9 @@ _DOMAINS = {
     "performance_truth": performance_truth_domain,
     "recovery": recovery_domain,
     "inventory": inventory_domain,
+    "acceptance": acceptance_domain,
+    "release_gate": release_gate_domain,
+    "crypto_protection": crypto_protection_domain,
 }
 # Typed registry contract (audit v5 P0-1): every domain is
 # `async def domain(db, account=None) -> dict` and declares its scope.
@@ -340,7 +384,8 @@ DOMAIN_SCOPE = {"platform": "platform_global", "broker": "account_bound",
                 "infrastructure": "account_bound", "account": "account_bound",
                 "certification": "account_bound", "bot_health": "account_bound",
                 "performance_truth": "account_bound", "recovery": "account_bound",
-                "inventory": "platform_global"}
+                "inventory": "platform_global", "acceptance": "account_bound",
+                "release_gate": "platform_global", "crypto_protection": "account_bound"}
 # domains whose FRESH/FULL state is a precondition for RESIZING (REDUCED)
 HARD_TRUTH_DOMAINS = ("position_truth", "broker", "execution")
 

@@ -64,9 +64,25 @@ def _lock():
     return json.load(open(p)) if os.path.exists(p) else {}
 
 
+def _ea_signed() -> bool:
+    """A signed, CI-compiled EX5 record the shipped server trusts (fail closed)."""
+    import sys
+    sys.path.insert(0, os.path.join(ROOT, "backend"))
+    try:
+        from ea_capabilities import accepted_ea_sha256s
+        return bool(accepted_ea_sha256s()) and not os.environ.get("EA_RELEASE_SHA256")
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def fields() -> dict:
     lock, findings = _lock(), _open_findings()
-    verdict = "NOT RELEASABLE" if (not lock.get("authoritative") or any(f["severity"] in ("P0", "P1") for f in findings)) else "RELEASE CANDIDATE"
+    # A13 P0-02 — RELEASABLE only for an authoritative, digest-pinned lock with a signed EX5 record
+    images = lock.get("images") or {}
+    ea_record = _ea_signed()
+    releasable = (lock.get("authoritative") and images.get("backend") and images.get("frontend") and ea_record
+                  and not any(f["severity"] in ("P0", "P1") for f in findings))
+    verdict = "RELEASABLE" if releasable else "NOT RELEASABLE"
     return {
         "source_commit": _sha(),
         "lock_commit": str(lock.get("git_commit")),

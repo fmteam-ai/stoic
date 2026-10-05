@@ -98,6 +98,16 @@ def run_preflight(check_signer_health: bool = False) -> dict:
         "set" if (env.get("BRIDGE_TOKEN_HASH_KEY") or "").strip() else "unset", "32+ random chars, ≠ JWT_SECRET",
         _bk or "ok"))
 
+    # A13 P0-02 — the deploy must be an authoritative, digest-pinned, signed release
+    from release_gate import evaluate as _release_eval
+    _rg = _release_eval(env=env)
+    checks.append(_check(
+        "release_gate", "Authoritative release (rc_lock + digests + signed EX5)",
+        "pass" if _rg["ok"] else ("fail" if is_production() else "warn"),
+        "ok" if _rg["ok"] else "; ".join(_rg["failures"][:2]),
+        "release.yml-generated lock, STOIC_IMAGE_DIGEST == locked backend digest, signed EX5 record",
+        "Run the release workflow on a signed tag and deploy by digest — live authority stays CLOSE_ONLY otherwise."))
+
     pw = env.get("ADMIN_PASSWORD") or ""
     from seed import _is_known_default_password
     if pw and not _is_known_default_password(pw) and len(pw) >= 12:
