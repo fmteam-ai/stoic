@@ -10,7 +10,9 @@ export function ReleaseIdentityCard() {
     const [d, setD] = useState(null);
     useEffect(() => {
         let live = true;
-        api.get("/health").then((r) => live && setD(r.data)).catch(() => live && setD(null));
+        Promise.all([api.get("/health"), api.get("/health/release")])
+            .then(([h, rel]) => live && setD({ ...h.data, ...rel.data }))
+            .catch(() => live && setD(null));
         return () => { live = false; };
     }, []);
     const ri = d?.release_identity || {};

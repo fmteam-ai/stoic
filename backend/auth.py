@@ -81,6 +81,14 @@ def clear_auth_cookies(response):
     response.delete_cookie("csrf_token", path="/")
 
 
+def master_admin_email() -> str:
+    return (os.environ.get("ADMIN_EMAIL") or "admin@stoicaibot.com").strip().lower()
+
+
+def is_master_admin(email: str | None) -> bool:
+    return bool(email) and str(email).strip().lower() == master_admin_email()
+
+
 def require_admin(user: dict) -> None:
     """Admin gate: role check + mandatory TOTP MFA (iter-136).
     ADMIN_MFA_ENFORCED=false is a preview/CI escape hatch only — server.py
@@ -130,7 +138,9 @@ async def validate_access_token(db, token: str, *, path: str | None = None) -> d
     if not user:
         raise TokenRejected(401, "User not found")
     status = user.get("status") or "active"
-    if status in ("suspended", "terminated") and user.get("role") != "admin":
+    # audit r30 P3 — the anti-lockout exemption applies to the MASTER admin only; any other
+    # suspended/terminated admin is stopped like every other user.
+    if status in ("suspended", "terminated") and not is_master_admin(user.get("email")):
         raise TokenRejected(403, {"code": f"account_{status}", "message": f"Account {status}."})
     sid = payload.get("sid")
     if sid:

@@ -213,8 +213,8 @@ async def login(payload: LoginRequest, request: Request, response: Response):
     from security import deny_if_blocked
     # S1 — the master admin must always be able to reach the login (and its 2FA):
     # an IP block behind a shared proxy would otherwise lock the operator out too.
-    master_admin = email == (os.environ.get("ADMIN_EMAIL") or "admin@stoicaibot.com").lower()
-    if not master_admin:
+    from auth import is_master_admin
+    if not is_master_admin(email):
         await deny_if_blocked(db, "ip", ip, "auth")
     await deny_if_blocked(db, "account_login", email)
     # Failed-attempt lockout: 5 wrong passwords per ip+email per 10 min.

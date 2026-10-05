@@ -3152,4 +3152,13 @@ A9d: P1-02 auth.validate_access_token (iat+sid, session revoked, users.tokens_va
 A9e: /api/health.release_identity + ReleaseIdentityCard (Bot Health) · release.yml attaches coverage.xml + junit-critical · scorecard per-rule promotion checklist (MIN_TARGETS 3, MIN_OBSERVE_DAYS 14) · CI update-path smoke (check_compose_secrets.py).
 Tests: tests/test_fixplan_main93_a9.py (21), a7/a8b/sa3/sa4/iter162 updated to spec; unit lane 1030 passed; testing agent iteration_229 100 %. Preflight 5/5.
 2026-06 fork check-in: user chose to review the preview before any deploy (agent stands by); SA4 IPs/mode still NOT supplied (echoed the prompt only); Telegram token rotation deferred. Preview health 200/200.
+
+## SECURITY AUDIT r30 (2026-06, this fork) — CONDITIONAL PASS → all 4 fixed → re-audit PASS
+- SEC-001 (P2): WS `/api/ws` now rejects cross-origin Origin even when the allowlist resolves empty (same-origin by Host still trusted); credentialed CORS uses ONLY `security._allowed_origins()` — NO raw CORS_ORIGINS fallback (empty → credential-less wildcard). `server._credentialed_origins`.
+- P3 health: `release_identity` (image digest, accepted EA sha256s) moved to admin-only `GET /api/health/release` (get_current_user + require_admin). Public `/api/health` = status/db/build_sha/policy/ea_version/app_env + env marker. `ReleaseIdentityCard.jsx` fetches both.
+- P3 auth: `auth.is_master_admin(email)` / `master_admin_email()` — suspended/terminated exemption ONLY for ADMIN_EMAIL; login IP-block exemption (auth_routes) shares the helper.
+- P3 proxy: production boot WARNING when TRUSTED_PROXY_CIDRS unset; .env.example documents it.
+- Tests: `tests/test_audit_r30_hardening.py` (5); a9e + sa5 + iter229 live tests updated. tests/unit lane 837 passed; manifest/rc_lock/RELEASE_SUMMARY regenerated; preflight 5/5; secret_scan clean.
+- Pre-existing failures outside the CI unit lane (NOT caused here, fail on the previous commit too): test_fixplan_main92_sa5 (s1 traffic share, s3 r5 expiry), test_fixplan_b2_safety_guards r8, test_ai_latency_and_release_drift sampled, test_signer_service_contract health, test_iter181 all_good (mongo_transactions needs replica set).
+- Residual (accepted): master admin keeps live-token access while suspended (single-operator anti-lockout).
 PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token (appeared in chat); production env must add TRUSTED_PROXY_CIDRS (update.sh defaults it), EA_RELEASE_SHA256 pin, BRIDGE_TOKEN_HASH_KEY optional (falls back to JWT_SECRET — do NOT rotate JWT_SECRET without re-pairing EAs).

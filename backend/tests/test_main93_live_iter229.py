@@ -50,12 +50,17 @@ def mongo():
 
 # ---------- Health / release identity ----------
 
-def test_health_release_identity_and_ea_version():
+def test_health_release_identity_and_ea_version(admin_session):
     r = requests.get(f"{BASE}/api/health", timeout=10)
     assert r.status_code == 200
     j = r.json()
     assert j.get("ea_version") == "1.59", j.get("ea_version")
-    ri = j.get("release_identity")
+    # audit r30 — release identity is admin-only; the public probe no longer carries it
+    assert "release_identity" not in j
+    assert requests.get(f"{BASE}/api/health/release", timeout=10).status_code == 401
+    r2 = admin_session.get(f"{BASE}/api/health/release", timeout=10)
+    assert r2.status_code == 200, r2.text
+    ri = r2.json().get("release_identity")
     assert isinstance(ri, dict), j
     assert "image_digest" in ri
     assert ri.get("ea_shipped_version") == "1.59"

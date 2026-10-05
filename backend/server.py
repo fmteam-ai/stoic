@@ -25,7 +25,8 @@ from bson import ObjectId  # noqa: F401 — re-exported for route modules
 from database import close_client, get_db
 from app_env import is_production
 from seed import seed_admin, ensure_indexes
-from auth import decode_token  # noqa: F401
+from auth import decode_token, get_current_user, require_admin  # noqa: F401
+from fastapi import Depends
 from ws_manager import manager as ws_manager
 import bot_runner
 import trade_manager
@@ -242,20 +243,8 @@ async def health():
             "execution_policy_version": EXECUTION_POLICY_VERSION,
             "ea_version": LATEST_EA,
             "app_env": os.environ.get("APP_ENV") or "development"}
-    # P1-05 (A9e) — the RUNNING release identity: image digest + the EX5 hashes this build
-    # admits for live terminals, so the health page can be compared with the promoted digests.
-    try:
-        from ea_capabilities import accepted_ea_sha256s, shipped_ea_version
-        _accepted = accepted_ea_sha256s()
-        prov["release_identity"] = {
-            "image_digest": os.environ.get("STOIC_IMAGE_DIGEST") or None,
-            "ea_shipped_version": shipped_ea_version(),
-            "ea_expected_sha256": _accepted[0] if _accepted else None,
-            "ea_accepted_sha256s": _accepted,
-            "ea_signed_record": bool(_accepted) and not os.environ.get("EA_RELEASE_SHA256"),
-        }
-    except Exception as _e:  # noqa: BLE001 — provenance must never break the probe
-        prov["release_identity"] = {"error": type(_e).__name__}
+    # audit r30 P3 — image digest + accepted EX5 hash set moved to the admin-only
+    # /api/health/release probe (inventory/reconnaissance value on a public endpoint).
     # audit round 7 P1 — deployment-signed environment marker so mutating
     # test runners (route sweep, drills) can PROVE they are not on production
     # before their first login. HMAC(LEDGER_ANCHOR_KEY, "env|build").
@@ -270,6 +259,22 @@ async def health():
         logger.error("health degraded [cid=%s]: %s", cid, e)
         return {"status": "degraded", "db": "unavailable", "cid": cid,
                 **prov}
+
+
+@api_router.get("/health/release")
+async def health_release(user: dict = Depends(get_current_user)):
+    """P1-05 (A9e) — the RUNNING release identity: image digest + the EX5 hashes this build
+    admits for live terminals, compared against the promoted digests. Admin only (audit r30)."""
+    require_admin(user)
+    from ea_capabilities import accepted_ea_sha256s, shipped_ea_version
+    _accepted = accepted_ea_sha256s()
+    return {"release_identity": {
+        "image_digest": os.environ.get("STOIC_IMAGE_DIGEST") or None,
+        "ea_shipped_version": shipped_ea_version(),
+        "ea_expected_sha256": _accepted[0] if _accepted else None,
+        "ea_accepted_sha256s": _accepted,
+        "ea_signed_record": bool(_accepted) and not os.environ.get("EA_RELEASE_SHA256"),
+    }}
 
 
 @api_router.get("/health/live")
@@ -587,8 +592,9 @@ async def ws_endpoint(websocket: WebSocket):
             pass
         await websocket.close(code=code)
 
-    if _allowed and _origin and not _same_origin \
-            and _origin not in _allowed:
+    # audit r30 SEC-001 — a cross-site browser Origin is refused ALSO when no allowlist
+    # resolved (empty / "*" / dev-only CORS_ORIGINS): never fail open on the live feed.
+    if _origin and not _same_origin and _origin not in _allowed:
         await _reject(4403)
         return
     token = websocket.cookies.get("access_token")
@@ -722,14 +728,13 @@ async def _security_agent_middleware(request: Request, call_next):
 # Either: explicit allowlist with credentials, OR wildcard WITHOUT credentials.
 # If CORS_ORIGINS is unset/wildcard, we strip credentials so a malicious site
 # can't pull authenticated calls from a logged-in browser.
-cors_origins_env = (os.environ.get("CORS_ORIGINS") or "").strip()
-if cors_origins_env and cors_origins_env != "*":
-    # SEC-001 — run the credentialed CORS allowlist through the SAME
-    # production filter as the CSRF origin check (dev/preview entries are
-    # dropped automatically when APP_ENV=production).
-    from security import _allowed_origins as _filtered_origins
-    allowed = sorted(_filtered_origins()) or [
-        o.strip() for o in cors_origins_env.split(",") if o.strip()]
+from security import _allowed_origins as _filtered_origins  # noqa: E402
+# SEC-001 — the credentialed CORS allowlist is the SAME production-filtered set as the
+# CSRF/WS origin check. audit r30: NO fallback to the unfiltered CORS_ORIGINS value — when
+# the filtered set is empty the API serves credential-less wildcard CORS only.
+_credentialed_origins = sorted(_filtered_origins())
+if _credentialed_origins:
+    allowed = _credentialed_origins
     app.add_middleware(
         CORSMiddleware,
         allow_origins=allowed,
@@ -795,6 +800,14 @@ async def on_startup():
                 "APP_ENV=production requires CORS_ORIGINS to contain at "
                 "least one real production origin (localhost/preview "
                 "entries are ignored in production).")
+        # audit r30 P3 — behind 2+ proxy hops an unset TRUSTED_PROXY_CIDRS collapses every
+        # client to the edge IP (shared rate-limit bucket, blunt SA4 blocks). Not fatal:
+        # a single ingress that appends the client IP is a valid topology.
+        if not (os.environ.get("TRUSTED_PROXY_CIDRS") or "").strip():
+            logging.getLogger("server").warning(
+                "TRUSTED_PROXY_CIDRS is unset in production — client_ip() trusts only the "
+                "right-most X-Forwarded-For hop; set it to your proxy ranges if the API sits "
+                "behind more than one proxy (deploy/update.sh defaults the docker ranges).")
         # SEC-001 — test bypass secrets must never exist in production.
         from app_env import bypass_token
         if bypass_token("STEP_UP_BYPASS_TOKEN") or bypass_token("RATE_LIMIT_BYPASS_TOKEN"):

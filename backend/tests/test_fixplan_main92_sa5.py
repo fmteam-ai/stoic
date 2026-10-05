@@ -79,7 +79,7 @@ def test_s1_block_ip_refused_when_one_ip_carries_most_traffic():
 def test_s1_master_admin_login_bypasses_ip_block():
     import routes.auth_routes as ar
     src = inspect.getsource(ar.login)
-    assert "master_admin = email ==" in src and 'if not master_admin:\n        await deny_if_blocked(db, "ip", ip, "auth")' in src
+    assert 'if not is_master_admin(email):\n        await deny_if_blocked(db, "ip", ip, "auth")' in src   # audit r30 — shared helper
     assert 'await deny_if_blocked(db, "account_login", email)' in src       # account locks still apply (admin is protected anyway)
 
 

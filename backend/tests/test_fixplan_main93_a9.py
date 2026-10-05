@@ -386,8 +386,10 @@ def test_p1_07_welcome_wording_no_overclaim():
 # ── A9e ───────────────────────────────────────────────────────────────────────
 def test_a9e_release_identity_on_health_scorecard_checklist_and_release_evidence():
     import server
-    src = inspect.getsource(server.health)
+    src = inspect.getsource(server.health_release)
     assert '"release_identity"' in src and "accepted_ea_sha256s()" in src and "STOIC_IMAGE_DIGEST" in src
+    assert "require_admin(user)" in src  # audit r30 — admin-only probe
+    assert '"release_identity"' not in inspect.getsource(server.health)
     assert os.path.exists(os.path.join(ROOT, "frontend", "src", "components", "ReleaseIdentityCard.jsx"))
     assert "<ReleaseIdentityCard />" in open(os.path.join(ROOT, "frontend", "src", "pages", "BotHealth.jsx")).read()
     from security_agent import scorecard
