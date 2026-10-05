@@ -3141,3 +3141,4 @@ Verified claims first: P0-1/P0-2/P1-1/P1-6 REAL; P2-1 already fixed (aria-hidden
 ## GO-LIVE PREP (June 2026, fork)
 - release_preflight.sh was failing `release_summary_current` (RELEASE_SUMMARY.md lagged test manifest 4585→4999 tests). Regenerated release/rc_lock.json + docs/RELEASE_SUMMARY.md; preflight now 5/5 OK.
 - Go-live path documented to user: Save to GitHub → CI green → run `ea-release` workflow (EA 1.58 .ex5) → server `deploy/update.sh` (Path A) or tag `vX.Y.Z` → release.yml + deploy-production.yml (Path B).
+- SA3 TELEGRAM LIVE (preview, 2026-10-05): SECURITY_AGENT_TELEGRAM_BOT_TOKEN + SECURITY_AGENT_TELEGRAM_CHAT_ID=981306515 (private chat w/ owner, bot @stoic_security_alerts_bot) set in backend/.env; test finding delivered by agent tick (telegram=True). Test finding resolved. Production .env must carry the same two keys. PENDING: SECURITY_AGENT_PROTECTED_IPS + mode choice from user.
