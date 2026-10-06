@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from database import get_db
+from http_errors import error_detail
 from routes.metrics_routes import _authorized
 
 router = APIRouter(tags=["ops"])
@@ -581,7 +582,7 @@ async def releases_promote(request: Request):
     try:
         st = await promote(get_db(), actor=actor or "admin")
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"detail": str(e)})
+        return JSONResponse(status_code=400, content={"detail": error_detail(400, "release_promote_invalid", e)})
     st.pop("_id", None)
     return st
 
@@ -595,7 +596,7 @@ async def releases_rollback(request: Request):
     try:
         st = await rollback(get_db(), actor=actor or "admin")
     except ValueError as e:
-        return JSONResponse(status_code=400, content={"detail": str(e)})
+        return JSONResponse(status_code=400, content={"detail": error_detail(400, "release_rollback_invalid", e)})
     st.pop("_id", None)
     return st
 
@@ -717,7 +718,7 @@ async def deploy_watch_arm(request: Request):
                         notify_email=full["email"], armed_by=full["email"],
                         timeout_h=int(body.get("timeout_h") or 24))
     except (ValueError, TypeError) as e:
-        return JSONResponse(status_code=400, content={"detail": str(e)})
+        return JSONResponse(status_code=400, content={"detail": error_detail(400, "deploy_watch_invalid", e)})
     return {"watch": doc}
 
 

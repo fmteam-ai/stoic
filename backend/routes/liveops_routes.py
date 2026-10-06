@@ -31,7 +31,8 @@ async def operator_action(payload: dict, user=Depends(get_current_user)):
         return await run_action(get_db(), user["id"], action,
                                 payload.get("params") or {})
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))  # ValueError: crafted validation text
+        from http_errors import static_error
+        raise static_error(400, "liveops_action_invalid", e)
 
 
 @router.get("/operator/actions")

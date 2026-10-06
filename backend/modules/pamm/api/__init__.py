@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 
 from auth import get_current_user
 from database import get_db
+from http_errors import static_error
 from modules.pamm.permissions import (is_admin, require_admin,
                                       require_manager,
                                       require_program_access)
@@ -124,7 +125,7 @@ async def resume_ep(program_id: str, request: Request,
         return await set_op_state(db, program, "running", user["id"],
                                   source="human", allow_deescalate=True)
     except PermissionError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "program_state_locked", e)
 
 
 @router.post("/programs/{program_id}/emergency-stop")
@@ -161,7 +162,7 @@ async def clear_estop_ep(program_id: str, request: Request,
                 {"program_id": program_id},
                 {"$set": {"emergency_stop": False}})
     except PermissionError as e:  # LOCKED → dual authorization only
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "program_state_locked", e)
     return {"program_id": program_id, "emergency_stop": False,
             "op_state": "new_trades_paused"}
 
@@ -301,7 +302,7 @@ async def put_risk_limits_ep(program_id: str, payload: dict, request: Request,
         clean = validate_limits_patch(payload)
     except (ValueError, TypeError) as e:
         # input-validation feedback only (field names/ranges) — safe to echo
-        raise HTTPException(status_code=400, detail=str(e))
+        raise static_error(400, "limits_patch_invalid", e)
     # editing safety caps is risk-increasing → fresh MFA required
     await _step_up(db, user, request, "pamm_risk_limits_update",
                    {"program_id": program_id, "patch": clean})
@@ -316,7 +317,7 @@ async def put_risk_limits_ep(program_id: str, payload: dict, request: Request,
                 {"risk_limits_patch": clean}, user["id"],
                 reason=f"loosens: {', '.join(loosened)}")
         except ValueError as e:
-            raise HTTPException(status_code=409, detail=str(e))
+            raise static_error(409, "change_request_conflict", e)
         return {"program_id": program_id, "pending_approval": True,
                 "change_id": req["change_id"], "loosens": loosened,
                 "message": "This change weakens protection — a SECOND "
@@ -428,7 +429,7 @@ async def join_request_ep(program_id: str, payload: dict, request: Request,
         return await create_join_request(
             db, program, user, amount, str(payload.get("note") or ""))
     except ValueError as e:  # user-input validation feedback only
-        raise HTTPException(status_code=400, detail=str(e))
+        raise static_error(400, "join_request_invalid", e)
 
 
 @router.get("/marketplace/my-requests")
@@ -526,7 +527,7 @@ async def op_state_ep(program_id: str, payload: dict, request: Request,
                                   reason=str(payload.get("reason") or ""),
                                   source="human", allow_deescalate=True)
     except PermissionError as e:  # LOCKED → dual authorization only
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "program_state_locked", e)
 
 
 @router.post("/programs/{program_id}/trade-verdict")
@@ -592,7 +593,7 @@ async def create_change_ep(program_id: str, payload: dict, request: Request,
             dict(payload.get("payload") or {}), user["id"],
             reason=str(payload.get("reason") or ""))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise static_error(400, "change_request_invalid", e)
 
 
 @router.post("/change-requests/{change_id}/{decision}")
@@ -610,9 +611,9 @@ async def decide_change_ep(change_id: str, decision: str, request: Request,
         return await decide_change_request(db, change_id,
                                            decision == "approve", user["id"])
     except PermissionError as e:  # same-admin approval attempt
-        raise HTTPException(status_code=403, detail=str(e))
+        raise static_error(403, "same_admin_approval", e)
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "change_request_conflict", e)
 
 
 @router.post("/partners/{partner_id}/certify")
@@ -694,7 +695,7 @@ async def create_partner_ep(payload: dict, request: Request,
     try:
         return await register_partner(db, payload, user["id"])
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise static_error(400, "partner_registration_invalid", e)
 
 
 @router.get("/programs/{program_id}/position-truth")
@@ -764,7 +765,7 @@ async def drift_tolerance_ep(program_id: str, payload: dict,
         return await set_drift_tolerance(
             db, program, float(payload.get("tolerance") or 0), user["id"])
     except PermissionError as e:  # increases go through dual auth
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "drift_tolerance_locked", e)
     except (TypeError, ValueError):
         raise HTTPException(status_code=400,
                             detail="tolerance must be a number >= 0")

@@ -7,6 +7,7 @@ from fastapi.responses import PlainTextResponse
 
 from auth import get_current_user
 from database import get_db
+from http_errors import static_error
 
 
 def _admin_ok(u) -> bool:
@@ -41,7 +42,7 @@ async def _mtls_gate(db, agent_token: str, fingerprint: str) -> dict:
         agent = await agent_by_token(db, agent_token)
         await enforce_mtls(db, agent, fingerprint)
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
     return agent
 
 
@@ -106,9 +107,9 @@ async def provider_catalog(name: str, user=Depends(get_current_user)):
         return {"regions": await p.list_regions(),
                 "plans": await p.list_plans()}
     except PartnerRequiredError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "partner_required", e)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise static_error(400, "invalid_request", e)
 
 
 # ── broker-first recommendation ─────────────────────────────────
@@ -179,7 +180,7 @@ async def get_deployment(deployment_id: str,
     try:
         return await advance_deployment(get_db(), user["id"], deployment_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise static_error(404, "deployment_not_found", e)
 
 
 @router.post("/deployments/{deployment_id}/bootstrap-token")
@@ -220,7 +221,7 @@ async def server_action(deployment_id: str, payload: dict, request: Request,
               "backup": p.create_backup, "delete": p.delete_server}[action]
         res = await fn(sid)
     except PartnerRequiredError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "partner_required", e)
     now = datetime.now(timezone.utc)
     if action == "backup":
         await db.vps_backups.insert_one({
@@ -338,7 +339,7 @@ async def agent_register(payload: dict):
     try:
         return await register_agent(get_db(), token, payload)
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_registration_refused", e)
 
 
 @router.post("/agent/cert/enroll")
@@ -354,7 +355,7 @@ async def agent_cert_enroll(payload: dict, cert_fp: str = _FP_HEADER):
     try:
         agent = await agent_by_token(db, str(payload.get("agent_token") or ""))
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
     m = agent.get("mtls") or {}
     if m and not m.get("revoked"):
         chk = await agent_mtls.verify_agent_cert(db, agent["agent_id"], cert_fp)
@@ -368,7 +369,7 @@ async def agent_cert_enroll(payload: dict, cert_fp: str = _FP_HEADER):
     try:
         return await agent_mtls.issue_from_csr(db, agent, csr_pem)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise static_error(400, "csr_rejected", e)
 
 
 @router.post("/agents/{agent_id}/mtls/revoke")
@@ -405,7 +406,7 @@ async def agent_heartbeat_ep(payload: dict, cert_fp: str = _FP_HEADER):
             db, agent, payload.get("metrics") or {})
         return out
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
 
 
 @router.post("/agent/renew-token")
@@ -418,7 +419,7 @@ async def agent_renew_token_ep(payload: dict, cert_fp: str = _FP_HEADER):
         return await rotate_agent_token(db,
                                         str(payload.get("agent_token") or ""))
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
 
 
 @router.post("/agent/deploy-status")
@@ -487,7 +488,7 @@ async def agent_hardening_ep(payload: dict, cert_fp: str = _FP_HEADER):
                                       str(payload.get("agent_token") or ""),
                                       payload.get("checklist") or {})
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
 
 
 @router.post("/mt5/instances")
@@ -499,7 +500,7 @@ async def mt5_instance_ep(payload: dict, cert_fp: str = _FP_HEADER):
         return await register_mt5_instance(
             db, str(payload.get("agent_token") or ""), payload)
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
 
 
 # ── EA pairing ──────────────────────────────────────────────────
@@ -515,11 +516,11 @@ async def create_pairing(payload: dict, user=Depends(get_current_user)):
             expected_server=payload.get("expected_server"),
             revoke_existing=bool(payload.get("revoke_existing")))
     except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "pairing_conflict", e)
     except ValueError as e:
         if "not found" in str(e):
-            raise HTTPException(status_code=404, detail=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+            raise static_error(404, "not_found", e)
+        raise static_error(400, "invalid_request", e)
     except Exception:  # noqa: BLE001 — malformed ObjectId etc.
         raise HTTPException(status_code=400, detail="invalid request")
 
@@ -533,8 +534,8 @@ async def claim_pairing(payload: dict):
             payload.get("terminal") or {})
     except ValueError as e:
         if "terminal" in str(e):
-            raise HTTPException(status_code=400, detail=str(e))
-        raise HTTPException(status_code=401, detail=str(e))
+            raise static_error(400, "terminal_invalid", e)
+        raise static_error(401, "agent_auth_failed", e)
 
 
 @router.get("/ea-deployments")
@@ -572,7 +573,7 @@ async def ea_deploy_progress(payload: dict, cert_fp: str = _FP_HEADER):
         agent = await _mtls_gate(
             db, str(payload.get("agent_token") or ""), cert_fp)
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
     state = str(payload.get("state") or "")
     if state not in AGENT_PROGRESS_STATES:
         raise HTTPException(status_code=400, detail=(
@@ -608,7 +609,7 @@ async def pathb_status_ep(deployment_id: str,
     try:
         return await pathb_status(get_db(), user["id"], deployment_id)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise static_error(404, "deployment_not_found", e)
 
 
 @router.post("/agent/discovery")
@@ -621,7 +622,7 @@ async def agent_discovery_ep(payload: dict, cert_fp: str = _FP_HEADER):
             db, str(payload.get("agent_token") or ""),
             payload.get("terminals") or [])
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
 
 
 @router.get("/deployments/{deployment_id}/discovery")
@@ -652,12 +653,11 @@ async def terminal_decision(discovery_id: str, payload: dict,
             str(payload.get("action") or ""),
             bool(payload.get("consent")))
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise static_error(403, "consent_required", e)
     except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "action_conflict", e)
     except ValueError as e:
-        raise HTTPException(status_code=404 if "not found" in str(e)
-                            else 400, detail=str(e))
+        raise static_error(404 if "not found" in str(e) else 400, "action_target_invalid", e)
 
 
 # ── agent command queue ─────────────────────────────────────────
@@ -673,10 +673,9 @@ async def queue_agent_command(agent_id: str, payload: dict,
                                    payload.get("params") or {},
                                    f"user:{user['id']}")
     except RuntimeError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        raise static_error(409, "action_conflict", e)
     except ValueError as e:
-        raise HTTPException(status_code=404 if "not found" in str(e)
-                            else 400, detail=str(e))
+        raise static_error(404 if "not found" in str(e) else 400, "action_target_invalid", e)
 
 
 @router.post("/agents/{agent_id}/rotate-credentials")
@@ -751,7 +750,7 @@ async def poll_agent_commands(payload: dict, cert_fp: str = _FP_HEADER):
                                    str(payload.get("agent_token") or ""))
         return {"commands": cmds}
     except ValueError as e:
-        raise HTTPException(status_code=401, detail=str(e))
+        raise static_error(401, "agent_auth_failed", e)
 
 
 @router.post("/agent/commands/ack")
@@ -766,9 +765,7 @@ async def ack_agent_command(payload: dict, cert_fp: str = _FP_HEADER):
                                  bool(payload.get("ok")),
                                  str(payload.get("detail") or ""))
     except ValueError as e:
-        raise HTTPException(status_code=401 if ("agent" in str(e)
-                                                or "mtls" in str(e))
-                            else 404, detail=str(e))
+        raise static_error(401 if "agent" in str(e) else 404, "command_ack_refused", e)
 
 
 @router.get("/agents/{agent_id}/health")
@@ -809,7 +806,7 @@ async def artifacts_manifest(agent_id: str | None = None):
         return await manifest_for_agent(get_db(), agent_id)
     except RuntimeError as e:
         # iter-125 correction #3 — unsigned manifests are refused outright.
-        raise HTTPException(status_code=503, detail=str(e))
+        raise static_error(503, "manifest_unavailable", e)
 
 
 @router.post("/agent/artifact-digest")
@@ -844,7 +841,7 @@ async def report_artifact_digest(payload: dict, cert_fp: str = _FP_HEADER):
     try:
         manifest = build_artifact_manifest()
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        raise static_error(503, "manifest_unavailable", e)
     expected = next((a.get("sha256") for a in manifest["artifacts"]
                      if a["name"] == name), None)
     match = bool(expected) and expected.lower() == digest
@@ -942,7 +939,7 @@ async def register_installer(payload: dict,
         return await register_broker_installer(get_db(), user["id"],
                                                payload)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise static_error(400, "installer_invalid", e)
 
 
 @router.post("/broker-installers/{installer_id}/approve")
@@ -953,9 +950,9 @@ async def approve_installer(installer_id: str,
         return await approve_broker_installer(get_db(), user,
                                               installer_id)
     except PermissionError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise static_error(403, "installer_forbidden", e)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise static_error(404, "installer_not_found", e)
 
 
 @router.get("/failure-matrix")

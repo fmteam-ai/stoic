@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user
 from database import get_db
+from http_errors import static_error
 
 router = APIRouter(prefix="/ops", tags=["soak"])
 
@@ -94,7 +95,7 @@ async def canary_enable_ep(payload: dict,
     try:
         return await enable(get_db(), account_id, user["id"])
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))  # ValueError: crafted validation text
+        raise static_error(400, "canary_enable_invalid", e)
 
 
 @router.post("/canary/disable")
@@ -118,7 +119,7 @@ async def canary_resume_ep(user=Depends(get_current_user)):
     try:
         return await resume(get_db(), user["id"])
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))  # ValueError: crafted validation text
+        raise static_error(400, "canary_resume_invalid", e)
 
 
 @router.get("/broker-validation")

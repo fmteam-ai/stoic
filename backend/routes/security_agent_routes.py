@@ -140,7 +140,8 @@ async def undo_action(action_id: str, body: UndoBody, request: Request, user=Dep
     except LookupError:
         raise HTTPException(status_code=404, detail={"code": "action_not_found", "message": "security action not found"})
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        from http_errors import static_error
+        raise static_error(409, "action_not_undoable", e)
     invalidate_block_cache()
     return _ser(row)
 

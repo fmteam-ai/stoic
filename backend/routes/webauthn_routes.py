@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 from auth import get_current_user
 from database import get_db
+from http_errors import static_error
 from security import check_failure_limit, clear_failures, record_failure
 from step_up import STEP_UP_ACTIONS, audit_event, issue_step_up_token, require_step_up
 
@@ -55,7 +56,7 @@ async def register_begin(request: Request, payload: dict | None = None,
         return await begin_registration(get_db(), user,
                                         _origin(request, payload))
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))  # deliberate ValueError message
+        raise static_error(400, "passkey_registration_invalid", e)
 
 
 @router.post("/register/complete")
@@ -111,7 +112,7 @@ async def step_up_begin(payload: dict, request: Request,
         return await begin_step_up(get_db(), user, _origin(request, payload),
                                    action)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))  # deliberate ValueError message
+        raise static_error(400, "step_up_begin_invalid", e)
 
 
 @router.post("/step-up/complete")

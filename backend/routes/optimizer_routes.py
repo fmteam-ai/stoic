@@ -127,7 +127,8 @@ async def apply_rec(report_id: str, rec_id: str, user=Depends(get_current_user))
     try:
         audit = await apply_recommendation(user["id"], report, rec)
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))
+        from http_errors import static_error
+        raise static_error(409, "recommendation_apply_conflict", e)
     await db.optimizer_reports.update_one(
         {"_id": report["_id"], "recommendations.id": rec_id},
         {"$set": {"recommendations.$.status": "applied",

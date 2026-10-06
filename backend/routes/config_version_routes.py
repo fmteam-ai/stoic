@@ -46,4 +46,5 @@ async def rollback_config(request: Request, account_id: str | None = None,
     try:
         return await rollback(db, user["id"], account_id, actor=user["id"])
     except ValueError as e:
-        raise HTTPException(status_code=409, detail=str(e))  # ValueError: crafted validation text
+        from http_errors import static_error
+        raise static_error(409, "config_rollback_conflict", e)
