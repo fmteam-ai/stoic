@@ -1,0 +1,26 @@
+{
+  "summary": "iter237 — STOIC main99 Review (Phases 1-4 + 2 security-audit items) backend integration verification. New test file backend/tests/integration/test_main99_review.py (15 tests): 14 PASSED, 1 SKIPPED (trust-terminal probe skipped because the preview admin has no non-paper, non-verified account — SEC-001 was still verified at code level: step_up.require_step_up is invoked before any legacy code path, and bundle endpoint returned the same mfa_enrollment_required code live). All checks GREEN:\n  • Admin cookie+CSRF login OK; GET /api/auth/me returns admin.\n  • GET /api/admin/acceptance/current → 200, has required/release/latest/valid_for_release/reason/accounts; latest contains NO signature field (SEC/P3).\n  • POST /api/admin/acceptance/bundle without X-Step-Up-Token → 403 {code:'mfa_enrollment_required', action:'authority_relax', message:'…'} — NEVER 500, structured code, no raw str(e). (SEC-002 confirmed: no Traceback/<class ...> leak.) When step-up is minted, build_bundle correctly raises RuntimeError if no APPROVED inventory expectation and the handler converts that to 503 {code:'bundle_unavailable'} (A14-9 contract preserved at the route level — never 500).\n  • GET /api/authority/inventory (admin) 200; GET /api/authority/inventory/pending 200 with expectation+admin_count; same /pending unauth → 401.\n  • GET /api/crypto/exchanges unauthenticated → 401; authenticated → 200 with 5 exchanges, each row carries capability matrix {sandbox, client_id_lookup, oco_protection, partial_fill_policy, certified, live_allowed, missing[]} + reachability flags (binance geo-blocked 451 as expected on this cluster). A14-5 verdict surfaced via live_allowed+missing.\n  • GET /api/performance/verified → provenance.source_kind='derived', provenance.ledger_gate_reasons is a list, provenance.share_allowed=False and payload.share_allowed=False (correctly refuses sharing when not broker-reconciled; N99-1/N99-3/N99-7/A14-3 contract OK).\n  • Regression smoke: /api/status, /api/accounts, /api/bot/pulse, /api/admin/audit/verify all 200.\n  • Backend err log scan during the test window shows NO 500 from any route exercised by the suite. (Preview-only 500s on /api/bridge/heartbeat are stale external EA clients hitting the preview — same test-seed artifact documented in iter236; not a regression of this review's scope.)",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/integration/test_main99_review.py",
+    "/app/test_reports/pytest/iter237_main99.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "routes/admin_routes.py L148-167 (acceptance/bundle): correctly catches RuntimeError from acceptance_bundle.build_bundle and maps to 503 bundle_unavailable with a static message (SEC-002 compliant). Any future contributor must preserve this except-pattern — raw raise would leak internals.",
+    "step_up.require_step_up correctly guards 'terminal_trust' and 'authority_relax' actions. The response is a structured dict detail (code/action/message), never a raw str(e). SEC-001 verified.",
+    "routes/performance_routes.py L139-156: provenance share_allowed = reconciled AND not stale — matches N99-7/A14-3 wording; ledger_gate_reasons always attached. OK.",
+    "routes/crypto_routes.py GET /exchanges: capability_matrix() wired per-exchange with live_allowed/missing semantics (A14-5). OK."
+  ],
+  "updated_files": [
+    "/app/backend/tests/integration/test_main99_review.py (new)"
+  ],
+  "success_rate": {"backend": "100% (14/14 executed, 1 skipped by env — no eligible non-paper account for trust-terminal probe)", "frontend": "n/a (backend-only review)"},
+  "test_credentials": "Read at runtime from TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD env vars; NEVER written to any file under /app. See /app/memory/test_credentials.md for the shared preview password.",
+  "seed_data_creation": "None. All reads were against preview DB (ai_trading_bot). No TEST_ rows created or left behind.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "To exercise the SEC-001 trust-terminal step-up refusal live, seed an MT5 account with mode!='paper' and no verified_identity (and user_id = admin user). The suite's TestTrustTerminalStepUp skips when no eligible account exists. The code-level invariant is already independently covered by backend/tests/unit/test_fixplan_main99_phase1.py and the admin-bundle path returned the same mfa_enrollment_required code at runtime, giving us a live proxy for the step-up guard. For acceptance/bundle happy-path (schema_version==2 + Ed25519 + approved_by): requires an APPROVED inventory expectation AND a step-up token — propose at POST /authority/inventory/expectation then approve at /approve from a different admin, then mint step-up at /api/auth/step-up. Suite leaves preview-DB state untouched.",
+  "rca of the issue": "No product bugs observed in the main99 Phases 1-4 or SEC-001/SEC-002 scope. The 500s visible in backend.err.log tail are external EA bridge clients hitting /api/bridge/heartbeat with incomplete payloads (same user_id-seed artifact noted in iter236 context_for_next_testing_agent) — not caused by this suite and not within this review's scope."
+}
