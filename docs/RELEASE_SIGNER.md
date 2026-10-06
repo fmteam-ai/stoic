@@ -50,6 +50,23 @@ Then set in the PRODUCTION env of the API (and remove the local key):
 The API verifies every returned signature against the pinned public key
 (defence-in-depth) — a compromised signer cannot forge accepted output.
 
+## GitHub Actions secrets (ea-release.yml / release.yml)
+The EA compile-record-sign job signs through the SAME external signer. Add these as
+repository secrets (Settings → Secrets and variables → Actions), otherwise the job stops
+at *"Signer secrets present"* right after a successful compile:
+
+| Secret | Value |
+|--------|-------|
+| `RELEASE_SIGNER_URL` | `https://<signer-host>:9443` (reachable from GitHub runners) |
+| `RELEASE_SIGNER_TOKEN` | the `SIGNER_TOKEN` |
+| `RELEASE_SIGNER_ALLOWED_HOSTS` | `<signer-host>` (comma list; the URL host must be in it) |
+| `RELEASE_PUBLIC_KEY_B64` | the PUBLIC key |
+| `RELEASE_SIGNER_KEY_ID` | key id the signer serves (e.g. `stoic-ea-2026`) |
+
+Re-run: Actions → **ea-release** → *Run workflow* (ref `main`). The job commits
+`release/ea_release.json` + `docs/RELEASE_HASHES.json` back; then pin the new EX5 hash per
+docs/PRODUCTION_DEPLOY_CHECKLIST.md.
+
 ## Verify
 - Preflight page: RELEASE_SIGNER row shows **pass — external**.
 - `GET https://<signer-host>:9443/healthz` → `{"status":"ok"}`.

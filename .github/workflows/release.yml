@@ -40,6 +40,8 @@ jobs:
         run: git archive --format=tar.gz -o /tmp/stoic-release.tar.gz HEAD
       - name: Unpack to a clean tree
         run: mkdir /tmp/release && tar -xzf /tmp/stoic-release.tar.gz -C /tmp/release
+      - name: Materialise env templates from deploy/env (archive tree)
+        run: cd /tmp/release && python3 scripts/sync_env_examples.py
       - name: Archive completeness gate (deployment files MUST ship)
         run: |
           # github.sha is the TAG OBJECT for annotated tags — peel it to the

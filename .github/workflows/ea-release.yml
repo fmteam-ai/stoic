@@ -51,6 +51,26 @@ jobs:
           Write-Host $log
           if ($log -notmatch "0 error") { throw "EA compilation reported errors" }
           if (-not (Test-Path "backend\static\EmergentTradingBridge.ex5")) { throw "Compiled .ex5 not produced" }
+      - name: Signer secrets present (fail with a clear message, not a traceback)
+        shell: bash
+        env:
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+        run: |
+          missing=""
+          for v in RELEASE_SIGNER_URL RELEASE_SIGNER_TOKEN RELEASE_SIGNER_ALLOWED_HOSTS RELEASE_PUBLIC_KEY_B64 RELEASE_SIGNER_KEY_ID; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::EA compiled with 0 errors, but the signed release record cannot be produced: GitHub repository secrets missing —$missing."
+            echo "Set them under Settings → Secrets and variables → Actions (see docs/RELEASE_SIGNER.md, section 'GitHub Actions secrets'),"
+            echo "then re-run this workflow (Actions → ea-release → Run workflow). Until then the server keeps the previous signed EX5 hash."
+            exit 1
+          fi
+          echo "all signer secrets present"
       - name: Record + sign the EX5 (external signer; compiler identity from the log)
         shell: pwsh
         env:

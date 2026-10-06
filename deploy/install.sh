@@ -99,7 +99,16 @@ gen() { python3 -c "import secrets;print(secrets.token_urlsafe(32))"; }
 # The installer is SELF-CONTAINED: if the .env.example templates are missing
 # from the archive, equivalent templates are written inline so a fresh
 # deployment never fails on a packaging gap.
+# deploy/env/*.env.example is the committed source of truth (the platform never
+# commits .env* paths, so a checked-out .env.example may be stale) — refresh first.
+sync_env_templates() {
+  [ -f deploy/env/root.env.example ] && cp deploy/env/root.env.example .env.example
+  [ -f deploy/env/backend.env.example ] && cp deploy/env/backend.env.example backend/.env.example
+  return 0
+}
+
 ensure_root_template() {
+  sync_env_templates
   [ -f .env.example ] && return
   echo "   (writing missing .env.example inline)"
   cat > .env.example <<'EOF'
@@ -114,6 +123,7 @@ EOF
 }
 
 ensure_backend_template() {
+  sync_env_templates
   [ -f backend/.env.example ] && return
   echo "   (writing missing backend/.env.example inline)"
   cat > backend/.env.example <<'EOF'
