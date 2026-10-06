@@ -220,17 +220,23 @@ async def admin_get_signups(user=Depends(get_current_user)):
 
 
 @router.post("/admin/settings/signups")
-async def admin_set_signups(payload: dict, user=Depends(get_current_user)):
-    """Testing period: close/open new member registrations + affiliate applications (audited)."""
+async def admin_set_signups(payload: dict, request: Request, user=Depends(get_current_user)):
+    """Testing period: close/open new member registrations + affiliate applications.
+    N103-7 — opening is a relaxation: step-up 2FA required; the audit row records the previous state."""
     _admin_only(user)
     import signup_lock
+    from step_up import require_step_up
     db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    before = await signup_lock.state(db)
     closed = bool(payload.get("closed"))
     msg = payload.get("message") if isinstance(payload.get("message"), str) else None
     s = await signup_lock.set_closed(db, closed, user.get("email", ""), msg[:300] if msg else None)
     await _audit(db, actor_email=user.get("email", ""),
                  action="signups_" + ("closed" if closed else "opened"),
-                 target_kind="platform", target_id="signups")
+                 target_kind="platform", target_id="signups",
+                 meta={"previous_closed": before["closed"], "previous_db_closed": before["db_closed"],
+                       "env_closed": before["env_closed"], "message": s.get("message")})
     return s
 
 

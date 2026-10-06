@@ -107,8 +107,7 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     # Testing period — new member sign-ups are closed (admin toggle / SIGNUPS_CLOSED). Checked before
     # Turnstile and rate limiting so a closed door costs nothing and leaks nothing.
     import signup_lock
-    if await signup_lock.is_closed(db):
-        raise signup_lock.closed_http_exception("member")
+    await signup_lock.refuse_if_closed(db, "member")
     from turnstile_gate import require_turnstile
     await require_turnstile(db, payload.turnstile_token, client_ip(request),
                             action="register")

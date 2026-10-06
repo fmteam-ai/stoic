@@ -135,6 +135,32 @@ async def inventory_ep(user=Depends(get_current_user)):
     return await projection(db, user["id"])
 
 
+@router.get("/inventory/policies")
+async def inventory_policies_ep(user=Depends(get_current_user)):
+    """A15-1 — signed policy migrations committed by the policy-migration workflow (release/policy_migrations/)."""
+    if not _admin_ok(user):
+        raise HTTPException(status_code=403, detail="Admin only")
+    import glob
+    import json
+    import os
+    from inventory_projection import installation_id, environment_label
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "release", "policy_migrations")
+    out = []
+    for path in sorted(glob.glob(os.path.join(root, "*.json"))):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                mig = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        out.append({"file": os.path.basename(path), "policy_version": mig.get("policy_version"),
+                    "previous_policy_version": mig.get("previous_policy_version"), "accounts": mig.get("accounts"),
+                    "enabled": mig.get("enabled"), "bots": mig.get("bots"), "account_ids": mig.get("account_ids") or [],
+                    "demo_only": bool(mig.get("demo_only")), "expires_at": mig.get("expires_at"), "issuer": mig.get("issuer"),
+                    "matches_host": mig.get("installation_id") == installation_id() and mig.get("environment") == environment_label(),
+                    "migration": mig})
+    return {"policies": out, "installation_id": installation_id(), "environment": environment_label()}
+
+
 @router.post("/inventory/expectation")
 async def inventory_expectation_ep(payload: dict, request: Request, user=Depends(get_current_user)):
     if not _admin_ok(user):

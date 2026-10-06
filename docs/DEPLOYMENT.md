@@ -395,3 +395,29 @@ Current bootstrap never touches `/usr/bin/python3`: the modern interpreter is li
 `/usr/local/lib/stoic/bin/python3`, which `deploy/lib.sh` and the standalone scripts
 (`doctor.sh`, `backup.sh`, `healthwatch.sh`, `install_report.sh`) prepend to `PATH`.
 `deploy/doctor.sh` fails when the system python lacks the `dnf` module.
+
+### Signed DEMO-only inventory policy (A15-1)
+Production accepts only the signed live policy (6/3/3) **or a signed policy migration**. For the
+demo, mint a DEMO-only policy with the CI release key — dual approval comes from the GitHub
+environment `policy-approval` (Settings → Environments → add 2 required reviewers):
+
+1. GitHub → Actions → **policy-migration → Run workflow**: `installation_id` (Admin → System /
+   `STOIC_INSTALLATION_ID` in backend/.env), `previous_policy_version` = `6/3/3-v1` (fresh install),
+   `policy_version` = e.g. `demo-2x2-v1`, `accounts`/`enabled` = 2/2, `account_ids` = the two
+   platform account ids (Accounts page → account → id), `demo_only` = true, a reason.
+   The run waits for the reviewers, signs (`purpose=policy-migration`) and commits
+   `release/policy_migrations/demo-2x2-v1.json` to `main`.
+2. Deploy `main` (demo-only mode), then Admin → Brokers → **Inventory go-live**: pick the policy in
+   the dropdown (counts + account ids fill in), **Propose**, step-up, **Approve**; then approve the
+   inventory hash.
+3. Rules enforced at every evaluation: every listed account must be an **attested DEMO** account;
+   any LIVE account is CLOSE_ONLY under a DEMO-only policy; a DB row that drifts from the signed
+   policy (counts, ids) is CLOSE_ONLY. The live 6/3/3 policy is a separate signed migration with
+   `demo_only=false` (A15-9, before real money).
+
+### Windows installer — one terminal per run (A15-2)
+`STOIC-Installer.ps1` v1.2 installs into **one** terminal: pass `-TerminalPath "<data folder>"`
+(MT5: File → Open Data Folder) or `-TerminalId <32-hex>`; with several terminals and neither
+flag it asks which one. Portable-mode terminals (MQL5 next to `terminal64.exe`) and
+broker-branded MetaEditor folders are found. The device key is **kept** across pairings
+(`-RotateDeviceKey` to mint a new one), so pairing terminal B no longer voids terminal A.

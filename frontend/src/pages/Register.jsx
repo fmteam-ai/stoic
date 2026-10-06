@@ -170,8 +170,8 @@ export default function Register() {
                 </div>
 
                 <div className="font-mono text-[11px] text-[#00FF41] tracking-widest mb-3">// CREATE ACCOUNT</div>
-                <h2 className="font-display font-bold text-3xl tracking-tight mb-2">Join the discipline</h2>
-                <p className="text-sm text-[#A1A1AA] mb-8">Spin up your AI trading workspace.</p>
+                <h2 className="font-display font-bold text-3xl tracking-tight mb-2">Create your workspace</h2>
+                <p className="text-sm text-[#A1A1AA] mb-8">Closed beta — demo accounts only, no live capital during the testing period.</p>
 
                 <form onSubmit={handleSubmit} className="space-y-4" data-testid="register-form">
                     <div>

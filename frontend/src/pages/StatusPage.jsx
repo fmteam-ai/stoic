@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { ClosedBetaBanner } from "@/components/ClosedBetaBanner";
 import axios from "axios";
 import { StoicMark } from "@/components/StoicLogo";
 import {
@@ -53,6 +54,7 @@ export default function StatusPage() {
 
     return (
         <div className="min-h-screen bg-[#050505] text-[#FAFAFA]">
+            <ClosedBetaBanner />
             <div className="max-w-3xl mx-auto px-4 py-12">
                 <div className="flex items-center gap-3 mb-10">
                     <StoicMark className="w-8 h-8" />

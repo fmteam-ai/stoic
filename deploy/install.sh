@@ -346,10 +346,12 @@ if [ "${MODE}" = "--production" ] || [ "${MODE}" = "--behind-proxy" ]; then
   # First production install: the checkout must be a signed, attested release.
   # Override consciously with ATTESTATION_REQUIRED=false in ./.env (not advised).
   verify_attestation || { echo "ERROR: release attestation gate failed — refusing production install"; exit 1; }
+  adopt_release_lock || { echo "ERROR: could not adopt the signed release lock (N103-5)"; exit 1; }
 fi
 if [ "$(deploy_mode)" = "registry" ] && [ "${MODE}" != "--production" ]; then
   # registry mode is digest-driven: the attestation is the ONLY source of the digests
   verify_attestation || { echo "ERROR: release attestation gate failed — registry mode cannot resolve images"; exit 1; }
+  adopt_release_lock || { echo "ERROR: could not adopt the signed release lock (N103-5)"; exit 1; }
 fi
 echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test manifest bind to one commit)"
 verify_release_provenance || exit 1

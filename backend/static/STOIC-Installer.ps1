@@ -66,8 +66,12 @@ function Get-StoicDeviceKey {
 }
 
 function Get-StoicDevicePublicKey {
-    # rotate the key on every pairing: a fresh dashboard token = a fresh enrolment
-    return (New-StoicDeviceKey)
+    # A15-2 — KEEP the device key across pairings: one VPS = one device identity, however many
+    # terminals it hosts. Pairing terminal B must not invalidate terminal A's enrolment.
+    # Pass -RotateDeviceKey to mint a fresh key deliberately.
+    if ($script:RotateDeviceKey -or -not (Test-Path (Get-StoicDeviceKeyPath))) { return (New-StoicDeviceKey) }
+    $rsa = Get-StoicDeviceKey
+    try { return $rsa.ToXmlString($false) } finally { $rsa.Dispose() }
 }
 
 function ConvertTo-StoicJsonString([string]$v) {
@@ -136,11 +140,18 @@ function Install-Stoic {
 
         [string]$Hostname = $env:COMPUTERNAME,
 
+        # A15-2 — install into ONE terminal: full data-folder path, or the 32-hex terminal id
+        # under %APPDATA%\MetaQuotes\Terminal. With several terminals and neither given, you choose.
+        [string]$TerminalPath,
+        [string]$TerminalId,
+
+        [switch]$RotateDeviceKey,
         [switch]$NoCompile
     )
 
-    $InstallerVersion = "1.1"
+    $InstallerVersion = "1.2"
     $ServerUrl = $ServerUrl.TrimEnd('/')
+    $script:RotateDeviceKey = [bool]$RotateDeviceKey
     $devicePublicKey = Get-StoicDevicePublicKey
 
     Write-Host ""
@@ -193,19 +204,59 @@ function Install-Stoic {
     # ── 2. Discover MT5 terminals ─────────────────────────────────────
     Write-Host "[2/5] Discovering MetaTrader 5 installations ..." -ForegroundColor Cyan
     $mtRoot = Join-Path $env:APPDATA "MetaQuotes\Terminal"
-    if (-not (Test-Path $mtRoot)) {
-        Write-Host "    ✗ No MetaTrader installations found under $mtRoot" -ForegroundColor Red
-        Write-Host "    Install MT5 from your broker first, then re-run." -ForegroundColor DarkGray
-        return
-    }
-    # Terminal data folders have a 32-char hex GUID name (skip Community/Help/etc).
-    $terminals = Get-ChildItem $mtRoot -Directory | Where-Object {
-        $_.Name -match '^[0-9A-F]{32}$' -and
-        (Test-Path (Join-Path $_.FullName "MQL5\Experts"))
-    }
-    if ($terminals.Count -eq 0) {
-        Write-Host "    ✗ Found $mtRoot but no terminals with MQL5\Experts inside." -ForegroundColor Red
-        return
+    $terminals = @()
+    if ($TerminalPath) {
+        # explicit data folder (also covers portable-mode terminals: <install dir>\MQL5)
+        if (-not (Test-Path (Join-Path $TerminalPath "MQL5\Experts"))) {
+            Write-Host "    ✗ -TerminalPath $TerminalPath has no MQL5\Experts folder (point at the terminal DATA folder: File → Open Data Folder)" -ForegroundColor Red
+            return
+        }
+        $terminals = @(Get-Item $TerminalPath)
+    } elseif ($TerminalId) {
+        $cand = Join-Path $mtRoot $TerminalId
+        if (-not (Test-Path (Join-Path $cand "MQL5\Experts"))) {
+            Write-Host "    ✗ -TerminalId $TerminalId not found under $mtRoot" -ForegroundColor Red
+            return
+        }
+        $terminals = @(Get-Item $cand)
+    } else {
+        $found = @()
+        if (Test-Path $mtRoot) {
+            # Terminal data folders have a 32-char hex GUID name (skip Community/Help/etc).
+            $found += Get-ChildItem $mtRoot -Directory | Where-Object {
+                $_.Name -match '^[0-9A-F]{32}$' -and (Test-Path (Join-Path $_.FullName "MQL5\Experts"))
+            }
+        }
+        # portable-mode terminals keep MQL5 next to terminal64.exe
+        foreach ($root in @("C:\Program Files", "C:\Program Files (x86)", "$env:LOCALAPPDATA\Programs")) {
+            if (Test-Path $root) {
+                $found += Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Where-Object {
+                    (Test-Path (Join-Path $_.FullName "terminal64.exe")) -and (Test-Path (Join-Path $_.FullName "MQL5\Experts"))
+                }
+            }
+        }
+        if ($found.Count -eq 0) {
+            Write-Host "    ✗ No MetaTrader 5 terminal found (looked under $mtRoot and portable install folders)." -ForegroundColor Red
+            Write-Host "    Install MT5 from your broker first, then re-run (or pass -TerminalPath)." -ForegroundColor DarkGray
+            return
+        }
+        if ($found.Count -eq 1) {
+            $terminals = @($found[0])
+        } else {
+            # A15-2 — never write one account's token into EVERY terminal: make the operator choose
+            Write-Host "    Several terminals found — this token belongs to ONE account. Choose the terminal for $accountLabel :" -ForegroundColor Yellow
+            for ($i = 0; $i -lt $found.Count; $i++) {
+                $origin = Join-Path $found[$i].FullName "origin.txt"
+                $label = if (Test-Path $origin) { (Get-Content $origin -ErrorAction SilentlyContinue | Select-Object -First 1) } else { "" }
+                Write-Host ("    [{0}] {1}  {2}" -f ($i + 1), $found[$i].FullName, $label) -ForegroundColor White
+            }
+            $pick = Read-Host "    terminal number (or re-run with -TerminalPath / -TerminalId)"
+            if (-not ($pick -match '^[0-9]+$') -or [int]$pick -lt 1 -or [int]$pick -gt $found.Count) {
+                Write-Host "    ✗ no valid choice — nothing written" -ForegroundColor Red
+                return
+            }
+            $terminals = @($found[[int]$pick - 1])
+        }
     }
     foreach ($t in $terminals) {
         Write-Host "    • $($t.FullName)" -ForegroundColor White
@@ -310,12 +361,21 @@ $installationId
         }
         if (-not $NoCompile -and -not $ciEx5Deployed) {
             $editor = $null
-            foreach ($candidate in @(
+            # A15-2 — broker-branded installs ("IC Markets Global MT5", "Pepperstone MetaTrader 5", …)
+            $candidates = @(
                 "C:\Program Files\MetaTrader 5\metaeditor64.exe",
                 "C:\Program Files (x86)\MetaTrader 5\metaeditor64.exe",
                 "$env:LOCALAPPDATA\Programs\MetaTrader 5\metaeditor64.exe"
-            )) {
-                if (Test-Path $candidate) { $editor = $candidate; break }
+            )
+            foreach ($root in @("C:\Program Files", "C:\Program Files (x86)", "$env:LOCALAPPDATA\Programs")) {
+                if (Test-Path $root) {
+                    $candidates += Get-ChildItem $root -Filter "metaeditor64.exe" -Recurse -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+                }
+            }
+            $origin = Join-Path $t.FullName "origin.txt"     # data folder → install folder of THIS terminal
+            if (Test-Path $origin) { $candidates = @((Join-Path ((Get-Content $origin | Select-Object -First 1).Trim()) "metaeditor64.exe")) + $candidates }
+            foreach ($candidate in $candidates) {
+                if ($candidate -and (Test-Path $candidate)) { $editor = $candidate; break }
             }
             if ($editor) {
                 $log = Join-Path $env:TEMP "stoic-compile.log"

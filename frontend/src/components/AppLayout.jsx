@@ -1,4 +1,5 @@
 import { Sidebar } from "@/components/Sidebar";
+import { ClosedBetaBanner } from "@/components/ClosedBetaBanner";
 import { CoPilotWidget } from "@/components/CoPilotWidget";
 import { SubscriptionBanner } from "@/components/SubscriptionBanner";
 import { TickerTape } from "@/components/TickerTape";
@@ -52,6 +53,7 @@ export function AppLayout({ children }) {
                 <StatusBar />
                 <AuthorityStrip />
                 <TickerTape />
+                <ClosedBetaBanner compact />
                 <SubscriptionBanner />
                 <SecurityCriticalBanner />
                 <div className="px-4 md:px-8 pt-3">
