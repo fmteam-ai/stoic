@@ -176,6 +176,20 @@ the server trusts a DEMO classification only when the **broker** says so:
 Rollout: push to main → `ea-release.yml` signs the 1.60 EX5; keep the previous hash in
 `EA_RELEASE_SHA256_PREVIOUS` during the window (same N-R6 dual-hash rule as below).
 
+### ✅ 1.60 SIGNED — 2026-10-06 (ea-release run on commit `23943e2`, record commit `b7fa7d9`)
+Public facts (no secrets) — `release/ea_release.json` is the source of truth:
+- EX5 sha256 **`73b2661463dc85b52a5228fba0c512331222cfe69762546281a4b0e6a6afcfa6`** → `EA_RELEASE_SHA256`
+- MQ5 sha256 `897d6bf8768862b55e1432f897fc523dd0938431e8e8661f77cc16f7e20edc12` (matches shipped source)
+- Compile: 0 errors / 0 warnings, Windows 10.0.26100, `compiled_by: github-actions`
+- Signer: `https://stoic-signer.fly.dev` (Fly app `stoic-signer`, region ams), key id
+  `stoic-release-ed25519-v1`, public key `/lYiSnGAY8/nWkdSKoGSXUJtDm0Syd+ioKTFa+s7cCo=`
+  (`RELEASE_PUBLIC_KEY_B64`). Signature re-verified out-of-band against this key.
+- `previous` is null (first signed release) — terminals still on ≤1.59 are CLOSE_ONLY on LIVE
+  accounts until updated; add their hash to `EA_RELEASE_SHA256_PREVIOUS` only if a rollout window is needed.
+- Token hygiene: the signer token was rotated right after the first signed run; GitHub secret
+  `RELEASE_SIGNER_TOKEN` and the production API secret must carry the CURRENT value from
+  `/root/.stoic-signer/stoic-signer.token` on the operator host (never in the repo or chat).
+
 ## EA v1.59 (main92 H1 / main93 decision 1) — rebuild required
 EA 1.59 (the `margin_mode` change, renamed from the interim 1.58 as agreed — no signed 1.58 EX5
 was ever produced) adds `margin_mode` (ACCOUNT_MARGIN_MODE) to every heartbeat so netting accounts
