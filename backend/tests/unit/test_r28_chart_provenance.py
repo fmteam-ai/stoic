@@ -13,13 +13,13 @@ def test_contract_fields_freshness_gaps_and_kinds(monkeypatch):
     import chart_provenance as cp
     monkeypatch.setenv("APP_ENV", "production")
     now = datetime.now(timezone.utc)
-    pts = [{"date": (now - timedelta(days=d)).isoformat()} for d in (6, 5, 4, 1, 0)]   # gap: 4 → 1 (2 missing days)
+    pts = [{"date": (now - timedelta(days=d)).isoformat()} for d in (6, 5, 4, 0)]   # gap: 4 → 0 (3 missing days — never weekend-only)
     p = cp.build(provider="broker_deals", source_kind="broker_reconciled", points=pts, expected_interval_s=86400,
                  reconciliation_id="rec-1", ledger_id="led-1")
     assert p["contract_version"] == 1 and p["provider"] == "broker_deals" and p["source_kind"] == "broker_reconciled"
-    assert p["timezone"] == "UTC" and p["environment"] == "production" and p["points"] == 5
+    assert p["timezone"] == "UTC" and p["environment"] == "production" and p["points"] == 4
     assert p["freshness_s"] < 5 and p["stale"] is False
-    assert p["missing_intervals_count"] == 1 and p["missing_intervals"][0]["missing"] == 2
+    assert p["missing_intervals_count"] == 1 and p["missing_intervals"][0]["missing"] == 3
     assert p["ledger_id"] == "led-1" and p["reconciliation_id"] == "rec-1"
     stale = cp.build(provider="x", source_kind="indicative", points=[{"date": (now - timedelta(days=5)).isoformat()}])
     assert stale["stale"] is True and stale["cache_status"] == "live"

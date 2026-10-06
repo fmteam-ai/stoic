@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-10-05T22:32:32.678031+00:00",
-  "git_commit": "4eba5af7a0f2249beb181d1585c5a040311bcb50",
-  "source_sha": "4eba5af7a0f2249beb181d1585c5a040311bcb50",
+  "captured_at": "2026-10-06T06:00:00.271995+00:00",
+  "git_commit": "b946e750c0c9810ddb254f7db9b3470933ac4cc8",
+  "source_sha": "b946e750c0c9810ddb254f7db9b3470933ac4cc8",
   "images": {
     "backend": null,
     "frontend": null
@@ -11,8 +11,8 @@
   "note": "developer snapshot \u2014 NOT release evidence; release.yml regenerates the lock bound to the tagged commit",
   "signer_key_id": "stoic-release-ed25519-v1",
   "migrations_sha256": "9d5e137fa0fd8bfa5658435dff724140e6ed8b022067d5e001d4d3741415b94a",
-  "frontend_asset_digest": "857192dfaa23d829996f9f9108af58efd9c97bae007728a3f71a9e0d3373f334",
-  "test_manifest_sha256": "07b317a9b709809b610097ea3b3e2456c0a6bb4580a476b53a1e869860d75f57",
+  "frontend_asset_digest": null,
+  "test_manifest_sha256": "7e9a903a4375e4202a50bf3a5686c12a162160b80085b24da615cd28dbdbaecd",
   "model_manifest_sha256": "b2a5223864b07ecc9528819e9492975eaba3c887ad7c1957461339bd3e6959b6",
   "python": {
     "version": "3.11.16",
@@ -104,10 +104,10 @@
       "matplotlib==3.11.0",
       "mccabe==0.7.0",
       "mdurl==0.1.2",
-      "motor==3.3.1",
+      "motor==3.7.1",
       "mpmath==1.3.0",
       "msgpack==1.2.1",
-      "multidict==6.7.1",
+      "multidict==6.9.1",
       "mutagen==1.48.1",
       "mypy==2.1.0",
       "mypy_extensions==1.1.0",
@@ -146,7 +146,7 @@
       "pydantic_core==2.46.4",
       "pyee==13.0.1",
       "pyflakes==3.4.0",
-      "pymongo==4.6.3",
+      "pymongo==4.18.2",
       "pyparsing==3.3.2",
       "pypdf==6.19.0",
       "pytest-asyncio==1.4.0",
@@ -202,8 +202,8 @@
       "yarl==1.24.2",
       "zipp==4.1.0"
     ],
-    "packages_sha256": "d854d62b8583a852eeab8d7d6a18ddca1be5bee44658a9bf39df3340fe9bde85",
-    "requirements_txt_sha256": "2b39983a4299afcbc1a825b790401594a56e3cc7011f8eb42164eb546915f654"
+    "packages_sha256": "f22027c8870709a48c10dca0cc18540bb6c4db4afbd5cbab49456b156d84d2c9",
+    "requirements_txt_sha256": "1cb844c8a2d83c2ef9657fbb527b7a9a3b5f06aeb679d8c661ee39ce4dea8220"
   },
   "node": {
     "version": "v20.20.2",
