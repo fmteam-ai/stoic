@@ -130,7 +130,8 @@ async def fleet(db) -> list[dict]:
                                    "position_mode_override": 1, "trading_enabled": 1, "execution_brake": 1,
                                    "broker_server": 1, "server": 1, "verified_identity": 1, "expected_identity": 1,
                                    "account_number": 1, "trading_authority": 1,
-                                   "ea_identity": 1, "account_trade_mode": 1}).to_list(length=FLEET_LIMIT)
+                                   "ea_identity": 1, "account_trade_mode": 1, "creds_version": 1,   # N102-2 — identity-bound attestation
+                                   "broker_account_id_reported": 1}).to_list(length=FLEET_LIMIT)
     from broker_env import attested_environment, reported_trade_mode
     from routes.bridge_routes import position_mode_resolution
     from routes.diagnostic_routes import LATEST_EA

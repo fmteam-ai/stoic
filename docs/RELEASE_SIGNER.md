@@ -97,11 +97,17 @@ Two keys, two ids, two pins (N101-5):
 | CI release key (Fly `stoic-signer`) | `RELEASE_SIGNER_KEY_ID` = `stoic-release-ed25519-v1` | `RELEASE_PUBLIC_KEY_B64` | EA release records, model manifests, policy migrations |
 | runtime key (self-hosted sidecar) | `BUNDLE_SIGNER_KEY_ID` = `stoic-bundle-ed25519-v1` (compose `SIGNER_KEY_ID`) | `BUNDLE_PUBLIC_KEY_B64` | acceptance bundles, artifact manifests, anchors, attestations |
 
-`install.sh` pins the sidecar as the runtime key; `update.sh` (`ensure_bundle_key_pins`) migrates an
-existing host the same way and leaves `RELEASE_PUBLIC_KEY_B64` as the CI release key — **set it to the
-Fly signer's public key** (`flyctl secrets`/`/public-key`) so CI-signed EA records verify on your server.
-Unset `BUNDLE_*` = single-key install (both roles use the release key — only valid when the sidecar and
-CI really share one private key).
+`install.sh` pins the sidecar as the runtime key and **never** writes it as `RELEASE_PUBLIC_KEY_B64`;
+`update.sh` (`ensure_bundle_key_pins`) migrates an existing host the same way and REMOVES a release pin
+that equals the sidecar key (N102-5 — with one key, root on the API host could mint EA-release
+signatures). The self-hosted sidecar runs with `SIGNER_ROLE=runtime` (compose): it loads no release
+token and refuses release purposes for every caller. Preflight `release_key_distinct` FAILS in
+production while both pins are the same key. **Set `RELEASE_PUBLIC_KEY_B64` to the Fly signer's
+public key** (`GET https://<fly-app>/public-key`) so CI-signed EA records verify on your server;
+if the Fly signer was ever keyed with the sidecar's private key, re-key it
+(`deploy/signer/deploy_fly.sh`) and re-run `ea-release`. The EA record's signed statement includes
+`signature.key_id` (N102-5), so a record cannot be relabelled to another key.
+Unset `BUNDLE_*` = single-key install (only valid outside production).
 
 Cut-over notes: pre-N100-11 artefacts signed WITHOUT a prefix are accepted only where history must
 stay verifiable (audit anchors, the developer model manifest on re-sign). EA release records and

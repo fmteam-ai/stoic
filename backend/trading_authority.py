@@ -331,9 +331,13 @@ async def release_gate_domain(db, account: dict | None = None) -> dict:
     from app_env import is_production
     if not is_production():
         return {"level": "FULL", "reason": "release gate enforced in production only"}
-    if account is not None and account.get("mode") == "paper":
+    if account is None:
+        # N102-1 — the gate is account-bound: an account-less (platform/user-level) evaluation must not
+        # paint demo users CLOSE_ONLY; every real entry passes the full account (bot_runner → submit_intent).
+        return {"level": "FULL", "reason": "release gate evaluated per account (DEMO exempt, LIVE needs an authoritative release)"}
+    if account.get("mode") == "paper":
         return {"level": "FULL", "reason": "paper account — release gate applies to broker accounts"}
-    if account is not None and "_id" in account:
+    if "_id" in account:
         from broker_env import attested_environment
         if attested_environment(account) == "DEMO":      # identity-bound admin attestation, never a heartbeat
             return {"level": "FULL", "reason": "attested DEMO account — release gate applies to real money"}

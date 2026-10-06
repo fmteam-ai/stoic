@@ -297,9 +297,11 @@ def test_release_gate_blocks_non_authoritative_release_in_production():
     assert rg.evaluate(lock=good_lock, env={"STOIC_IMAGE_DIGEST": "sha256:be"}, ea_signed=True)["ok"] is True
     bad = rg.evaluate(lock=good_lock, env={"STOIC_IMAGE_DIGEST": "sha256:other"}, ea_signed=True)
     assert bad["ok"] is False and "differs" in bad["failures"][0]
-    with patch.dict(os.environ, {"APP_ENV": "production"}), patch("release_gate.evaluate", lambda **k: bad):
-        d = run(ta.release_gate_domain(FakeDb()))
+    with patch.dict(os.environ, {"APP_ENV": "production"}), patch("release_gate.evaluate", lambda **k: bad), \
+            patch("broker_env.attested_environment", lambda a: "LIVE"):
+        d = run(ta.release_gate_domain(FakeDb(), {"_id": "live1", "mode": "live"}))   # N102-1: gate is account-bound
         assert d["level"] == "CLOSE_ONLY" and d["code"] == "RELEASE_NOT_AUTHORITATIVE"
+        assert run(ta.release_gate_domain(FakeDb()))["level"] == "FULL"              # account-less ⇒ evaluated per account
     with patch.dict(os.environ, {"APP_ENV": "preview"}):
         assert run(ta.release_gate_domain(FakeDb()))["level"] == "FULL"
     assert ta.DOMAIN_SCOPE["release_gate"] == "account_bound" and ta.DOMAIN_SCOPE["acceptance"] == "account_bound"   # N101-2

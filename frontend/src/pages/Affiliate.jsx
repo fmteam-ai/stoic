@@ -18,6 +18,7 @@ export default function Affiliate() {
     const [status, setStatus] = useState(null); // {state, affiliate?, application?}
     const [stats, setStats] = useState(null);
     const [err, setErr] = useState("");
+    const [signupsClosed, setSignupsClosed] = useState(false);   // testing period: no new affiliates
     const [copied, setCopied] = useState(false);
 
     // Form state
@@ -46,7 +47,10 @@ export default function Affiliate() {
         } finally { setLoading(false); }
     };
 
-    useEffect(() => { load(); }, []);
+    useEffect(() => {
+        load();
+        api.get("/auth/signups-status").then((r) => setSignupsClosed(!!r.data.closed)).catch(() => {});   // testing period
+    }, []);
 
     const submit = async () => {
         if (!form.terms_agreed) {
@@ -150,7 +154,13 @@ export default function Affiliate() {
                     <SubscriptionGate />
                 )}
 
-                {(status?.state === "none" || !status) && (
+                {(status?.state === "none" || !status) && signupsClosed && (
+                    <div className="bg-[#0A0A0A] border border-[#FFB020]/40 p-5" data-testid="affiliate-closed">
+                        <div className="font-mono text-[11px] text-[#FFB020] tracking-widest mb-2">// APPLICATIONS CLOSED</div>
+                        <p className="text-sm text-[#A1A1AA]">New affiliate applications are paused during the testing period. Existing affiliates keep their links, stats and payouts.</p>
+                    </div>
+                )}
+                {(status?.state === "none" || !status) && !signupsClosed && (
                     <ApplicationForm
                         form={form} setForm={setForm} submit={submit}
                         submitting={submitting} userEmail={user?.email} />

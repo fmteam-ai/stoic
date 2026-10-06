@@ -93,17 +93,17 @@ services:
       context: ./deploy/signer
     restart: unless-stopped
     environment:
-      SIGNER_TOKEN_FILE: /run/secrets/signer_token
+      # N102-5 — the self-hosted sidecar is a RUNTIME signer: it never loads a release token and refuses
+      # release purposes for every caller, so root on this host cannot mint EA-release signatures.
+      SIGNER_ROLE: runtime
       SIGNER_TOKEN_BUNDLE_FILE: /run/secrets/signer_token_bundle
-      # N101-5 — the self-hosted sidecar is the RUNTIME key (bundles, anchors, artifact manifests) and
-      # carries its own id; the CI release key (EA records, model manifests) is pinned separately
-      # in backend/.env as RELEASE_PUBLIC_KEY_B64 / RELEASE_SIGNER_KEY_ID.
-      SIGNER_KEY_ID: ${SIGNER_KEY_ID:-stoic-release-ed25519-v1}
+      # N101-5 — the runtime key carries its own id; the CI release key (EA records, model manifests)
+      # is pinned separately in backend/.env as RELEASE_PUBLIC_KEY_B64 / RELEASE_SIGNER_KEY_ID.
+      SIGNER_KEY_ID: ${SIGNER_KEY_ID:-stoic-bundle-ed25519-v1}
       ED25519_SIGNING_KEY_B64_FILE: /run/secrets/signer_ed25519_key
     command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9443",
               "--ssl-certfile", "/run/secrets/signer_cert", "--ssl-keyfile", "/run/secrets/signer_cert_key"]
     secrets:
-      - signer_token
       - signer_token_bundle
       - signer_ed25519_key
       - signer_cert
@@ -214,8 +214,6 @@ secrets:
     file: ./secrets/ledger_anchor_key
   bridge_token_hash_key:
     file: ./secrets/bridge_token_hash_key
-  signer_token:
-    file: ./secrets/signer_token
   signer_token_bundle:
     file: ./secrets/signer_token_bundle
   signer_ed25519_key:

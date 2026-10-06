@@ -296,7 +296,8 @@ async def current_status(db) -> dict:
                                                                         "server": 1, "broker_server": 1, "account_number": 1,
                                                                         "account_type": 1, "ea_identity": 1,
                                                                         "broker_account_id_reported": 1, "creds_version": 1,
-                                                                        "broker_environment": 1, "mode": 1}).limit(50):
+                                                                        "broker_environment": 1, "mode": 1,
+                                                                        "account_trade_mode": 1}).limit(50):   # N102-2
         if fp is None:
             fp = await config_fingerprint(db, list((b or {}).get("account_ids") or []), rel) if b else ""
         env = attested_environment(acc)

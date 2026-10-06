@@ -179,11 +179,16 @@ def signer_config_violations(env) -> list[str]:
     if not ((env.get("RELEASE_SIGNER_TOKEN") or "").strip() or (env.get("RELEASE_SIGNER_BUNDLE_TOKEN") or "").strip()):
         v.append("RELEASE_SIGNER=external requires RELEASE_SIGNER_BUNDLE_TOKEN (API host) or RELEASE_SIGNER_TOKEN (CI only); *_FILE supported.")
     pinned = (env.get("RELEASE_PUBLIC_KEY_B64") or "").strip()
-    if not _b64_key_ok(pinned):
-        v.append("RELEASE_SIGNER=external requires a pinned, valid RELEASE_PUBLIC_KEY_B64 (base64 of 32 raw bytes).")
     bpinned = (env.get("BUNDLE_PUBLIC_KEY_B64") or "").strip()
+    if pinned and not _b64_key_ok(pinned):
+        v.append("RELEASE_PUBLIC_KEY_B64 is set but is not a valid Ed25519 public key (base64 of 32 raw bytes).")
     if bpinned and not _b64_key_ok(bpinned):
         v.append("BUNDLE_PUBLIC_KEY_B64 is set but is not a valid Ed25519 public key (base64 of 32 raw bytes).")
+    if not (_b64_key_ok(pinned) or _b64_key_ok(bpinned)):
+        # N102-5 — a host that only signs runtime artefacts needs the bundle pin; the CI release pin is
+        # for VERIFYING EA records / model manifests and may be absent (they then simply do not verify).
+        v.append("RELEASE_SIGNER=external requires a pinned, valid public key: BUNDLE_PUBLIC_KEY_B64 (runtime) "
+                 "and/or RELEASE_PUBLIC_KEY_B64 (CI release key).")
     if not (env.get("RELEASE_SIGNER_KEY_ID") or "").strip():
         v.append("RELEASE_SIGNER=external requires RELEASE_SIGNER_KEY_ID.")
     if _timeout(env) is None:

@@ -22,7 +22,7 @@ python scripts/production_preflight.py        # exit 1 while verdict=will_crash
 | 1 | `STEP_UP_BYPASS_TOKEN` | set | **empty / removed** |
 | 2 | `RATE_LIMIT_BYPASS_TOKEN` | set | **empty / removed** |
 | 3 | `ADMIN_MFA_ENFORCED` | `false` | **`true`** — enrol TOTP on the admin BEFORE deploying (Settings → Two-factor) or admin pages are locked |
-| 4 | `RELEASE_SIGNER` | `local` | **`external`** + `RELEASE_SIGNER_URL`, `RELEASE_SIGNER_TOKEN`, `RELEASE_SIGNER_ALLOWED_HOSTS`, `RELEASE_SIGNER_KEY_ID`, `RELEASE_PUBLIC_KEY_B64`, `RELEASE_SIGNER_TIMEOUT` |
+| 4 | `RELEASE_SIGNER` | `local` | **`external`** + `RELEASE_SIGNER_URL`, `RELEASE_SIGNER_BUNDLE_TOKEN` (the API's runtime token — **never** `RELEASE_SIGNER_TOKEN`, that is the CI release token; N101-5), `RELEASE_SIGNER_ALLOWED_HOSTS`, `RELEASE_SIGNER_KEY_ID` + `RELEASE_PUBLIC_KEY_B64` (CI release key), `BUNDLE_SIGNER_KEY_ID` + `BUNDLE_PUBLIC_KEY_B64` (local runtime key), `RELEASE_SIGNER_TIMEOUT` |
 | 5 | `ED25519_SIGNING_KEY_B64` | present | **removed** from the API env (lives only in the signer) |
 
 Everything else already passes (CORS origins, dedicated `ORDER_AUTH_SECRET` /
@@ -86,9 +86,11 @@ ED25519_SIGNING_KEY_B64=         (empty — or delete the key)
 RELEASE_SIGNER=external
 RELEASE_SIGNER_URL=https://<signer-host>
 RELEASE_SIGNER_ALLOWED_HOSTS=<signer-host>
-RELEASE_SIGNER_TOKEN=<SIGNER_TOKEN>
+RELEASE_SIGNER_BUNDLE_TOKEN=<SIGNER_TOKEN_BUNDLE>      # runtime token only — RELEASE_SIGNER_TOKEN stays in CI (N101-5)
 RELEASE_SIGNER_KEY_ID=stoic-release-ed25519-v1
-RELEASE_PUBLIC_KEY_B64=<PUBLIC from step 1>
+RELEASE_PUBLIC_KEY_B64=<CI release signer PUBLIC key from step 1>
+BUNDLE_SIGNER_KEY_ID=stoic-bundle-ed25519-v1
+BUNDLE_PUBLIC_KEY_B64=<local sidecar PUBLIC key (secrets/signer_public_key)>   # must differ from RELEASE_PUBLIC_KEY_B64 (N102-5)
 RELEASE_SIGNER_TIMEOUT=10
 ```
 
@@ -189,8 +191,9 @@ Public facts (no secrets) — `release/ea_release.json` is the source of truth:
 - `previous` is null (first signed release) — terminals still on ≤1.59 are CLOSE_ONLY on LIVE
   accounts until updated; add their hash to `EA_RELEASE_SHA256_PREVIOUS` only if a rollout window is needed.
 - Token hygiene: the signer token was rotated right after the first signed run; GitHub secret
-  `RELEASE_SIGNER_TOKEN` and the production API secret must carry the CURRENT value from
-  `/root/.stoic-signer/stoic-signer.token` on the operator host (never in the repo or chat).
+  `RELEASE_SIGNER_TOKEN` must carry the CURRENT value from `/root/.stoic-signer/stoic-signer.token`
+  on the operator host (never in the repo or chat). The production API does **not** hold it
+  (N101-5: the API has only `RELEASE_SIGNER_BUNDLE_TOKEN`; `update.sh` strips a stray release token).
 
 ## EA v1.59 (main92 H1 / main93 decision 1) — rebuild required
 EA 1.59 (the `margin_mode` change, renamed from the interim 1.58 as agreed — no signed 1.58 EX5

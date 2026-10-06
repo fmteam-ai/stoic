@@ -4,7 +4,7 @@ import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import {
     Users as UsersIcon, ShieldAlert, ShieldCheck, ShieldX, Loader2,
-    Search, RefreshCw, History, AlertTriangle, CheckCircle2, Clock,
+    Search, RefreshCw, History, AlertTriangle, CheckCircle2, Clock, UserX,
 } from "lucide-react";
 
 function StatusPill({ status }) {
@@ -239,6 +239,47 @@ function LoginOtpToggle() {
     );
 }
 
+function SignupsToggle() {
+    const [s, setS] = useState(null);
+    const [busy, setBusy] = useState(false);
+    useEffect(() => {
+        api.get("/admin/settings/signups").then(r => setS(r.data)).catch(() => setS({ closed: false }));
+    }, []);
+    const toggle = async () => {
+        setBusy(true);
+        try {
+            const { data } = await api.post("/admin/settings/signups", { closed: !s.closed });
+            setS(data);
+            toast.success(`New sign-ups ${data.closed ? "CLOSED" : "OPEN"}`);
+        } catch (e) { toast.error(formatApiError(e)); }
+        finally { setBusy(false); }
+    };
+    const closed = !!s?.closed;
+    return (
+        <div className="bg-[#0A0A0A] border border-[#1F1F1F] p-4 mb-6 flex flex-wrap items-center gap-4"
+            data-testid="signups-setting-card">
+            <UserX className={`w-5 h-5 ${closed ? "text-[#FFB020]" : "text-[#52525B]"}`} />
+            <div className="flex-1 min-w-[240px]">
+                <div className="font-display text-sm text-white">New member &amp; affiliate sign-ups</div>
+                <div className="text-xs text-[#71717A] mt-0.5">
+                    When CLOSED (testing period), <code>/register</code> and affiliate applications are refused
+                    with a clear notice; existing members and affiliates are not affected.
+                    {s?.env_closed && <span className="text-[#FFB020]"> Forced closed by SIGNUPS_CLOSED in the environment.</span>}
+                    {s?.updated_by && <span> Last change by {s.updated_by} · {String(s.updated_at || "").slice(0, 16).replace("T", " ")} UTC.</span>}
+                </div>
+            </div>
+            <button onClick={toggle} disabled={busy || s === null || !!s?.env_closed}
+                data-testid="signups-toggle"
+                className={`px-4 py-2 text-xs font-mono tracking-widest border transition ${
+                    closed ? "border-[#FFB020]/50 bg-[#FFB020]/10 text-[#FFB020]"
+                           : "border-[#00FF41]/50 bg-[#00FF41]/10 text-[#00FF41]"
+                }`}>
+                {s === null ? "…" : busy ? "SAVING…" : closed ? "CLOSED — CLICK TO OPEN" : "OPEN — CLICK TO CLOSE"}
+            </button>
+        </div>
+    );
+}
+
 export default function AdminUsers() {
     const [users, setUsers] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -303,6 +344,7 @@ export default function AdminUsers() {
                     </button>
                 }
             />
+            <SignupsToggle />
             <LoginOtpToggle />
             <TurnstileToggle />
 

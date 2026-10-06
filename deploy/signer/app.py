@@ -20,6 +20,10 @@ Env:
                              no "one token signs everything" fallback (N101-5).
   SIGNER_KEY_ID              key id this signer answers for (default stoic-release-ed25519-v1; the
                              self-hosted runtime sidecar uses stoic-bundle-ed25519-v1)
+  SIGNER_ROLE                release (default: CI signer — release + runtime purposes by token) or
+                             runtime (N102-5: the self-hosted sidecar — release purposes are refused for
+                             EVERY token and no release token is loaded, so root on the API host can
+                             never mint an EA-release / model-manifest signature)
   ED25519_SIGNING_KEY_B64    base64 raw 32-byte Ed25519 private key
 """
 import base64
@@ -33,6 +37,9 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
 KEY_ID = (os.environ.get("SIGNER_KEY_ID") or "stoic-release-ed25519-v1").strip()
+ROLE = (os.environ.get("SIGNER_ROLE") or "release").strip().lower()
+if ROLE not in ("release", "runtime"):
+    raise RuntimeError("SIGNER_ROLE must be release|runtime")
 _log = logging.getLogger("stoic.signer")
 
 def _secret(name: str) -> str:
@@ -44,11 +51,13 @@ def _secret(name: str) -> str:
     return os.environ[name]
 
 
-_token = _secret("SIGNER_TOKEN")                       # release token — CI only: ea-release, model-manifest
+_token = None if ROLE == "runtime" else _secret("SIGNER_TOKEN")   # release token — CI only; never loaded by a runtime sidecar
 try:
     _bundle_token = _secret("SIGNER_TOKEN_BUNDLE") or None   # API token — runtime purposes
 except (KeyError, FileNotFoundError):
     _bundle_token = None
+if ROLE == "runtime" and not _bundle_token:
+    raise RuntimeError("SIGNER_ROLE=runtime requires SIGNER_TOKEN_BUNDLE")
 if not _bundle_token:
     _log.warning("SIGNER_TOKEN_BUNDLE not configured — RELEASE-ONLY mode: runtime purposes are refused (N101-5)")
 
@@ -80,7 +89,7 @@ def _auth(authorization: str | None) -> str:
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Bearer token required")
     presented = authorization[7:]
-    if hmac.compare_digest(presented, _token):
+    if _token and hmac.compare_digest(presented, _token):
         return "release"
     if _bundle_token and hmac.compare_digest(presented, _bundle_token):
         return "bundle"
@@ -90,6 +99,9 @@ def _auth(authorization: str | None) -> str:
 def _authorize_purpose(role: str, purpose: str) -> bytes:
     if purpose not in PURPOSES:
         raise HTTPException(status_code=400, detail="unknown signing purpose")
+    if purpose in RELEASE_PURPOSES and ROLE == "runtime":
+        # N102-5 — a runtime sidecar never signs release artefacts, whatever token is presented
+        raise HTTPException(status_code=403, detail="runtime signer: release purposes are not available here")
     if purpose in RELEASE_PURPOSES and role != "release":
         # the trading API holds only the bundle token → it can NEVER obtain an EA-release signature
         raise HTTPException(status_code=403, detail="this token may not sign release artefacts")
@@ -120,7 +132,7 @@ def public_key():
 def health(authorization: str | None = Header(None)):
     _auth(authorization)
     return {"ok": True, "key_id": KEY_ID, "public_key_b64": _public_key_b64(),
-            "release_only": _bundle_token is None}
+            "role": ROLE, "release_only": _bundle_token is None}
 
 
 @app.post("/sign")
