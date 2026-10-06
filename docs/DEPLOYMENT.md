@@ -192,6 +192,11 @@ The `http` class runs against the staging stack via
 validation campaign with a live EA attached.
 
 ## Updating
+> **Tagging gotcha:** a tag that points at a commit whose message carries `[skip ci]` (every
+> `ea-release` bot commit does) never fires GitHub's `push` trigger. `release.yml` therefore also
+> runs on *Release published* and via *Run workflow* (pick the tag). Preferred: create the tag
+> through GitHub → Releases → *Draft a new release*, which always fires.
+
 ```bash
 deploy/update.sh            # latest origin/main
 deploy/update.sh v1.4.0     # specific signed release tag
