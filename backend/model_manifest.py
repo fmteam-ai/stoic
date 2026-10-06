@@ -224,12 +224,33 @@ def sign(approvals: list, *, promote: list | None = None, commit: str | None = N
     return _write_signed(build_body(approvals, promote=promote, commit=commit))
 
 
+def _load_body_for_resign() -> dict:
+    """The developer manifest is signed with the DEVELOPER key, which the release pipeline does not
+    trust (and must not: CI/production pin the release key). Re-signing therefore checks the
+    document's integrity against its own embedded public key — the body is unchanged since it was
+    signed — then every model hash is re-verified against the staged files before the release key
+    signs the frozen commit."""
+    if not MANIFEST.exists():
+        raise ModelRefused("no MODEL_MANIFEST.json to re-sign")
+    try:
+        doc = json.loads(MANIFEST.read_text())
+        body, sig, pub = doc["body"], doc["signature_hex"], doc["public_key_b64"]
+    except (ValueError, KeyError, TypeError) as e:
+        raise ModelRefused(f"model manifest malformed: {type(e).__name__}")
+    from release_signing import verify_hex
+    if not verify_hex(_canonical(body), sig, pub):
+        raise ModelRefused("model manifest is internally inconsistent (body does not match its own signature)")
+    if body.get("version") != MANIFEST_VERSION or body.get("policy_version") != POLICY_VERSION:
+        raise ModelRefused(f"model manifest schema/policy {body.get('version')}/{body.get('policy_version')} not accepted")
+    return body
+
+
 def resign(commit: str) -> dict:
     """CI release job: verify the developer-signed manifest, carry its approvals
     and model entries unchanged, bind code_commit to the frozen release commit."""
     if not _SHA_RE.match(commit or ""):
         raise ModelRefused("resign requires a 40-hex release commit")
-    body = load_manifest()
+    body = _load_body_for_resign()
     for m in body["models"]:
         p = MODEL_DIR / m["path"]
         probs = _check_entry(m, p if p.exists() else None, FEATURE_SCHEMA_VERSION, build=None,

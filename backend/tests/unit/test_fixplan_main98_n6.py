@@ -38,7 +38,7 @@ def _demo_account(trade_mode=None, server="Broker-Demo", attested=True, authorit
     import broker_env as be
     acc = {"_id": ObjectId(), "mode": "live", "label": "Demo-1", "account_type": "demo", "server": server,
            "broker_server": server, "account_number": "123", "broker_account_id_reported": "123", "creds_version": 1,
-           "last_heartbeat": datetime.now(timezone.utc).isoformat(), "ea_binary_sha256": _ACCEPTED_EX5,
+           "last_heartbeat": datetime.now(timezone.utc).isoformat(), "ea_binary_sha256": _ACCEPTED_EX5, "ea_binary_sha256_method": "installer_attested",
            "ea_identity": {"installation_id": "inst1", "authoritative": authoritative, "broker_server": server,
                            "trade_mode": trade_mode}}
     if attested:

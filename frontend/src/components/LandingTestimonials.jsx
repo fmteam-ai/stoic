@@ -214,7 +214,7 @@ export const LandingTestimonials = () => {
             <div className="tst-marquee" data-testid="testimonials-marquee" data-reduced-motion={reducedMotion ? "true" : "false"}
                  role="region" aria-roledescription="carousel" tabIndex={0}
                  onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setPaused((v) => !v); } }}
-                 data-paused={paused ? "true" : "false"}
+                 data-paused={paused ? "true" : "false"} aria-pressed={paused}
                  aria-label="Illustrative testimonials — press Space or Enter to pause or resume the scrolling; decorative scrolling duplicates are hidden from assistive technology">
                 <div className="tst-track">
                     {rowA.map((t, i) => <Card key={`a${i}`} t={t} idx={i * 2} />)}

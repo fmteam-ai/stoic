@@ -43,6 +43,20 @@ _decrypt_to() {
   openssl $(_encrypt_args) -d -in "$1" -out "$2"
 }
 
+# N100-2 — update.sh / rollback.sh / cron call this script without a login shell: BACKUP_* are
+# read from ./.env so an exported variable is not the only way to configure the passphrase.
+if [ -f .env ]; then
+  while IFS= read -r line; do
+    case "$line" in BACKUP_[A-Z_]*=*) k="${line%%=*}"; [ -z "${!k:-}" ] && export "$k=${line#*=}" ;; esac
+  done < .env
+fi
+if [ -n "${BACKUP_PASSPHRASE_FILE:-}" ]; then
+  case "$(readlink -f "${BACKUP_PASSPHRASE_FILE}")" in
+    "$(readlink -f ./secrets 2>/dev/null)"/*|"$(readlink -f "${BACKUP_DIR:-./backups}" 2>/dev/null)"/*)
+      echo "ERROR: BACKUP_PASSPHRASE_FILE must live OUTSIDE ./secrets and the backup destination (it decrypts them)"; exit 1 ;;
+  esac
+fi
+
 _backup_secrets() {
   # $1 = stamp — encrypted tarball of ./secrets (never written in plaintext)
   [ -d secrets ] || { echo "   (no ./secrets directory — nothing to include)"; return 0; }
@@ -72,6 +86,7 @@ _restore_secrets() {
   [ -f "${sec}" ] || { echo "   (no secrets archive ${sec} next to the dump — secrets/ left untouched)"; return 0; }
   [ -n "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -f "${BACKUP_PASSPHRASE_FILE}" ] || { echo "!! ${sec} present but BACKUP_PASSPHRASE_FILE unset — secrets/ NOT restored"; return 0; }
   tmp="$(mktemp -d /tmp/stoic-secrets-XXXXXX)"
+  trap 'rm -rf "${tmp}"' RETURN EXIT   # N100-3 — a failed restore must never leave plaintext secrets in /tmp
   # shellcheck disable=SC2046
   openssl $(_encrypt_args) -d -in "${sec}" | tar -xzf - -C "${tmp}"
   mkdir -p secrets
@@ -174,6 +189,10 @@ case "${1:-backup}" in
 
   verify)
     FILE="${2:-$(ls -t "${BACKUP_DIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | sed -n 1p)}"
+    # N100-3 — the encrypted secrets archive of the SAME stamp travels off-site with the dump
+    STAMP="$(basename "${FILE}" | sed -E 's/^stoic-mongo-([0-9]{8}-[0-9]{6}).*/\1/')"
+    SECRETS_ENC="$(ls "${BACKUP_DIR}"/stoic-secrets-"${STAMP}".tar.gz.enc 2>/dev/null | head -1 || true)"
+    [ -n "${SECRETS_ENC}" ] || echo "   (no stoic-secrets-${STAMP}.tar.gz.enc next to the dump — secrets archive NOT pushed)"
     [ -n "${FILE}" ] && [ -f "${FILE}" ] || { echo "ERROR: no archive to verify"; exit 1; }
     MANIFEST="${FILE%.enc}.manifest.json"
     [ -f "${MANIFEST}" ] || { echo "ERROR: manifest ${MANIFEST} not found"; exit 1; }
@@ -232,17 +251,23 @@ EOF
 
   offsite)
     FILE="${2:-$(ls -t "${BACKUP_DIR}"/stoic-mongo-*.archive.gz* 2>/dev/null | grep -v manifest | sed -n 1p)}"
+    # N100-3 — the encrypted secrets archive of the SAME stamp travels off-site with the dump
+    STAMP="$(basename "${FILE}" | sed -E 's/^stoic-mongo-([0-9]{8}-[0-9]{6}).*/\1/')"
+    SECRETS_ENC="$(ls "${BACKUP_DIR}"/stoic-secrets-"${STAMP}".tar.gz.enc 2>/dev/null | head -1 || true)"
+    [ -n "${SECRETS_ENC}" ] || echo "   (no stoic-secrets-${STAMP}.tar.gz.enc next to the dump — secrets archive NOT pushed)"
     [ -n "${FILE}" ] && [ -f "${FILE}" ] || { echo "ERROR: no archive to push"; exit 1; }
     MANIFEST="${FILE%.enc}.manifest.json"
     if [ -n "${BACKUP_RCLONE_REMOTE:-}" ]; then
       echo "-- pushing to rclone remote ${BACKUP_RCLONE_REMOTE}"
       rclone copyto "${FILE}" "${BACKUP_RCLONE_REMOTE}/$(basename "${FILE}")"
       [ -f "${MANIFEST}" ] && rclone copyto "${MANIFEST}" "${BACKUP_RCLONE_REMOTE}/$(basename "${MANIFEST}")"
+      [ -n "${SECRETS_ENC}" ] && rclone copyto "${SECRETS_ENC}" "${BACKUP_RCLONE_REMOTE}/$(basename "${SECRETS_ENC}")"   # N100-3
       echo "   off-site push complete (rclone)"
     elif [ -n "${BACKUP_S3_URI:-}" ]; then
       echo "-- pushing to ${BACKUP_S3_URI}"
       aws s3 cp "${FILE}" "${BACKUP_S3_URI}/$(basename "${FILE}")"
       [ -f "${MANIFEST}" ] && aws s3 cp "${MANIFEST}" "${BACKUP_S3_URI}/$(basename "${MANIFEST}")"
+      [ -n "${SECRETS_ENC}" ] && aws s3 cp "${SECRETS_ENC}" "${BACKUP_S3_URI}/$(basename "${SECRETS_ENC}")"   # N100-3
       echo "   off-site push complete (s3)"
     else
       echo "ERROR: set BACKUP_RCLONE_REMOTE (e.g. remote:stoic-backups) or BACKUP_S3_URI (e.g. s3://bucket/stoic)"

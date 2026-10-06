@@ -54,7 +54,7 @@ ensure_release_secrets() {
   local envkey envval
   for f in order_auth_secret ledger_anchor_key bridge_token_hash_key; do
     envkey=$(printf '%s' "${f}" | tr '[:lower:]' '[:upper:]')
-    envval=$( { grep -E "^${envkey}=." backend/.env 2>/dev/null || grep -E "^${envkey}=." .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+    envval=$( { grep -E "^${envkey}=." backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")   # N100-7 — backend/.env only
     if [ -s "secrets/${f}" ] && [ -n "${envval}" ] && [ "$(cat "secrets/${f}")" != "${envval}" ]; then
       echo "!! ${envkey} differs between backend/.env and secrets/${f} — keep ONE value:"
       echo "   copy the .env value into secrets/${f} (or vice-versa), then remove the .env line. Refusing to continue."

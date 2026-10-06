@@ -101,7 +101,7 @@ jobs:
         run: |
           git config user.name "stoic-ea-release[bot]"
           git config user.email "ea-release@users.noreply.github.com"
-          git add release/ea_release.json docs/RELEASE_HASHES.json release/rc_lock.json
+          git add release/ea_release.json docs/RELEASE_HASHES.json release/rc_lock.json backend/static/EmergentTradingBridge.ex5
           if git diff --cached --quiet; then echo "record unchanged"; exit 0; fi
           git commit -m "ea-release: signed EX5 record for ${GITHUB_SHA} [skip ci]"
           git push origin HEAD:"${TARGET_REF}"

@@ -132,7 +132,7 @@ def never_left_exchange(exc: BaseException) -> bool:
         import ccxt
         if isinstance(exc, ccxt.NetworkError):
             return False
-        if isinstance(exc, getattr(ccxt, "ExchangeNotAvailable", ()) + getattr(ccxt, "OnMaintenance", ())):
+        if isinstance(exc, (ccxt.ExchangeNotAvailable, ccxt.OnMaintenance)):
             return False                      # N100-9 — venue down/maintenance: outcome UNKNOWN, never "rejected"
         if isinstance(exc, getattr(ccxt, "BadResponse", ())):
             return False                      # main99 — the venue answered garbage: outcome UNKNOWN, never "rejected"
