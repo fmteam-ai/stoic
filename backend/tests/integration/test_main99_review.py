@@ -13,20 +13,19 @@ Scope:
 
 Credentials are read from TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD env vars — NEVER written to disk.
 """
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".."))
 import os
 import re
 import pytest
 import requests
 
+from live_target import require_live_base_url, resolve_admin_credentials  # noqa: E402
+
 pytestmark = pytest.mark.integration
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL") or os.environ.get("BASE_URL")
-assert BASE_URL, "REACT_APP_BACKEND_URL must be set"
-BASE_URL = BASE_URL.rstrip("/")
-
-ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or "admin@trading.bot"
-ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD")
-assert ADMIN_PASSWORD, "TEST_ADMIN_PASSWORD must be set in environment"
+BASE_URL = require_live_base_url()          # skips the module when there is no live target (CI mongo-only lane)
+ADMIN_EMAIL, ADMIN_PASSWORD = resolve_admin_credentials()
 
 
 # ────────── helpers / fixtures ──────────

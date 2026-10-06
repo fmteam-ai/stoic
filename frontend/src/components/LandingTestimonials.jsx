@@ -185,8 +185,8 @@ export const LandingTestimonials = () => {
     const rowB = TESTIMONIALS.filter((_, i) => i % 2 === 1);
     const [statsStatus, setStatsStatus] = useState("loading");
     const [reducedMotion, setReducedMotion] = useState(
-    const [paused, setPaused] = useState(false);   // N99-8 — keyboard pause (Space/Enter)
         () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
+    const [paused, setPaused] = useState(false);   // N99-8 — keyboard pause (Space/Enter)
     useEffect(() => {
         const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
         if (!mq) return undefined;
