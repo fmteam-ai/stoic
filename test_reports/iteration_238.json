@@ -1,0 +1,26 @@
+{
+  "summary": "iter238 — STOIC main100 Review backend integration verification. New test file backend/tests/integration/test_main100_review.py (17 tests, 17 PASSED, 0 FAILED, 0 SKIPPED, 4.90s). All N100 deltas green on live preview:\n  • Regression smoke: GET /api/status 200; admin cookie+CSRF login 200 (/api/auth/me returns admin); GET /api/admin/acceptance/current returned 200 with required/release/latest/valid_for_release/reason/accounts and the latest never leaks a signature field (503 bundle_unavailable path is also structured and asserted).\n  • GET /api/crypto/exchanges: capability matrix present per row; ONLY {binance} has capabilities.live_allowed==True (N100-7 / A14-5 contract OK).\n  • N100-8: GET /api/performance/verified → provenance.source_kind='derived', provenance.ledger_gate_reasons is a list containing STATEMENT_LEDGER_MISSING (admin has zero enabled accounts in preview), provenance.share_allowed=False and payload.share_allowed=False.\n  • N100-6/A14-7: GET /api/ops/release-readiness returns structured JSON (ready+checks keys), 200 or 503, NEVER 500; checks.ea_release does not report 'no signed EX5 release record' when docs/RELEASE_HASHES.json has a signature on disk. GET /api/admin/release-gate also structured JSON (no 500, no regressed phrase in body).\n  • SEC-002 (follow-up): POST /api/infra/agent/register with bogus bootstrap_token → 401 {code:'agent_registration_refused', message:<generic>, ref:<10-char hex>}; NO Traceback / <class '...' / bogus token value leaked back in body.\n  • No-500 sweep across 9 endpoints touched by this iteration (status, acceptance/current, authority/inventory, authority/inventory/pending, crypto/exchanges, performance/verified, ops/release-readiness, admin/release-gate, accounts) — ALL != 500 and no traceback leaks.\n  • Unit lane (976) remains green locally per hand-off from iter237; not re-run (out of scope for a live-stack integration review).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/integration/test_main100_review.py",
+    "/app/test_reports/pytest/iter238_main100.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "backend/http_errors.py static_error: ref = uuid4().hex[:10] + logger.warning([ref] code (status): exc) correctly keeps original exception OFF the wire while preserving operator-side traceability by ref. Test asserts the ref matches ^[0-9a-f]{10}$ and body contains no 'Traceback' / '<class '.",
+    "backend/routes/ops_routes.py release_readiness: ea_release block (L249-257) is well-structured — 'verified' is independent of 'enforced'; failures=None when no fails. Response is JSONResponse(200/503) with full checks dict; no raise-and-reraise path left that could 500.",
+    "backend/broker_statement_ledger.py ledger_gate: N100-8 wording at L412 ('reasons.append(STATEMENT_LEDGER_MISSING) when covered==0') is covered by this test against a user with no enabled accounts — the derived provenance + share_allowed=False composition is correctly surfaced by routes/performance_routes.py _verified_payload.",
+    "backend/routes/crypto_routes.py GET /exchanges: capability_matrix() wired per-exchange; only binance has live_allowed=True on this preview — matches the review requirement that crypto live remains OFF by design everywhere else."
+  ],
+  "updated_files": [
+    "/app/backend/tests/integration/test_main100_review.py (new)"
+  ],
+  "success_rate": {"backend": "100% (17/17)", "frontend": "n/a (backend-only review)"},
+  "test_credentials": "Read at run time from TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD env vars; NEVER written to any file under /app. Preview password is listed in /app/memory/test_credentials.md.",
+  "seed_data_creation": "None. All reads were against preview DB (ai_trading_bot). No TEST_ rows created or left behind.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "test_main100_review.py already asserts the N100-8 ledger-gate contract against a user with zero enabled accounts (the preview admin). If a future iteration adds broker-enabled accounts to the preview admin, the TestVerifiedProvenanceLedgerGate branch for 'enabled→broker_reconciled|derived' will still pass without edits. N100-6 verification uses docs/RELEASE_HASHES.json on disk to decide whether to assert the anti-pattern — this keeps the test correct even if the file is removed. The infra/agent/register SEC-002 envelope test is a stable negative-path check that works without credentials; keep it in any future smoke sweep. Preview still has PLATFORM_OVERRIDE kill switch (BLOCKED/CLOSE_ONLY) by design — do not treat canonical_decision.ok=false in release-readiness as a bug.",
+  "rca of the issue": "No product bugs observed in the main100 N100 scope. All five review bullets verified against the live preview backend; no 500s, no traceback leaks, structured error envelopes everywhere SEC-002 applies."
+}
