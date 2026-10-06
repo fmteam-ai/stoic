@@ -370,7 +370,9 @@ async def ledger_gate(db, user_id: str) -> list:
     chain = await verify_chain(db, user_id)
     if chain["problems"]:
         reasons.append("LEDGER_CHAIN_BROKEN")
+    covered = 0
     async for a in db.accounts.find({"user_id": user_id, "trading_enabled": True, "status": {"$ne": "deleted"}}):
+        covered += 1
         rows = await db.reconciliation_ledger.find({"user_id": user_id, "account_id": str(a["_id"])}).sort("period_from", 1).to_list(1000)
         if not rows:
             reasons.append("STATEMENT_LEDGER_MISSING")
@@ -406,6 +408,8 @@ async def ledger_gate(db, user_id: str) -> list:
         # window, join contiguously and end within the freshness tolerance of as_of
         cov = coverage_report(rows, now)
         reasons += cov["reasons"]
+    if covered == 0:
+        reasons.append("STATEMENT_LEDGER_MISSING")   # N100-8 — nothing to check is NOT a pass
     return sorted(set(reasons))
 
 

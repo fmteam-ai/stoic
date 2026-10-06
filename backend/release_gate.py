@@ -20,8 +20,9 @@ def evaluate(lock: dict | None = None, env: dict | None = None, ea_signed: bool 
     env = env if env is not None else os.environ
     lock = load_lock() if lock is None else lock
     if ea_signed is None:
-        from ea_capabilities import accepted_ea_sha256s
-        ea_signed = bool(accepted_ea_sha256s()) and not env.get("EA_RELEASE_SHA256")
+        # N100-6 — a signed EX5 record is proof on its own; an EA_RELEASE_SHA256 pin must never hide it
+        from ea_capabilities import _signed_release_record
+        ea_signed = bool(_signed_release_record())
     fails = []
     if not lock.get("authoritative"):
         fails.append("rc_lock is not authoritative (developer snapshot)")

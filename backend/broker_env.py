@@ -29,8 +29,12 @@ def broker_reports_real(account: dict) -> bool:
 
 
 def ea_binary_accepted(account: dict) -> bool:
-    """N99-2 — the terminal runs an EX5 whose hash is in the signed/pinned accepted set."""
-    h = str(account.get("ea_binary_sha256") or account.get("ea_binary_sha256_reported") or "").lower()
+    """N99-2/N100-5 — the terminal runs an EX5 whose hash is in the signed/pinned accepted set AND the
+    hash was MEASURED by the installer (`installer_attested`). The heartbeat-reported hash is what a
+    self-compiled EA would echo, so it is never evidence."""
+    if str(account.get("ea_binary_sha256_method") or "") != "installer_attested":
+        return False
+    h = str(account.get("ea_binary_sha256") or "").lower()
     if len(h) != 64:
         return False
     try:

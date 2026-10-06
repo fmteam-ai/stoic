@@ -278,6 +278,15 @@ def public_key_b64() -> str:
     return base64.b64encode(pub).decode()
 
 
+def revoked_key_ids() -> set:
+    return {k.strip() for k in (os.environ.get("RELEASE_REVOKED_KEY_IDS") or "").split(",") if k.strip()}
+
+
+def key_id_accepted(kid) -> bool:
+    """A14-7 — a signature only counts under the CURRENT, un-revoked key id."""
+    return bool(kid) and kid == key_id() and kid not in revoked_key_ids()
+
+
 def verify_hex(data: bytes, signature_hex: str,
                pub_b64: str | None = None) -> bool:
     try:
