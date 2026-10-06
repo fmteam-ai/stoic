@@ -1,0 +1,23 @@
+{
+  "summary": "iter235 FixPlan main98 verification (Part 1 before-demo + N98-3/4/5/7/8/9/10 + Q-2 + audit rows). All in-scope checks GREEN. Unit lane: `cd /app/backend && DB_NAME='' python -m pytest tests/unit -q -p no:warnings` → 932 passed in 14.51s (includes tests/unit/test_fixplan_main98.py's 14 tests). Backend startup log is clean: no 'SCALP SERVICE BLOCKED' and no 'IndexOptionsConflict' in /var/log/supervisor/backend.err.log. Mongo collection account_reservation_locks shows exactly {_id_, locked_until_ttl} — the TTL index is named locked_until_ttl with expireAfterSeconds=300 and the legacy locked_until_1 is gone (N98-1 OK). Live HTTP against REACT_APP_BACKEND_URL (stoic-trading-bot preview) with cookie session + X-CSRF-Token: POST /api/auth/login (admin@trading.bot) → 200; GET /api/admin/acceptance/current → 200 with accounts[]=50; POST /api/admin/acceptance/bundle without step-up → 403 with detail.code='mfa_enrollment_required' (admin has no TOTP enrolled, as expected); GET /api/crypto/status → 200 {live_enabled:false, default_testnet:true} — crypto stays OFF. File/compose checks: backend/.env.example contains BRIDGE_TOKEN_HASH_KEY=, CRYPTO_LIVE_TRADING_ENABLED=, LEDGER_ANCHOR_KEY=; docker-compose.yml declares the bridge_token_hash_key secret (BRIDGE_TOKEN_HASH_KEY_FILE=/run/secrets/bridge_token_hash_key, mounted on backend); `python scripts/check_compose_secrets.py` from /app → 'OK: every compose secret is provisioned by the update path' exit 0. Frontend BotConfig PPNumInput (data-testid=input-trade_of_day_cap, /bot-config): select-all + Backspace leaves value='' (draft state preserved), typing 2 shows exactly '2' (NOT '12' — i.e. default is NOT merged while typing), clearing again shows '' while focused, and blurring with an empty draft applies the default and shows '1'. All four PPNumInput assertions passed.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/unit/test_fixplan_main98.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "ensure_reservation_lock_indexes correctly drops any legacy index on locked_until (observed only _id_ and locked_until_ttl remain in Mongo), so the IndexOptionsConflict/'SCALP SERVICE BLOCKED' startup failure mode is retired.",
+    "/api/admin/acceptance/bundle enforces step-up: without TOTP it returns 403 code=mfa_enrollment_required (not a soft error); the demo_readiness manual tick + bundle generation path records step_up_verified=True in the audit row (verified via unit lane in test_fixplan_main98.py).",
+    "Crypto live_enabled stays false in the preview per policy; /api/crypto/status is a public GET on this build (requires session cookie) and returns {live_enabled:false, default_testnet:true}.",
+    "BotConfig PPNumInput now implements the specified draft pattern: internal string state during focus, parent numeric state applied only on blur with the default fallback — avoids the 'select-all + type 2 → 12' prefix-merge bug and empty-value jank."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (932/932 unit + live HTTP spot-checks all green)", "frontend": "100% (4/4 PPNumInput draft-state assertions pass on /bot-config)"},
+  "test_credentials": "admin@trading.bot / password read from /app/memory/test_credentials.md at runtime (not embedded in any file).",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Unit lane: DB_NAME='' from /app/backend (932 tests). Mongo index check: open AsyncIOMotorClient on MONGO_URL/DB_NAME from backend/.env and call db.account_reservation_locks.index_information(); expect only _id_ and locked_until_ttl (expireAfterSeconds=300). Admin HTTP: GET /api/auth/csrf first to collect csrf_token cookie, then login with X-CSRF-Token header. /api/admin/acceptance/bundle requires step-up — the preview admin has NO TOTP enrolled, so 403 mfa_enrollment_required is the expected pass signal. For PPNumInput, draft state is held inside the input while focused; the parent numeric prop is only updated on blur — so UI assertions must be read from input_value() while focused, and from input_value() after a body click to blur.",
+  "rca of the issue": "No product bugs observed in this iteration. All main98 fixes verified end-to-end."
+}
