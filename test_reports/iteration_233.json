@@ -1,0 +1,31 @@
+{
+  "summary": "main97 review (N97-1..11, Q-1, Q-2) backend verification. Unit lane 17/17 green on tests/unit/test_fixplan_main97.py (new file). Related unit lanes (A13 Part 1, A13 Part 2, main96 A12, iter35 binance_ccxt, scalp units incl. reservations) 207/207 still green. Wrote new HTTP smoke tests/test_iter233_main97_http.py (7 tests) all passing against preview backend with admin cookie: login/me, release-gate shape, acceptance/current, POST acceptance/bundle (verdict=FAIL + signature/digest/account_ids/release.payload/expires_at — N97 coverage fields present), demo-readiness returning authority.grants_authority=false, step-up on unlock_account refused for admin without TOTP (403 as spec'd), and public callers on all three admin surfaces refused (401/403).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/unit/test_fixplan_main97.py",
+    "/app/backend/tests/test_iter233_main97_http.py",
+    "/app/test_reports/pytest/iter233_main97_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "account_reservations.caps_for returns daily_cap=1 by default for unset configs and keys the counter per base-symbol (XAUUSD vs EURUSD) across suffixed/non-suffixed spellings — correct per N97-1 and matches bot_runner default.",
+    "Manual entries use their own blocked code and only hit the hard total cap (N97-2); scalp engine reserves through reserve_entry carrying its own reservation id (consistent with A13 Part 2 refactor).",
+    "acceptance_bundle signature binds verdict + account_ids + release + expires_at — HMAC coverage confirmed by both unit test and the HTTP payload shape (bundle_id/payload/algo/verdict/failures/digest/signature/account_ids/expires_at).",
+    "bridge_tokens accepts legacy JWT_SECRET-hashed tokens once and re-hashes under BRIDGE_TOKEN_HASH_KEY (migration-friendly, idempotent).",
+    "deploy/update.sh leaves the stack stopped on restore failure (fail-closed on rollback) — covered by unit N97-6.",
+    "ccxt_engine refuses testnet mode on exchanges without sandbox support — guards an easy misconfig.",
+    "crypto_execution: filled-limit becomes 'open', dispatched not_found reaches failed_confirmed, crash between fill-and-insert is recovered (idempotent OCO/trade insert) — recovery path is sound.",
+    "Step-up endpoint requires body.action (FastAPI 422 if omitted); on preview admin (no TOTP) action=unlock_account correctly returns 403."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter233_main97_http.py"
+  ],
+  "success_rate": {"backend": "100% (17/17 main97 unit + 207/207 related unit + 7/7 new HTTP)", "frontend": "n/a (not in scope)"},
+  "test_credentials": "admin@trading.bot / TEST_ADMIN_PASSWORD from backend/.env (never embedded in source).",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "main97 corrections are all green at unit and HTTP layers. acceptance/bundle keys at top-level are: bundle_id, payload{release,...}, algo, verdict, failures, build_sha, image_digest, created_by, created_at, expires_at, account_ids, digest, signature. demo-readiness payload nests grants_authority under 'authority'. Step-up expects body.action (e.g. 'unlock_account'); preview admin has no TOTP so action=unlock_account returns 403. Run unit lane with DB_NAME=''; HTTP file with STOIC_TESTS_ALLOW_DB_NAME=1 DB_NAME=ai_trading_bot against preview.",
+  "rca of the issue": "No new issues. Two initial HTTP test shape failures were in the test (not product): bundle fields renamed account_ids/payload.release/expires_at and step-up requires action field — both fixed in the test file, all 7 HTTP tests now green."
+}
