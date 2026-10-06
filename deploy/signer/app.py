@@ -37,7 +37,22 @@ def _secret(name: str) -> str:
     return os.environ[name]
 
 
-_token = _secret("SIGNER_TOKEN")
+_token = _secret("SIGNER_TOKEN")                       # release token — CI only: ea-release, model-manifest
+try:
+    _bundle_token = _secret("SIGNER_TOKEN_BUNDLE")      # API token — acceptance-bundle & other runtime purposes
+except (KeyError, FileNotFoundError):
+    _bundle_token = None                                # single-token install: release token signs everything
+
+# N100-11 — domain separation. Mirrors backend/release_signing.PURPOSES byte-for-byte.
+PURPOSES = {
+    "ea-release":        b"stoic:ea-release:v1\0",
+    "model-manifest":    b"stoic:model-manifest:v1\0",
+    "acceptance-bundle": b"stoic:acceptance-bundle:v1\0",
+    "audit-anchor":      b"stoic:audit-anchor:v1\0",
+    "differentiation":   b"stoic:differentiation:v1\0",
+    "canary":            b"stoic:canary:v1\0",
+}
+RELEASE_PURPOSES = {"ea-release", "model-manifest"}
 _key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(_secret("ED25519_SIGNING_KEY_B64")))
 
 app = FastAPI(title="STOIC Release Signer", docs_url=None, redoc_url=None)
@@ -46,13 +61,30 @@ app = FastAPI(title="STOIC Release Signer", docs_url=None, redoc_url=None)
 class SignRequest(BaseModel):
     key_id: str
     data_hex: str
+    purpose: str
 
 
-def _auth(authorization: str | None):
+def _auth(authorization: str | None) -> str:
+    """Returns which token authenticated: 'release' or 'bundle'."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Bearer token required")
-    if not hmac.compare_digest(authorization[7:], _token):
-        raise HTTPException(status_code=403, detail="Invalid signer token")
+    presented = authorization[7:]
+    if hmac.compare_digest(presented, _token):
+        return "release"
+    if _bundle_token and hmac.compare_digest(presented, _bundle_token):
+        return "bundle"
+    raise HTTPException(status_code=403, detail="Invalid signer token")
+
+
+def _authorize_purpose(role: str, purpose: str) -> bytes:
+    if purpose not in PURPOSES:
+        raise HTTPException(status_code=400, detail="unknown signing purpose")
+    if purpose in RELEASE_PURPOSES and role != "release":
+        # the trading API holds only the bundle token → it can NEVER obtain an EA-release signature
+        raise HTTPException(status_code=403, detail="this token may not sign release artefacts")
+    if purpose not in RELEASE_PURPOSES and role == "release" and _bundle_token:
+        raise HTTPException(status_code=403, detail="release token may not sign runtime artefacts")
+    return PURPOSES[purpose]
 
 
 @app.get("/healthz")
@@ -79,7 +111,8 @@ def health(authorization: str | None = Header(None)):
 
 @app.post("/sign")
 def sign(req: SignRequest, authorization: str | None = Header(None)):
-    _auth(authorization)
+    role = _auth(authorization)
+    prefix = _authorize_purpose(role, req.purpose)
     if req.key_id != KEY_ID:
         raise HTTPException(status_code=400,
                             detail=f"unknown key_id (expected {KEY_ID})")
@@ -89,4 +122,4 @@ def sign(req: SignRequest, authorization: str | None = Header(None)):
         raise HTTPException(status_code=400, detail="data_hex is not hex")
     if len(data) > 1_048_576:
         raise HTTPException(status_code=413, detail="payload too large")
-    return {"signature_hex": _key.sign(data).hex(), "key_id": KEY_ID}
+    return {"signature_hex": _key.sign(prefix + data).hex(), "key_id": KEY_ID, "purpose": req.purpose}

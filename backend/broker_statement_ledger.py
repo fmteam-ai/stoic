@@ -104,7 +104,7 @@ def statement_problems(st: dict, signature_hex: str) -> list:
                 return problems
         except Exception:  # noqa: BLE001 — no release key configured here; independence holds trivially
             pass
-        if not signature_hex or not verify_hex(statement_body(st), str(signature_hex), pinned):
+        if not signature_hex or not verify_hex(statement_body(st), str(signature_hex), pinned, purpose=None):
             problems.append("statement signature does not verify against the statement-attestation key")
     except Exception:  # noqa: BLE001
         problems.append("statement signature does not verify against the statement-attestation key")

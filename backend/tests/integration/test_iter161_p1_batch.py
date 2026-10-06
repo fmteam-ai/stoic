@@ -87,7 +87,8 @@ def test_perf_attestation_ed25519():
     )
     pub = Ed25519PublicKey.from_public_bytes(
         base64.b64decode(a["public_key_b64"]))
-    pub.verify(bytes.fromhex(a["signature"]), a["payload_hash"].encode())
+    # N100-11 — attestations are domain-separated: verifiers prepend the published prefix
+    pub.verify(bytes.fromhex(a["signature"]), b"stoic:differentiation:v1\0" + a["payload_hash"].encode())
     # legacy HMAC attestations issued pre-migration still verify
     legacy = hmac.new(
         (os.environ.get("PERF_SIGNING_KEY")

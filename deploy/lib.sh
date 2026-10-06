@@ -46,6 +46,11 @@ app_env() {
 ensure_release_secrets() {
   [ -d secrets ] || return 0
   local f
+  # N100-11 — existing installs predate the per-purpose signer token: mint the bundle token the
+  # API will hold (the release token stays with CI / the signer only). Compose mounts it next.
+  if [ -d secrets ] && [ -s secrets/signer_token ] && [ ! -s secrets/signer_token_bundle ]; then
+    ( umask 077; openssl rand -hex 32 > secrets/signer_token_bundle ) && echo "   generated secrets/signer_token_bundle (API-side signer token)"
+  fi
   # create with mode 0600 from the start (no umask window), regenerate zero-byte leftovers
   # main98 — bridge_token_hash_key: generated ONCE, never regenerated (changing it un-pairs every EA)
   # N99-5 — a key already living in backend/.env (or ./.env) must become the file value, never a

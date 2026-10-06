@@ -211,7 +211,7 @@ def _write_signed(body: dict) -> dict:
     sys.path.insert(0, str(_HERE))
     from release_signing import sign_hex, key_id, public_key_b64
     doc = {"body": body, "body_sha256": hashlib.sha256(_canonical(body)).hexdigest(),
-           "signature_hex": sign_hex(_canonical(body)), "key_id": key_id(), "public_key_b64": public_key_b64()}
+           "signature_hex": sign_hex(_canonical(body), purpose="model-manifest"), "key_id": key_id(), "public_key_b64": public_key_b64()}
     MANIFEST.parent.mkdir(parents=True, exist_ok=True)
     MANIFEST.write_text(json.dumps(doc, indent=2, sort_keys=True))
     return doc
@@ -238,7 +238,8 @@ def _load_body_for_resign() -> dict:
     except (ValueError, KeyError, TypeError) as e:
         raise ModelRefused(f"model manifest malformed: {type(e).__name__}")
     from release_signing import verify_hex
-    if not verify_hex(_canonical(body), sig, pub):
+    if not (verify_hex(_canonical(body), sig, pub, purpose="model-manifest")
+            or verify_hex(_canonical(body), sig, pub, purpose=None)):      # pre-N100-11 developer manifest
         raise ModelRefused("model manifest is internally inconsistent (body does not match its own signature)")
     if body.get("version") != MANIFEST_VERSION or body.get("policy_version") != POLICY_VERSION:
         raise ModelRefused(f"model manifest schema/policy {body.get('version')}/{body.get('policy_version')} not accepted")
@@ -272,7 +273,7 @@ def load_manifest() -> dict:
         raise ModelRefused(f"model manifest malformed: {type(e).__name__}")
     from release_signing import verify_hex
     pinned = os.environ.get("RELEASE_PUBLIC_KEY_B64")
-    if not verify_hex(_canonical(body), sig, pinned or None):
+    if not verify_hex(_canonical(body), sig, pinned or None, purpose="model-manifest"):
         raise ModelRefused("model manifest signature does not verify against the trusted release key")
     if body.get("version") != MANIFEST_VERSION or body.get("policy_version") != POLICY_VERSION:
         raise ModelRefused(f"model manifest schema/policy {body.get('version')}/{body.get('policy_version')} "

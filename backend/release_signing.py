@@ -175,19 +175,52 @@ def _private_key() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.from_private_bytes(base64.b64decode(b64))
 
 
-def sign_hex(data: bytes) -> str:
-    """Sign `data` → hex Ed25519 signature via the configured backend.
+# N100-11 — domain separation. Every signature is over `<domain>\0<data>`, so a signature minted
+# for one purpose can never verify as another, and the signer enforces WHICH token may request
+# WHICH purpose: the API only ever holds the acceptance-bundle token, CI holds the release token.
+PURPOSES = {
+    "ea-release":        b"stoic:ea-release:v1\0",        # CI only (release token)
+    "model-manifest":    b"stoic:model-manifest:v1\0",    # CI only (release token)
+    "acceptance-bundle": b"stoic:acceptance-bundle:v1\0", # API (bundle token)
+    "audit-anchor":      b"stoic:audit-anchor:v1\0",      # API
+    "differentiation":   b"stoic:differentiation:v1\0",   # API
+    "canary":            b"stoic:canary:v1\0",            # API (chaos drill round-trip)
+}
+RELEASE_PURPOSES = {"ea-release", "model-manifest"}
+API_PURPOSES = set(PURPOSES) - RELEASE_PURPOSES   # what a running trading API may ask the signer for
+
+
+def domain_bytes(purpose, data: bytes) -> bytes:
+    if purpose is None:            # raw/legacy: externally produced signatures (broker statements) and pre-N100-11 anchors
+        return data
+    try:
+        return PURPOSES[purpose] + data
+    except KeyError:
+        raise ValueError(f"unknown signing purpose {purpose!r}")
+
+
+def _token_for(purpose: str, env) -> str:
+    """Per-purpose bearer tokens: the bundle token lives on the API host, the release token only in CI.
+    RELEASE_SIGNER_BUNDLE_TOKEN(_FILE) falls back to RELEASE_SIGNER_TOKEN for single-token installs."""
+    if purpose in API_PURPOSES and (env.get("RELEASE_SIGNER_BUNDLE_TOKEN") or "").strip():
+        return env["RELEASE_SIGNER_BUNDLE_TOKEN"].strip()
+    return env["RELEASE_SIGNER_TOKEN"].strip()
+
+
+def sign_hex(data: bytes, purpose: str = "ea-release") -> str:
+    """Sign `data` (domain-prefixed by `purpose`) → hex Ed25519 signature via the configured backend.
     Refuses to sign with an incoherent configuration (same validator as boot)."""
     env = os.environ
+    msg = domain_bytes(purpose, data)
     if _mode(env) == "deferred":
         raise SignerDeferred(DEFERRED_MESSAGE)
     if _mode(env) == "external":
-        return _external_sign(data)
+        return _external_sign(data, purpose)
     if _is_prod(env):
         viol = production_signer_violation(env)
         if viol:
             raise RuntimeError(viol)
-    return _private_key().sign(data).hex()
+    return _private_key().sign(msg).hex()
 
 
 def signer_status() -> dict:
@@ -200,7 +233,7 @@ def signer_status() -> dict:
             "config_violations": len(signer_config_violations(env))}
 
 
-def _external_sign(data: bytes) -> str:
+def _external_sign(data: bytes, purpose: str = "ea-release") -> str:
     """POST {url}/sign  Authorization: Bearer <token>
     body {"key_id", "data_hex"} → {"signature_hex", "key_id"}. Fail closed on
     any config, transport, shape, key-id or signature-verification problem."""
@@ -212,8 +245,8 @@ def _external_sign(data: bytes) -> str:
     url = env["RELEASE_SIGNER_URL"].strip().rstrip("/")
     kid = key_id(env)
     try:
-        r = requests.post(f"{url}/sign", json={"key_id": kid, "data_hex": data.hex()},
-                          headers={"Authorization": f"Bearer {env['RELEASE_SIGNER_TOKEN'].strip()}"},
+        r = requests.post(f"{url}/sign", json={"key_id": kid, "data_hex": data.hex(), "purpose": purpose},
+                          headers={"Authorization": f"Bearer {_token_for(purpose, env)}"},
                           timeout=_timeout(env), verify=_tls_verify(env))
         r.raise_for_status()
         body = r.json()
@@ -228,7 +261,7 @@ def _external_sign(data: bytes) -> str:
     sig = body.get("signature_hex")
     if not isinstance(sig, str) or len(sig) != 128:
         raise RuntimeError("external signer returned no/invalid signature_hex")
-    if not verify_hex(data, sig, env["RELEASE_PUBLIC_KEY_B64"].strip()):
+    if not verify_hex(data, sig, env["RELEASE_PUBLIC_KEY_B64"].strip(), purpose=purpose):
         raise RuntimeError("external signer signature failed local verification against the pinned public key")
     return sig
 
@@ -288,11 +321,11 @@ def key_id_accepted(kid) -> bool:
 
 
 def verify_hex(data: bytes, signature_hex: str,
-               pub_b64: str | None = None) -> bool:
+               pub_b64: str | None = None, purpose: str = "ea-release") -> bool:
     try:
         pub = Ed25519PublicKey.from_public_bytes(
             base64.b64decode(pub_b64 or public_key_b64()))
-        pub.verify(bytes.fromhex(signature_hex), data)
+        pub.verify(bytes.fromhex(signature_hex), domain_bytes(purpose, data))
         return True
     except Exception:  # noqa: BLE001
         return False

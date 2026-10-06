@@ -55,7 +55,7 @@ def _sign(bundle: dict) -> tuple[str, str]:
     from release_signing import sign_hex, key_id
     body = _canonical(bundle)
     digest = hashlib.sha256(body).hexdigest()
-    return digest, sign_hex(body)
+    return digest, sign_hex(body, purpose="acceptance-bundle")
 
 
 def revoked_key_ids() -> set:
@@ -76,7 +76,7 @@ def verify_signature(bundle: dict) -> bool:
         body = _canonical(bundle)
         if hashlib.sha256(body).hexdigest() != bundle.get("digest"):
             return False
-        return verify_hex(body, str(bundle.get("signature") or ""))
+        return verify_hex(body, str(bundle.get("signature") or ""), purpose="acceptance-bundle")
     except Exception:  # noqa: BLE001
         return False
 

@@ -42,7 +42,7 @@ async def create_anchor(db) -> dict | None:
     body = {"seq": head["seq"], "entry_hash": head["entry_hash"],
             "collection": CHAIN_COLLECTION, "anchored_at": _now().isoformat()}
     from release_signing import KEY_ID, public_key_b64, sign_hex
-    doc = {**body, "signature": sign_hex(_canon(body).encode()),
+    doc = {**body, "signature": sign_hex(_canon(body).encode(), purpose="audit-anchor"),
            "key_id": KEY_ID, "public_key_b64": public_key_b64()}
     await db.audit_anchors.insert_one(dict(doc))
     await _push_external(doc)
@@ -74,8 +74,8 @@ async def verify_latest(db) -> dict:
     body = {k: anchor[k] for k in
             ("seq", "entry_hash", "collection", "anchored_at")}
     from release_signing import verify_hex
-    sig_ok = verify_hex(_canon(body).encode(), anchor["signature"],
-                        anchor.get("public_key_b64"))
+    sig_ok = (verify_hex(_canon(body).encode(), anchor["signature"], anchor.get("public_key_b64"), purpose="audit-anchor")
+              or verify_hex(_canon(body).encode(), anchor["signature"], anchor.get("public_key_b64"), purpose=None))  # pre-N100-11 anchors
     head = await _chain_head(db)
     head_seq = head["seq"] if head else 0
     covered = head_seq >= anchor["seq"]

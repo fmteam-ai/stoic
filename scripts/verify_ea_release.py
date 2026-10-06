@@ -131,7 +131,7 @@ def record(args):
     if args.sign:
         from release_signing import KEY_ID, sign_hex
         ea["signature"] = {"key_id": KEY_ID,
-                           "sig_hex": sign_hex(_canonical_payload(ea)),
+                           "sig_hex": sign_hex(_canonical_payload(ea), purpose="ea-release"),
                            "signed_at": datetime.now(timezone.utc).isoformat()}
     doc["ea"] = ea
     json.dump(doc, open(HASHES, "w"), indent=2)

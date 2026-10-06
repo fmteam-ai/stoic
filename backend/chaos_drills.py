@@ -316,10 +316,10 @@ def _drill_invalid_signature() -> dict:
     try:
         body = _json.dumps({"artifacts": ["chaos"],
                             "nonce": uuid.uuid4().hex}).encode()
-        sig = release_signing.sign_hex(body)
-        good = release_signing.verify_hex(body, sig)
-        tampered = release_signing.verify_hex(body + b"tampered", sig)
-        forged = release_signing.verify_hex(body, "00" * 64)
+        sig = release_signing.sign_hex(body, purpose="canary")
+        good = release_signing.verify_hex(body, sig, purpose="canary")
+        tampered = release_signing.verify_hex(body + b"tampered", sig, purpose="canary")
+        forged = release_signing.verify_hex(body, "00" * 64, purpose="canary")
         ok = good and not tampered and not forged
         return {"drill": "invalid_signature", "passed": ok,
                 "detail": ("valid Ed25519 signature accepted; tampered body "

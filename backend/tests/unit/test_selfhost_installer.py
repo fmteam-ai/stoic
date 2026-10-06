@@ -20,7 +20,10 @@ def test_compose_has_signer_sidecar_with_tls_and_file_secrets():
     assert "--ssl-certfile" in s["command"] and "--ssl-keyfile" in s["command"]
     assert "ports" not in s                                     # internal network only
     env = d["services"]["backend"]["environment"]
-    assert env["RELEASE_SIGNER_TOKEN_FILE"] == "/run/secrets/signer_token"
+    # N100-11 — the API holds ONLY the bundle token; the release token never reaches app containers
+    assert env["RELEASE_SIGNER_TOKEN_FILE"] == "/run/secrets/signer_token_bundle"
+    assert env["RELEASE_SIGNER_BUNDLE_TOKEN_FILE"] == "/run/secrets/signer_token_bundle"
+    assert "signer_token" not in d["services"]["backend"]["secrets"]
     assert env["RELEASE_SIGNER_CA_BUNDLE"] == "/run/secrets/signer_cert"
     assert env["ORDER_AUTH_SECRET_FILE"] != env["LEDGER_ANCHOR_KEY_FILE"]
     assert "signer_ed25519_key" not in d["services"]["backend"]["secrets"]   # API never holds the private key
