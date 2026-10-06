@@ -86,7 +86,11 @@ class BinanceCCXTEngine(ExecutionEngine):
                     "reason": "spot accounts cannot open SELL positions — only BUY entries are accepted"}
         # A13-1 (P0-01 step 1) — operator kill switch: with live crypto OFF every non-testnet
         # order is refused HERE, before any exchange call. Default off.
-        from crypto_bridge.ccxt_engine import _live_enabled, _wants_live
+        from crypto_bridge.ccxt_engine import _live_enabled, _wants_live, live_capability_block
+        if _wants_live(account):
+            cap_block = live_capability_block(account.get("exchange_id") or "binance")   # A14-5
+            if cap_block:
+                return cap_block
         if _wants_live(account) and not _live_enabled():
             logger.warning("binance execute refused: live crypto trading disabled user=%s sym=%s",
                            user_id, signal.get("symbol"))
@@ -280,8 +284,11 @@ class BinanceCCXTEngine(ExecutionEngine):
             pass
 
         # N97-8 — protect / flatten what we actually HOLD (filled minus base-asset fees)
-        held = cx.filled_base_amount(order_resp, ccxt_symbol.split("/")[0]) if intent_state == "filled" else 0.0
+        # A14-4 — ANY filled quantity is exposure: a resting partially filled order carries its held amount
+        held = cx.filled_base_amount(order_resp, ccxt_symbol.split("/")[0]) if float(order_resp.get("filled") or 0) > 0 else 0.0
         trade_doc["held_amount"] = held
+        if intent_state != "filled" and held > 0:
+            trade_doc["partial_fill"] = True       # pending + exposure → the protection sweep cancels the remainder, then protects
         inserted_id, _new_row = await cx.insert_trade_once(db, trade_doc)      # N97-9 — sweep race safe
         await cx.mark_trade_recorded(db, intent["intent_id"], inserted_id)
         trade_doc["id"] = str(inserted_id)

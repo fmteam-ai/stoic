@@ -185,6 +185,7 @@ export const LandingTestimonials = () => {
     const rowB = TESTIMONIALS.filter((_, i) => i % 2 === 1);
     const [statsStatus, setStatsStatus] = useState("loading");
     const [reducedMotion, setReducedMotion] = useState(
+    const [paused, setPaused] = useState(false);   // N99-8 — keyboard pause (Space/Enter)
         () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches);
     useEffect(() => {
         const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)");
@@ -211,7 +212,10 @@ export const LandingTestimonials = () => {
             </p>
             <TrustBar onStatus={setStatsStatus} />
             <div className="tst-marquee" data-testid="testimonials-marquee" data-reduced-motion={reducedMotion ? "true" : "false"}
-                 role="region" aria-roledescription="carousel" aria-label="Illustrative testimonials — decorative scrolling duplicates are hidden from assistive technology">
+                 role="region" aria-roledescription="carousel" tabIndex={0}
+                 onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setPaused((v) => !v); } }}
+                 data-paused={paused ? "true" : "false"}
+                 aria-label="Illustrative testimonials — press Space or Enter to pause or resume the scrolling; decorative scrolling duplicates are hidden from assistive technology">
                 <div className="tst-track">
                     {rowA.map((t, i) => <Card key={`a${i}`} t={t} idx={i * 2} />)}
                     {/* audit F-19 / round-8 P2-5 — clones are decorative, semantic-free and absent under reduced motion */}

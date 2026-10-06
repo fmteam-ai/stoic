@@ -123,8 +123,11 @@ if [ "$(app_env)" = "production" ]; then
   fi
 fi
 
+# A14-1 — env templates: deploy/env/ is the source; materialise the dot-files, then refuse drift
+python3 scripts/sync_env_examples.py >/dev/null
+python3 scripts/sync_env_examples.py --check || { echo "!! env template drift — edit deploy/env/*.env.example and re-run scripts/sync_env_examples.py"; rollback; }
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
-ensure_release_secrets
+ensure_release_secrets || rollback
 # N-R1 — hosts installed before the trusted-proxy chain existed: default the docker ranges once
 grep -q "^TRUSTED_PROXY_CIDRS=." backend/.env 2>/dev/null || set_kv backend/.env TRUSTED_PROXY_CIDRS "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8,::1/128,fd00::/8"
 provision_images || rollback
@@ -157,6 +160,7 @@ fi
 # to the production tenant (RECONCILE_SCOPE_USER_ID) and the evidence must carry
 # a non-null signature from the dedicated key. Any missing element → rollback.
 _envval() { { grep -E "^$1=" .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d '"'"'"; }   # never non-zero under pipefail
+_benvval() { { grep -E "^$1=" backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d '"'"'"; }   # what the backend process actually loads
 APP_ENV_VAL=$(app_env)   # production if ./.env OR backend/.env says so (lib.sh — the backend reads backend/.env)
 RECONCILE_EXPECT=$(_envval RECONCILE_EXPECT)
 RECONCILE_SCOPE=$(_envval RECONCILE_SCOPE_USER_ID)
@@ -171,7 +175,11 @@ if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 0 ]; then
   [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY}"; rollback; }
   [ -n "${RECONCILE_SCOPE}" ] || { echo "!! production requires RECONCILE_SCOPE_USER_ID (explicit tenant scope)"; rollback; }
   [ -n "$(_envval LEDGER_ANCHOR_KEY)" ] || [ -s secrets/ledger_anchor_key ] || { echo "!! production requires LEDGER_ANCHOR_KEY (dedicated evidence signing key — secrets/ledger_anchor_key or ./.env)"; rollback; }
-  [ -n "$(_envval BRIDGE_TOKEN_HASH_KEY)" ] || [ -s secrets/bridge_token_hash_key ] || { echo "!! production requires BRIDGE_TOKEN_HASH_KEY (dedicated EA token hash key — secrets/bridge_token_hash_key; generated once by ensure_release_secrets)"; rollback; }
+  # N99-5 — the backend reads backend/.env (never ./.env); check the file the process sees
+  [ -n "$(_benvval BRIDGE_TOKEN_HASH_KEY)" ] || [ -s secrets/bridge_token_hash_key ] || { echo "!! production requires BRIDGE_TOKEN_HASH_KEY (dedicated EA token hash key — secrets/bridge_token_hash_key; generated once by ensure_release_secrets)"; rollback; }
+  if [ -n "$(_benvval BRIDGE_TOKEN_HASH_KEY)" ] && [ -s secrets/bridge_token_hash_key ] && [ "$(_benvval BRIDGE_TOKEN_HASH_KEY)" != "$(cat secrets/bridge_token_hash_key)" ]; then
+    echo "!! BRIDGE_TOKEN_HASH_KEY in backend/.env differs from secrets/bridge_token_hash_key — unify them first (see docs/DISASTER_RECOVERY.md)"; rollback
+  fi
 fi
 if [ -n "${RECONCILE_EXPECT}" ]; then
   echo "-- verifying production topology policy (${RECONCILE_EXPECT}, signed read-only reconciliation)"

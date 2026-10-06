@@ -23,9 +23,10 @@ from bson import ObjectId
 from auth import get_current_user, generate_bridge_token
 from database import get_db
 from secrets_vault import encrypt as vault_encrypt, mask as vault_mask
+from crypto_bridge.crypto_execution import public_result
 from crypto_bridge.ccxt_engine import (
     CCXTClient, normalize_symbol, _live_enabled,
-    EXCHANGES, SUPPORTED_EXCHANGES, DEFAULT_EXCHANGE_ID,
+    EXCHANGES, SUPPORTED_EXCHANGES, DEFAULT_EXCHANGE_ID, capability_matrix,
     check_reachability,
 )
 from crypto_bridge.binance_engine import BinanceCCXTEngine
@@ -260,6 +261,7 @@ async def crypto_execute(account_id: str, payload: CryptoSignal,
         user_id=user["id"], account=acc, signal=signal,
         max_concurrent=0, cfg_account_id=str(acc["_id"]),
     )
+    result = public_result(result)                       # A14-6 — no raw exchange text to clients
     if result.get("blocked"):
         raise HTTPException(status_code=422, detail=result)
     return result
@@ -326,6 +328,7 @@ async def crypto_exchanges(refresh: bool = False, user=Depends(get_current_user)
                 "label": meta["label"],
                 "requires_passphrase": meta["passphrase"],
                 "supports_sandbox": meta["sandbox"],
+                "capabilities": capability_matrix().get(eid),     # A14-5
                 "default_quote": meta.get("default_quote", "USDT"),
                 "reachable": reachability.get(eid, {}).get("reachable"),
                 "reach_error": reachability.get(eid, {}).get("error"),

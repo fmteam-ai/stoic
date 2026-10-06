@@ -164,6 +164,10 @@ async def _trade_mode_contradiction(db, acc: dict, hb_trade_mode: str, now_iso: 
     Security Agent alert and chain the event so the operator sees why gates flipped."""
     if hb_trade_mode not in _REAL_MONEY_MODES:
         return
+    # N99-3 — only the TRANSITION is an event: once the account already carries a real/contest
+    # report, every following heartbeat (≈ every 5 s) is the same state — no new audit row.
+    if str(acc.get("account_trade_mode") or "").lower() in _REAL_MONEY_MODES:
+        return
     from broker_env import attested_environment, broker_environment
     prior = {k: v for k, v in acc.items() if k not in ("account_trade_mode",)}
     prior["ea_identity"] = {k: v for k, v in (acc.get("ea_identity") or {}).items() if k != "trade_mode"}

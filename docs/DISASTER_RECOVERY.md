@@ -9,6 +9,18 @@
    self-heal via replay but shorten reconciliation if preserved.
 
 ## Backups
+- **`./secrets/` is part of every backup (N99-4).** `deploy/backup.sh backup` writes
+  `stoic-secrets-<stamp>.tar.gz.enc` (AES-256, `BACKUP_PASSPHRASE_FILE`) next to the dump and
+  REFUSES to run without a passphrase while `./secrets` exists (`BACKUP_SKIP_SECRETS=1` opts out).
+  Losing `secrets/bridge_token_hash_key` un-pairs every EA, `ledger_anchor_key` makes bundles
+  unverifiable, `secrets_master_key` loses sealed integration secrets. Keep the passphrase file
+  OUTSIDE the backup destination and copy the whole `secrets/` folder to a password manager after
+  every update as well. `restore` puts missing secret files back from the matching archive (never
+  overwrites an existing one — differences are printed).
+- **One hash-key source (N99-5).** `BRIDGE_TOKEN_HASH_KEY` lives in `secrets/bridge_token_hash_key`.
+  If `backend/.env` also carries it, `ensure_release_secrets` seeds the file from that value; a
+  DIFFERENT value in both places stops install/update and the backend refuses to boot in production
+  (`bridge_tokens.key_source_conflict`). Remove the `.env` line once the file holds the value.
 - `deploy/backup.sh backup` — gzip archive + per-collection count manifest in
   `./backups` (14-day retention). Nightly via `deploy/backup.sh schedule`.
 - **Encryption**: set `BACKUP_PASSPHRASE_FILE=/path/to/passphrase` — archives

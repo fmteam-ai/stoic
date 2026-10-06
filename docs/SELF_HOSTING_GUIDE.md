@@ -79,7 +79,7 @@ What it does (idempotent — safe to re-run):
 ## 4. Configure `backend/.env` (integrations + admin)
 
 The installer generates the security-critical values. Add / carry over your
-integration keys (see `.env.example` for every key):
+integration keys (see `deploy/env/backend.env.example` for every key):
 
 | Key | Value / note |
 |---|---|

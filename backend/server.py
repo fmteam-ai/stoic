@@ -806,6 +806,10 @@ async def on_startup():
     # review item 5 / iter-182 — Origin enforcement is AUTOMATIC in
     # production (no CSRF_ENFORCE_ORIGIN secret needed) and localhost /
     # preview entries are filtered out of CORS_ORIGINS automatically.
+    if not is_production():
+        from bridge_tokens import key_source_conflict as _ksc
+        if _ksc():
+            logger.warning("N99-5 %s", _ksc())
     if is_production():
         from security import _allowed_origins
         if not _allowed_origins():
@@ -843,8 +847,8 @@ async def on_startup():
         from integrations_settings import _master_key as _vault_master_key
         _vault_master_key()
         # A13-2 (P1-04) — EA token hashing needs its OWN key in production; no JWT_SECRET fallback
-        from bridge_tokens import production_key_violation
-        _bk = production_key_violation()
+        from bridge_tokens import production_key_violation, key_source_conflict
+        _bk = production_key_violation() or key_source_conflict()
         if _bk:
             raise RuntimeError(_bk)
         # review P1-9 — local signing must FAIL at boot in production, not

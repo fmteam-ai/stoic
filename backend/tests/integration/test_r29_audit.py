@@ -247,8 +247,9 @@ def test_trial_decision_pending_error_is_retried_against_original_offer(pricing_
 
 # ───────────────────────── P2-01 watermark provenance ─────────────────────────
 
-def test_verified_performance_as_of_is_authoritative_watermark_not_now():
+def test_verified_performance_as_of_is_authoritative_watermark_not_now(monkeypatch):
     from routes.performance_routes import _verified_payload
+    import broker_statement_ledger
     db = _db()
     uid = str(ObjectId())
     old = datetime.now(timezone.utc) - timedelta(days=3)
@@ -261,11 +262,18 @@ def test_verified_performance_as_of_is_authoritative_watermark_not_now():
         assert p["stale"] is True and p["share_allowed"] is False
         assert p["reconciliation_id"].startswith("recon:") and ":7" in p["reconciliation_id"]
         assert "hb_age" not in str(p["reconciliation_id"])
-        # fresh reconciliation + heartbeat → not stale, share allowed
+        # fresh reconciliation + heartbeat → not stale; but N99-7/A14-3: WITHOUT a signed statement
+        # ledger the curve is only DERIVED — "broker-reconciled" may not be claimed, no sharing
         now = datetime.now(timezone.utc).isoformat()
         _run(db.accounts.update_one({"_id": acc_id}, {"$set": {"last_heartbeat": now, "last_reconciled_at": now}}))
         p = _run(_verified_payload(db, uid))["provenance"]
-        assert p["stale"] is False and p["share_allowed"] is True
+        assert p["source_kind"] == "derived" and p["share_allowed"] is False and p["ledger_gate_reasons"]
+        # statement ledger gate PASSES → broker_reconciled, share allowed
+        async def _gate_ok(_db, _uid):
+            return []
+        monkeypatch.setattr(broker_statement_ledger, "ledger_gate", _gate_ok)
+        p = _run(_verified_payload(db, uid))["provenance"]
+        assert p["stale"] is False and p["share_allowed"] is True and p["source_kind"] == "broker_reconciled"
         # no reconciliation at all → stale regardless of generation time
         _run(db.accounts.update_one({"_id": acc_id}, {"$unset": {"last_reconciled_at": ""}}))
         p = _run(_verified_payload(db, uid))["provenance"]

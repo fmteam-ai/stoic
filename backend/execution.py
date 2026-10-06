@@ -420,6 +420,7 @@ class MT5BridgeEngine(ExecutionEngine):
             "closed_at": None,
             "error": None,
             "origin": signal.get("origin", "manual"),
+            "engine": signal.get("engine"),           # N99-1 — "scalp" marks the scalp counter; origin stays "auto"
             "scope": signal.get("scope"),
             "strategy_class": signal.get("strategy_class"),
             "market_regime": signal.get("market_regime"),

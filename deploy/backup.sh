@@ -11,6 +11,11 @@
 #   deploy/backup.sh offsite <file>    → push archive+manifest off-site via rclone
 #                                        (BACKUP_RCLONE_REMOTE) or aws s3 (BACKUP_S3_URI)
 #   deploy/backup.sh schedule          → print crontab lines for nightly backup + verify
+#
+# N99-4 — every backup also writes an ENCRYPTED copy of ./secrets/ (stoic-secrets-<stamp>.tar.gz.enc):
+#   bridge_token_hash_key (lose it = every EA un-paired), ledger_anchor_key, secrets_master_key,
+#   jwt_secret, mongo passwords… BACKUP_PASSPHRASE_FILE is therefore REQUIRED when ./secrets exists
+#   (BACKUP_SKIP_SECRETS=1 opts out explicitly). `restore` puts secrets/ back when it is missing.
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/stoic-path.sh"   # private python >= 3.9 (bootstrap.sh) — audit H2 guarded PATH prepend
 cd "$(dirname "$0")/.."
@@ -36,6 +41,49 @@ _decrypt_to() {
     || { echo "ERROR: ${1} is encrypted — set BACKUP_PASSPHRASE_FILE"; exit 1; }
   # shellcheck disable=SC2046
   openssl $(_encrypt_args) -d -in "$1" -out "$2"
+}
+
+_backup_secrets() {
+  # $1 = stamp — encrypted tarball of ./secrets (never written in plaintext)
+  [ -d secrets ] || { echo "   (no ./secrets directory — nothing to include)"; return 0; }
+  if [ "${BACKUP_SKIP_SECRETS:-0}" = "1" ]; then
+    echo "!! BACKUP_SKIP_SECRETS=1 — secrets/ NOT included (bridge_token_hash_key, ledger_anchor_key, secrets_master_key are unrecoverable without it)"
+    return 0
+  fi
+  if [ -z "${BACKUP_PASSPHRASE_FILE:-}" ] || [ ! -f "${BACKUP_PASSPHRASE_FILE}" ]; then
+    echo "ERROR: ./secrets exists but BACKUP_PASSPHRASE_FILE is not set — refusing to write a backup without an encrypted copy of secrets/."
+    echo "       Set BACKUP_PASSPHRASE_FILE=/path/outside/backup/destination (any random passphrase) or BACKUP_SKIP_SECRETS=1 to opt out knowingly."
+    exit 1
+  fi
+  local out="${BACKUP_DIR}/stoic-secrets-$1.tar.gz.enc"
+  echo "-- encrypting secrets/ → ${out}"
+  # shellcheck disable=SC2046
+  tar -czf - secrets | openssl $(_encrypt_args) -out "${out}"
+  chmod 600 "${out}"
+  echo "   $(tar -tzf <(openssl $(_encrypt_args) -d -in "${out}") | grep -c '^secrets/.') secret file(s) included"
+}
+
+_restore_secrets() {
+  # $1 = mongo archive path — the sibling stoic-secrets-<stamp>.tar.gz.enc is restored ONLY into an
+  # absent/empty ./secrets; existing files are never overwritten (differences are reported).
+  local stamp sec tmp f
+  stamp=$(basename "$1" | sed -E 's/^stoic-mongo-([0-9]{8}-[0-9]{6}).*/\1/')
+  sec="$(dirname "$1")/stoic-secrets-${stamp}.tar.gz.enc"
+  [ -f "${sec}" ] || { echo "   (no secrets archive ${sec} next to the dump — secrets/ left untouched)"; return 0; }
+  [ -n "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -f "${BACKUP_PASSPHRASE_FILE}" ] || { echo "!! ${sec} present but BACKUP_PASSPHRASE_FILE unset — secrets/ NOT restored"; return 0; }
+  tmp="$(mktemp -d /tmp/stoic-secrets-XXXXXX)"
+  # shellcheck disable=SC2046
+  openssl $(_encrypt_args) -d -in "${sec}" | tar -xzf - -C "${tmp}"
+  mkdir -p secrets
+  for f in "${tmp}"/secrets/*; do
+    [ -f "${f}" ] || continue
+    if [ -s "secrets/$(basename "${f}")" ]; then
+      cmp -s "${f}" "secrets/$(basename "${f}")" || echo "!! secrets/$(basename "${f}") differs from the backup copy — kept the CURRENT file (compare manually)"
+    else
+      (umask 077; cp "${f}" "secrets/$(basename "${f}")"); chmod 600 "secrets/$(basename "${f}")"; echo "   restored secrets/$(basename "${f}")"
+    fi
+  done
+  rm -rf "${tmp}"
 }
 
 _write_manifest() {
@@ -70,8 +118,9 @@ case "${1:-backup}" in
       OUT="${OUT}.enc"
       echo "   encrypted: ${OUT}"
     fi
+    _backup_secrets "${STAMP}"
     echo "-- pruning archives older than ${RETENTION_DAYS} days"
-    find "${BACKUP_DIR}" \( -name "stoic-mongo-*.archive.gz" -o -name "stoic-mongo-*.archive.gz.enc" -o -name "stoic-mongo-*.manifest.json" \) -mtime +"${RETENTION_DAYS}" -delete
+    find "${BACKUP_DIR}" \( -name "stoic-mongo-*.archive.gz" -o -name "stoic-mongo-*.archive.gz.enc" -o -name "stoic-mongo-*.manifest.json" -o -name "stoic-secrets-*.tar.gz.enc" \) -mtime +"${RETENTION_DAYS}" -delete
     if [ "${BACKUP_OFFSITE:-false}" = "true" ]; then
       "$0" offsite "${OUT}"
     fi
@@ -103,6 +152,8 @@ case "${1:-backup}" in
 
     echo "-- 3/5 restoring (drop + replace)"
     docker compose exec -T "${MONGO_SVC}" sh -c "mongorestore ${MONGO_AUTH} --archive --gzip --drop" < "${PLAIN}"
+    echo "-- 3b/5 secrets/ (N99-4): restoring missing secret files from the matching encrypted archive"
+    _restore_secrets "${FILE}"
 
     if [ "${RESTORE_NO_START:-0}" = "1" ]; then
       # Q-3 — caller (rollback.sh / update.sh) brings the matching CODE up afterwards; the new
@@ -135,6 +186,13 @@ case "${1:-backup}" in
     SCRATCH="stoic-restore-verify-$$"
     cleanup() { docker rm -f "${SCRATCH}" >/dev/null 2>&1 || true; [ "${PLAIN}" != "${FILE}" ] && rm -f "${PLAIN}"; }
     trap cleanup EXIT
+    SECFILE="$(dirname "${FILE}")/stoic-secrets-$(basename "${FILE}" | sed -E 's/^stoic-mongo-([0-9]{8}-[0-9]{6}).*/\1/').tar.gz.enc"
+    if [ -f "${SECFILE}" ]; then
+      # shellcheck disable=SC2046
+      echo "-- secrets archive: $(openssl $(_encrypt_args) -d -in "${SECFILE}" | tar -tzf - | grep -c '^secrets/.') file(s) decrypt + list OK"
+    else
+      echo "!! no secrets archive next to ${FILE} — this backup cannot restore bridge_token_hash_key / ledger_anchor_key"
+    fi
     echo "-- starting throwaway Mongo container (${SCRATCH})"
     docker run -d --rm --name "${SCRATCH}" mongo:7 >/dev/null
     for i in $(seq 1 30); do

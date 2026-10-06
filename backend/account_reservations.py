@@ -56,29 +56,58 @@ async def ensure_reservation_lock_indexes(db) -> None:
 
 
 
-async def _acquire_lock(db, account_id: str, owner: str) -> bool:
+async def _acquire_lock(db, account_id: str, owner: str) -> int | None:
+    """A14-2 — fenced lease: every acquisition bumps the lock's monotonic `fence` ($inc) and the
+    holder carries that number. A holder that paused past the lease and lost it to another
+    worker can never write with its stale fence. Returns the fence, None when busy."""
+    from pymongo import ReturnDocument
     col = db.account_reservation_locks
     for _ in range(LOCK_RETRIES):
         now = _now()
         lease = now + timedelta(seconds=LOCK_TTL_SEC)
         if await col.find_one({"_id": account_id}, {"_id": 1}) is None:
             try:
-                await col.insert_one({"_id": account_id, "locked_until": lease, "owner": owner})
-                return True
+                await col.insert_one({"_id": account_id, "locked_until": lease, "owner": owner, "fence": 1})
+                return 1
             except DuplicateKeyError:
                 pass                  # another worker created the lease doc first
-        res = await col.update_one(
+        doc = await col.find_one_and_update(
             {"_id": account_id, "$or": [{"locked_until": {"$lt": now}}, {"locked_until": None}]},
-            {"$set": {"locked_until": lease, "owner": owner}})
-        if res.matched_count == 1:
-            return True
+            {"$set": {"locked_until": lease, "owner": owner}, "$inc": {"fence": 1}},
+            return_document=ReturnDocument.AFTER)
+        if doc is not None:
+            return int(doc.get("fence") or 0)
         await asyncio.sleep(0.05)
-    return False
+    return None
 
 
-async def _release_lock(db, account_id: str, owner: str) -> None:
-    await db.account_reservation_locks.update_one(
-        {"_id": account_id, "owner": owner}, {"$set": {"locked_until": None, "owner": None}})
+async def _lock_held(db, account_id: str, owner: str, fence: int) -> bool:
+    """Atomic fence check: matches only while owner + fence agree and the lease is unexpired
+    (and extends it, so a check right before a write never races the TTL)."""
+    return await _renew_lock(db, account_id, owner, fence)
+
+
+async def _renew_lock(db, account_id: str, owner: str, fence: int) -> bool:
+    """Extend the lease ONLY while we still hold it (owner + fence match, not expired)."""
+    res = await db.account_reservation_locks.update_one(
+        {"_id": account_id, "owner": owner, "fence": fence, "locked_until": {"$gt": _now()}},
+        {"$set": {"locked_until": _now() + timedelta(seconds=LOCK_TTL_SEC)}})
+    return res.matched_count == 1
+
+
+async def _release_lock(db, account_id: str, owner: str, fence: int | None = None) -> None:
+    q = {"_id": account_id, "owner": owner}
+    if fence is not None:
+        q["fence"] = fence            # a late releaser never frees a lease it no longer holds
+    await db.account_reservation_locks.update_one(q, {"$set": {"locked_until": None, "owner": None}})
+
+
+def trade_counter_filter(counter: str) -> dict:
+    """Trade-side filter for a counter key: 'scalp' → auto trades of the scalp engine; 'auto' →
+    auto trades of the main bot (no engine / any other engine)."""
+    if counter == "scalp":
+        return {"origin": "auto", "engine": "scalp"}
+    return {"origin": "auto", "engine": {"$ne": "scalp"}}
 
 
 async def capacity_snapshot(db, *, account_id: str, user_id: str, symbol: str | None = None,
@@ -88,13 +117,15 @@ async def capacity_snapshot(db, *, account_id: str, user_id: str, symbol: str | 
     from pip_utils import symbol_match
     base = {"user_id": user_id, "account_id": account_id, "status": {"$in": ["pending", "open"]}}
     total_open = await db.trades.count_documents(base)
-    # N98-3 — the automated counter is scoped to ONE origin (main bot "auto" vs "scalp")
-    auto_open = await db.trades.count_documents({**base, "origin": counter_origin})
+    # N98-3 / N99-1 — the automated counter is scoped to ONE engine: every automated trade keeps
+    # origin "auto" (so all auto safety filters apply); `engine: "scalp"` separates the scalp counter
+    tfilter = trade_counter_filter(counter_origin)
+    auto_open = await db.trades.count_documents({**base, **tfilter})
     unaccounted = await rr.unaccounted_count(db, account_id)
     today_auto = 0
     if symbol:
         today_auto = await db.trades.count_documents(
-            {"user_id": user_id, "account_id": account_id, "origin": counter_origin,
+            {"user_id": user_id, "account_id": account_id, **tfilter,
              "symbol": symbol_match(symbol), "opened_at": {"$gte": _day_start_iso()}})
         today_auto += await db.risk_reservations.count_documents(
             {"account_id": account_id, "state": {"$in": list(rr.ACTIVE_STATES)}, "trade_id": None,
@@ -134,12 +165,20 @@ async def reserve_entry(db, *, account_id: str, user_id: str, source: str, decis
     {"ok": False, "blocked": "max_concurrent_cap|trade_of_day_cap|risk_cap|reservation_busy", ...}."""
     caps = caps or {}
     owner = f"{source}:{decision_id}"
-    if not await _acquire_lock(db, account_id, owner):
+    fence = await _acquire_lock(db, account_id, owner)
+    if fence is None:
         logger.warning("reservation lease busy account=%s source=%s", account_id, source)
         return {"ok": False, "blocked": "reservation_busy", "reason": "account entry lease busy — retry next cycle"}
+    started = _now()
+    lost = {"ok": False, "blocked": "reservation_lease_lost",
+            "reason": "account entry lease expired during the capacity snapshot — retry next cycle"}
     try:
         snap = await capacity_snapshot(db, account_id=account_id, user_id=user_id, symbol=symbol,
                                        counter_origin=caps.get("origin", "auto"))
+        # A14-2 — a slow snapshot renews the lease (while still held); a lost lease aborts
+        if (_now() - started).total_seconds() > LOCK_TTL_SEC / 2 and not await _renew_lock(db, account_id, owner, fence):
+            logger.warning("reservation lease lost during snapshot account=%s source=%s", account_id, source)
+            return lost
         bad = _violations(snap, caps, risk_usd, origin)
         if bad:
             logger.warning("reservation refused account=%s source=%s sym=%s: %s", account_id, source, symbol,
@@ -148,17 +187,26 @@ async def reserve_entry(db, *, account_id: str, user_id: str, source: str, decis
                     "inflight": snap["auto_open"], "cap": int(caps.get("auto_cap") or 0),
                     "total_inflight": snap["total_open"], "total_cap": int(caps.get("total_cap") or 0),
                     "today": snap["today_auto"], "daily_cap": int(caps.get("daily_cap") or 0)}
+        if not await _lock_held(db, account_id, owner, fence):
+            return lost
         try:
             doc = await rr.reserve(db, account_id=account_id, user_id=user_id, decision_id=decision_id,
                                    risk_usd=risk_usd, lot=lot)
         except DuplicateKeyError:
             return {"ok": False, "blocked": "duplicate_reservation",
                     "reason": "an ACTIVE reservation already exists for this decision"}
-        extra = {"source": source, "symbol": symbol, "origin": origin, "caps_snapshot": caps, "capacity_snapshot": snap}
+        extra = {"source": source, "symbol": symbol, "origin": origin, "caps_snapshot": caps,
+                 "capacity_snapshot": snap, "lease_fence": fence}
         await db.risk_reservations.update_one({"reservation_id": doc["reservation_id"]}, {"$set": extra})
+        # fenced write: the lease must STILL be ours after the insert, else the snapshot the
+        # decision was based on is stale (another holder counted without us) — undo it
+        if not await _lock_held(db, account_id, owner, fence):
+            await rr.transition(db, doc["reservation_id"], "RELEASED", release_reason="lease_lost")
+            logger.warning("reservation write rejected (fence moved) account=%s source=%s", account_id, source)
+            return lost
         return {"ok": True, "reservation": {**doc, **extra}, "capacity": snap}
     finally:
-        await _release_lock(db, account_id, owner)
+        await _release_lock(db, account_id, owner, fence)
 
 
 async def present(db, reservation_id: str, *, account_id: str) -> dict | None:
@@ -199,7 +247,7 @@ def resolve_daily_cap(cfg: dict | None) -> int:
 async def resolve_bot_config(db, *, user_id: str, cfg_account_id: str | None) -> dict | None:
     """N98-2 — the SAME config bot_runner runs with: the account's own config, else the
     user's default profile (account_id None/absent). Never a silent fallback to 1."""
-    proj = {"trade_of_day_cap": 1, "max_concurrent_trades": 1, "account_id": 1}
+    proj = {"trade_of_day_cap": 1, "max_concurrent_trades": 1, "account_id": 1, "scalp": 1}   # N99-1 — scalp config read too
     cfg = None
     if cfg_account_id:
         cfg = await db.bot_configs.find_one({"user_id": user_id, "account_id": cfg_account_id}, proj)
@@ -215,14 +263,16 @@ async def caps_for(db, *, user_id: str, cfg_account_id: str | None, max_concurre
     """Engine caps: automated concurrency cap, hard total cap, PER-SYMBOL daily automated cap.
     Callers that already resolved the cap (bot_runner) pass `daily_cap`; otherwise it is read
     from the same config bot_runner uses (own account config → default profile).
-    N98-3 — scalp has its OWN counter: its daily cap is its preset's hourly budget × 24 and its
-    concurrency cap is `scalp_max_concurrent` (default 3), never the main bot's."""
+    N98-3 — scalp has its OWN concurrency counter (`scalp.max_concurrent`, default 3) and daily
+    cap; N99-1 — it shares the account-wide TOTAL cap with the main bot (max_concurrent + buffer)."""
     cfg = await resolve_bot_config(db, user_id=user_id, cfg_account_id=cfg_account_id)
+    main_max = int((cfg or {}).get("max_concurrent_trades") or 0)
     if origin == "scalp":
         scalp_cfg = (cfg or {}).get("scalp") if cfg else None
         auto_cap = int((scalp_cfg or {}).get("max_concurrent") or os.environ.get("SCALP_MAX_CONCURRENT", "3"))
         daily = int((scalp_cfg or {}).get("max_trades_per_symbol_per_day") or 0)   # 0 = governed hourly by scalp/risk
-        return {"auto_cap": auto_cap, "total_cap": 0, "daily_cap": daily, "origin": "scalp"}
+        return {"auto_cap": auto_cap, "total_cap": (main_max + total_positions_buffer()) if main_max else 0,
+                "daily_cap": daily, "origin": "scalp"}
     if max_concurrent is None:
         max_concurrent = int((cfg or {}).get("max_concurrent_trades") or 0)
     daily = resolve_daily_cap(cfg) if daily_cap is None else int(daily_cap)

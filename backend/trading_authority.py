@@ -314,7 +314,11 @@ async def acceptance_domain(db, account: dict | None = None) -> dict:
     from broker_env import attested_environment
     if attested_environment(account) == "DEMO":      # N97-11 — attestation, not heartbeat freshness
         return {"level": "FULL", "reason": "attested DEMO account — acceptance applies to real money"}
-    ok, why = bundle_covers(await latest_bundle(db), _acct_id(account), release_identity())
+    from acceptance_bundle import config_fingerprint
+    b = await latest_bundle(db)
+    rel = release_identity()
+    fp = await config_fingerprint(db, list(b.get("account_ids") or []), rel) if b else None   # A14-11
+    ok, why = bundle_covers(b, _acct_id(account), rel, current_fingerprint=fp)
     if ok:
         return {"level": "FULL", "reason": "operational acceptance bundle PASS for this release"}
     return {"level": "CLOSE_ONLY", "reason": f"operational acceptance missing — {why}", "code": "ACCEPTANCE_REQUIRED"}

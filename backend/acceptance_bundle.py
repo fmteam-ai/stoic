@@ -3,15 +3,18 @@
 A bundle is the proof that the LIVE setup actually running is the one approved:
 account and bot ids, environments, enabled states, EA sessions, reconciliation
 times, positions, executions, authority blockers and the broker-statement
-comparison, bound to the deployed release identity (build SHA + image digest)
-and HMAC-signed with LEDGER_ANCHOR_KEY. Live (real-money) authority unlocks only
-while a PASSING bundle for the CURRENT release covers the account.
+comparison and the approved inventory expectation (A14-9), bound to the deployed
+release identity (build SHA + image digest) and a configuration fingerprint
+(A14-11), Ed25519-signed through the release signer (A14-10). Live (real-money)
+authority unlocks only while a PASSING, unexpired bundle for the CURRENT release
+and UNCHANGED configuration covers the account.
 """
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
+
+from bson import ObjectId
 import os
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -36,7 +39,8 @@ def release_identity() -> dict:
 
 
 SIGNED_FIELDS = ("bundle_id", "payload", "verdict", "failures", "account_ids", "build_sha", "image_digest",
-                 "created_by", "created_at", "expires_at")
+                 "created_by", "created_at", "expires_at", "config_fingerprint", "schema_version", "key_id", "algo")
+SCHEMA_VERSION = 2          # A14-10 — v2: Ed25519 via the release signer, fingerprint-bound (A14-11), inventory inside (A14-9)
 
 
 def _canonical(bundle: dict) -> bytes:
@@ -46,20 +50,70 @@ def _canonical(bundle: dict) -> bytes:
 
 
 def _sign(bundle: dict) -> tuple[str, str]:
+    """A14-10 — asymmetric: Ed25519 through release_signing (external signer in production; the
+    trading server holds only RELEASE_PUBLIC_KEY_B64 and can never mint a valid signature itself)."""
+    from release_signing import sign_hex, key_id
     body = _canonical(bundle)
     digest = hashlib.sha256(body).hexdigest()
-    key = (os.environ.get("LEDGER_ANCHOR_KEY") or "").encode()
-    if not key:
-        raise RuntimeError("LEDGER_ANCHOR_KEY unset — acceptance bundles must be signed")
-    return digest, hmac.new(key, body, hashlib.sha256).hexdigest()
+    return digest, sign_hex(body)
+
+
+def revoked_key_ids() -> set:
+    return {k.strip() for k in (os.environ.get("RELEASE_REVOKED_KEY_IDS") or "").split(",") if k.strip()}
 
 
 def verify_signature(bundle: dict) -> bool:
+    """Ed25519 over the canonical body with the PINNED public key; the bundle's key id must be the
+    current one and not revoked. Legacy shared-secret (schema v1) bundles are refused."""
+    from release_signing import verify_hex, key_id
+    if int(bundle.get("schema_version") or 1) < SCHEMA_VERSION:
+        return False
+    kid = str(bundle.get("key_id") or "")
+    if not kid or kid in revoked_key_ids() or kid != key_id():
+        return False
     try:
-        digest, sig = _sign(bundle)
+        body = _canonical(bundle)
+        if hashlib.sha256(body).hexdigest() != bundle.get("digest"):
+            return False
+        return verify_hex(body, str(bundle.get("signature") or ""))
     except Exception:  # noqa: BLE001
         return False
-    return hmac.compare_digest(sig, str(bundle.get("signature") or "")) and digest == bundle.get("digest")
+
+
+async def config_fingerprint(db, account_ids: list, rel: dict) -> str:
+    """A14-11 — everything the acceptance vouches for: accounts, bots (risk config), credentials,
+    EA hashes, broker servers, inventory approval, release. Any change ⇒ coverage void at once."""
+    parts = {"release": f"{rel.get('build_sha')}|{rel.get('image_digest')}"}
+    for aid in sorted(account_ids):
+        a = await db.accounts.find_one({"_id": ObjectId(aid)}, {"ea_binary_sha256": 1, "broker_server": 1, "server": 1,
+                                                                "account_number": 1, "creds_version": 1, "trading_enabled": 1,
+                                                                "bridge_token_rotated_at": 1, "verified_identity": 1,
+                                                                "environment_attestation": 1}) or {}
+        bots = []
+        async for b in db.bot_configs.find({"account_id": aid}):
+            bots.append(json.dumps({k: v for k, v in b.items() if k not in ("_id", "updated_at")}, sort_keys=True, default=str))
+        parts[aid] = json.dumps({k: v for k, v in a.items() if k != "_id"}, sort_keys=True, default=str) + "|" + "|".join(sorted(bots))
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
+    parts["inventory_expectation"] = json.dumps({k: v for k, v in exp.items() if k != "_id"}, sort_keys=True, default=str)
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()
+
+
+def inventory_failures(proj: dict, exp: dict) -> list[str]:
+    """A14-9 — exact counts against the APPROVED expectation; any structural defect blocks."""
+    if not exp or not exp.get("approved_by"):
+        return ["no approved inventory expectation — a bundle cannot be produced without one"]
+    out = list(proj.get("structural_defects") or [])
+    c = proj.get("counts") or {}
+    if c.get("configured") != exp.get("accounts"):
+        out.append(f"unique identity-bound accounts {c.get('configured')} != approved {exp.get('accounts')}")
+    if c.get("live_enabled") != exp.get("enabled"):
+        out.append(f"enabled accounts {c.get('live_enabled')} != approved {exp.get('enabled')}")
+    if c.get("bots_enabled") != exp.get("bots"):
+        out.append(f"enabled bots {c.get('bots_enabled')} != approved {exp.get('bots')}")
+    if c.get("bots_enabled") != c.get("live_enabled"):
+        out.append("exactly one enabled bot per enabled account required")
+    out += [v for v in (proj.get("violations") or []) if v not in out and ("orphan" in v or "outside" in v or "disabled" in v)]
+    return out
 
 
 def _age_s(iso: str | None, now: datetime) -> float | None:
@@ -150,16 +204,28 @@ async def build_bundle(db, *, actor: str) -> dict:
         ev = await account_evidence(db, acc, now)
         ev["failures"] = account_failures(ev)
         accounts.append(ev)
+    # A14-9 — the approved inventory expectation + approver travel INSIDE the signed bundle
+    from inventory_projection import projection
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
+    if not exp.get("approved_by"):
+        raise RuntimeError("no approved inventory expectation — approve the inventory before building a bundle")
+    proj = await projection(db)
     payload = {"release": rel, "generated_at": now.isoformat(), "actor": actor,
                "inventory": {"accounts": await db.accounts.count_documents(base_q),
                              "enabled": len(accounts),
-                             "bots_active": sum(1 for a in accounts for b in a["bots"] if b["active"])},
+                             "bots_active": sum(1 for a in accounts for b in a["bots"] if b["active"]),
+                             "observed": proj.get("counts"), "inventory_hash": proj.get("inventory_hash"),
+                             "expected": {k: exp.get(k) for k in ("accounts", "enabled", "bots", "account_ids", "policy_version")},
+                             "approved_by": exp.get("approved_by"), "approved_at": exp.get("set_at")},
                "accounts": accounts}
     failures = [f"{a['label']}: {f}" for a in accounts for f in a["failures"]]
+    failures += [f"inventory: {f}" for f in inventory_failures(proj, exp)]
     if not any(a["trading_enabled"] for a in accounts):
         failures.append("no enabled live account to accept")
+    from release_signing import key_id
     doc = {"bundle_id": uuid.uuid4().hex, "payload": payload,
-           "algo": "hmac-sha256(LEDGER_ANCHOR_KEY) over bundle_id+payload+verdict+failures+account_ids+release+times",
+           "algo": "ed25519", "schema_version": SCHEMA_VERSION, "key_id": key_id(),
+           "config_fingerprint": await config_fingerprint(db, [a["account_id"] for a in accounts if a["trading_enabled"]], rel),
            "verdict": "PASS" if not failures else "FAIL",
            "failures": failures, "build_sha": rel["build_sha"], "image_digest": rel["image_digest"],
            "created_by": actor, "created_at": now.isoformat(),
@@ -171,10 +237,14 @@ async def build_bundle(db, *, actor: str) -> dict:
     return doc
 
 
-def bundle_covers(bundle: dict | None, account_id: str, rel: dict, now: datetime | None = None) -> tuple[bool, str]:
+def bundle_covers(bundle: dict | None, account_id: str, rel: dict, now: datetime | None = None,
+                  current_fingerprint: str | None = None) -> tuple[bool, str]:
     now = now or _now()
     if not bundle:
         return False, "no acceptance bundle"
+    # A14-11 — event-driven expiry: the configuration the bundle vouched for must be unchanged
+    if current_fingerprint is not None and bundle.get("config_fingerprint") != current_fingerprint:
+        return False, "configuration changed since the acceptance bundle (accounts/bots/credentials/EA/release) — new bundle required"
     if bundle.get("verdict") != "PASS":
         return False, "latest acceptance bundle FAILED"
     if not verify_signature(bundle):
@@ -203,6 +273,7 @@ async def current_status(db) -> dict:
     """N97-11 — coverage is reported for EVERY enabled live account, not just the first."""
     from broker_env import attested_environment
     rel = release_identity()
+    fp = None
     b = await latest_bundle(db)
     public_b = {k: v for k, v in (b or {}).items() if k != "signature"} if b else None   # audit P3
     accounts = []
@@ -213,8 +284,10 @@ async def current_status(db) -> dict:
                                                                         "account_type": 1, "ea_identity": 1,
                                                                         "broker_account_id_reported": 1, "creds_version": 1,
                                                                         "broker_environment": 1, "mode": 1}).limit(50):
+        if fp is None:
+            fp = await config_fingerprint(db, list((b or {}).get("account_ids") or []), rel) if b else ""
         env = attested_environment(acc)
-        ok, why = bundle_covers(b, str(acc["_id"]), rel)
+        ok, why = bundle_covers(b, str(acc["_id"]), rel, current_fingerprint=fp)
         accounts.append({"account_id": str(acc["_id"]), "label": acc.get("display_name") or acc.get("label") or acc.get("broker"),
                          "environment": env, "covered": ok, "reason": why,
                          "gate_applies": env == "LIVE"})

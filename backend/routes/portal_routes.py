@@ -255,6 +255,19 @@ async def _compute_status(now: float, timings: dict | None = None):
                          else f"Trading {readiness['state'].lower().replace('_', '-')} · connectivity {connectivity.replace('_', ' ')}")}
     headline = (("Platform controls available" if not hard and not soft else f"Platform {overall.replace('_', ' ')}")
                 + (" · trading ready" if trading_ready else f" · {trading['label'].lower()}"))
+    # N99-8 — the login page promises "the readiness requirements": publish the list, each with
+    # its current pass/fail, never raw operational counts
+    trading["requirements"] = [
+        {"id": "ea_bridge", "label": "Verified EA terminal connected (signed EX5 / attested DEMO)",
+         "ok": components["ea_bridge"]["status"] == "operational"},
+        {"id": "connectivity", "label": "Broker connectivity active", "ok": connectivity == "active"},
+        {"id": "readiness", "label": "Trading authority READY (no safety block, caps and risk config set)",
+         "ok": readiness["state"] == "READY"},
+        {"id": "inventory", "label": "Signed exact inventory attested (accounts · enabled · bots)",
+         "ok": bool(aggregate.get("attested"))},
+        {"id": "exposure", "label": "New exposure allowed by the authority",
+         "ok": bool(readiness.get("new_exposure_allowed")) and trading_ready},
+    ]
     data = {"overall": overall, "components": components, "trading": trading, "headline": headline,
             # round 10 P2-01 — deployment metadata, never hard-coded copy
             "deployment": {"region": os.environ.get("DEPLOYMENT_REGION") or None,

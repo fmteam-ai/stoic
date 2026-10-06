@@ -434,8 +434,30 @@ async def ensure_indexes():
     # risk snapshot per account+symbol, one ledger event per deal+type).
     # Failure to create ANY of them is FATAL for the scalp service: the
     # whole subsystem fails closed until indexes are healthy.
-    try:
+    # N99-6 — one try per index group: a failure in one group blocks ONLY what depends on it
+    # (scalp fails closed on its own indexes; billing / auth / crypto / outbox groups are
+    # independent and are never skipped because an earlier group raised).
+    async def _scalp_group():
         await db.scalp_owners.create_index("account_id", unique=True)
+        # Round 17 item 7 — one document per capacity unit is a SAFETY
+        # guarantee: duplicates would double broker capacity.
+        await db.scalp_submission_slots.create_index(
+            [("broker_key", 1), ("slot_id", 1)], unique=True)
+        await db.trades.create_index("submission_slot.token", sparse=True)
+        await db.scalp_risk_state.create_index([("account_id", 1), ("symbol", 1)],
+                                               unique=True)
+        await db.scalp_financial_events.create_index([("account_id", 1), ("at", -1)])
+        await db.scalp_financial_events.create_index(
+            [("account_id", 1), ("deal_id", 1), ("event_type", 1)], unique=True)
+        # Round 18 review item 8 — reservation uniqueness constraints are a
+        # safety guarantee (one active reservation per decision / trade).
+        from scalp.risk_reservations import ensure_reservation_indexes
+        await ensure_reservation_indexes(db)
+        # A13 P1-02 — account-wide entry lease
+        from account_reservations import ensure_reservation_lock_indexes
+        await ensure_reservation_lock_indexes(db)
+
+    async def _billing_group():
         # iter-122 billing correctness — exactly-once payment ledger,
         # idempotent affiliate commissions, durable commission outbox,
         # one subscription doc per user, TTL cleanup of short-lived
@@ -449,11 +471,8 @@ async def ensure_indexes():
             "expires_at", expireAfterSeconds=3600)
         await db.vps_bootstrap_tokens.create_index(
             "expires_at", expireAfterSeconds=3600)
-        # Round 17 item 7 — one document per capacity unit is a SAFETY
-        # guarantee: duplicates would double broker capacity.
-        await db.scalp_submission_slots.create_index(
-            [("broker_key", 1), ("slot_id", 1)], unique=True)
-        await db.trades.create_index("submission_slot.token", sparse=True)
+
+    async def _auth_group():
         # Auth hardening: revocable refresh sessions + shared rate limits
         await db.auth_sessions.create_index("jti", unique=True)
         await db.auth_sessions.create_index([("user_id", 1), ("revoked", 1)])
@@ -465,30 +484,31 @@ async def ensure_indexes():
                                            unique=True)
         await db.broker_deals.create_index([("financial_reconciliation_status", 1),
                                             ("received_at", 1)])
-        await db.scalp_risk_state.create_index([("account_id", 1), ("symbol", 1)],
-                                               unique=True)
-        await db.scalp_financial_events.create_index([("account_id", 1), ("at", -1)])
-        await db.scalp_financial_events.create_index(
-            [("account_id", 1), ("deal_id", 1), ("event_type", 1)], unique=True)
-        # Round 18 review item 8 — reservation uniqueness constraints are a
-        # safety guarantee (one active reservation per decision / trade).
-        from scalp.risk_reservations import ensure_reservation_indexes
-        await ensure_reservation_indexes(db)
-        # A13 P1-02 / P0-01 — account-wide entry lease + unique crypto client order ids
-        from account_reservations import ensure_reservation_lock_indexes
-        await ensure_reservation_lock_indexes(db)
+
+    async def _crypto_group():
+        # A13 P0-01 — unique crypto client order ids
         from crypto_bridge.crypto_execution import ensure_crypto_indexes
         await ensure_crypto_indexes(db)
+
+    async def _outbox_group():
         # Phase A — transactional-outbox durability for critical events
         from scalp.outbox import ensure_outbox_indexes
         await ensure_outbox_indexes(db)
-        from scalp.engine import set_service_block
+
+    from scalp.engine import set_service_block
+    _index_failures = []
+    for _name, _grp in (("scalp", _scalp_group), ("billing", _billing_group), ("auth", _auth_group),
+                        ("crypto", _crypto_group), ("outbox", _outbox_group)):
+        try:
+            await _grp()
+        except Exception as e:  # noqa: BLE001
+            _index_failures.append(_name)
+            logging.getLogger("trading-bot").critical(
+                "critical index group '%s' failed: %s", _name, e)
+            if _name == "scalp":
+                set_service_block(f"critical index creation failed ({_name}): {e}")
+    if "scalp" not in _index_failures:
         set_service_block(None)
-    except Exception as e:  # noqa: BLE001
-        from scalp.engine import set_service_block
-        set_service_block(f"critical index creation failed: {e}")
-        logging.getLogger("trading-bot").critical(
-            "SCALP SERVICE BLOCKED — unique index creation failed: %s", e)
     await db.broker_time_offsets.create_index([("account_id", 1),
                                                ("effective_from", -1)])
 

@@ -136,14 +136,24 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
     marks = [m for m in (last_deal, min(recon_marks) if recon_marks else None,
                          (now - timedelta(seconds=hb_age)) if hb_age is not None else None) if m]
     watermark = min(marks) if marks else None
-    prov = provenance(provider="broker_deals", source_kind="broker_reconciled", points=curve[-365:],
+    # N99-7 / A14-3 — "broker-reconciled" is a CLAIM: only when the statement ledger gate passes
+    # (signed RECONCILED statements covering every enabled account). Otherwise the curve is
+    # DERIVED from broker deal reports — honest, but not reconciled against a statement.
+    from broker_statement_ledger import ledger_gate
+    gate_reasons = await ledger_gate(db, user_id)
+    reconciled = not gate_reasons and bool(recon_marks)
+    prov = provenance(provider="broker_deals", source_kind="broker_reconciled" if reconciled else "derived",
+                      points=curve[-365:],
                       time_key="date", expected_interval_s=86400, as_of=watermark,
                       reconciliation_id=("recon:" + ",".join(sorted(recon_ids))) if recon_ids else None,
-                      cache_status="live" if recon_marks else "unreconciled",
-                      note="broker-confirmed deals only; estimated/unknown outcomes excluded")
+                      cache_status="live" if reconciled else "unreconciled",
+                      note=("broker-confirmed deals only; statement ledger gate PASSED" if reconciled else
+                            "derived from broker deal reports — NOT reconciled against a signed statement"
+                            + (f" ({', '.join(gate_reasons[:3])})" if gate_reasons else "")))
     if watermark is None or not recon_marks:
         prov["stale"] = True
-    prov["share_allowed"] = not prov["stale"]
+    prov["ledger_gate_reasons"] = gate_reasons
+    prov["share_allowed"] = reconciled and not prov["stale"]
     return {"generated_at": now.isoformat(),
             "overall": _stats(total),
             "max_drawdown": round(max_dd, 2),

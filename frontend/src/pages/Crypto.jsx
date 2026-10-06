@@ -303,12 +303,24 @@ function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr,
                                 className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
                         </div>
                     )}
-                    <label className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" checked={form.testnet}
+                    {selected.capabilities && (
+                        <div data-testid="exchange-capability-matrix" className="border border-[#1F1F1F] bg-[#050505] p-2 font-mono text-[10px] space-y-0.5">
+                            <div className="text-[#52525B] tracking-widest">CAPABILITY MATRIX · {selected.label}</div>
+                            {[["sandbox", "Sandbox / testnet"], ["client_id_lookup", "Client-id order verification"], ["oco_protection", "Exchange-side OCO protection"], ["certified", "Certification"]].map(([k, lbl]) => (
+                                <div key={k} className="flex justify-between"><span className="text-[#A1A1AA]">{lbl}</span><span className={selected.capabilities[k] ? "text-[#00FF41]" : "text-[#FF3B30]"}>{selected.capabilities[k] ? "PASS" : "FAIL"}</span></div>
+                            ))}
+                            <div className="flex justify-between"><span className="text-[#A1A1AA]">Partial-fill policy</span><span className="text-white">{selected.capabilities.partial_fill_policy || "—"}</span></div>
+                            <div className="flex justify-between pt-1 border-t border-[#1F1F1F]"><span className="text-[#A1A1AA]">Live trading</span>
+                                <span data-testid="exchange-live-allowed" className={selected.capabilities.live_allowed ? "text-[#00FF41]" : "text-[#FF3B30]"}>{selected.capabilities.live_allowed ? "ALLOWED (when the operator switch is on)" : "REFUSED — testnet only"}</span></div>
+                        </div>
+                    )}
+                    <label className={`flex items-center gap-2 ${selected.capabilities && !selected.capabilities.live_allowed ? "opacity-60 cursor-not-allowed" : "cursor-pointer"}`}>
+                        <input type="checkbox" checked={selected.capabilities && !selected.capabilities.live_allowed ? true : form.testnet}
+                            disabled={!!selected.capabilities && !selected.capabilities.live_allowed}
                             onChange={(e) => set("testnet", e.target.checked)} data-testid="form-testnet"
                             className="accent-[#FFD700]" />
                         <span className="font-mono text-xs">
-                            Testnet {supportsSandbox ? "(recommended)" : "(safe-mode flag — no sandbox available for this exchange)"}
+                            Testnet {selected.capabilities && !selected.capabilities.live_allowed ? "(forced — this exchange is not cleared for live trading)" : supportsSandbox ? "(recommended)" : "(safe-mode flag — no sandbox available for this exchange)"}
                         </span>
                     </label>
 

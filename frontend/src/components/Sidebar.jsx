@@ -233,7 +233,7 @@ export function Sidebar({ onNavigate }) {
                     <StoicMark size={36} />
                     <div>
                         <div className="font-display font-bold text-sm tracking-[0.18em]">STOIC</div>
-                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest">RISK-CONTROLLED · v1.0</div>
+                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest">VETO-FIRST · v1.0</div>
                     </div>
                 </div>
                 <button onClick={toggleSimpleMode}

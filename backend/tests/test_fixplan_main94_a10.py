@@ -45,8 +45,9 @@ def test_compose_config_stubs_both_env_files_in_ci_and_cleans_up(tmp_path, monke
     spec = importlib.util.spec_from_file_location("ccs", os.path.join(ROOT, "scripts", "check_compose_secrets.py"))
     ccs = importlib.util.module_from_spec(spec); spec.loader.exec_module(ccs)
     (tmp_path / "backend").mkdir()
-    (tmp_path / ".env.example").write_text("DB_NAME=\nMONGO_ROOT_USER=\n")
-    (tmp_path / "backend" / ".env.example").write_text("APP_ENV=\nJWT_SECRET=\n")
+    (tmp_path / "deploy" / "env").mkdir(parents=True)        # A14-1 — templates live in deploy/env/
+    (tmp_path / "deploy" / "env" / "root.env.example").write_text("DB_NAME=\nMONGO_ROOT_USER=\n")
+    (tmp_path / "deploy" / "env" / "backend.env.example").write_text("APP_ENV=\nJWT_SECRET=\n")
     (tmp_path / "docker-compose.yml").write_text("services: {}\n")
     fake_bin = tmp_path / "bin"; fake_bin.mkdir()
     probe = tmp_path / "probe.txt"

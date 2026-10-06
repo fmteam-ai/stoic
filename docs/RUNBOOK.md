@@ -36,6 +36,6 @@
 5. Deploy backend before asking users to update EAs (backend is backward compatible per version gate).
 
 ## Secrets
-All configuration via `backend/.env` (see `.env.example`). Broker/exchange
+All configuration via `backend/.env` (see `deploy/env/backend.env.example`). Broker/exchange
 secrets at rest are encrypted with `KEY_VAULT_MASTER`. Rotate `JWT_SECRET`
 only during a maintenance window (invalidates all sessions).

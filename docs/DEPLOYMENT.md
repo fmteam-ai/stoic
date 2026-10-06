@@ -166,7 +166,7 @@ deploy/install.sh --dev                            # local: loopback-only
 deploy/install.sh --production trade.example.com   # public TLS via Caddy
 ```
 Does: prereq checks → generates Docker secrets (`./secrets/`) → creates
-`./.env` + `backend/.env` from the `.env.example` templates (written inline
+`./.env` + `backend/.env` from the `deploy/env/*.env.example` templates (written inline
 if missing from the archive — the installer is self-contained) → production
 mode enforces `APP_ENV=production`, `CSRF_ENFORCE_ORIGIN`, `CORS_ORIGINS`
 and wires `COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml` so every
@@ -230,7 +230,7 @@ Weekly restore drills into a staging copy are part of the soak plan
 (docs/MT5_VALIDATION_CAMPAIGN.md §7).
 
 ## Production configuration checklist
-Set in `backend/.env` (see `.env.example` for every key):
+Set in `backend/.env` (see `deploy/env/backend.env.example` for every key):
 
 | Key | Requirement |
 |---|---|

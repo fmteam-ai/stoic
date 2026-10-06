@@ -26,7 +26,9 @@ STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_cr
                    # A7d — execution-health brake manual release
                    "execution_brake_release",
                    # fix plan D2 — S1 passkey enrolment, S6 forced promotion, S11 VPS destructive ops
-                   "passkey_enrol", "admin_promote", "vps_destroy"}
+                   "passkey_enrol", "admin_promote", "vps_destroy",
+                   # SEC-001 (main99) — trusting a terminal mints the verified identity chain
+                   "terminal_trust"}
 
 
 def _hash_token(token: str) -> str:

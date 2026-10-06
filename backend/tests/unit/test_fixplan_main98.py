@@ -52,10 +52,10 @@ class _IndexedCollection(FakeCollection):
 
 # ── Part 1: .env templates + secrets ─────────────────────────────────────────
 def test_env_templates_and_docker_secret_carry_the_keys():
-    be = _src("backend", ".env.example")
+    be = _src("deploy", "env", "backend.env.example")
     for k in ("BRIDGE_TOKEN_HASH_KEY=", "CRYPTO_LIVE_TRADING_ENABLED=", "LEDGER_ANCHOR_KEY="):
         assert k in be, k
-    root = _src(".env.example")
+    root = _src("deploy", "env", "root.env.example")
     for k in ("BRIDGE_TOKEN_HASH_KEY=", "CRYPTO_LIVE_TRADING_ENABLED=", "LEDGER_ANCHOR_KEY="):
         assert k in root, k
     inst = _src("deploy", "install.sh").split("cat > backend/.env.example <<'EOF'")[1].split("\nEOF")[0]
@@ -127,7 +127,10 @@ def test_scalp_uses_its_own_origin_and_caps_not_the_main_bots():
     r_scalp = run(ar.reserve_entry(db, account_id=aid, user_id="u", source="scalp", decision_id="s", caps=scalp, symbol="XAUUSD", origin="scalp"))
     assert r_scalp["ok"] is True and r_scalp["capacity"]["auto_open"] == 0   # the main bot's open trade is NOT its counter
     eng = _src("backend", "scalp", "engine.py")
-    assert 'origin="scalp"' in eng and '"origin": "scalp", "scope": "scalp_fast"' in eng
+    # N99-1 — the counter key stays "scalp" (reservation side) but the TRADE keeps origin "auto"
+    # + engine "scalp" so every auto safety filter still applies
+    assert 'origin="scalp"' in eng and '"origin": "auto", "engine": "scalp", "scope": "scalp_fast"' in eng
+    assert scalp["total_cap"] == 3                                 # N99-1 — shares the account-wide total cap
 
 
 # ── N98-4 suspension survives the re-hash ────────────────────────────────────

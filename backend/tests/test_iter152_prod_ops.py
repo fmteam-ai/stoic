@@ -107,7 +107,7 @@ def test_certify_endpoint_blocks_when_checks_fail():
 
 # ----------------------------------------------- artifacts + docs
 def test_env_example_documents_all_keys():
-    example = open(_os.path.join(_BACKEND_DIR, ".env.example")).read()
+    example = open(_os.path.join(_REPO_DIR, "deploy", "env", "backend.env.example")).read()
     real_keys = [l.split("=", 1)[0] for l in
                  open(_os.path.join(_BACKEND_DIR, ".env")) if "=" in l]
     for k in real_keys:

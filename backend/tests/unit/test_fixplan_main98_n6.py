@@ -24,11 +24,21 @@ def _src(*parts):
     return open(os.path.join(ROOT, *parts), encoding="utf-8", errors="replace").read()
 
 
+_ACCEPTED_EX5 = "a" * 64
+
+
+@pytest.fixture(autouse=True)
+def _accepted_ex5_release():
+    """N99-2 — broker 'demo' is evidence only from an ACCEPTED EX5; pin one for this module."""
+    with patch("ea_capabilities.accepted_ea_sha256s", lambda: [_ACCEPTED_EX5]):
+        yield
+
+
 def _demo_account(trade_mode=None, server="Broker-Demo", attested=True, authoritative=True):
     import broker_env as be
     acc = {"_id": ObjectId(), "mode": "live", "label": "Demo-1", "account_type": "demo", "server": server,
            "broker_server": server, "account_number": "123", "broker_account_id_reported": "123", "creds_version": 1,
-           "last_heartbeat": datetime.now(timezone.utc).isoformat(),
+           "last_heartbeat": datetime.now(timezone.utc).isoformat(), "ea_binary_sha256": _ACCEPTED_EX5,
            "ea_identity": {"installation_id": "inst1", "authoritative": authoritative, "broker_server": server,
                            "trade_mode": trade_mode}}
     if attested:

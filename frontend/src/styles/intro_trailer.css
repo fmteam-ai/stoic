@@ -264,7 +264,10 @@
     animation: tstScroll 55s linear infinite;
 }
 .tst-track.reverse { animation: tstScrollBack 62s linear infinite; }
-.tst-marquee:hover .tst-track { animation-play-state: paused; }
+.tst-marquee:hover .tst-track,
+.tst-marquee:focus-within .tst-track,
+.tst-marquee[data-paused="true"] .tst-track { animation-play-state: paused; }   /* N99-8 — keyboard pause */
+.tst-marquee:focus-visible { outline: 1px solid rgba(0, 255, 65, 0.6); outline-offset: 4px; }
 @keyframes tstScroll     { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 @keyframes tstScrollBack { from { transform: translateX(-50%); } to { transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) {

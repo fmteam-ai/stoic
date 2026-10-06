@@ -38,7 +38,7 @@ logger = logging.getLogger("crypto.ccxt")
 # endpoint that returns quickly on success.
 EXCHANGES = {
     "binance":   {"klass": "binance",   "sandbox": True,  "passphrase": False, "default_quote": "USDT", "label": "Binance Global",
-                  "ping_url": "https://api.binance.com/api/v3/ping"},
+                  "ping_url": "https://api.binance.com/api/v3/ping", "oco": True, "client_id_lookup": True, "certified": True},
     "binanceus": {"klass": "binanceus", "sandbox": False, "passphrase": False, "default_quote": "USDT", "label": "Binance.US",
                   "ping_url": "https://api.binance.us/api/v3/ping"},
     "kraken":    {"klass": "kraken",    "sandbox": False, "passphrase": False, "default_quote": "USD",  "label": "Kraken",
@@ -95,7 +95,8 @@ async def check_reachability(force: bool = False) -> dict:
         except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
             return eid, {"reachable": False, "status_code": None, "error": f"Network: {type(e).__name__}"}
         except Exception as e:  # noqa: BLE001
-            return eid, {"reachable": False, "status_code": None, "error": str(e)[:120]}
+            red = redact_exchange_error(e, f"reachability:{eid}")
+            return eid, {"reachable": False, "status_code": None, "error": red["code"], "correlation_id": red["correlation_id"]}
 
     pairs = await asyncio.gather(*[
         _probe(eid, meta["ping_url"])
@@ -225,7 +226,11 @@ class CCXTClient:
     async def __aenter__(self) -> "CCXTClient":
         self.exchange = _new_exchange(self.account)
         # N98-8 — market() / amount_to_precision() need the market table on a FRESH client
-        await self.exchange.load_markets()
+        try:
+            await self.exchange.load_markets()
+        except BaseException:
+            await self.__aexit__(None, None, None)      # main99 — a failed load_markets must still close()
+            raise
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -262,6 +267,12 @@ class CCXTClient:
 
     async def cancel_order(self, order_id: str, symbol: str) -> dict:
         return await self.exchange.cancel_order(order_id, symbol)
+
+    async def fetch_order_trades(self, symbol: str, order_id: str) -> list:
+        """main99 — the order's own fills (with fee data) for fee-aware held sizing."""
+        if self.exchange.has.get("fetchOrderTrades"):
+            return await self.exchange.fetch_order_trades(order_id, symbol)
+        return await self.exchange.fetch_my_trades(symbol, params={"orderId": order_id})
 
     def amount_to_precision(self, symbol: str, amount: float) -> float:
         return float(self.exchange.amount_to_precision(symbol, amount))
@@ -311,13 +322,56 @@ class CCXTClient:
         try:
             return await self.exchange.privateGetOrderlist({"origClientOrderId": list_client_order_id})
         except Exception as e:  # noqa: BLE001
-            if "does not exist" in str(e).lower() or "-2018" in str(e) or "OrderNotFound" in type(e).__name__:
+            # main99 — -2013 is Binance's "Order does not exist"; -2018 is "balance insufficient" (NOT absence)
+            if "does not exist" in str(e).lower() or "-2013" in str(e) or "OrderNotFound" in type(e).__name__:
                 return None
             raise
 
 
 # Backwards-compat alias — old code calls BinanceClient(account).
 BinanceClient = CCXTClient
+
+
+# ── A14-5 — per-exchange capability matrix: live only where EVERY row passes ──
+PARTIAL_FILL_POLICY = "cancel_remainder_then_protect_filled"
+
+
+def capability_matrix() -> dict:
+    out = {}
+    for eid, meta in EXCHANGES.items():
+        caps = {"sandbox": bool(meta.get("sandbox")),
+                "client_id_lookup": bool(meta.get("client_id_lookup")),      # look-before-resend by client order id
+                "oco_protection": bool(meta.get("oco")),                      # exchange-side SL/TP as one OCO list
+                "partial_fill_policy": PARTIAL_FILL_POLICY if meta.get("oco") else None,
+                "certified": bool(meta.get("certified"))}
+        caps["live_allowed"] = all((caps["sandbox"], caps["client_id_lookup"], caps["oco_protection"], caps["certified"]))
+        caps["missing"] = [k for k in ("sandbox", "client_id_lookup", "oco_protection", "certified") if not caps[k]]
+        out[eid] = caps
+    return out
+
+
+def live_capability_block(exchange_id: str) -> dict | None:
+    caps = capability_matrix().get(str(exchange_id or DEFAULT_EXCHANGE_ID).lower())
+    if caps is None:
+        return {"blocked": "exchange_unsupported", "reason": "unknown exchange"}
+    if caps["live_allowed"]:
+        return None
+    return {"blocked": "exchange_not_certified",
+            "reason": f"{exchange_id} is not cleared for live trading — capability matrix missing: {', '.join(caps['missing'])}",
+            "capabilities": caps}
+
+
+# ── A14-6 — never return raw exchange text: fixed code + correlation id, raw in the log ──
+def redact_exchange_error(exc: BaseException, context: str = "exchange") -> dict:
+    import uuid as _uuid
+    cid = _uuid.uuid4().hex[:12]
+    name = type(exc).__name__
+    code = ("exchange_network_error" if "Network" in name or "Timeout" in name or isinstance(exc, (TimeoutError, ConnectionError, OSError))
+            else "exchange_rejected" if "Exchange" in name or "InsufficientFunds" in name or "InvalidOrder" in name
+            else "exchange_bad_response" if "BadResponse" in name
+            else "exchange_error")
+    logging.getLogger("crypto.exchange").warning("[%s] %s %s: %s", cid, context, name, str(exc)[:500])
+    return {"code": code, "correlation_id": cid, "exception": name}
 
 
 # ─────────────────── Lightweight helpers (no live call) ───────────────────

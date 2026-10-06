@@ -11,6 +11,7 @@ sized from the FILLED amount minus base-asset fees, or the position is flattened
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
@@ -130,6 +131,8 @@ def never_left_exchange(exc: BaseException) -> bool:
         import ccxt
         if isinstance(exc, ccxt.NetworkError):
             return False
+        if isinstance(exc, getattr(ccxt, "BadResponse", ())):
+            return False                      # main99 — the venue answered garbage: outcome UNKNOWN, never "rejected"
         if isinstance(exc, ccxt.ExchangeError):
             return True
     except Exception:  # noqa: BLE001
@@ -151,9 +154,11 @@ async def record_failure(db, intent_id: str, exc: BaseException) -> dict:
     """Pre-dispatch / broker-confirmed error → rejected; anything that may have
     left STOIC → UNKNOWN (never resent, reconciled by client order id)."""
     if never_left_exchange(exc):
-        await transition(db, intent_id, "rejected", detail=str(exc)[:200],
-                         result={"error": str(exc)[:300]})
-        return {"blocked": "exchange_error", "intent_id": intent_id, "error": str(exc)[:200]}
+        from crypto_bridge.ccxt_engine import redact_exchange_error
+        red = redact_exchange_error(exc, f"execute:{intent_id}")
+        await transition(db, intent_id, "rejected", detail=f"{red['exception']} [{red['correlation_id']}]",
+                         result={"error": red["code"], "correlation_id": red["correlation_id"]})
+        return {"blocked": "exchange_error", "intent_id": intent_id, "error": red["code"], "correlation_id": red["correlation_id"]}
     await transition(db, intent_id, "unknown",
                      detail=f"post-dispatch failure ({type(exc).__name__}) — exchange truth required",
                      result={"error": str(exc)[:300]})
@@ -225,11 +230,43 @@ async def protect(db, client, *, trade_id, ccxt_symbol: str, side: str, amount: 
                 "reason": f"OCO lookup failed ({type(e).__name__}) — not resent"}
         await db.trades.update_one({"_id": oid}, {"$set": {"protection": prot}})
         return prot
-    if live is not None:
+    if live is not None and str(live.get("listOrderStatus") or "").upper() != "ALL_DONE":
         prot = {"status": PROTECTION_PLACED, "at": _now(), "amount": amount, "list_id": str(live.get("orderListId") or ""),
                 "list_client_order_id": derived_id(cid, "-oco"), "tp_client_order_id": derived_id(cid, "-tp"),
                 "sl_client_order_id": derived_id(cid, "-sl"), "raw_status": live.get("listOrderStatus"), "adopted": True}
         await db.trades.update_one({"_id": oid}, {"$set": {"protection": prot}})
+        return prot
+    if live is not None:
+        # N99-9 — a FINISHED list is not protection: a filled leg closed the position; otherwise it is unprotected
+        closed = await _close_if_oco_leg_filled(db, client, oid, ccxt_symbol, cid)
+        if closed:
+            return closed
+        # the list's client ids are spent at the exchange (no identical resend possible) → fail closed
+        logger.warning("OCO list for %s already ALL_DONE without a fill — position unprotected, flattening", oid)
+        prot = await _flatten_unprotected(db, client, oid, ccxt_symbol, side, amount, cid,
+                                          {"status": PROTECTION_MISSING, "reason": "oco_finished_without_fill", "at": _now()})
+        sets = {"protection": prot}
+        if prot["status"] == PROTECTION_FLATTENED:
+            sets.update({"status": "closed", "closed_at": _now(), "close_reason": "protection_failed_flattened",
+                         "exit_price": prot.get("flatten_price")})
+        await db.trades.update_one({"_id": oid}, {"$set": sets})
+        return prot
+    # main99 — a flatten placed by an earlier attempt means the coins are GONE: never place an OCO over it
+    try:
+        prior_fl = await client.fetch_order_by_client_id(ccxt_symbol, derived_id(cid, "-fl"))
+    except Exception as e:  # noqa: BLE001
+        prot = {"status": PROTECTION_PLACING, "at": _now(), "uncertain": True,
+                "reason": f"flatten lookup failed ({type(e).__name__}) — not resent"}
+        await db.trades.update_one({"_id": oid}, {"$set": {"protection": prot}})
+        return prot
+    if prior_fl is not None:
+        prot = await _flatten_unprotected(db, client, oid, ccxt_symbol, side, amount, cid,
+                                          {"status": PROTECTION_MISSING, "reason": "earlier flatten found", "at": _now()})
+        sets = {"protection": prot}
+        if prot["status"] == PROTECTION_FLATTENED:
+            sets.update({"status": "closed", "closed_at": _now(), "close_reason": "protection_failed_flattened",
+                         "exit_price": prot.get("flatten_price")})
+        await db.trades.update_one({"_id": oid}, {"$set": sets})
         return prot
     if amount <= 0:
         prot = {"status": PROTECTION_MISSING, "reason": "no held base amount after fees", "at": _now()}
@@ -252,7 +289,9 @@ async def protect(db, client, *, trade_id, ccxt_symbol: str, side: str, amount: 
                              "Crypto OCO outcome unknown after a transport failure — will be verified by client id.",
                              f"crypto_protection_uncertain:{oid}", {"trade_id": str(oid), "symbol": ccxt_symbol})
                 return prot
-            prot = {"status": PROTECTION_MISSING, "reason": str(e)[:200], "at": _now()}
+            from crypto_bridge.ccxt_engine import redact_exchange_error
+            red = redact_exchange_error(e, f"protect:{oid}")
+            prot = {"status": PROTECTION_MISSING, "reason": red["code"], "correlation_id": red["correlation_id"], "at": _now()}
     if prot["status"] != PROTECTION_PLACED:
         prot = await _flatten_unprotected(db, client, oid, ccxt_symbol, side, amount, cid, prot)
     sets = {"protection": prot}
@@ -268,6 +307,15 @@ async def _flatten_unprotected(db, client, oid, ccxt_symbol, side, amount, cid, 
     try:
         prior = await client.fetch_order_by_client_id(ccxt_symbol, derived_id(cid, "-fl"))   # N98-9 — never resend
         if prior is not None:
+            pst = str(prior.get("status") or "").lower()
+            if pst in ("canceled", "cancelled", "expired", "rejected") and float(prior.get("filled") or 0) <= 0:
+                # main99 — a dead flatten that sold NOTHING is not a flatten: still exposed, manual action
+                prot = {**prot, "status": PROTECTION_MISSING, "flatten_error": "flatten_cancelled_unfilled",
+                        "flatten_order_id": str(prior.get("id") or "")}
+                await _alert(db, "crypto_protection_failed", "critical",
+                             "Crypto flatten order was cancelled UNFILLED — position still OPEN and unprotected; manual action required.",
+                             f"crypto_protection_failed:{oid}", {"trade_id": str(oid), "symbol": ccxt_symbol, "protection_status": prot["status"]})
+                return prot
             return {**prot, "status": PROTECTION_FLATTENED, "flatten_order_id": str(prior.get("id") or ""),
                     "flatten_price": prior.get("average") or prior.get("price"), "flatten_amount": prior.get("filled"),
                     "adopted": True}
@@ -279,11 +327,54 @@ async def _flatten_unprotected(db, client, oid, ccxt_symbol, side, amount, cid, 
                 "flatten_price": resp.get("average") or resp.get("price"), "flatten_amount": qty}
         msg = "Unprotected crypto position FLATTENED (fail closed) — exchange-side SL/TP could not be placed."
     except Exception as e:  # noqa: BLE001
-        prot = {**prot, "status": PROTECTION_MISSING, "flatten_error": str(e)[:200]}
+        from crypto_bridge.ccxt_engine import redact_exchange_error
+        red = redact_exchange_error(e, f"flatten:{oid}")
+        prot = {**prot, "status": PROTECTION_MISSING, "flatten_error": red["code"], "correlation_id": red["correlation_id"]}
         msg = "Crypto position is OPEN WITHOUT exchange-side protection and could not be flattened — manual action required."
     await _alert(db, "crypto_protection_failed", "critical", msg, f"crypto_protection_failed:{oid}",
                  {"trade_id": str(oid), "symbol": ccxt_symbol, "protection_status": prot["status"]})
     return prot
+
+
+async def _close_if_oco_leg_filled(db, client, oid, ccxt_symbol: str, cid: str) -> dict | None:
+    """N99-9 — an ALL_DONE list whose TP or SL leg filled means the position is CLOSED."""
+    t = await db.trades.find_one({"_id": oid}) or {}
+    for leg_id, reason in ((derived_id(cid, "-tp"), "tp"), (derived_id(cid, "-sl"), "sl")):
+        o = await client.fetch_order_by_client_id(ccxt_symbol, leg_id)
+        if o and str(o.get("status") or "").lower() in ("closed", "filled"):
+            exit_px = float(o.get("average") or o.get("price") or 0)
+            qty = float(o.get("filled") or t.get("held_amount") or t.get("lot_size") or 0)
+            prot = {"status": PROTECTION_NA, "reason": f"closed by OCO {reason} leg", "filled_leg": reason, "at": _now()}
+            await db.trades.update_one({"_id": oid}, {"$set": {
+                "status": "closed", "closed_at": _now(), "exit_price": exit_px,
+                "pnl": round((exit_px - float(t.get("entry_price") or 0)) * qty, 4), "close_reason": f"oco_{reason}",
+                "protection": prot}})
+            if t.get("reservation_id"):
+                from scalp.risk_reservations import release_for_trade
+                await release_for_trade(db, str(oid), f"oco_{reason}")
+            return prot
+    return None
+
+
+_PUBLIC_KEYS = ("blocked", "reason", "intent_id", "trade_id", "id", "status", "correlation_id", "error",
+                "capabilities", "symbol", "action", "lot_size", "held_amount", "protection", "entry_price",
+                "stop_loss", "take_profit", "exchange_symbol", "client_order_id", "mode", "broker", "opened_at")
+_CODE_LIKE = re.compile(r"^[a-z0-9_]{3,40}$")
+
+
+def public_result(res: dict) -> dict:
+    """A14-6 — what the execute route may return: whitelisted keys; `error` must be a fixed code."""
+    out = {k: v for k, v in (res or {}).items() if k in _PUBLIC_KEYS}
+    err = out.get("error")
+    if isinstance(err, str) and not _CODE_LIKE.match(err):
+        out["error"] = "exchange_error"
+    prot = out.get("protection")
+    if isinstance(prot, dict):
+        out["protection"] = {k: v for k, v in prot.items() if k in ("status", "reason", "correlation_id", "amount", "at", "list_client_order_id")}
+        if isinstance(out["protection"].get("reason"), str) and not _CODE_LIKE.match(out["protection"]["reason"]) \
+                and out["protection"].get("status") in (PROTECTION_MISSING,):
+            out["protection"]["reason"] = "protection_failed"
+    return out
 
 
 # ── recovery ─────────────────────────────────────────────────────────────────
@@ -294,12 +385,13 @@ def trade_from_exchange_order(intent: dict, order: dict) -> dict:
     st = str(order.get("status") or "").lower()
     base = str(p.get("exchange_symbol") or "/").split("/")[0]
     partial = st in ("canceled", "cancelled", "expired") and float(order.get("filled") or 0) > 0
-    held = filled_base_amount(order, base) if (st in ("closed", "filled") or partial) else 0.0
+    resting_partial = st == "open" and float(order.get("filled") or 0) > 0        # A14-4 — exposure while resting
+    held = filled_base_amount(order, base) if (st in ("closed", "filled") or partial or resting_partial) else 0.0
     return {"user_id": intent.get("actor"), "account_id": intent.get("account_id"),
             "signal_id": p.get("signal_id"), "symbol": p.get("symbol"), "exchange_symbol": p.get("exchange_symbol"),
             "action": "BUY" if str(p.get("side", "")).lower() == "buy" else "SELL",
             "lot_size": float(p.get("amount") or 0), "original_lot_size": float(p.get("amount") or 0),
-            "held_amount": held,
+            "held_amount": held, "partial_fill": bool(partial or resting_partial),
             "entry_price": round(px, 5), "stop_loss": p.get("stop_loss"), "take_profit": p.get("take_profit"),
             "pnl": 0.0, "exit_price": None,
             "status": "open" if (st in ("closed", "filled") or partial) else ("pending" if st == "open" else "cancelled"),
@@ -334,25 +426,52 @@ async def _fail_confirmed(db, intent: dict) -> None:
     await _settle_reservation(db, intent, released_reason="exchange_not_found")
 
 
-async def _apply_exchange_truth(db, intent: dict, order: dict) -> tuple[str, bool]:
+async def held_from_fills(client, symbol: str, order: dict, base: str) -> float:
+    """main99 — fetch_order carries no fee data on Binance: size the held amount from the order's
+    own fills (fetch_my_trades by orderId) so base-asset fees are subtracted; fall back to the order."""
+    if float((order or {}).get("filled") or 0) <= 0:
+        return 0.0
+    if not (order.get("fees") or order.get("fee")) and client is not None and order.get("id"):
+        try:
+            fills = await client.fetch_order_trades(symbol, str(order["id"]))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("fill lookup failed for %s: %s", order.get("id"), type(e).__name__)
+            fills = None
+        if fills:
+            filled = sum(float(f.get("amount") or 0) for f in fills)
+            base_fee = sum(float((f.get("fee") or {}).get("cost") or 0) for f in fills
+                           if str((f.get("fee") or {}).get("currency") or "").upper() == base.upper())
+            return max(0.0, filled - base_fee)
+    return filled_base_amount(order, base)
+
+
+async def _apply_exchange_truth(db, intent: dict, order: dict, client=None) -> tuple[str, bool]:
     """Record / update the local row from exchange truth. Returns (status, recorded_new_row)."""
     st = str(order.get("status") or "").lower()
     base = str((intent.get("payload") or {}).get("exchange_symbol") or "/").split("/")[0]
+    sym = (intent.get("payload") or {}).get("exchange_symbol")
     existing = await db.trades.find_one({"client_order_id": intent["client_order_id"]}, {"_id": 1, "status": 1})
     recorded = False
     if existing is None:
-        tid, recorded = await insert_trade_once(db, trade_from_exchange_order(intent, order))
+        row = trade_from_exchange_order(intent, order)
+        if row["held_amount"] > 0:
+            row["held_amount"] = await held_from_fills(client, sym, order, base)
+        tid, recorded = await insert_trade_once(db, row)
     else:
         tid = existing["_id"]
         sets = {"exchange_order_status": order.get("status")}
         if st in ("closed", "filled") and existing.get("status") == "pending":
             # N97-9 — a filled LIMIT order becomes an OPEN position (and gets protected by the sweep)
             sets.update({"status": "open", "entry_price": round(float(order.get("average") or order.get("price") or 0), 5),
-                         "held_amount": filled_base_amount(order, base), "filled_at": _now()})
+                         "held_amount": await held_from_fills(client, sym, order, base), "filled_at": _now()})
+        elif st == "open" and float(order.get("filled") or 0) > 0 and existing.get("status") == "pending":
+            # A14-4 — resting order with a partial fill: exposure NOW (cumulative held after base fees)
+            sets.update({"held_amount": await held_from_fills(client, sym, order, base), "partial_fill": True,
+                         "entry_price": round(float(order.get("average") or order.get("price") or 0), 5)})
         elif st in ("canceled", "cancelled", "rejected", "expired") and existing.get("status") == "pending":
             if float(order.get("filled") or 0) > 0:          # N98-10 — partial fill before cancel = open position
                 sets.update({"status": "open", "entry_price": round(float(order.get("average") or order.get("price") or 0), 5),
-                             "held_amount": filled_base_amount(order, base), "filled_at": _now(), "partial_fill": True})
+                             "held_amount": await held_from_fills(client, sym, order, base), "filled_at": _now(), "partial_fill": True})
             else:
                 sets.update({"status": "cancelled", "closed_at": _now(), "close_reason": f"exchange_{st}"})
         await db.trades.update_one({"_id": tid}, {"$set": sets})
@@ -395,7 +514,7 @@ async def reconcile_intents(db, client_factory, now: datetime | None = None) -> 
             else:
                 out["pending"] += 1
             continue
-        st, recorded = await _apply_exchange_truth(db, it, order)
+        st, recorded = await _apply_exchange_truth(db, it, order, client)
         out["recorded"] += int(recorded)
         if st == "open":
             if it["status"] in ("dispatched", "unknown"):
@@ -412,10 +531,41 @@ async def reconcile_intents(db, client_factory, now: datetime | None = None) -> 
 
 
 async def unprotected_open_count(db, account_id: str | None = None) -> int:
-    q = {"broker_kind": "binance", "status": "open", "protection.status": {"$nin": list(PROTECTED_STATES)}}
+    q = {"broker_kind": "binance", "protection.status": {"$nin": list(PROTECTED_STATES)}, **EXPOSED_FILTER}
     if account_id:
         q["account_id"] = account_id
     return await db.trades.count_documents(q)
+
+
+# A14-4 — exposure = open positions AND resting orders that already filled something
+EXPOSED_FILTER = {"$or": [{"status": "open"}, {"status": "pending", "held_amount": {"$gt": 0}}]}
+
+
+async def _cancel_remainder(db, client, t: dict) -> dict | None:
+    """A14-4 policy: a resting partially filled entry is cancelled first (so the entry and its
+    protective sell never compete for the same balance), then the FILLED amount is protected."""
+    sym, oid_ex = t.get("exchange_symbol"), t.get("exchange_order_id")
+    try:
+        if oid_ex:
+            try:
+                await client.cancel_order(oid_ex, sym)
+            except Exception as e:  # noqa: BLE001 — already gone is fine; anything else: verify by lookup
+                logger.info("cancel remainder %s: %s", oid_ex, type(e).__name__)
+        order = await client.fetch_order_by_client_id(sym, t.get("client_order_id"))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("remainder lookup failed for %s: %s", t["_id"], type(e).__name__)
+        return None
+    if order is None or str(order.get("status") or "").lower() == "open":
+        return None                                   # still resting — retry next sweep, nothing protected yet
+    base = str(sym or "/").split("/")[0]
+    held = await held_from_fills(client, sym, order, base)
+    sets = {"status": "open" if held > 0 else "cancelled", "held_amount": held, "partial_fill": True,
+            "exchange_order_status": order.get("status"), "remainder_cancelled_at": _now(),
+            "entry_price": round(float(order.get("average") or order.get("price") or t.get("entry_price") or 0), 5)}
+    if held <= 0:
+        sets.update({"closed_at": _now(), "close_reason": "exchange_cancelled"})
+    await db.trades.update_one({"_id": t["_id"]}, {"$set": sets})
+    return {**t, **sets}
 
 
 async def reconcile_protection(db, client_factory) -> dict:
@@ -423,8 +573,8 @@ async def reconcile_protection(db, client_factory) -> dict:
     (skipping rows another actor is placing), otherwise fail closed (flatten) and keep alerting."""
     out = {"protected": 0, "flattened": 0, "missing": 0, "skipped": 0}
     lease_floor = (datetime.now(timezone.utc) - timedelta(seconds=PLACING_LEASE_SEC)).isoformat()
-    async for t in db.trades.find({"broker_kind": "binance", "status": "open",
-                                   "protection.status": {"$nin": list(PROTECTED_STATES)}}):
+    async for t in db.trades.find({"broker_kind": "binance", "protection.status": {"$nin": list(PROTECTED_STATES)},
+                                   **EXPOSED_FILTER}):
         prot = t.get("protection") or {}
         if prot.get("status") == PROTECTION_PLACING and str(prot.get("at") or "") >= lease_floor \
                 and not prot.get("uncertain"):
@@ -435,9 +585,15 @@ async def reconcile_protection(db, client_factory) -> dict:
             out["missing"] += 1
             continue
         side = "buy" if t.get("action") == "BUY" else "sell"
-        amount = float(t.get("held_amount") if t.get("held_amount") is not None else (t.get("lot_size") or 0))
         try:
             async with client_factory(acc) as client:
+                if t.get("status") == "pending":                      # A14-4 — resting partial fill
+                    t2 = await _cancel_remainder(db, client, t)
+                    if t2 is None or t2.get("status") != "open":
+                        out["missing" if t2 is None else "skipped"] += 1
+                        continue
+                    t = t2
+                amount = float(t.get("held_amount") if t.get("held_amount") is not None else (t.get("lot_size") or 0))
                 res = await protect(db, client, trade_id=t["_id"], ccxt_symbol=t.get("exchange_symbol"),
                                     side=side, amount=amount, stop_loss=t.get("stop_loss"),
                                     take_profit=t.get("take_profit"),

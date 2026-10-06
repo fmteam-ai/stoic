@@ -34,7 +34,7 @@ def test_crypto_live_switch_default_off_blocks_before_any_exchange_call():
         assert out["blocked"] == "crypto_live_disabled" and calls == []
     with patch.dict(os.environ, {"BINANCE_LIVE_ENABLED": "true", "CRYPTO_LIVE_TRADING_ENABLED": "true"}):
         assert ccxt_engine._live_enabled() is True
-    assert "CRYPTO_LIVE_TRADING_ENABLED" in open(os.path.join(os.path.dirname(__file__), "..", "..", ".env.example")).read()
+    assert "CRYPTO_LIVE_TRADING_ENABLED" in open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "deploy", "env", "root.env.example")).read()
 
 
 # ── A13-2 no silent hash-key fallback ────────────────────────────────────────

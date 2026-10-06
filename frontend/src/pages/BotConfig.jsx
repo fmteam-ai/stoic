@@ -1002,7 +1002,7 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                         desc="Bot auto-stops if today's realised P&L drops below the threshold. Prevents the revenge-trading death spiral that kills most retail accounts." />
                     {cfg.daily_drawdown_enabled && (
                         <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="daily_drawdown_pct" label="DAILY LOSS LIMIT" suffix="% of equity" step={0.5} min={0.5} max={20} />
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="daily_drawdown_pct" label="DAILY LOSS LIMIT" suffix="% of equity" step={0.5} min={0.5} max={20} fallback={3} />
                         </div>
                     )}
                 </div>
@@ -1013,7 +1013,7 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                         desc="A 7-day rolling kill-switch that catches slow-bleed losing streaks the daily limit misses. Conservative default: 7% — bumps to 8% at medium risk, 14% at high." />
                     {cfg.weekly_drawdown_enabled && (
                         <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="weekly_drawdown_pct" label="WEEKLY LOSS LIMIT" suffix="% of equity" step={0.5} min={1} max={40} />
+                            <PPNumInput cfg={cfg} setCfg={setCfg} field="weekly_drawdown_pct" label="WEEKLY LOSS LIMIT" suffix="% of equity" step={0.5} min={1} max={40} fallback={7} />
                         </div>
                     )}
                 </div>

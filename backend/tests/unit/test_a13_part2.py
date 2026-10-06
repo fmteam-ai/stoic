@@ -248,10 +248,15 @@ def test_acceptance_bundle_signed_verdict_and_authority_unlock():
            "last_heartbeat": now.isoformat(), "last_full_sync_at": now.isoformat(), "reconciliation_seq": 3,
            "ea_identity": {"installation_id": "inst1", "broker_server": "Broker-Live"}, "ea_version": "1.60"}
     db.accounts.rows.append(acc)
+    db.bot_configs.rows.append({"_id": ObjectId(), "account_id": str(acc_id), "user_id": "u", "active": True})   # A14-9: 1 bot/account
     db.reconciliation_ledger.rows.append({"account_id": str(acc_id), "discrepancy": 0.0, "period_to": "2026-06-01", "seq": 1})
     full = {"level": "FULL", "domains": {"platform": {"level": "FULL", "reason": "x"},
                                          "acceptance": {"level": "CLOSE_ONLY", "reason": "no bundle"}}, "reasons": []}
-    env = {"LEDGER_ANCHOR_KEY": "k" * 32, "APP_ENV": "production", "STOIC_IMAGE_DIGEST": "sha256:abc"}
+    from test_fixplan_main99_phase4 import signer_env, approve_inventory
+    # A14-10: production REFUSES in-process signing (external signer only), so the unit test signs in
+    # preview mode with the local Ed25519 key and forces the gate on via ACCEPTANCE_BUNDLE_REQUIRED.
+    env = {**signer_env(), "APP_ENV": "preview", "ACCEPTANCE_BUNDLE_REQUIRED": "true", "STOIC_IMAGE_DIGEST": "sha256:abc"}
+    approve_inventory(db, acc_id)
     with patch.dict(os.environ, env), patch("trading_authority.compute_authority", AsyncMock(return_value=full)), \
             patch("modules.pamm.strategy_guard.GIT_COMMIT", "deadbeef1"), \
             patch("broker_env.attested_environment", lambda a: "LIVE"):

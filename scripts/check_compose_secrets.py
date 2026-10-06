@@ -52,21 +52,22 @@ def _stub_from_example(example: str) -> str:
 def _compose_config() -> "subprocess.CompletedProcess":
     """`docker compose config` against stubs for every env file a CI checkout lacks:
     ./.env (--env-file, `${VAR:?}` contract) and backend/.env (compose `env_file:` — the
-    path must exist). Stubs are built from the .env.example files only and removed after."""
+    path must exist). Stubs are built from the deploy/env/*.env.example templates only and removed after."""
     import tempfile
     env = {**os.environ, "COMPOSE_FILE": "docker-compose.yml"}
     cmd = ["docker", "compose"]
     cleanup = []
     try:
-        if not os.path.exists(os.path.join(ROOT, ".env")) and os.path.exists(os.path.join(ROOT, ".env.example")):
+        root_example = os.path.join(ROOT, "deploy", "env", "root.env.example")
+        if not os.path.exists(os.path.join(ROOT, ".env")) and os.path.exists(root_example):
             stub = tempfile.NamedTemporaryFile("w", suffix=".env", delete=False)
-            stub.write(_stub_from_example(os.path.join(ROOT, ".env.example")))
+            stub.write(_stub_from_example(root_example))
             stub.close()
             cleanup.append(stub.name)
             cmd += ["--env-file", stub.name]
         backend_env = os.path.join(ROOT, "backend", ".env")
         if not os.path.exists(backend_env):
-            example = os.path.join(ROOT, "backend", ".env.example")
+            example = os.path.join(ROOT, "deploy", "env", "backend.env.example")
             with open(backend_env, "w", encoding="utf-8") as fh:
                 fh.write(_stub_from_example(example) if os.path.exists(example) else "APP_ENV=ci-stub\n")
             cleanup.append(backend_env)

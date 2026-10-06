@@ -1758,7 +1758,9 @@ class ScalpRunner:
                         "entry_price": round_to_tick(entry, tick),
                         "stop_loss": round_to_tick(sl, tick),
                         "take_profit": round_to_tick(tp, tick),
-                        "origin": "scalp", "scope": "scalp_fast",            # N98-3 — own counter
+                        # N99-1 — origin stays "auto" so every auto safety filter (circuit breaker,
+                        # EOD flatten, entitlements, adaptive sizing) applies; engine marks the counter
+                        "origin": "auto", "engine": "scalp", "scope": "scalp_fast",
                         "_reservation_id": _resv["reservation_id"],
                         "scalp_decision_id": decision["decision_id"],
                         "scalp_lease_epoch": lease_epoch,

@@ -343,7 +343,7 @@ def test_sec7_production_refuses_signers_sharing_jwt_secret():
     finally:
         os.environ.clear()
         os.environ.update(saved)
-    assert "ORDER_AUTH_SECRET=" in open(os.path.join(ROOT, ".env.example")).read()
+    assert "ORDER_AUTH_SECRET=" in open(os.path.join(ROOT, "..", "deploy", "env", "backend.env.example")).read()
 
 
 # ── audit round 7 P2 · exact backlog accounting under a large incident ───────

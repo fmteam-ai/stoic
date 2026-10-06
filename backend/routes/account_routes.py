@@ -754,6 +754,10 @@ async def trust_terminal(account_id: str, request: Request,
         return {"ok": True, "already_verified": True,
                 "installation_id": (acc.get("verified_identity") or {})
                 .get("installation_id")}
+    # SEC-001 — same step-up MFA as rotate/revoke: this call creates the verified identity
+    # chain the DEMO proof and live-capital gates rely on.
+    from step_up import require_step_up
+    await require_step_up(db, user, request, "terminal_trust")
     conn = effective_connection_state(acc)
     if not conn["connected"]:
         raise HTTPException(status_code=409, detail=(
@@ -852,6 +856,9 @@ async def rotate_token(account_id: str, request: Request, user=Depends(get_curre
     suspended = bool(acc.get("bridge_token_suspended"))
     upd = bt.rotation_update(acc, new_token, grace_until=grace_until, suspended=suspended)
     upd["$set"]["status"] = "disconnected"
+    # main99 — a MANUAL rotation abandons any installer pairing still pending (Q-2 leftover):
+    # the new token is the operator's, not the installer's, so the pending flag must not linger
+    upd["$unset"]["installation_pending"] = ""
     await db.accounts.update_one({"_id": acc["_id"]}, upd)
     await db.audit_log.insert_one({
         "user_id": user["id"], "actor": user["id"], "action": "bridge_token_rotated",

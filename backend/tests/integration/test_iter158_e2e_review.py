@@ -129,6 +129,7 @@ def _get_first_account(session):
     assert r.status_code == 200, r.text[:200]
     payload = r.json()
     accts = payload if isinstance(payload, list) else payload.get("accounts", [])
+    accts = [a for a in accts if a.get("mode") != "paper"] or accts   # paper accounts have no MT5 pipeline to test
     assert accts, "no accounts in preview"
     return accts[0]
 

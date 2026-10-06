@@ -49,7 +49,7 @@ jobs:
           WANT=$(git rev-parse --verify --quiet "${GITHUB_SHA}^{commit}" \
                  || git rev-parse HEAD^{commit})
           cd /tmp/release
-          for f in .env.example backend/.env.example frontend/.env.example \
+          for f in deploy/env/root.env.example deploy/env/backend.env.example frontend/.env.example \
                    deploy/install.sh docker-compose.yml docker-compose.tls.yml \
                    deploy/Caddyfile deploy/mongo-init.js README.md \
                    docs/TEST_MANIFEST.md backend/BUILD_SHA; do

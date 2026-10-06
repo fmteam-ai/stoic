@@ -137,8 +137,8 @@ async def undo_action(action_id: str, body: UndoBody, request: Request, user=Dep
     await require_step_up(db, user, request, "security_action_undo")
     try:
         row = await actions.undo(db, action_id, user.get("email") or user["id"], body.note)
-    except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except LookupError:
+        raise HTTPException(status_code=404, detail={"code": "action_not_found", "message": "security action not found"})
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     invalidate_block_cache()
@@ -158,8 +158,8 @@ async def extend_action(action_id: str, body: ExtendBody, request: Request, user
         raise HTTPException(status_code=400, detail="minutes must be 0..10080")
     try:
         row = await actions.extend(db, action_id, body.minutes, user.get("email") or user["id"])
-    except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+    except LookupError:
+        raise HTTPException(status_code=404, detail={"code": "action_not_found", "message": "security action not found"})
     invalidate_block_cache()
     return _ser(row)
 

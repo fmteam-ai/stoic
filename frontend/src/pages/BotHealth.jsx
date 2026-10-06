@@ -328,6 +328,10 @@ function SessionsPanel({ sessions, onReload }) {
                 </div>
             )}
 
+            <div className="px-4 pt-3 font-mono text-[9px] tracking-widest text-[#52525B] flex items-center gap-2" data-testid="bot-health-session-provenance">
+                <span title="Session statistics are derived from STOIC's own trade records — indicative, not broker-reconciled" className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-[#FFB000]/50 text-[#FFB000]">INDICATIVE</span>
+                derived from recorded trades · not a broker-reconciled statement
+            </div>
             <div className="p-4 grid grid-cols-2 md:grid-cols-3 gap-2">
                 <Kpi label="OVERALL TRADES" value={sessions.overall?.count ?? 0} />
                 <Kpi label="OVERALL WIN%" value={`${sessions.overall?.win_rate ?? 0}%`}

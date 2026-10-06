@@ -2,6 +2,8 @@
 import os
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+import logging
+logger = logging.getLogger(__name__)
 
 from auth import get_current_user
 from database import get_db
@@ -70,9 +72,11 @@ async def register_complete(payload: dict, request: Request,
             db, user, str(payload.get("challenge_id") or ""),
             payload.get("credential") or {},
             str(payload.get("label") or ""))
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
+        logger.warning("passkey registration failed user=%s: %s", user.get("id"), e)   # SEC-002
         raise HTTPException(status_code=400,
-                            detail=f"Passkey registration failed: {e}")
+                            detail={"code": "passkey_registration_failed",
+                                    "message": "Passkey registration failed — retry the enrolment from the start."})
     await audit_event(db, user["id"], "passkey_enrolled",
                       {"label": out["label"],
                        "credential_id": out["credential_id"][:16]},

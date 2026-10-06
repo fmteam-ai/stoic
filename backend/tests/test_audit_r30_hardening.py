@@ -108,7 +108,7 @@ def test_production_boot_warns_when_trusted_proxy_cidrs_unset():
     import server
     src = inspect.getsource(server.on_startup)
     assert "TRUSTED_PROXY_CIDRS" in src and "warning(" in src
-    assert "TRUSTED_PROXY_CIDRS" in open(os.path.join(os.path.dirname(server.__file__), ".env.example")).read()
+    assert "TRUSTED_PROXY_CIDRS" in open(os.path.join(os.path.dirname(server.__file__), "..", "deploy", "env", "backend.env.example")).read()
 
 
 # ── CI: every workflow step that SIGNS via release_signing must install `requests` ─

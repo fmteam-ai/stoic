@@ -50,6 +50,27 @@ def production_key_violation(env=None) -> str | None:
     return None
 
 
+def key_source_conflict(env=None) -> str | None:
+    """N99-5 — BRIDGE_TOKEN_HASH_KEY may arrive from backend/.env AND from the Docker secret
+    file (BRIDGE_TOKEN_HASH_KEY_FILE). The env value wins at load time, so a differing file
+    would silently take over the day the env line is removed and un-pair every EA. Refuse."""
+    env = env if env is not None else os.environ
+    k = (env.get(HASH_KEY_ENV) or "").strip()
+    path = (env.get(HASH_KEY_ENV + "_FILE") or "").strip()
+    if not (k and path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            file_val = f.read().strip()
+    except OSError:
+        return None
+    if file_val and file_val != k:
+        return (f"BRIDGE_TOKEN_HASH_KEY differs between backend/.env and the secret file {path} — "
+                "keep ONE value (copy the .env value into the file, then remove the .env line); "
+                "a mismatch un-pairs every EA when either source is removed")
+    return None
+
+
 async def migration_report(db) -> dict:
     """A13-2 — after boot migration: counts + proof (zero plaintext, unique hash index present)."""
     plaintext = await db.accounts.count_documents({"$or": [{"bridge_token": {"$type": "string"}},

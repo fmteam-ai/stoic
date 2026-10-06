@@ -33,6 +33,8 @@ Side effects on suspend/terminate user:
 Login flow consults users.status — see auth_routes.login.
 """
 from datetime import datetime, timezone
+import logging
+logger = logging.getLogger(__name__)
 from typing import Optional
 
 from bson import ObjectId
@@ -155,7 +157,9 @@ async def admin_acceptance_generate(request: Request, user=Depends(get_current_u
     try:
         doc = await build_bundle(db, actor=actor)
     except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
+        logger.warning("acceptance bundle unavailable: %s", e)          # SEC-002: detail stays server-side
+        raise HTTPException(status_code=503, detail={"code": "bundle_unavailable",
+                                                     "message": "acceptance bundle cannot be built right now — see server log"})
     doc.pop("signature", None)                                   # audit P3: the HMAC stays server-side
     await _audit(db, actor_email=actor, action="acceptance_bundle_generated", target_kind="release",
                  target_id=str(doc["build_sha"])[:12], target_label=doc["verdict"],
@@ -221,7 +225,7 @@ async def admin_get_turnstile(user=Depends(get_current_user)):
 @router.post("/admin/settings/turnstile")
 async def admin_set_turnstile(payload: dict, user=Depends(get_current_user)):
     _admin_only(user)
-    from turnstile_gate import set_enabled, is_enabled, secret_key, site_key
+    from turnstile_gate import set_enabled, is_enabled, secret_key, site_key, expected_hostnames, is_production
     db = get_db()
     enabled = bool(payload.get("enabled"))
     if enabled and not (secret_key() and site_key()):
@@ -230,6 +234,14 @@ async def admin_set_turnstile(payload: dict, user=Depends(get_current_user)):
             detail={"code": "turnstile_not_configured",
                     "message": "Set TURNSTILE_SITE_KEY and "
                                "TURNSTILE_SECRET_KEY before enabling."})
+    # N99-8 — production boot refuses Turnstile without TURNSTILE_EXPECTED_HOSTNAMES; enabling it
+    # here would therefore take the API down on the next restart. Refuse up front.
+    if enabled and is_production() and not expected_hostnames():
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "turnstile_hostnames_required",
+                    "message": "Set TURNSTILE_EXPECTED_HOSTNAMES (comma list of your public hostnames) "
+                               "before enabling Turnstile in production — the next restart would fail without it."})
     await set_enabled(db, enabled, actor_email=user.get("email", ""))
     await _audit(db, actor_email=user.get("email", ""),
                  action="turnstile_" + ("enabled" if enabled else "disabled"),
@@ -818,6 +830,47 @@ async def admin_attest_account_environment(account_id: str, payload: dict, user=
                                        "verifier": verifier if env == "DEMO" else None,
                                        "override": override and env == "DEMO", "checks": proof["checks"]},
                               "at": now})
+    acc = await db.accounts.find_one({"_id": acc["_id"]})
+    return _env_row(acc)
+
+
+@router.post("/admin/account-environments/{account_id}/clear-broker-mode")
+async def admin_clear_broker_trade_mode(account_id: str, payload: dict, user=Depends(get_current_user)):
+    """N99-3 — an account that once reported real/contest money stays LIVE for ever (fail-closed),
+    even after the terminal moved back to an EA < 1.60 that reports nothing. An admin may clear
+    the stored report (re-auth, reason, audited) — ONLY while no current heartbeat still reports it."""
+    from auth import require_admin
+    from audit_chain import append_chained
+    from state_contract import HEARTBEAT_FRESH_S
+    require_admin(user)
+    db = get_db()
+    acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")})
+    if not acc:
+        raise HTTPException(status_code=404, detail="account not found")
+    reason = str(payload.get("reason") or "").strip()[:300]
+    if len(reason) < 10:
+        raise HTTPException(status_code=422, detail={"code": "reason_required", "message": "a reason (≥10 chars) is required"})
+    await _reauth(db, user, str(payload.get("password") or ""), payload.get("otp"))
+    ident = acc.get("ea_identity") or {}
+    hb = acc.get("last_heartbeat")
+    fresh = False
+    if hb:
+        try:
+            fresh = (datetime.now(timezone.utc) - datetime.fromisoformat(str(hb).replace("Z", "+00:00"))).total_seconds() <= HEARTBEAT_FRESH_S
+        except ValueError:
+            fresh = False
+    if fresh and ident.get("trade_mode"):
+        raise HTTPException(status_code=409, detail={
+            "code": "terminal_still_reports", "message": f"the connected EA still reports ACCOUNT_TRADE_MODE={ident.get('trade_mode')} — "
+                                                        "detach it from the real-money terminal first"})
+    before = {"account_trade_mode": acc.get("account_trade_mode"), "reported_at": acc.get("account_trade_mode_reported_at"),
+              "ea_identity_trade_mode": ident.get("trade_mode")}
+    await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"account_trade_mode": "", "account_trade_mode_reported_at": "",
+                                                                 "ea_identity.trade_mode": ""}})
+    now = _now_iso()
+    await append_chained(db, {"actor_email": user.get("email"), "action": "account_broker_trade_mode_cleared",
+                              "target_kind": "account", "target_id": str(acc["_id"]), "target_label": acc.get("label"),
+                              "reason": reason, "meta": {"before": before, "reauth": True, "step_up_verified": True}, "at": now})
     acc = await db.accounts.find_one({"_id": acc["_id"]})
     return _env_row(acc)
 

@@ -48,8 +48,25 @@ ensure_release_secrets() {
   local f
   # create with mode 0600 from the start (no umask window), regenerate zero-byte leftovers
   # main98 — bridge_token_hash_key: generated ONCE, never regenerated (changing it un-pairs every EA)
+  # N99-5 — a key already living in backend/.env (or ./.env) must become the file value, never a
+  # second random one: the env wins at load time and a differing file would un-pair every EA the
+  # day the env line is removed. Both present and different ⇒ hard stop.
+  local envkey envval
   for f in order_auth_secret ledger_anchor_key bridge_token_hash_key; do
-    [ -s "secrets/${f}" ] || { (umask 077; python3 -c "import secrets;print(secrets.token_urlsafe(32))" > "secrets/${f}"); echo "   generated ${f}"; }
+    envkey=$(printf '%s' "${f}" | tr '[:lower:]' '[:upper:]')
+    envval=$( { grep -E "^${envkey}=." backend/.env 2>/dev/null || grep -E "^${envkey}=." .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+    if [ -s "secrets/${f}" ] && [ -n "${envval}" ] && [ "$(cat "secrets/${f}")" != "${envval}" ]; then
+      echo "!! ${envkey} differs between backend/.env and secrets/${f} — keep ONE value:"
+      echo "   copy the .env value into secrets/${f} (or vice-versa), then remove the .env line. Refusing to continue."
+      return 1
+    fi
+    if [ ! -s "secrets/${f}" ]; then
+      if [ -n "${envval}" ]; then
+        (umask 077; printf '%s\n' "${envval}" > "secrets/${f}"); echo "   seeded ${f} from ${envkey} in .env (remove the .env line once the stack is up)"
+      else
+        (umask 077; python3 -c "import secrets;print(secrets.token_urlsafe(32))" > "secrets/${f}"); echo "   generated ${f}"
+      fi
+    fi
   done
   [ -s secrets/secrets_master_key ] || {
     (umask 077; python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())" > secrets/secrets_master_key)

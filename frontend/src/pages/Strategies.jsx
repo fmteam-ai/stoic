@@ -420,7 +420,8 @@ function BacktestPanel({ backtest }) {
                     <BarChart3 className="w-3.5 h-3.5" />
                     STAGE 3 · BACKTEST · LAST {backtest.lookback_days}d
                 </div>
-                <div className="font-mono text-[10px] text-[#52525B] tracking-widest">
+                <div className="font-mono text-[10px] text-[#52525B] tracking-widest flex items-center gap-2">
+                    <span data-testid="strategies-backtest-provenance" title="Backtest on historical trades — simulated, not broker-reconciled" className="inline-flex items-center gap-1 px-1.5 py-0.5 border border-[#EC4899]/50 text-[#EC4899]">SIMULATED</span>
                     {backtest.matched_trades}/{backtest.total_trades} TRADES MATCHED
                 </div>
             </div>

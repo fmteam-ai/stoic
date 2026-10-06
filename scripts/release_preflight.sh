@@ -4,6 +4,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ok=0; fail=0
 step() { local name="$1"; shift; if "$@" >/tmp/preflight.log 2>&1; then echo "OK    ${name}"; ok=$((ok+1)); else echo "FAIL  ${name}"; tail -n 5 /tmp/preflight.log; fail=$((fail+1)); fi; }
+step env_templates_in_sync   bash -c 'python3 scripts/sync_env_examples.py >/dev/null && python3 scripts/sync_env_examples.py --check'
 step test_manifest_current   python3 scripts/generate_test_manifest.py --check
 step release_summary_current python3 scripts/generate_release_summary.py --check
 step provenance_consistent   python3 scripts/release_consistency_check.py

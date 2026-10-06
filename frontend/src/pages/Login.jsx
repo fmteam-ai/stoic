@@ -150,7 +150,7 @@ export default function Login() {
                         <StoicMark size={48} />
                         <div>
                             <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
-                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">RISK-CONTROLLED AUTOMATED TRADING</div>
+                            <div className="font-mono text-[10px] text-[#52525B] tracking-widest">VETO-FIRST AUTOMATED TRADING · NOTHING TRADES UNTIL READINESS PASSES</div>
                         </div>
                     </div>
 

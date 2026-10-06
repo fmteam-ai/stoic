@@ -90,9 +90,12 @@ def test_scalp_reserves_through_reserve_entry_with_caps():
 # ── N97-3 signed decision fields ─────────────────────────────────────────────
 def test_bundle_signature_covers_verdict_accounts_release_and_expiry():
     import acceptance_bundle as ab
-    with patch.dict(os.environ, {"LEDGER_ANCHOR_KEY": "k" * 32}):
+    from test_fixplan_main99_phase4 import signer_env
+    with patch.dict(os.environ, signer_env()):
+        from release_signing import key_id
         doc = {"bundle_id": "b1", "payload": {"x": 1}, "verdict": "FAIL", "failures": ["f"], "account_ids": ["a"],
-               "build_sha": "abc", "image_digest": None, "created_by": "me", "created_at": "t", "expires_at": "2099"}
+               "build_sha": "abc", "image_digest": None, "created_by": "me", "created_at": "t", "expires_at": "2099",
+               "schema_version": ab.SCHEMA_VERSION, "key_id": key_id(), "algo": "ed25519", "config_fingerprint": "fp"}
         doc["digest"], doc["signature"] = ab._sign(doc)
         assert ab.verify_signature(doc)
         for k, v in (("verdict", "PASS"), ("account_ids", ["a", "b"]), ("expires_at", "2199"),
@@ -119,7 +122,7 @@ def test_legacy_jwt_secret_hash_still_matches_and_is_rehashed_once():
         assert run(bt.find_by_current(db, "tok_abc")) is not None                   # direct hit now
         assert run(bt.find_by_current(db, "tok_other")) is None
     assert "REQUIRED" in _src("docs", "PRODUCTION_DEPLOY_CHECKLIST.md").split("BRIDGE_TOKEN_HASH_KEY")[1][:40]
-    env_example = _src("backend", ".env.example")
+    env_example = _src("deploy", "env", "backend.env.example")
     assert "BRIDGE_TOKEN_HASH_KEY=" in env_example and "CRYPTO_LIVE_TRADING_ENABLED=" in env_example
 
 

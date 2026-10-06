@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Single source of truth for the env templates: deploy/env/*.env.example.
 
-The platform's auto-commit skips every `.env*` path, so edits made directly to
-`.env.example` / `backend/.env.example` never reach the repository and CI (which
-reads the templates) goes red. Edit the files under deploy/env/ instead and run
-this script; CI and deploy/install.sh run it before anything reads a template.
+The platform's auto-commit skips every `.env*` path, so the dot-files are NOT in git
+(A14-1): `.env.example` / `backend/.env.example` are generated, git-ignored copies.
+Edit the files under deploy/env/ and run this script; CI, deploy/install.sh and
+deploy/update.sh run it (update.sh also `--check`s) before anything reads a template.
 
   python scripts/sync_env_examples.py          # write .env.example + backend/.env.example
   python scripts/sync_env_examples.py --check  # exit 1 if a dot-file drifted from its source
@@ -34,7 +34,8 @@ def main(argv):
         if have == want:
             continue
         if check:
-            drift.append(f"{dst_rel} differs from {src_rel}")
+            if have is not None:          # absent = not yet generated (fresh clone) — never drift
+                drift.append(f"{dst_rel} differs from {src_rel}")
             continue
         with open(dst, "w", encoding="utf-8") as fh:
             fh.write(want)

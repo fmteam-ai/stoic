@@ -25,8 +25,13 @@ export const AccountEnvironmentsPanel = () => {
     const submit = async () => {
         setSaving(true);
         try {
-            await api.post(`/admin/account-environments/${target.account_id}`, { environment: target.next, ...form, otp: form.otp || null });
-            toast.success(target.next === "DEMO" ? (form.override ? "DEMO attested via ADMIN OVERRIDE" : "DEMO attested") : "Attestation revoked");
+            if (target.next === "CLEAR") {
+                await api.post(`/admin/account-environments/${target.account_id}/clear-broker-mode`, { ...form, otp: form.otp || null });
+                toast.success("Stored broker trade mode cleared");
+            } else {
+                await api.post(`/admin/account-environments/${target.account_id}`, { environment: target.next, ...form, otp: form.otp || null });
+                toast.success(target.next === "DEMO" ? (form.override ? "DEMO attested via ADMIN OVERRIDE" : "DEMO attested") : "Attestation revoked");
+            }
             setTarget(null); setForm({ reason: "", password: "", otp: "", override: false }); load();
         } catch (e) { toast.error(formatApiError(e)); }
         finally { setSaving(false); }
@@ -34,6 +39,7 @@ export const AccountEnvironmentsPanel = () => {
 
     const needsOverride = target?.next === "DEMO" && !!target?.proof && !target.proof.ok;
     const missing = [];
+    if (target?.next === "CLEAR" && form.reason.trim().length < 10) missing.push(`reason needs ${10 - form.reason.trim().length} more character(s)`);
     if (needsOverride && !form.override) missing.push("tick the override confirmation above");
     if (needsOverride && form.reason.trim().length < 10) missing.push(`reason needs ${10 - form.reason.trim().length} more character(s)`);
     if (!form.password) missing.push("enter your password");
@@ -78,6 +84,7 @@ export const AccountEnvironmentsPanel = () => {
                                             <span className="inline-flex items-center gap-3">
                                                 {r.proof?.checks?.broker_not_real_money !== false && <button data-testid={`account-env-reattest-${r.account_id}`} onClick={() => setTarget({ ...r, next: "DEMO" })} className="text-[#00FF41] font-mono text-[10px] inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5" /> RE-ATTEST</button>}
                                                 <button data-testid={`account-env-revoke-${r.account_id}`} onClick={() => setTarget({ ...r, next: "LIVE" })} className="text-[#FF3B30] font-mono text-[10px] inline-flex items-center gap-1"><ShieldOff className="w-3.5 h-3.5" /> REVOKE</button>
+                                                {r.broker_trade_mode && r.broker_trade_mode !== "demo" && <button data-testid={`account-env-clear-broker-mode-${r.account_id}`} onClick={() => setTarget({ ...r, next: "CLEAR" })} title="Admin: clear the stored real/contest report (only after the EA left the real-money terminal)" className="text-[#FFB000] font-mono text-[10px] inline-flex items-center gap-1">CLEAR BROKER MODE</button>}
                                             </span>
                                         ) : r.attested_by ? (
                                             <button data-testid={`account-env-revoke-${r.account_id}`} onClick={() => setTarget({ ...r, next: "LIVE" })} className="text-[#FF3B30] font-mono text-[10px] inline-flex items-center gap-1"><ShieldOff className="w-3.5 h-3.5" /> REVOKE</button>
@@ -96,7 +103,7 @@ export const AccountEnvironmentsPanel = () => {
             <Dialog open={!!target} onOpenChange={(o) => !o && setTarget(null)}>
                 <DialogContent className="bg-[#0A0A0A] border-[#1F1F1F]" data-testid="account-env-dialog">
                     <DialogHeader>
-                        <DialogTitle className="font-mono text-sm">{target?.next === "DEMO" ? "Attest DEMO" : "Revoke attestation"} · {target?.label || target?.account_number}</DialogTitle>
+                        <DialogTitle className="font-mono text-sm">{target?.next === "DEMO" ? "Attest DEMO" : target?.next === "CLEAR" ? "Clear stored broker trade mode" : "Revoke attestation"} · {target?.label || target?.account_number}</DialogTitle>
                         <DialogDescription className="text-[#71717A] text-xs">Recorded in the admin audit chain. Re-authenticate to apply.</DialogDescription>
                     </DialogHeader>
                     <div className="space-y-3">
@@ -106,7 +113,7 @@ export const AccountEnvironmentsPanel = () => {
                                 <span>The EA reports <b>{target.proof.reported_server || "an unnamed server"}</b>, which is not demo-named. I confirm this is a practice account and accept that this override is recorded in the audit chain (reason required, ≥10 chars).</span>
                             </label>
                         )}
-                        <Input data-testid="account-env-reason" placeholder={needsOverride ? "reason (REQUIRED for override, ≥10 chars)" : "reason (optional)"} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} className={needsOverride && form.reason.trim().length < 10 ? "border-[#FF3B30]/60" : ""} />
+                        <Input data-testid="account-env-reason" placeholder={needsOverride || target?.next === "CLEAR" ? "reason (REQUIRED, ≥10 chars)" : "reason (optional)"} value={form.reason} onChange={(e) => setForm({ ...form, reason: e.target.value })} className={needsOverride && form.reason.trim().length < 10 ? "border-[#FF3B30]/60" : ""} />
                         <Input data-testid="account-env-password" type="password" placeholder="your password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="current-password" />
                         <Input data-testid="account-env-otp" inputMode="numeric" placeholder="authenticator code (if enabled)" value={form.otp} onChange={(e) => setForm({ ...form, otp: e.target.value })} autoComplete="one-time-code" />
                         {missing.length > 0 && (

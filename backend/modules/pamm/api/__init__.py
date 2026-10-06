@@ -205,10 +205,16 @@ async def nav_ep(program_id: str, user=Depends(get_current_user)):
     from modules.pamm.services import nav_history
     from chart_provenance import build as provenance
     nav = await nav_history(db, program_id)
+    # N99-7 — NAV is "broker-reconciled" only while the manager's statement ledger gate passes
+    from broker_statement_ledger import ledger_gate
+    reasons = await ledger_gate(db, str(program.get("manager_id") or program.get("user_id") or ""))
     return {"nav": nav,
-            "provenance": provenance(provider="broker_gateway_nav", source_kind="broker_reconciled", points=nav,
+            "provenance": provenance(provider="broker_gateway_nav",
+                                     source_kind="broker_reconciled" if not reasons else "derived", points=nav,
                                      time_key="at", expected_interval_s=3600, reconciliation_id=program_id,
-                                     note="broker-authoritative NAV snapshots pulled by reconcile")}
+                                     cache_status="live" if not reasons else "unreconciled",
+                                     note=("broker-authoritative NAV snapshots; statement ledger gate PASSED" if not reasons
+                                           else "NAV snapshots from the gateway — statement ledger NOT reconciled"))}
 
 
 @router.get("/programs/{program_id}/master")

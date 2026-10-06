@@ -86,6 +86,19 @@ export default function StatusPage() {
                                     {data.trading.attestation?.inventory_hash && <span> · inv {data.trading.attestation.inventory_hash}</span>}</div>
                                 <div>new exposure: <span className="text-white">{data.trading.readiness?.new_exposure_allowed ? "allowed" : "refused"}</span></div>
                                 <div>as of: <span className="text-white">{data.trading.attestation?.as_of || data.checked_at || "—"}</span></div>
+                                {Array.isArray(data.trading.requirements) && data.trading.requirements.length > 0 && (
+                                    <div className="sm:col-span-2 border-t border-[#1F1F1F] pt-2 mt-1" data-testid="status-requirements">
+                                        <div className="text-[#52525B] tracking-widest mb-1">READINESS REQUIREMENTS — nothing trades until every line passes</div>
+                                        <ul className="space-y-0.5">
+                                            {data.trading.requirements.map((r) => (
+                                                <li key={r.id} data-testid={`status-requirement-${r.id}`} className="flex items-start gap-2">
+                                                    <span className={r.ok ? "text-[#00FF41]" : "text-[#FF3B30]"}>{r.ok ? "PASS" : "FAIL"}</span>
+                                                    <span className={r.ok ? "text-[#A1A1AA]" : "text-white"}>{r.label}</span>
+                                                </li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                )}
                             </div>
                         )}
                         <div className="space-y-2" data-testid="status-components">

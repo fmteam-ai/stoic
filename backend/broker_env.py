@@ -28,11 +28,24 @@ def broker_reports_real(account: dict) -> bool:
                for v in (ident.get("trade_mode"), account.get("account_trade_mode")))
 
 
+def ea_binary_accepted(account: dict) -> bool:
+    """N99-2 — the terminal runs an EX5 whose hash is in the signed/pinned accepted set."""
+    h = str(account.get("ea_binary_sha256") or account.get("ea_binary_sha256_reported") or "").lower()
+    if len(h) != 64:
+        return False
+    try:
+        from ea_capabilities import accepted_ea_sha256s
+        return h in [str(x).lower() for x in accepted_ea_sha256s()]
+    except Exception:  # noqa: BLE001 — no release record ⇒ nothing is accepted
+        return False
+
+
 def broker_reports_demo(account: dict) -> bool:
-    """'demo' counts only on an AUTHORITATIVE identity chain (verified terminal)."""
+    """'demo' counts only on an AUTHORITATIVE identity chain running an ACCEPTED EX5 (N99-2): a
+    self-compiled EA could send "demo" from a real account. Otherwise the legacy path applies."""
     ident = account.get("ea_identity") or {}
     return bool(ident.get("authoritative")) and str(ident.get("trade_mode") or "").lower() == "demo" \
-        and not broker_reports_real(account)
+        and not broker_reports_real(account) and ea_binary_accepted(account)
 
 
 def attestation_identity(account: dict) -> str:
