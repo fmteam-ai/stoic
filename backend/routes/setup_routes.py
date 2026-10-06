@@ -288,7 +288,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "server_url": backend_base,
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
-        "ea_latest_version": "1.59",
+        "ea_latest_version": "1.60",
         # r26 P1-02 — device key enrolled with THIS pairing (None when the installer sent none)
         "device_key_id": (device_key or {}).get("key_id"),
         "attestation_challenge_url": f"{backend_base}/api/infra/attestation/challenge",

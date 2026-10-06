@@ -54,7 +54,7 @@ def test_health_release_identity_and_ea_version(admin_session):
     r = requests.get(f"{BASE}/api/health", timeout=10)
     assert r.status_code == 200
     j = r.json()
-    assert j.get("ea_version") == "1.59", j.get("ea_version")
+    assert j.get("ea_version") == "1.60", j.get("ea_version")
     # audit r30 — release identity is admin-only; the public probe no longer carries it
     assert "release_identity" not in j
     assert requests.get(f"{BASE}/api/health/release", timeout=10).status_code == 401
@@ -63,7 +63,7 @@ def test_health_release_identity_and_ea_version(admin_session):
     ri = r2.json().get("release_identity")
     assert isinstance(ri, dict), j
     assert "image_digest" in ri
-    assert ri.get("ea_shipped_version") == "1.59"
+    assert ri.get("ea_shipped_version") == "1.60"
     assert isinstance(ri.get("ea_accepted_sha256s"), list)
 
 
@@ -191,7 +191,7 @@ def test_p1_01_rotate_returns_plaintext_once_and_doc_has_hash(admin_session, cre
 
     # heartbeat with plaintext authenticates
     rhb = requests.post(f"{BASE}/api/bridge/heartbeat",
-                        json={"bridge_token": plaintext, "ea_version": "1.59",
+                        json={"bridge_token": plaintext, "ea_version": "1.60",
                               "account_login": created_account["account_number"],
                               "balance": 0.0, "equity": 0.0, "open_positions": 0}, timeout=15)
     assert rhb.status_code == 200, (rhb.status_code, rhb.text[:400])
@@ -223,7 +223,7 @@ def test_p1_01_revoke_requires_step_up_and_disables_token(admin_session, created
     assert r2.status_code in (200, 204), r2.text
     # heartbeat now 401
     rhb = requests.post(f"{BASE}/api/bridge/heartbeat",
-                        json={"bridge_token": plaintext, "ea_version": "1.59",
+                        json={"bridge_token": plaintext, "ea_version": "1.60",
                               "account_login": _shared.get("acc_num"),
                               "balance": 0.0, "equity": 0.0, "open_positions": 0}, timeout=10)
     assert rhb.status_code == 401, (rhb.status_code, rhb.text[:200])

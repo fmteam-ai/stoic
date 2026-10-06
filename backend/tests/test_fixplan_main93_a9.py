@@ -150,16 +150,16 @@ def test_nr6_current_and_previous_signed_hash_accepted(tmp_path):
     assert '"previous": previous' in vsrc and 'ea.get("version") != version' in vsrc
 
 
-def test_ea_renamed_to_1_59_everywhere_and_hash_recorded():
+def test_ea_renamed_to_1_60_everywhere_and_hash_recorded():
     mq5 = open(os.path.join(ROOT, "backend", "static", "EmergentTradingBridge.mq5"), encoding="utf-8", errors="replace").read()
-    assert '#property version   "1.59"' in mq5 and '#define EA_CLIENT_VERSION "1.59"' in mq5 and "margin_mode" in mq5
+    assert '#property version   "1.60"' in mq5 and '#define EA_CLIENT_VERSION "1.60"' in mq5 and "margin_mode" in mq5
     rec = json.load(open(os.path.join(ROOT, "docs", "RELEASE_HASHES.json")))["ea"]
-    assert rec["version"] == "1.59"
+    assert rec["version"] == "1.60"
     import hashlib
     raw = open(os.path.join(ROOT, "backend", "static", "EmergentTradingBridge.mq5"), "rb").read().replace(b"\r\n", b"\n")
     assert rec["mq5_sha256"] == hashlib.sha256(raw).hexdigest()
     for rel in ("frontend/src/components/EaVersionStrip.jsx", "frontend/src/pages/Accounts.jsx", "backend/routes/diagnostic_routes.py"):
-        assert "1.59" in open(os.path.join(ROOT, rel)).read()
+        assert "1.60" in open(os.path.join(ROOT, rel)).read()
 
 
 # ── A9b · N1 — absorb only bot backfill rows (BEHAVIOUR) ──────────────────────

@@ -39,7 +39,7 @@ def test_env_checks_grade_secret_file_vs_env_vs_missing():
     assert c["client_ip"]["status"] == "info"
 
 
-def _fleet_db(fresh=True, ea="1.59", attested=True, cap=3, braked=False):
+def _fleet_db(fresh=True, ea="1.60", attested=True, cap=3, braked=False):
     db = FakeDb()
     uid = str(ObjectId())
     hb = (datetime.now(timezone.utc) - timedelta(seconds=10 if fresh else 900)).isoformat()

@@ -48,7 +48,8 @@ def _acc(uid, **over):
 def test_demo_proof_checks():
     from broker_env import demo_proof
     ok = demo_proof(_acc("u"))
-    assert ok["ok"] and ok["mandatory_ok"] and all(ok["checks"].values())
+    assert ok["ok"] and ok["mandatory_ok"] and all(v for k, v in ok["checks"].items() if k != "broker_reports_demo")
+    assert ok["checks"]["broker_reports_demo"] is False     # N98-6: EA 1.57 reports no ACCOUNT_TRADE_MODE
     stale = demo_proof(_acc("u", last_heartbeat=(datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()))
     assert not stale["mandatory_ok"] and stale["checks"]["heartbeat_fresh"] is False
     unauth = demo_proof(_acc("u", ea_identity={"installation_id": "x", "authoritative": False, "broker_server": "VTMarkets-Demo"}))

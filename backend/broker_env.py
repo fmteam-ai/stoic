@@ -9,6 +9,30 @@ otherwise PAPER mode and demo-server naming are detected."""
 
 ENVIRONMENTS = ("LIVE", "DEMO", "PAPER")
 _DEMO_TOKENS = ("demo", "trial", "practice", "contest")
+TRADE_MODES = ("demo", "real", "contest")
+_REAL_MONEY_MODES = ("real", "contest")
+
+
+def reported_trade_mode(account: dict) -> str | None:
+    """N98-6 — ACCOUNT_TRADE_MODE as the EA (v1.60+) reported it on the latest heartbeat:
+    'demo' | 'real' | 'contest' | None (older EA — nothing reported)."""
+    ident = account.get("ea_identity") or {}
+    tm = str(ident.get("trade_mode") or account.get("account_trade_mode") or "").lower()
+    return tm if tm in TRADE_MODES else None
+
+
+def broker_reports_real(account: dict) -> bool:
+    """Fail-closed: ANY heartbeat (authoritative or not) saying real/contest money ⇒ LIVE."""
+    ident = account.get("ea_identity") or {}
+    return any(str(v or "").lower() in _REAL_MONEY_MODES
+               for v in (ident.get("trade_mode"), account.get("account_trade_mode")))
+
+
+def broker_reports_demo(account: dict) -> bool:
+    """'demo' counts only on an AUTHORITATIVE identity chain (verified terminal)."""
+    ident = account.get("ea_identity") or {}
+    return bool(ident.get("authoritative")) and str(ident.get("trade_mode") or "").lower() == "demo" \
+        and not broker_reports_real(account)
 
 
 def attestation_identity(account: dict) -> str:
@@ -64,12 +88,22 @@ def demo_proof(account: dict, *, max_heartbeat_age_s: int = 600, now=None) -> di
                                       and str(account.get("broker_environment") or "").upper() != "LIVE"
                                       and not account.get("broker_account_mismatch"),
         "server_demo_named": any(t in str(reported_server).lower() for t in _DEMO_TOKENS),
+        # N98-6 — the broker's own ACCOUNT_TRADE_MODE (EA 1.60+): real/contest money is a
+        # hard stop; 'demo' is positive evidence that supersedes the server-name heuristic.
+        "broker_not_real_money": not broker_reports_real(account),
+        "broker_reports_demo": broker_reports_demo(account),
     }
-    mandatory_ok = all(v for k, v in checks.items() if k != "server_demo_named")
+    mandatory_ok = all(v for k, v in checks.items() if k not in NON_MANDATORY_CHECKS)
+    demo_evidence = checks["broker_reports_demo"] or checks["server_demo_named"]
     proof_id = hashlib.sha256(f"{attestation_identity(account)}|{sorted(checks.items())}|{hb}".encode()).hexdigest()[:24]
-    return {"ok": mandatory_ok and checks["server_demo_named"], "mandatory_ok": mandatory_ok,
-            "override_eligible": mandatory_ok and not checks["server_demo_named"],
-            "checks": checks, "heartbeat_age_s": age, "reported_server": reported_server, "proof_id": proof_id}
+    return {"ok": mandatory_ok and demo_evidence, "mandatory_ok": mandatory_ok,
+            "override_eligible": mandatory_ok and not demo_evidence,
+            "checks": checks, "heartbeat_age_s": age, "reported_server": reported_server,
+            "reported_trade_mode": reported_trade_mode(account), "proof_id": proof_id}
+
+
+# checks that are evidence alternatives, not gates (either one satisfies the DEMO proof)
+NON_MANDATORY_CHECKS = ("server_demo_named", "broker_reports_demo")
 
 
 def attested_environment(account: dict) -> str:
@@ -78,9 +112,12 @@ def attested_environment(account: dict) -> str:
     all) or an admin attestation that AGREES with the declared classification
     AND still matches the bound identity digest may downgrade from LIVE —
     user-writable fields (account_type, server name, broker_environment)
-    never do on their own."""
+    never do on their own. N98-6: a broker-reported real/contest trade mode
+    voids any attestation — the broker's word beats everything."""
     if account.get("mode") == "paper":
         return "PAPER"
+    if broker_reports_real(account):
+        return "LIVE"
     att = account.get("environment_attestation") or {}
     if (str(att.get("environment") or "").upper() == "DEMO" and att.get("approved_by")
             and att.get("identity_hash") == attestation_identity(account)
@@ -99,6 +136,9 @@ def attestation_state(account: dict) -> str:
 
 
 def broker_environment(account: dict) -> str:
+    # N98-6 — the broker said real money: no declared field may call it DEMO
+    if account.get("mode") != "paper" and broker_reports_real(account):
+        return "LIVE"
     explicit = str(account.get("broker_environment") or "").upper()
     if explicit in ENVIRONMENTS:
         return explicit

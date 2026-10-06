@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnostic", tags=["diagnostic"])
 
-LATEST_EA = "1.59"
+LATEST_EA = "1.60"
 from state_contract import HEARTBEAT_FRESH_S as HEARTBEAT_FRESH_SEC  # P0-2: single connection threshold
 
 # Retcode → human explanation

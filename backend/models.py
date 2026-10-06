@@ -434,6 +434,8 @@ class BridgeHeartbeat(BaseModel):
     broker_server: Optional[str] = None
     # H1 leftover — ACCOUNT_MARGIN_MODE as the EA sees it: "netting" | "hedging"
     margin_mode: Optional[str] = None
+    # N98-6 (EA v1.60+) — ACCOUNT_TRADE_MODE as the broker sees it: "demo" | "real" | "contest"
+    trade_mode: Optional[str] = None
     terminal_build: Optional[int] = None
     ea_version: Optional[str] = None
     # iter-212: explicit NTP/clock-health telemetry — the agent reports its

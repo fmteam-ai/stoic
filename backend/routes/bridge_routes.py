@@ -16,6 +16,7 @@ from pip_utils import price_to_pips, base_symbol
 from intelligence_counters import increment as inc_intel_counter
 from trade_reconciler import reconcile_account, reconcile_user
 from silent_failures import record_swallow
+from broker_env import TRADE_MODES, _REAL_MONEY_MODES
 
 async def _bridge_ip_throttle(request: Request) -> None:
     """r22: per-IP volume guard on the unauthenticated bridge surface (token
@@ -157,6 +158,37 @@ def _backfill_doc(acc: dict, account_id: str, p, opened_iso: str) -> dict:
     }
 
 
+async def _trade_mode_contradiction(db, acc: dict, hb_trade_mode: str, now_iso: str) -> None:
+    """N98-6 — the broker says real/contest money on an account STOIC classified as DEMO:
+    the attestation is void from this heartbeat on (attested_environment → LIVE); raise a
+    Security Agent alert and chain the event so the operator sees why gates flipped."""
+    if hb_trade_mode not in _REAL_MONEY_MODES:
+        return
+    from broker_env import attested_environment, broker_environment
+    prior = {k: v for k, v in acc.items() if k not in ("account_trade_mode",)}
+    prior["ea_identity"] = {k: v for k, v in (acc.get("ea_identity") or {}).items() if k != "trade_mode"}
+    was_attested = attested_environment(prior) == "DEMO"
+    was_declared_demo = broker_environment(prior) == "DEMO"
+    if not (was_attested or was_declared_demo):
+        return
+    label = acc.get("label") or str(acc["_id"])[-6:]
+    msg = (f"Broker reports ACCOUNT_TRADE_MODE={hb_trade_mode} on '{label}' which STOIC "
+           f"{'had admin-attested as DEMO — attestation voided, LIVE gates apply' if was_attested else 'has declared as DEMO — declared classification overridden to LIVE'}")
+    logger.warning("N98-6 %s", msg)
+    from alerting import raise_alert
+    await raise_alert(db, "demo_attestation_contradicted", "critical" if was_attested else "warning", msg,
+                      dedup_key=f"demo_attestation_contradicted:{acc['_id']}",
+                      meta={"account_id": str(acc["_id"]), "trade_mode": hb_trade_mode,
+                            "was_attested": was_attested, "was_declared_demo": was_declared_demo})
+    from audit_chain import append_chained
+    await append_chained(db, {"actor_email": "system:bridge", "action": "account_environment_contradicted",
+                              "target_kind": "account", "target_id": str(acc["_id"]), "target_label": acc.get("label"),
+                              "reason": f"EA reported ACCOUNT_TRADE_MODE={hb_trade_mode}",
+                              "meta": {"trade_mode": hb_trade_mode, "was_attested": was_attested,
+                                       "was_declared_demo": was_declared_demo, "step_up_verified": False},
+                              "at": now_iso})
+
+
 @router.post("/heartbeat")
 async def heartbeat(payload: BridgeHeartbeat):
     db = get_db()
@@ -253,10 +285,23 @@ async def heartbeat(payload: BridgeHeartbeat):
     if hb_margin_mode in ("netting", "hedging"):
         set_doc["margin_mode"] = hb_margin_mode
         set_doc["margin_mode_reported_at"] = now_iso
+    # N98-6 — EA 1.60+: ACCOUNT_TRADE_MODE as the broker sees it. Stored on every
+    # heartbeat (real/contest is fail-closed evidence even from an unverified chain).
+    hb_trade_mode = str(getattr(payload, "trade_mode", None) or "").lower()
+    if hb_trade_mode not in TRADE_MODES:
+        hb_trade_mode = ""
+    if hb_trade_mode:
+        set_doc["account_trade_mode"] = hb_trade_mode
+        set_doc["account_trade_mode_reported_at"] = now_iso
+        try:
+            await _trade_mode_contradiction(db, acc, hb_trade_mode, now_iso)
+        except Exception as _sw:  # noqa: BLE001 — alerting must never break the heartbeat
+            record_swallow("bridge", "trade_mode_contradiction", _sw)
     if effective_installation_id:
         set_doc["ea_identity"] = {
             "installation_id": effective_installation_id,
             "margin_mode": hb_margin_mode or None,
+            "trade_mode": hb_trade_mode or None,
             "broker_server": payload.broker_server,
             "terminal_build": payload.terminal_build,
             "ea_version": payload.ea_version,
@@ -281,6 +326,7 @@ async def heartbeat(payload: BridgeHeartbeat):
         if ver >= "1.55":
             set_doc["ea_identity"] = {
                 "installation_id": None,
+                "trade_mode": hb_trade_mode or None,
                 "broker_server": payload.broker_server,
                 "terminal_build": payload.terminal_build,
                 "ea_version": ver,

@@ -9,6 +9,7 @@ CAPABILITIES = {
     "command_fencing_v1": (1, 50),      # intent/seq dedupe + durable new-order journal (r4)
     "nl_close_fence_v1": (1, 57),       # close_idem_key dedupe + per-trade close_seq ordering (r17/r18)
     "margin_mode_v1": (1, 58),          # heartbeat reports ACCOUNT_MARGIN_MODE (main92 H1)
+    "trade_mode_v1": (1, 60),           # heartbeat reports ACCOUNT_TRADE_MODE (main98 N98-6)
 }
 LIVE_REQUIRED = ("command_fencing_v1", "nl_close_fence_v1")
 LIVE_MIN_VERSION = max(CAPABILITIES[c] for c in LIVE_REQUIRED)

@@ -91,11 +91,11 @@ def test_health_has_no_release_identity_and_admin_release_shows_ea_1_59(admin):
         assert r2.status_code == 403, (r2.status_code, r2.text[:200])
     finally:
         _mongo().users.delete_one({"email": user_email})
-    # admin → 200 + ea_shipped_version 1.59
+    # admin → 200 + ea_shipped_version 1.60
     r3 = admin.get(f"{BASE}/api/health/release", timeout=15)
     assert r3.status_code == 200, r3.text
     ri = r3.json().get("release_identity") or {}
-    assert ri.get("ea_shipped_version") == "1.59", ri
+    assert ri.get("ea_shipped_version") == "1.60", ri
 
 
 # ───────────────────── admin execution-brakes ────────────────────────
@@ -202,7 +202,7 @@ def test_live_account_creation_returns_token_once_and_list_hides_it(throwaway_us
     # heartbeat using the shown-once token authenticates
     hb = requests.post(
         f"{BASE}/api/bridge/heartbeat",
-        json={"bridge_token": plaintext, "ea_version": "1.59",
+        json={"bridge_token": plaintext, "ea_version": "1.60",
               "account_login": this.get("account_number"),
               "balance": 0.0, "equity": 0.0, "open_positions": 0},
         timeout=15)

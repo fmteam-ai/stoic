@@ -3,7 +3,7 @@ Iter-214 / Round-17 security audit verification (READ-ONLY on preview).
 
 Covers:
   - P0-02 live suite is read-only; no mutating NL commands executed here.
-  - GET /api/health → ea_version == '1.59'.
+  - GET /api/health → ea_version == '1.60'.
   - GET /api/ops/deploy-preflight → mongo_transactions check exists (warn in preview).
   - GET /api/status shape for public /status: overall + headline + trading provenance.
   - Risk Commander read-only wiring:
@@ -51,7 +51,7 @@ def test_ea_version_is_157():
     r = requests.get(f"{BASE}/api/health", timeout=15)
     assert r.status_code == 200
     body = r.json()
-    assert body.get("ea_version") == "1.59", body
+    assert body.get("ea_version") == "1.60", body
 
 
 def test_public_status_shape():

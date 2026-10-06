@@ -50,7 +50,7 @@ export const AccountEnvironmentsPanel = () => {
                 <div className="border border-[#1F1F1F] rounded-lg overflow-x-auto">
                     <table className="w-full text-xs">
                         <thead className="bg-[#0A0A0A] text-[#52525B] font-mono">
-                            <tr><th className="text-left px-4 py-2">ACCOUNT</th><th className="text-left px-4 py-2">DECLARED</th><th className="text-left px-4 py-2">EFFECTIVE</th><th className="text-left px-4 py-2">DEMO PROOF</th><th className="text-left px-4 py-2">ATTESTED</th><th className="text-right px-4 py-2">ACTION</th></tr>
+                            <tr><th className="text-left px-4 py-2">ACCOUNT</th><th className="text-left px-4 py-2">DECLARED</th><th className="text-left px-4 py-2">EFFECTIVE</th><th className="text-left px-4 py-2">BROKER</th><th className="text-left px-4 py-2">DEMO PROOF</th><th className="text-left px-4 py-2">ATTESTED</th><th className="text-right px-4 py-2">ACTION</th></tr>
                         </thead>
                         <tbody>
                             {rows.map((r, i) => (
@@ -58,20 +58,25 @@ export const AccountEnvironmentsPanel = () => {
                                     <td className="px-4 py-2.5"><div className="text-white">{r.label || r.account_number}</div><div className="font-mono text-[10px] text-[#52525B]">{r.broker} · {r.server} · {r.account_type}</div></td>
                                     <td className="px-4 py-2.5"><Tag v={r.declared} /></td>
                                     <td className="px-4 py-2.5"><Tag v={r.effective} /></td>
+                                    <td className="px-4 py-2.5 font-mono text-[10px]" data-testid={`account-env-broker-mode-${r.account_id}`} title="ACCOUNT_TRADE_MODE as reported by the EA (1.60+)">
+                                        {r.broker_trade_mode === "demo" ? <span className="text-[#00FF41]">DEMO</span>
+                                            : r.broker_trade_mode ? <span className="text-[#FF3B30] font-bold">{r.broker_trade_mode.toUpperCase()} MONEY</span>
+                                            : <span className="text-[#52525B]">— (EA &lt; 1.60)</span>}
+                                    </td>
                                     <td className="px-4 py-2.5 font-mono text-[10px]" data-testid={`account-env-proof-${r.account_id}`}>
-                                        {r.proof?.ok ? <span className="text-[#00FF41]">EA EVIDENCE OK</span>
+                                        {r.proof?.ok ? <span className="text-[#00FF41]">{r.proof?.checks?.broker_reports_demo ? "BROKER SAYS DEMO" : "EA EVIDENCE OK"}</span>
                                             : r.proof?.override_eligible ? <span className="text-[#FFB000]">SERVER NOT DEMO-NAMED · {r.proof.reported_server || "?"}</span>
-                                            : <span className="text-[#FF3B30]">MISSING: {Object.entries(r.proof?.checks || {}).filter(([k, v]) => !v && k !== "server_demo_named").map(([k]) => k).join(", ") || "—"}</span>}
+                                            : <span className="text-[#FF3B30]">MISSING: {Object.entries(r.proof?.checks || {}).filter(([k, v]) => !v && k !== "server_demo_named" && k !== "broker_reports_demo").map(([k]) => k).join(", ") || "—"}</span>}
                                     </td>
                                     <td className="px-4 py-2.5 font-mono text-[10px] text-[#A1A1AA]">
                                         {r.attested_by ? `${r.attested_by} · ${(r.attested_at || "").slice(0, 10)}` : "—"}
                                         {r.verifier === "admin_override" && <span data-testid={`account-env-override-${r.account_id}`} className="block text-[#FF3B30] font-bold">ADMIN OVERRIDE — server not demo-named</span>}
-                                        {r.attestation_state === "invalidated" && <span data-testid={`account-env-invalidated-${r.account_id}`} className="block text-[#FFB000]">INVALIDATED — bound identity changed (broker/server/number/terminal/credentials)</span>}
+                                        {r.attestation_state === "invalidated" && <span data-testid={`account-env-invalidated-${r.account_id}`} className="block text-[#FFB000]">{r.broker_trade_mode && r.broker_trade_mode !== "demo" ? `INVALIDATED — broker reports ${r.broker_trade_mode.toUpperCase()} money (ACCOUNT_TRADE_MODE)` : "INVALIDATED — bound identity changed (broker/server/number/terminal/credentials)"}</span>}
                                     </td>
                                     <td className="px-4 py-2.5 text-right">
                                         {r.attestation_state === "invalidated" ? (
                                             <span className="inline-flex items-center gap-3">
-                                                <button data-testid={`account-env-reattest-${r.account_id}`} onClick={() => setTarget({ ...r, next: "DEMO" })} className="text-[#00FF41] font-mono text-[10px] inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5" /> RE-ATTEST</button>
+                                                {r.proof?.checks?.broker_not_real_money !== false && <button data-testid={`account-env-reattest-${r.account_id}`} onClick={() => setTarget({ ...r, next: "DEMO" })} className="text-[#00FF41] font-mono text-[10px] inline-flex items-center gap-1"><ShieldCheck className="w-3.5 h-3.5" /> RE-ATTEST</button>}
                                                 <button data-testid={`account-env-revoke-${r.account_id}`} onClick={() => setTarget({ ...r, next: "LIVE" })} className="text-[#FF3B30] font-mono text-[10px] inline-flex items-center gap-1"><ShieldOff className="w-3.5 h-3.5" /> REVOKE</button>
                                             </span>
                                         ) : r.attested_by ? (

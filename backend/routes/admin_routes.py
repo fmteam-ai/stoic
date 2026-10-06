@@ -738,13 +738,16 @@ def _env_row(a: dict) -> dict:
             "attestation_state": attestation_state(a),
             "attested_by": att.get("approved_by"), "attested_at": att.get("at"), "reason": att.get("reason"),
             "identity_hash": att.get("identity_hash"), "verifier": (att.get("proof") or {}).get("verifier"),
+            "broker_trade_mode": proof.get("reported_trade_mode"),
+            "broker_trade_mode_reported_at": a.get("account_trade_mode_reported_at"),
             "proof": proof}
 
 
 _ENV_PROJECTION = {"user_id": 1, "label": 1, "broker": 1, "broker_server": 1, "server": 1,
                    "account_number": 1, "account_type": 1, "broker_environment": 1, "mode": 1,
                    "environment_attestation": 1, "ea_identity": 1, "broker_account_id_reported": 1,
-                   "creds_version": 1, "last_heartbeat": 1, "broker_account_mismatch": 1}
+                   "creds_version": 1, "last_heartbeat": 1, "broker_account_mismatch": 1,
+                   "account_trade_mode": 1, "account_trade_mode_reported_at": 1}
 
 
 @router.get("/admin/account-environments")
@@ -754,7 +757,7 @@ async def admin_account_environments(user=Depends(get_current_user)):
     db = get_db()
     accs = await db.accounts.find({"mode": {"$ne": "paper"}}, _ENV_PROJECTION).sort("_id", -1).to_list(500)
     rows = [_env_row(a) for a in accs]
-    return {"accounts": [r for r in rows if r["declared"] == "DEMO" or r["attested_by"]]}
+    return {"accounts": [r for r in rows if r["declared"] == "DEMO" or r["attested_by"] or r["broker_trade_mode"] == "demo"]}
 
 
 @router.post("/admin/account-environments/{account_id}")
@@ -782,7 +785,8 @@ async def admin_attest_account_environment(account_id: str, payload: dict, user=
             "code": "declared_not_demo",
             "message": "the account's declared classification is not DEMO — attestation cannot downgrade it"})
     if env == "DEMO" and not proof["mandatory_ok"]:
-        failed = [k for k, v in proof["checks"].items() if not v and k != "server_demo_named"]
+        from broker_env import NON_MANDATORY_CHECKS
+        failed = [k for k, v in proof["checks"].items() if not v and k not in NON_MANDATORY_CHECKS]
         raise HTTPException(status_code=409, detail={
             "code": "demo_proof_missing", "failed_checks": failed, "proof": proof,
             "message": "DEMO cannot be attested without fresh authoritative terminal evidence: " + ", ".join(failed)})

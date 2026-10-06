@@ -157,9 +157,24 @@ Before:
 - Keep the security agent in `observe` with no rules enabled; `RESEND_API_KEY`, `WEBAUTHN_*`, admin 2FA as in main92.
 After:
 - `docker compose logs worker-security` shows one lease holder (the API log says "standing by" when the worker owns it).
-- Admin → Bot Health → Release Identity shows BUILD SHA / IMAGE DIGEST / EA 1.59 / accepted EX5 hashes.
+- Admin → Bot Health → Release Identity shows BUILD SHA / IMAGE DIGEST / EA 1.60 / accepted EX5 hashes.
 - Every user must sign in again once (access tokens are now revocable; pre-upgrade tokens are refused).
 - Confirm P3 (1 trade per symbol per day) in Bot Pulse; retrain ML models.
+
+## EA v1.60 (main98 N98-6) — rebuild required
+EA 1.60 adds `trade_mode` (ACCOUNT_TRADE_MODE → `demo` | `real` | `contest`) to every heartbeat so
+the server trusts a DEMO classification only when the **broker** says so:
+- `demo` on an authoritative identity chain is positive DEMO evidence (`broker_reports_demo`) — the
+  demo-named-server heuristic and the audited admin override are no longer needed for the proof.
+- `real` / `contest` from ANY heartbeat is fail-closed: `broker_environment()` and
+  `attested_environment()` return LIVE, an existing DEMO attestation shows INVALIDATED (LIVE gates —
+  signed EX5 proof, close-only — apply immediately), a critical `demo_attestation_contradicted` alert
+  is raised and the event is written to the hash-chained admin audit log.
+- Terminals on 1.57–1.59 report nothing: the legacy path (server-name heuristic + audited override)
+  stays valid for the 4-week demo; Demo Readiness shows `fleet_broker_demo` as WARN until 1.60 is
+  rolled to every demo terminal (FAIL if any terminal reports real money).
+Rollout: push to main → `ea-release.yml` signs the 1.60 EX5; keep the previous hash in
+`EA_RELEASE_SHA256_PREVIOUS` during the window (same N-R6 dual-hash rule as below).
 
 ## EA v1.59 (main92 H1 / main93 decision 1) — rebuild required
 EA 1.59 (the `margin_mode` change, renamed from the interim 1.58 as agreed — no signed 1.58 EX5

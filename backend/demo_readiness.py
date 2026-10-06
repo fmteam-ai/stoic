@@ -12,7 +12,7 @@ logger = logging.getLogger("demo_readiness")
 HEARTBEAT_FRESH_SEC = 120
 FLEET_WINDOW_H = 24
 FLEET_LIMIT = 50
-DEMO_ACCEPTED_EA = ("1.57", "1.58")   # D-1 — accepted on attested DEMO accounts until a signed 1.59 ships
+DEMO_ACCEPTED_EA = ("1.57", "1.58", "1.59")   # D-1 — accepted on attested DEMO accounts until a signed 1.60 ships
 
 MANUAL_STEPS = [
     ("telegram_revoked", "Leaked security-bot token revoked in @BotFather; new token created",
@@ -129,8 +129,9 @@ async def fleet(db) -> list[dict]:
                                    "environment_attestation": 1, "account_type": 1, "broker_environment": 1,
                                    "position_mode_override": 1, "trading_enabled": 1, "execution_brake": 1,
                                    "broker_server": 1, "server": 1, "verified_identity": 1, "expected_identity": 1,
-                                   "account_number": 1, "trading_authority": 1}).to_list(length=FLEET_LIMIT)
-    from broker_env import attested_environment
+                                   "account_number": 1, "trading_authority": 1,
+                                   "ea_identity": 1, "account_trade_mode": 1}).to_list(length=FLEET_LIMIT)
+    from broker_env import attested_environment, reported_trade_mode
     from routes.bridge_routes import position_mode_resolution
     from routes.diagnostic_routes import LATEST_EA
     out = []
@@ -150,9 +151,11 @@ async def fleet(db) -> list[dict]:
         out.append({
             "id": str(a["_id"]), "label": a.get("label") or a.get("account_number"),
             "heartbeat_fresh": fresh, "last_heartbeat": hb,
-            # D-1 — until a signed 1.59 exists, attested DEMO terminals legitimately run 1.57/1.58
+            # D-1 — until a signed 1.60 exists, attested DEMO terminals legitimately run 1.57–1.59
             "ea_version": a.get("ea_version"), "ea_current": ea_v == LATEST_EA or (demo and ea_v in DEMO_ACCEPTED_EA),
             "attested_demo": demo,
+            # N98-6 — broker's own ACCOUNT_TRADE_MODE (EA 1.60+); None on older EAs
+            "broker_trade_mode": reported_trade_mode(a),
             "position_mode": pm.get("mode"), "position_mode_source": pm.get("source"),
             "position_mode_explicit": pm.get("source") in ("admin", "registry", "ea"),
             "netting": pm.get("mode") == "netting",
@@ -173,10 +176,18 @@ def fleet_checks(rows: list[dict]) -> list[dict]:
         return _check(cid, title, "pass" if not bad else "fail",
                       f"{len(rows) - len(bad)}/{len(rows)} ok" + (f" · missing: {', '.join(map(str, bad[:5]))}" if bad else ""), hint)
     netting = [r["label"] for r in rows if r.get("netting")]
+    real = [r["label"] for r in rows if r.get("broker_trade_mode") in ("real", "contest")]
+    unreported = [r["label"] for r in rows if not r.get("broker_trade_mode")]
     return [
         agg("fleet_heartbeat", "Every demo EA heartbeat fresh (≤ 2 min)", "heartbeat_fresh", "re-attach the EA / restart MT5 within 15 min after any installer run"),
-        agg("fleet_ea", "Every demo account runs the current EA (1.57/1.58 accepted on attested DEMO accounts)", "ea_current", "attach the shipped EA build on each terminal"),
+        agg("fleet_ea", "Every demo account runs the current EA (1.57–1.59 accepted on attested DEMO accounts)", "ea_current", "attach the shipped EA build on each terminal"),
         agg("fleet_attested", "Every demo account admin-attested as DEMO", "attested_demo", "Accounts → admin attestation (needs the EA identity proof)"),
+        # N98-6 — the broker itself must say demo; real/contest on a demo fleet is a hard fail
+        _check("fleet_broker_demo", "Broker reports ACCOUNT_TRADE_MODE = demo (EA 1.60)",
+               "fail" if real else ("warn" if unreported else "pass"),
+               (f"REAL MONEY reported: {', '.join(map(str, real[:5]))}" if real
+                else f"{len(rows) - len(unreported)}/{len(rows)} broker-confirmed demo" + (f" · not reported (EA < 1.60): {', '.join(map(str, unreported[:5]))}" if unreported else "")),
+               "detach the EA from any real-money terminal; roll EA 1.60 so the broker's trade mode is on every heartbeat"),
         agg("fleet_position_mode", "Position mode known for every demo account (netting for Demo 3)", "position_mode_explicit", "Accounts → Position Mode (admin) or let the EA report margin_mode"),
         agg("fleet_caps", "trade_of_day_cap and max open trades set explicitly on each config", "caps_explicit", "Bot Config → apply preset, then set both caps per the Demo Test Plan"),
         # D-2 / Q-1 — netting is the main open risk: whole-position closes

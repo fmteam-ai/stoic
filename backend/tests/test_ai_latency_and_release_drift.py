@@ -140,4 +140,4 @@ def test_mq5_hash_is_line_ending_independent(tmp_path):
     assert g.sha256_file(str(crlf)) == v.sha256_source(str(crlf)) == c.sha256_source(str(crlf)) == lf_hash
     assert hashlib.sha256(crlf.read_bytes().replace(b"\r\n", b"\n")).hexdigest() == lf_hash   # ea_capabilities pin
     assert "backend/static/EmergentTradingBridge.mq5 text eol=lf" in open(os.path.join(ROOT, ".gitattributes")).read()
-    assert ec.shipped_ea_version() == "1.59"
+    assert ec.shipped_ea_version() == "1.60"

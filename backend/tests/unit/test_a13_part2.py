@@ -246,7 +246,7 @@ def test_acceptance_bundle_signed_verdict_and_authority_unlock():
     now = datetime.now(timezone.utc)
     acc = {"_id": acc_id, "mode": "live", "trading_enabled": True, "label": "Live-1", "status": "active",
            "last_heartbeat": now.isoformat(), "last_full_sync_at": now.isoformat(), "reconciliation_seq": 3,
-           "ea_identity": {"installation_id": "inst1", "broker_server": "Broker-Live"}, "ea_version": "1.59"}
+           "ea_identity": {"installation_id": "inst1", "broker_server": "Broker-Live"}, "ea_version": "1.60"}
     db.accounts.rows.append(acc)
     db.reconciliation_ledger.rows.append({"account_id": str(acc_id), "discrepancy": 0.0, "period_to": "2026-06-01", "seq": 1})
     full = {"level": "FULL", "domains": {"platform": {"level": "FULL", "reason": "x"},

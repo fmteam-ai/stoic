@@ -259,6 +259,11 @@
 //|         (b) heartbeat reports broker_time (server GMT offset,     |
 //|             server time and today's trading sessions for the      |
 //|             chart symbol) so DST/session handling is certifiable. |
+//| v1.60 — N98-6: heartbeat reports ACCOUNT_TRADE_MODE as the broker  |
+//|         sees it ("demo" | "real" | "contest"). The server trusts   |
+//|         DEMO only when the broker says so: "real" voids any DEMO   |
+//|         attestation (LIVE gates apply), "demo" replaces the        |
+//|         server-name heuristic / admin override for the proof.     |
 //| v1.56 — Candle feed covers the tick-stream symbol: SendCandles    |
 //|         now also streams M15 bars for TickStreamSymbol even when  |
 //|         it is neither the chart symbol nor in TrackedSymbols      |
@@ -266,14 +271,14 @@
 //|         EURUSD from a GOLD/other-symbol chart).                   |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.59"
+#property version   "1.60"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.59"
+#define EA_CLIENT_VERSION "1.60"
 
 input string ServerUrl              = "https://stoic-trading-bot.preview.emergentagent.com";
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -1222,6 +1227,14 @@ string BuildAvailableSymbolsJson() {
 //          "freeze_level_points":0}, ...} for the chart symbol, every
 // TrackedSymbols entry and every open-position symbol. Backend's
 // protection_guard uses these to respect precise broker stop constraints.
+// v1.60 / N98-6 — ACCOUNT_TRADE_MODE → "demo" | "real" | "contest"
+string TradeModeString() {
+   ENUM_ACCOUNT_TRADE_MODE m = (ENUM_ACCOUNT_TRADE_MODE)AccountInfoInteger(ACCOUNT_TRADE_MODE);
+   if (m == ACCOUNT_TRADE_MODE_DEMO)    return "demo";
+   if (m == ACCOUNT_TRADE_MODE_CONTEST) return "contest";
+   return "real";
+}
+
 void AppendSymbolSpec(string &json, string sym, bool &first) {
    if (sym == "" || StringFind(json, "\"" + sym + "\":") >= 0) return;
    double point = SymbolInfoDouble(sym, SYMBOL_POINT);
@@ -1336,11 +1349,14 @@ void SendHeartbeat() {
    // broker position per symbol) or hedges; report ACCOUNT_MARGIN_MODE.
    string margin_mode = ((ENUM_ACCOUNT_MARGIN_MODE)AccountInfoInteger(ACCOUNT_MARGIN_MODE)
                          == ACCOUNT_MARGIN_MODE_RETAIL_HEDGING) ? "hedging" : "netting";
+   // v1.60 / N98-6 — the broker's own word on practice vs real money. The
+   // server trusts a DEMO classification only when this says "demo".
+   string trade_mode = TradeModeString();
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"balance\":%.2f,\"equity\":%.2f,"
       "\"open_positions\":%d,\"spreads\":%s,"
       "\"account_login\":%I64d,\"base_currency\":\"%s\","
-      "\"margin_mode\":\"%s\","
+      "\"margin_mode\":\"%s\",\"trade_mode\":\"%s\","
       "\"broker_server\":\"%s\",\"installation_id\":\"%s\","
       "\"terminal_build\":%d,\"ea_version\":\"%s\","
       "\"ea_binary_sha256\":\"%s\","
@@ -1350,7 +1366,7 @@ void SendHeartbeat() {
       "\"broker_time\":%s,"
       "\"available_symbols\":%s}",
       EffectiveToken, balance, equity, openPos, spreads, login, ccy,
-      margin_mode,
+      margin_mode, trade_mode,
       broker_srv, EffectiveInstallation, term_build, EA_CLIENT_VERSION,
       EffectiveProofHash,
       (long)TimeGMT() * 1000,
