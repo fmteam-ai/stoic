@@ -176,6 +176,11 @@ def _new_exchange(account: dict):
     """
     exchange_id = (account.get("exchange_id") or DEFAULT_EXCHANGE_ID).lower()
     meta = _exchange_meta(exchange_id)
+    if _is_testnet(account) and not meta["sandbox"]:
+        # N97-6 — Kraken / Binance.US have no sandbox: a "testnet" account would hit the
+        # REAL exchange with real money while every live gate sees it as testnet. Refuse.
+        raise SandboxUnavailable(f"{meta['label']} has no sandbox/testnet — a testnet account cannot be "
+                                 "used here; connect it as LIVE (and arm both live switches) or remove it.")
     api_key, api_secret, api_pass = _decrypt_creds(account)
 
     config: dict = {
@@ -195,19 +200,17 @@ def _new_exchange(account: dict):
     ex = klass(config)
 
     if _is_testnet(account):
-        if meta["sandbox"]:
-            ex.set_sandbox_mode(True)
-            logger.debug("%s instance using SANDBOX", meta["label"])
-        else:
-            # Kraken / Binance.US have no public sandbox — log + proceed live
-            # (any orders are still blocked by the global BINANCE_LIVE_ENABLED
-            # gate at the route layer, so this is a no-op for execution).
-            logger.warning(
-                "%s has no sandbox; account marked testnet will use live "
-                "endpoints but route-layer gates still block real orders.",
-                meta["label"],
-            )
+        ex.set_sandbox_mode(True)
+        logger.debug("%s instance using SANDBOX", meta["label"])
     return ex
+
+
+class SandboxUnavailable(RuntimeError):
+    """N97-6 — testnet requested on an exchange without a sandbox (would trade real money)."""
+
+
+def sandbox_available(account: dict) -> bool:
+    return bool(EXCHANGES.get((account.get("exchange_id") or DEFAULT_EXCHANGE_ID).lower(), {}).get("sandbox"))
 
 
 # ────────────────────────────── Client ──────────────────────────────
@@ -257,6 +260,9 @@ class CCXTClient:
 
     async def cancel_order(self, order_id: str, symbol: str) -> dict:
         return await self.exchange.cancel_order(order_id, symbol)
+
+    def amount_to_precision(self, symbol: str, amount: float) -> float:
+        return float(self.exchange.amount_to_precision(symbol, amount))
 
     # ------- A13 P0-01: truth + protection -------
     async def fetch_order_by_client_id(self, symbol: str, client_order_id: str) -> dict | None:

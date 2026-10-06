@@ -11,12 +11,12 @@ from unittest.mock import patch
 import pytest
 from bson import ObjectId
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "unit"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fake_mongo import FakeDb  # noqa: E402
 
 pytestmark = pytest.mark.unit
-ROOT = os.path.join(os.path.dirname(__file__), "..", "..")
+ROOT = os.path.join(os.path.dirname(__file__), "..", "..", "..")
 
 
 def run(coro):

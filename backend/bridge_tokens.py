@@ -89,6 +89,22 @@ def token_hash(token: str) -> str:
     return hmac.new(_key(), str(token or "").encode("utf-8"), hashlib.sha256).hexdigest()
 
 
+def legacy_token_hash(token: str) -> str | None:
+    """N97-4 — hash under the JWT_SECRET fallback used BEFORE BRIDGE_TOKEN_HASH_KEY was set.
+    None when no dedicated key is configured (nothing to migrate from)."""
+    k = os.environ.get(HASH_KEY_ENV) or ""
+    legacy = os.environ.get("JWT_SECRET") or ""
+    if not k or not legacy or legacy == k:
+        return None
+    return hmac.new(legacy.encode("utf-8"), str(token or "").encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _hash_variants(token: str) -> list[str]:
+    h = token_hash(token)
+    lh = legacy_token_hash(token)
+    return [h, lh] if lh else [h]
+
+
 def token_fields(token: str) -> dict:
     """Fields to $set when a NEW token is issued (never the plaintext)."""
     return {"bridge_token_hash": token_hash(token), "bridge_token_last4": str(token)[-4:]}
@@ -110,23 +126,36 @@ def strip_plaintext(doc: dict) -> dict:
 
 
 async def find_by_current(db, token: str):
-    """Account whose CURRENT token is `token` (hash first, legacy plaintext until migrated)."""
-    acc = await db.accounts.find_one({"bridge_token_hash": token_hash(token)})
+    """Account whose CURRENT token is `token` (hash first, legacy plaintext until migrated).
+    N97-4 — one-release dual-verify: a hash made under the JWT_SECRET fallback still matches
+    and is re-hashed under the dedicated key on first sight (no EA is logged out by setting the key)."""
+    h = token_hash(token)
+    acc = await db.accounts.find_one({"bridge_token_hash": h})
+    if acc is None:
+        lh = legacy_token_hash(token)
+        if lh:
+            acc = await db.accounts.find_one({"bridge_token_hash": lh})
+            if acc is not None:
+                await db.accounts.update_one({"_id": acc["_id"], "bridge_token_hash": lh},
+                                             {"$set": {"bridge_token_hash": h, "bridge_token_rehashed_at":
+                                                       datetime.now(timezone.utc).isoformat()}})
+                acc["bridge_token_hash"] = h
+                logger.info("N97-4 bridge token re-hashed under BRIDGE_TOKEN_HASH_KEY account=%s", acc["_id"])
     if acc is None:
         acc = await db.accounts.find_one({"bridge_token": token})
     return acc
 
 
 async def find_by_prev(db, token: str, now_iso: str):
-    h = token_hash(token)
-    return await db.accounts.find_one({"$or": [{"bridge_token_prev_hash": h}, {"bridge_token_prev": token}],
+    hs = _hash_variants(token)
+    return await db.accounts.find_one({"$or": [{"bridge_token_prev_hash": {"$in": hs}}, {"bridge_token_prev": token}],
                                        "bridge_token_prev_expires": {"$gt": now_iso}})
 
 
 async def is_retired(db, token: str) -> bool:
     """S2 — a token this platform once issued and has since rotated away."""
-    h = token_hash(token)
-    row = await db.accounts.find_one({"$or": [{"bridge_token_prev_hash": h}, {"bridge_token_retired_hashes": h},
+    hs = _hash_variants(token)
+    row = await db.accounts.find_one({"$or": [{"bridge_token_prev_hash": {"$in": hs}}, {"bridge_token_retired_hashes": {"$in": hs}},
                                               {"bridge_token_prev": token}, {"bridge_token_retired": token}]}, {"_id": 1})
     return row is not None
 
@@ -144,12 +173,22 @@ def suspension_record(acc: dict, **extra) -> dict:
             **extra}
 
 
-def rotation_update(acc: dict, new_token: str, *, grace_until: str | None, suspended: bool) -> dict:
-    """Mongo update for a rotation: new hash, previous → grace (unless suspended), old → retired list."""
+def rotation_update(acc: dict, new_token: str, *, grace_until: str | None, suspended: bool,
+                    keep_prev_grace: bool = False) -> dict:
+    """Mongo update for a rotation: new hash, previous → grace (unless suspended), old → retired list.
+    Q-2 `keep_prev_grace`: an installer RE-RUN whose previous token was never used keeps the
+    RUNNING EA's token in the grace slot (the unused token is retired instead of the live one)."""
     old_hash = acc.get("bridge_token_hash") or (token_hash(acc["bridge_token"]) if acc.get("bridge_token") else None)
-    sets = {**token_fields(new_token), "bridge_token_rotated_at": datetime.now(timezone.utc).isoformat(),
-            "bridge_token_prev_hash": None if (suspended or not old_hash) else old_hash,
-            "bridge_token_prev_expires": grace_until}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    prev_active = bool(acc.get("bridge_token_prev_hash")) and str(acc.get("bridge_token_prev_expires") or "") > now_iso
+    if keep_prev_grace and prev_active and not suspended:
+        sets = {**token_fields(new_token), "bridge_token_rotated_at": now_iso,
+                "bridge_token_prev_hash": acc["bridge_token_prev_hash"],
+                "bridge_token_prev_expires": max(str(acc.get("bridge_token_prev_expires")), str(grace_until or ""))}
+    else:
+        sets = {**token_fields(new_token), "bridge_token_rotated_at": now_iso,
+                "bridge_token_prev_hash": None if (suspended or not old_hash) else old_hash,
+                "bridge_token_prev_expires": grace_until}
     upd: dict = {"$set": sets, "$unset": {"bridge_token": "", "bridge_token_prev": "", "bridge_token_retired": "",
                                           "bridge_token_suspended": ""}}
     if old_hash:
@@ -175,6 +214,7 @@ async def promote_pending_installation(db, acc: dict) -> str | None:
     pending = await db.installations.find_one({"account_id": account_id, "revoked": {"$ne": True},
                                                "pending_first_heartbeat": True})
     if not pending:
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"installation_pending": ""}})
         return None
     now = datetime.now(timezone.utc)
     await db.installations.update_many(
@@ -183,6 +223,7 @@ async def promote_pending_installation(db, acc: dict) -> str | None:
                   "revoked_at": now.isoformat()}})
     await db.installations.update_one({"_id": pending["_id"]},
                                       {"$unset": {"pending_first_heartbeat": ""}, "$set": {"first_heartbeat_at": now.isoformat()}})
+    await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"installation_pending": ""}})
     try:
         from vps_agent import LEASE_SECONDS
         await db.execution_leases.update_one(

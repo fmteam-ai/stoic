@@ -148,9 +148,12 @@ Before:
   every user now resolves to their own IP. Verify after deploy by logging in from two networks (Settings → Sessions).
 - `EA_RELEASE_SHA256=<current 1.57 EX5 hash>` — until the signed 1.59 record exists live accounts are CLOSE_ONLY
   without it. After 1.59 is signed, move the 1.57 hash to `EA_RELEASE_SHA256_PREVIOUS` for the rollout window.
-- `BRIDGE_TOKEN_HASH_KEY` (optional, 32+ random chars). Bridge tokens are now stored as HMAC hashes under this key
-  (fallback: `JWT_SECRET`). Rotating the key invalidates every paired EA until re-paired — set it ONCE before the
-  first boot of this release; the boot migration hashes existing plaintext tokens and deletes them.
+- `BRIDGE_TOKEN_HASH_KEY` — **REQUIRED** (32+ random chars, different from `JWT_SECRET`). Production REFUSES TO BOOT
+  without it (A13-2; `deploy_preflight` check `bridge_hash_key` catches it first). Bridge tokens are stored only as
+  HMAC hashes under this key. Set it ONCE before the first boot of this release and never change it: a later change
+  invalidates every paired EA until re-paired. N97-4 — EAs paired under an EARLIER build (hashes made with the
+  `JWT_SECRET` fallback) keep working: the first heartbeat after the key is set re-hashes the token under the new key
+  (one-release dual-verify). Re-pair only if a terminal still shows "Invalid bridge token" after the deploy.
 - Keep the security agent in `observe` with no rules enabled; `RESEND_API_KEY`, `WEBAUTHN_*`, admin 2FA as in main92.
 After:
 - `docker compose logs worker-security` shows one lease holder (the API log says "standing by" when the worker owns it).

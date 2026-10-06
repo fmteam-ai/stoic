@@ -86,7 +86,12 @@ rollback() {
     echo "-- safety dump of the FAILED release's database state"
     deploy/backup.sh backup || true
     echo "-- restoring pre-update database ${PRE_BACKUP} (stack stopped; old code starts on it next)"
-    RESTORE_NO_START=1 deploy/backup.sh restore "${PRE_BACKUP}" || echo "!! database restore FAILED — restore manually: deploy/rollback.sh ${PREV} --with-db ${PRE_BACKUP}"
+    if ! RESTORE_NO_START=1 deploy/backup.sh restore "${PRE_BACKUP}"; then
+      # N97-5 — never start old code on a half-restored database: leave the stack STOPPED.
+      echo "!! database restore FAILED — stack left STOPPED. Restore manually: deploy/rollback.sh ${PREV} --with-db ${PRE_BACKUP}"
+      echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-db-restore-FAILED=${PRE_BACKUP} stack-stopped" >> deploy/releases.log
+      exit 1
+    fi
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-db-restore=${PRE_BACKUP}" >> deploy/releases.log
   else
     echo "!! no pre-update archive to restore (or UPDATE_ROLLBACK_RESTORE_DB=0) — database keeps the NEW release's state"

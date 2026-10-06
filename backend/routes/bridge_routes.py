@@ -53,6 +53,10 @@ async def _account_by_token(token: str) -> dict:
         # no need to keep the grace window open once the EA switched over.
         if acc.get("bridge_token_prev_hash") or acc.get("bridge_token_prev"):
             await bt.retire_prev(db, acc)       # S2 — remembered as "old EA" (hash), never valid
+        elif acc.get("installation_pending"):
+            # Q-2 — first heartbeat of a pairing that had no grace slot (first pairing,
+            # suspended rotation): the pending installation is promoted all the same.
+            await bt.promote_pending_installation(db, acc)
         # audit F-05 — last-used tracking (throttled to ~1/min)
         now_iso = datetime.now(timezone.utc).isoformat()
         last = acc.get("bridge_last_used_at") or ""
@@ -632,7 +636,10 @@ async def heartbeat(payload: BridgeHeartbeat):
                     _live = {"live_volume": float(p.volume), "live_at": now_iso}   # R-6 — broker position volume
                     if p.current_price is not None:
                         _live.update({"live_pnl": float(p.profit or 0.0), "live_price": float(p.current_price)})
-                    await db.trades.update_one({"_id": existing["_id"]}, {"$set": _live})
+                    # Q-1 — netting: every open leg sharing this position ticket carries the
+                    # broker volume, so any leg can be closed by ticket without flattening blind.
+                    await db.trades.update_many({"account_id": account_id, "mt5_ticket": int(p.ticket),
+                                                 "status": "open"}, {"$set": _live})
                 # P0-1 · protection verification: the broker position
                 # snapshot carries the ACTUAL live SL. A filled trade is
                 # only OPEN once that SL is confirmed; a missing SL first

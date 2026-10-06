@@ -123,8 +123,10 @@ async def admin_demo_readiness(user=Depends(get_current_user)):
 
 
 @router.post("/admin/demo-readiness/manual")
-async def admin_demo_readiness_manual(payload: dict, user=Depends(get_current_user)):
+async def admin_demo_readiness_manual(payload: dict, request: Request, user=Depends(get_current_user)):
     _admin_only(user)
+    from step_up import require_step_up
+    await require_step_up(get_db(), user, request, "authority_relax")      # N97-10 — step-up MFA
     from demo_readiness import set_manual
     try:
         return await set_manual(get_db(), str(payload.get("id") or ""), bool(payload.get("checked")),
@@ -142,11 +144,13 @@ async def admin_acceptance_current(user=Depends(get_current_user)):
 
 
 @router.post("/admin/acceptance/bundle")
-async def admin_acceptance_generate(user=Depends(get_current_user)):
-    """A13 P1-01 — collect, evaluate and HMAC-sign a new acceptance bundle (audited)."""
+async def admin_acceptance_generate(request: Request, user=Depends(get_current_user)):
+    """A13 P1-01 — collect, evaluate and HMAC-sign a new acceptance bundle (audited, step-up MFA)."""
     _admin_only(user)
     from acceptance_bundle import build_bundle
+    from step_up import require_step_up
     db = get_db()
+    await require_step_up(db, user, request, "authority_relax")            # N97-10 — unlock endpoint
     actor = str(user.get("email") or user["id"])
     try:
         doc = await build_bundle(db, actor=actor)

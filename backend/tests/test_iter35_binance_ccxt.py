@@ -98,6 +98,9 @@ def _mock_db():
     db = MagicMock()
     for name in ("risk_reservations", "account_reservation_locks", "execution_intents", "bot_configs"):
         setattr(db, name, FakeCollection())
+    from types import SimpleNamespace
+    db.trades.update_one = AsyncMock(return_value=SimpleNamespace(matched_count=1, modified_count=1))
+    db.trades.find_one = AsyncMock(return_value=None)
     return db
 
 
@@ -157,7 +160,8 @@ def _make_account(**over):
 @pytest.mark.asyncio
 async def test_engine_blocks_when_max_concurrent_hit():
     db = _mock_db()
-    db.trades.count_documents = AsyncMock(return_value=3)
+    # N97-1 — a MANUAL signal is bound by the hard total cap (auto cap + buffer 2), not the auto cap
+    db.trades.count_documents = AsyncMock(return_value=5)
 
     with patch("crypto_bridge.binance_engine.get_db", return_value=db):
         result = await BinanceCCXTEngine().execute(
@@ -166,7 +170,7 @@ async def test_engine_blocks_when_max_concurrent_hit():
             cfg_account_id="acc1",
         )
     assert result["blocked"] == "max_concurrent_cap"
-    assert result["inflight"] == 3
+    assert result["total_inflight"] == 5 and result["total_cap"] == 4
 
 
 @pytest.mark.asyncio
@@ -218,13 +222,14 @@ async def test_engine_places_market_order_and_persists_trade():
     db.trades.count_documents = AsyncMock(return_value=0)
     inserted_id = ObjectId()
     db.trades.insert_one = AsyncMock(return_value=MagicMock(inserted_id=inserted_id))
-    db.trades.update_one = AsyncMock()
 
     fake_client = MagicMock()
     fake_client.create_market_order = AsyncMock(return_value={
         "id": "ORDER123", "status": "closed", "average": 60010.5, "price": 60010.5,
+        "filled": 0.001, "fees": [{"currency": "BTC", "cost": 0.000001}],         # N97-8 — base-asset fee
     })
     fake_client.place_oco_protection = AsyncMock(return_value={"list_id": "L1"})   # A13 P0-01
+    fake_client.amount_to_precision = lambda sym, amt: float(amt)
     fake_client.__aenter__ = AsyncMock(return_value=fake_client)
     fake_client.__aexit__ = AsyncMock(return_value=False)
 
@@ -244,6 +249,7 @@ async def test_engine_places_market_order_and_persists_trade():
     fake_client.create_market_order.assert_awaited_once()
     assert fake_client.create_market_order.await_args.kwargs["client_order_id"].startswith("stoic-")
     fake_client.place_oco_protection.assert_awaited_once()                        # exchange-side SL/TP
+    assert fake_client.place_oco_protection.await_args.args[2] == pytest.approx(0.000999)   # filled − base fee
     db.trades.insert_one.assert_awaited_once()
     persisted = db.trades.insert_one.await_args[0][0]
     assert persisted["client_order_id"] == fake_client.create_market_order.await_args.kwargs["client_order_id"]

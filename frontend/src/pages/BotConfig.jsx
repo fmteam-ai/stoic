@@ -912,7 +912,8 @@ function PPNumInput({ cfg, setCfg, field, label, suffix, step = 0.1, min = 0, ma
             <label htmlFor={`input-${field}`} className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{label}</label>
             <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#FFD700]">
                 <input type="number" step={step} min={min} max={max} value={cfg[field] ?? fallback}
-                    onChange={e => setCfg({ ...cfg, [field]: parseFloat(e.target.value) || 0 })}
+                    onChange={e => { const v = parseFloat(e.target.value); setCfg({ ...cfg, [field]: Number.isFinite(v) ? v : fallback }); }}
+                    onBlur={e => { if (e.target.value === "") setCfg({ ...cfg, [field]: fallback }); }}
                     data-testid={`input-${field}`}
                     id={`input-${field}`} name={field}
                     className="flex-1 bg-transparent px-3 py-2 text-sm font-mono outline-none" />

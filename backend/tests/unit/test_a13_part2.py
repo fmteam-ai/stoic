@@ -10,8 +10,8 @@ import pytest
 from bson import ObjectId
 from pymongo.errors import DuplicateKeyError
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "unit"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fake_mongo import FakeCollection, FakeDb  # noqa: E402
 
 pytestmark = pytest.mark.unit
@@ -52,6 +52,8 @@ def _fake_client(fetch=None, create_raises=None, oco_raises=None):
     c.place_oco_protection = AsyncMock(side_effect=oco_raises) if oco_raises else \
         AsyncMock(return_value={"list_id": "L1", "list_client_order_id": "x-oco"})
     c.fetch_balance = AsyncMock(return_value={"total": {"USDT": 1000}})
+    c.amount_to_precision = lambda sym, amt: float(amt)
+    c.fetch_oco_status = AsyncMock(return_value=None)
     return c
 
 
@@ -143,7 +145,7 @@ def test_protection_placed_or_fail_closed_flatten_and_authority_domain():
     assert prot2["status"] == cx.PROTECTION_FLATTENED and db.trades.rows[0]["status"] == "closed"
     bad.create_market_order.assert_awaited_once()
     flat_kwargs = bad.create_market_order.await_args
-    assert flat_kwargs.args[1] == "sell" and flat_kwargs.kwargs["client_order_id"] == "stoic-y-flat"
+    assert flat_kwargs.args[1] == "sell" and flat_kwargs.kwargs["client_order_id"] == "stoic-y-fl"   # N97-7 ≤ 36 chars
     # flatten ALSO fails → MISSING → authority CLOSE_ONLY for the account
     db.trades.rows[0]["status"] = "open"
     worse = _fake_client(oco_raises=RuntimeError("oco"), create_raises=RuntimeError("down"))
@@ -179,15 +181,16 @@ def test_reservation_caps_cover_every_entry_path_and_release_on_refusal():
     r1 = run(ar.reserve_entry(db, account_id=aid, user_id="u", source="mt5", decision_id="d1", caps=caps))
     assert r1["ok"] and r1["capacity"]["auto_open"] == 1
     r2 = run(ar.reserve_entry(db, account_id=aid, user_id="u", source="crypto", decision_id="d2", caps=caps))
-    assert r2["ok"] is False and r2["blocked"] == "reservation_capacity"      # 1 open + 1 reserved = cap 2
+    assert r2["ok"] is False and r2["blocked"] == "max_concurrent_cap"        # 1 open + 1 reserved = cap 2
     assert "automated positions 2/2" in r2["violations"][0]
     run(ar.release(db, r1["reservation"]["reservation_id"], "refused:test"))
     r3 = run(ar.reserve_entry(db, account_id=aid, user_id="u", source="paper", decision_id="d3", caps=caps))
     assert r3["ok"]
-    # daily capacity
-    r4 = run(ar.reserve_entry(db, account_id=aid, user_id="u", source="mt5", decision_id="d4",
-                              caps={"auto_cap": 0, "total_cap": 0, "daily_cap": 2}))
-    assert r4["ok"] is False and "daily trade capacity 2/2" in r4["violations"][0]
+    # daily capacity is PER SYMBOL (N97-1): the open XAUUSD trade + reservation count for XAUUSD only
+    db.trades.rows[0]["symbol"] = "XAUUSD"
+    r4 = run(ar.reserve_entry(db, account_id=aid, user_id="u", source="mt5", decision_id="d4", symbol="XAUUSD",
+                              caps={"auto_cap": 0, "total_cap": 0, "daily_cap": 1}))
+    assert r4["ok"] is False and r4["blocked"] == "trade_of_day_cap" and "1/1" in r4["violations"][0]
 
 
 def test_guard_entry_presents_or_reserves_links_and_releases():
@@ -228,7 +231,7 @@ def test_every_engine_and_scalp_route_through_the_reservation_service():
         assert "guard_entry(" in inspect.getsource(fn), fn
     assert 'trade_doc["reservation_id"] = reservation_id' in inspect.getsource(execution.MT5BridgeEngine._engine_stage)
     assert "count_documents(cap_q)" not in inspect.getsource(execution.MT5BridgeEngine._engine_stage)
-    scalp_src = open(os.path.join(os.path.dirname(__file__), "..", "scalp", "engine.py"), encoding="utf-8").read()
+    scalp_src = open(os.path.join(os.path.dirname(__file__), "..", "..", "scalp", "engine.py"), encoding="utf-8").read()
     assert '"_reservation_id": _resv["reservation_id"]' in scalp_src
     import seed
     assert "ensure_reservation_lock_indexes" in inspect.getsource(seed.ensure_indexes)
@@ -251,7 +254,7 @@ def test_acceptance_bundle_signed_verdict_and_authority_unlock():
     env = {"LEDGER_ANCHOR_KEY": "k" * 32, "APP_ENV": "production", "STOIC_IMAGE_DIGEST": "sha256:abc"}
     with patch.dict(os.environ, env), patch("trading_authority.compute_authority", AsyncMock(return_value=full)), \
             patch("modules.pamm.strategy_guard.GIT_COMMIT", "deadbeef1"), \
-            patch("broker_env.demo_proof", lambda a, **k: {"ok": False}):
+            patch("broker_env.attested_environment", lambda a: "LIVE"):
         b = run(ab.build_bundle(db, actor="admin@stoicaibot.com"))
         assert b["verdict"] == "PASS" and b["failures"] == [] and ab.verify_signature(b)
         assert b["image_digest"] == "sha256:abc" and b["build_sha"] == "deadbeef1" and str(acc_id) in b["account_ids"]
@@ -271,7 +274,7 @@ def test_acceptance_bundle_signed_verdict_and_authority_unlock():
     db.acceptance_bundles.rows.clear()
     with patch.dict(os.environ, env), patch("trading_authority.compute_authority", AsyncMock(return_value=full)), \
             patch("modules.pamm.strategy_guard.GIT_COMMIT", "deadbeef1"), \
-            patch("broker_env.demo_proof", lambda a, **k: {"ok": False}):
+            patch("broker_env.attested_environment", lambda a: "LIVE"):
         b2 = run(ab.build_bundle(db, actor="admin"))
         assert b2["verdict"] == "FAIL" and any("EA session" in f for f in b2["failures"])
         assert run(ta.acceptance_domain(db, acc))["level"] == "CLOSE_ONLY"
@@ -297,7 +300,7 @@ def test_release_gate_blocks_non_authoritative_release_in_production():
     assert ta.DOMAIN_SCOPE["release_gate"] == "platform_global" and ta.DOMAIN_SCOPE["acceptance"] == "account_bound"
     import deploy_preflight
     assert '"release_gate"' in inspect.getsource(deploy_preflight.run_preflight)
-    summary = open(os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "generate_release_summary.py"), encoding="utf-8").read()
+    summary = open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts", "generate_release_summary.py"), encoding="utf-8").read()
     assert '"RELEASABLE" if releasable' in summary and "images.get(\"backend\")" in summary
-    page = open(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "pages", "DemoReadiness.jsx"), encoding="utf-8").read()
+    page = open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "src", "pages", "DemoReadiness.jsx"), encoding="utf-8").read()
     assert "AcceptanceBundleCard" in page

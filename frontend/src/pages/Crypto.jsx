@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { CryptoLiveBadge } from "@/components/CryptoLiveBadge";
 import { Bitcoin, Plus, Trash2, RefreshCw, ShieldCheck, AlertTriangle, X, Zap } from "lucide-react";
 import { toast } from "sonner";
 
@@ -91,10 +92,13 @@ export default function Crypto() {
                 title="Crypto · Spot Trading"
                 subtitle="Live BTC/ETH execution via CCXT. Binance · Binance.US · Kraken · OKX · KuCoin. Testnet first — flip to live only after verification."
                 action={
-                    <button onClick={() => setShowForm(true)} data-testid="add-crypto-account-btn"
-                        className="bg-[#FFD700] text-black px-4 py-2 font-mono text-xs tracking-widest hover:bg-[#FFB000] flex items-center gap-2">
-                        <Plus className="w-4 h-4" /> ADD CRYPTO ACCOUNT
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <CryptoLiveBadge />
+                        <button onClick={() => setShowForm(true)} data-testid="add-crypto-account-btn"
+                            className="bg-[#FFD700] text-black px-4 py-2 font-mono text-xs tracking-widest hover:bg-[#FFB000] flex items-center gap-2">
+                            <Plus className="w-4 h-4" /> ADD CRYPTO ACCOUNT
+                        </button>
+                    </div>
                 }
             />
 
@@ -107,7 +111,7 @@ export default function Crypto() {
                         {status.live_enabled ? "LIVE ENABLED · real-money trades allowed" : "TESTNET ONLY · live trades disabled by env"}
                     </div>
                     <div className="text-xs text-[#A1A1AA] mt-1">
-                        Set <code className="font-mono text-[#FFD700]">BINANCE_LIVE_ENABLED=true</code> in backend/.env to unlock live. Defaults to false.
+                        Live needs BOTH <code className="font-mono text-[#FFD700]">CRYPTO_LIVE_TRADING_ENABLED=true</code> and <code className="font-mono text-[#FFD700]">BINANCE_LIVE_ENABLED=true</code> in backend/.env. Both default to off. Testnet accounts are refused on exchanges without a sandbox (Kraken, Binance.US).
                     </div>
                 </div>
             </div>

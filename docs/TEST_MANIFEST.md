@@ -6,17 +6,15 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 704 |
+| unit | pure logic, no external I/O | every CI job | 741 |
 | integration | real MongoDB service container | CI `backend-integration` | 200 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4175 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4155 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 5090 tests across 521 files.**
+**Total: 5107 tests across 522 files.**
 
 | file | class | tests |
 |------|-------|-------|
-| `backend/tests/test_a13_part1.py` | http-live | 3 |
-| `backend/tests/test_a13_part2.py` | http-live | 11 |
 | `backend/tests/test_a6_api_integration.py` | http-live | 7 |
 | `backend/tests/test_ai_latency_and_release_drift.py` | http-live | 6 |
 | `backend/tests/test_ai_optimizer.py` | http-live | 6 |
@@ -40,7 +38,6 @@ fails when this file drifts from the tree.
 | `backend/tests/test_fixplan_main92_sa5.py` | http-live | 20 |
 | `backend/tests/test_fixplan_main93_a9.py` | http-live | 21 |
 | `backend/tests/test_fixplan_main94_a10.py` | http-live | 12 |
-| `backend/tests/test_fixplan_main96_a12.py` | http-live | 6 |
 | `backend/tests/test_h9_fx_rates_and_scorecard.py` | http-live | 7 |
 | `backend/tests/test_iter100_batch_a.py` | http-live | 6 |
 | `backend/tests/test_iter100_http.py` | http-live | 7 |
@@ -506,12 +503,16 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/scalp/test_review_r18_lifecycle.py` | unit | 20 |
 | `backend/tests/unit/scalp/test_round16_slots.py` | unit | 7 |
 | `backend/tests/unit/scalp/test_scalp_unit.py` | unit | 162 |
+| `backend/tests/unit/test_a13_part1.py` | unit | 3 |
+| `backend/tests/unit/test_a13_part2.py` | unit | 11 |
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
 | `backend/tests/unit/test_admin_integrations.py` | unit | 6 |
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
+| `backend/tests/unit/test_fixplan_main96_a12.py` | unit | 6 |
+| `backend/tests/unit/test_fixplan_main97.py` | unit | 17 |
 | `backend/tests/unit/test_forecast_status.py` | unit | 3 |
 | `backend/tests/unit/test_host_migrator.py` | unit | 17 |
 | `backend/tests/unit/test_install_report_healthwatch.py` | unit | 3 |

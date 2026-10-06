@@ -1714,18 +1714,33 @@ class ScalpRunner:
         # order is queued; held until the broker outcome is certain so a
         # replacement order can't consume the same account risk meanwhile.
         from pip_utils import pip_value_usd_per_lot_strict as _pv_strict
+        # N97-2 — scalp reserves through the ACCOUNT-WIDE service (same caps and
+        # per-account lease as the main bot), never around it.
+        import account_reservations as _ar
         try:
-            _resv = await risk_reservations.reserve(
-                db, account_id=self.account_id, user_id=self.user_id,
+            _got = await _ar.reserve_entry(
+                db, account_id=self.account_id, user_id=self.user_id, source="scalp",
                 decision_id=decision["decision_id"],
                 risk_usd=fc.stop_pips * _pv_strict(self.symbol) * final_lot,
-                lot=final_lot)
+                lot=final_lot, symbol=self.symbol, origin="auto",
+                caps=await _ar.caps_for(db, user_id=self.user_id, cfg_account_id=self.account_id,
+                                        max_concurrent=None))
         except Exception:
-            # review item 8 — the DB refused (e.g. duplicate ACTIVE
-            # reservation for this decision): fail closed, free the slot.
+            # review item 8 — the DB refused: fail closed, free the slot.
             await release_broker_submission_slot(db, slot)
             self.state.record_reject()
             raise
+        if not _got["ok"]:
+            await release_broker_submission_slot(db, slot)
+            self.state.record_reject()
+            _bg(lambda s={"status": "refused_caps", "refusal": _got.get("blocked"),
+                          "violations": _got.get("violations") or [_got.get("reason")]}:
+                db.scalp_decisions.update_one({"decision_id": decision["decision_id"]}, {"$set": s}),
+                "decision_update")
+            logger.info("scalp submit refused by account caps decision=%s: %s",
+                        decision["decision_id"], _got.get("violations") or _got.get("reason"))
+            return
+        _resv = _got["reservation"]
         self._emit(db, "OrderIntentCreated",
                    decision_id=decision["decision_id"],
                    payload={"lot": final_lot,

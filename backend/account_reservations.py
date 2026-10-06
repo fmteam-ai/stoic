@@ -61,67 +61,79 @@ async def _release_lock(db, account_id: str, owner: str) -> None:
         {"_id": account_id, "owner": owner}, {"$set": {"locked_until": None, "owner": None}})
 
 
-async def capacity_snapshot(db, *, account_id: str, user_id: str) -> dict:
-    """Current exposure as the caps see it: DB positions + reservations invisible to them."""
+async def capacity_snapshot(db, *, account_id: str, user_id: str, symbol: str | None = None) -> dict:
+    """Current exposure as the caps see it: DB positions + reservations invisible to them.
+    The daily figure is PER SYMBOL (bot_runner semantics) and counts automated entries only."""
+    from pip_utils import symbol_match
     base = {"user_id": user_id, "account_id": account_id, "status": {"$in": ["pending", "open"]}}
     total_open = await db.trades.count_documents(base)
     auto_open = await db.trades.count_documents({**base, "origin": "auto"})
     unaccounted = await rr.unaccounted_count(db, account_id)
-    today = await db.trades.count_documents(
-        {"user_id": user_id, "account_id": account_id, "origin": "auto",
-         "opened_at": {"$gte": _day_start_iso()}})
+    today_auto = 0
+    if symbol:
+        today_auto = await db.trades.count_documents(
+            {"user_id": user_id, "account_id": account_id, "origin": "auto",
+             "symbol": symbol_match(symbol), "opened_at": {"$gte": _day_start_iso()}})
+        today_auto += await db.risk_reservations.count_documents(
+            {"account_id": account_id, "state": {"$in": list(rr.ACTIVE_STATES)}, "trade_id": None,
+             "origin": "auto", "symbol": symbol_match(symbol)})
     agg = await db.risk_reservations.aggregate([
         {"$match": {"account_id": account_id, "state": {"$in": list(rr.ACTIVE_STATES)}}},
         {"$group": {"_id": None, "risk": {"$sum": "$risk_usd"}}}]).to_list(1)
     return {"total_open": total_open + unaccounted, "auto_open": auto_open + unaccounted,
-            "today_auto": today + unaccounted, "reserved_risk_usd": float((agg or [{}])[0].get("risk", 0) or 0)}
+            "today_auto": today_auto, "reserved_risk_usd": float((agg or [{}])[0].get("risk", 0) or 0)}
 
 
-def _violations(snap: dict, caps: dict, risk_usd: float) -> list[str]:
+def _violations(snap: dict, caps: dict, risk_usd: float, origin: str) -> list[tuple[str, str]]:
+    """[(block_code, detail)] — automated caps bind automated entries only; the hard
+    total cap and the risk cap bind every entry (manual and test trades included)."""
     out = []
+    is_auto = origin == "auto"
     auto_cap = int(caps.get("auto_cap") or 0)
-    if auto_cap > 0 and snap["auto_open"] >= auto_cap:
-        out.append(f"automated positions {snap['auto_open']}/{auto_cap}")
+    if is_auto and auto_cap > 0 and snap["auto_open"] >= auto_cap:
+        out.append(("max_concurrent_cap", f"automated positions {snap['auto_open']}/{auto_cap}"))
     total_cap = int(caps.get("total_cap") or 0)
     if total_cap > 0 and snap["total_open"] >= total_cap:
-        out.append(f"total positions {snap['total_open']}/{total_cap}")
+        out.append(("max_concurrent_cap", f"total positions {snap['total_open']}/{total_cap}"))
     daily_cap = int(caps.get("daily_cap") or 0)
-    if daily_cap > 0 and snap["today_auto"] >= daily_cap:
-        out.append(f"daily trade capacity {snap['today_auto']}/{daily_cap}")
+    if is_auto and daily_cap > 0 and snap["today_auto"] >= daily_cap:
+        out.append(("trade_of_day_cap", f"daily trades for this symbol {snap['today_auto']}/{daily_cap}"))
     risk_cap = float(caps.get("risk_cap_usd") or 0)
     if risk_cap > 0 and snap["reserved_risk_usd"] + float(risk_usd or 0) > risk_cap:
-        out.append(f"reserved risk ${snap['reserved_risk_usd'] + float(risk_usd or 0):.2f} > ${risk_cap:.2f}")
+        out.append(("risk_cap", f"reserved risk ${snap['reserved_risk_usd'] + float(risk_usd or 0):.2f} > ${risk_cap:.2f}"))
     return out
 
 
 async def reserve_entry(db, *, account_id: str, user_id: str, source: str, decision_id: str,
-                        risk_usd: float = 0.0, lot: float = 0.0, caps: dict | None = None) -> dict:
+                        risk_usd: float = 0.0, lot: float = 0.0, caps: dict | None = None,
+                        symbol: str | None = None, origin: str = "auto") -> dict:
     """Check every cap and write the reservation atomically (per-account lease).
     Returns {"ok": True, "reservation": doc, "capacity": snap} or
-    {"ok": False, "blocked": "reservation_capacity|reservation_busy", ...}."""
+    {"ok": False, "blocked": "max_concurrent_cap|trade_of_day_cap|risk_cap|reservation_busy", ...}."""
     caps = caps or {}
     owner = f"{source}:{decision_id}"
     if not await _acquire_lock(db, account_id, owner):
         logger.warning("reservation lease busy account=%s source=%s", account_id, source)
         return {"ok": False, "blocked": "reservation_busy", "reason": "account entry lease busy — retry next cycle"}
     try:
-        snap = await capacity_snapshot(db, account_id=account_id, user_id=user_id)
-        bad = _violations(snap, caps, risk_usd)
+        snap = await capacity_snapshot(db, account_id=account_id, user_id=user_id, symbol=symbol)
+        bad = _violations(snap, caps, risk_usd, origin)
         if bad:
-            logger.warning("reservation refused account=%s source=%s: %s", account_id, source, "; ".join(bad))
-            return {"ok": False, "blocked": "reservation_capacity", "violations": bad, "capacity": snap,
+            logger.warning("reservation refused account=%s source=%s sym=%s: %s", account_id, source, symbol,
+                           "; ".join(d for _, d in bad))
+            return {"ok": False, "blocked": bad[0][0], "violations": [d for _, d in bad], "capacity": snap,
                     "inflight": snap["auto_open"], "cap": int(caps.get("auto_cap") or 0),
-                    "total_inflight": snap["total_open"], "total_cap": int(caps.get("total_cap") or 0)}
+                    "total_inflight": snap["total_open"], "total_cap": int(caps.get("total_cap") or 0),
+                    "today": snap["today_auto"], "daily_cap": int(caps.get("daily_cap") or 0)}
         try:
             doc = await rr.reserve(db, account_id=account_id, user_id=user_id, decision_id=decision_id,
                                    risk_usd=risk_usd, lot=lot)
         except DuplicateKeyError:
             return {"ok": False, "blocked": "duplicate_reservation",
                     "reason": "an ACTIVE reservation already exists for this decision"}
-        await db.risk_reservations.update_one(
-            {"reservation_id": doc["reservation_id"]},
-            {"$set": {"source": source, "caps_snapshot": caps, "capacity_snapshot": snap}})
-        return {"ok": True, "reservation": doc, "capacity": snap}
+        extra = {"source": source, "symbol": symbol, "origin": origin, "caps_snapshot": caps, "capacity_snapshot": snap}
+        await db.risk_reservations.update_one({"reservation_id": doc["reservation_id"]}, {"$set": extra})
+        return {"ok": True, "reservation": {**doc, **extra}, "capacity": snap}
     finally:
         await _release_lock(db, account_id, owner)
 
@@ -145,17 +157,25 @@ def total_positions_buffer() -> int:
     return int(os.environ.get("EXEC_TOTAL_POSITIONS_BUFFER", "2"))
 
 
-async def caps_for(db, *, user_id: str, cfg_account_id: str | None, max_concurrent: int) -> dict:
-    """Engine caps: config automated cap, hard total cap, daily trade capacity."""
-    caps = {"auto_cap": int(max_concurrent or 0),
-            "total_cap": (int(max_concurrent) + total_positions_buffer()) if max_concurrent else 0,
-            "daily_cap": 0}
+async def mark_uncertain(db, reservation_id: str) -> None:
+    """Exchange outcome UNKNOWN: the slot stays held (counted) until broker truth resolves it."""
+    await db.risk_reservations.update_one({"reservation_id": reservation_id}, {"$set": {"uncertain": True}})
+
+
+async def caps_for(db, *, user_id: str, cfg_account_id: str | None, max_concurrent: int | None) -> dict:
+    """Engine caps: automated concurrency cap, hard total cap, PER-SYMBOL daily automated
+    cap (`trade_of_day_cap`: unset → 1 like bot_runner; 0 → unlimited)."""
+    cfg = None
     if cfg_account_id:
         cfg = await db.bot_configs.find_one({"user_id": user_id, "account_id": cfg_account_id},
-                                            {"trade_of_day_cap": 1})
-        if cfg and cfg.get("trade_of_day_cap"):
-            caps["daily_cap"] = int(cfg["trade_of_day_cap"])
-    return caps
+                                            {"trade_of_day_cap": 1, "max_concurrent_trades": 1})
+    if max_concurrent is None:
+        max_concurrent = int((cfg or {}).get("max_concurrent_trades") or 0)
+    raw = (cfg or {}).get("trade_of_day_cap")
+    daily = 1 if raw in (None, "") else int(raw)
+    return {"auto_cap": int(max_concurrent or 0),
+            "total_cap": (int(max_concurrent) + total_positions_buffer()) if max_concurrent else 0,
+            "daily_cap": daily}
 
 
 async def guard_entry(db, *, account: dict, user_id: str, signal: dict, source: str,
@@ -176,10 +196,9 @@ async def guard_entry(db, *, account: dict, user_id: str, signal: dict, source: 
                           or f"{source}:{account_id}:{signal.get('symbol')}:{signal.get('action')}:{_now().timestamp():.0f}")
         got = await reserve_entry(db, account_id=account_id, user_id=user_id, source=source,
                                   decision_id=decision_id, risk_usd=float(signal.get("risk_usd") or 0),
-                                  lot=float(signal.get("lot_size") or 0), caps=caps)
+                                  lot=float(signal.get("lot_size") or 0), caps=caps,
+                                  symbol=signal.get("symbol"), origin=str(signal.get("origin") or "manual"))
         if not got["ok"]:
-            if got["blocked"] == "reservation_capacity":
-                got = {**got, "blocked": "max_concurrent_cap"}      # keep the runner's refusal vocabulary
             return {k: v for k, v in got.items() if k != "ok"}
         rid, owned = got["reservation"]["reservation_id"], True
     try:
@@ -189,7 +208,10 @@ async def guard_entry(db, *, account: dict, user_id: str, signal: dict, source: 
             await release(db, rid, "error")
         raise
     if isinstance(out, dict) and out.get("blocked"):
-        if owned:
+        if out["blocked"] == "exchange_unknown":
+            await mark_uncertain(db, rid)              # order may be live — hold the slot
+            out["reservation_id"] = rid
+        elif owned:
             await release(db, rid, f"refused:{out['blocked']}")
     elif isinstance(out, dict) and out.get("id"):
         if owned:                                   # a presenting path owns its own lifecycle

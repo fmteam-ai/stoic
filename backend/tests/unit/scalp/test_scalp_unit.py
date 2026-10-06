@@ -284,6 +284,7 @@ def _stub_db():
                  "scalp_configs", "trades", "broker_deals", "scalp_owners",
                  "scalp_financial_events", "accounts",
                  "scalp_submission_slots", "risk_reservations",
+                 "account_reservation_locks", "bot_configs",          # N97-2 — account-wide reservation
                  "outbox", "trade_events"):
         c = getattr(db, coll)
         c.insert_one = AsyncMock()
@@ -314,6 +315,10 @@ def _stub_db():
             yield  # pragma: no cover
         return gen()
     db.risk_reservations.find = MagicMock(side_effect=_empty_agen)
+    # N97-2 — reserve_entry aggregates reserved risk: aggregate(...).to_list()
+    _agg = MagicMock()
+    _agg.to_list = AsyncMock(return_value=[])
+    db.risk_reservations.aggregate = MagicMock(return_value=_agg)
     # iter-61: broker with plenty of healthy execution history so the
     # fail-closed history cap / exec-quality gate don't mask the stages
     # under test (each session bucket present, favourable averages)

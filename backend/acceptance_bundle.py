@@ -35,8 +35,18 @@ def release_identity() -> dict:
             "environment": os.environ.get("APP_ENV") or "dev"}
 
 
-def _sign(payload: dict) -> tuple[str, str]:
-    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+SIGNED_FIELDS = ("bundle_id", "payload", "verdict", "failures", "account_ids", "build_sha", "image_digest",
+                 "created_by", "created_at", "expires_at")
+
+
+def _canonical(bundle: dict) -> bytes:
+    """N97-3 — the signature covers EVERY field bundle_covers() decides on, not just the payload."""
+    body = {k: bundle.get(k) for k in SIGNED_FIELDS}
+    return json.dumps(body, sort_keys=True, separators=(",", ":"), default=str).encode()
+
+
+def _sign(bundle: dict) -> tuple[str, str]:
+    body = _canonical(bundle)
     digest = hashlib.sha256(body).hexdigest()
     key = (os.environ.get("LEDGER_ANCHOR_KEY") or "").encode()
     if not key:
@@ -46,7 +56,7 @@ def _sign(payload: dict) -> tuple[str, str]:
 
 def verify_signature(bundle: dict) -> bool:
     try:
-        digest, sig = _sign(bundle["payload"])
+        digest, sig = _sign(bundle)
     except Exception:  # noqa: BLE001
         return False
     return hmac.compare_digest(sig, str(bundle.get("signature") or "")) and digest == bundle.get("digest")
@@ -74,7 +84,7 @@ async def _statement_comparison(db, acc: dict) -> dict:
 
 
 async def account_evidence(db, acc: dict, now: datetime) -> dict:
-    from broker_env import demo_proof
+    from broker_env import attested_environment
     from trading_authority import compute_authority, level_severity
     aid = str(acc["_id"])
     ident = acc.get("ea_identity") or {}
@@ -89,8 +99,8 @@ async def account_evidence(db, acc: dict, now: datetime) -> dict:
     since = (now - timedelta(hours=24)).isoformat()
     return {
         "account_id": aid, "label": acc.get("display_name") or acc.get("label") or acc.get("broker"),
-        "mode": acc.get("mode"), "environment": "DEMO" if demo_proof(acc, now=now).get("ok") else
-        ("PAPER" if acc.get("mode") == "paper" else "LIVE"),
+        # N97-11 — environment by ADMIN ATTESTATION (identity-bound), never by heartbeat freshness
+        "mode": acc.get("mode"), "environment": attested_environment(acc),
         "trading_enabled": acc.get("trading_enabled") is True,
         "broker_server": ident.get("broker_server") or acc.get("broker_server"),
         "ea_session": {"installation_id": ident.get("installation_id") or acc.get("installation_id"),
@@ -148,13 +158,14 @@ async def build_bundle(db, *, actor: str) -> dict:
     failures = [f"{a['label']}: {f}" for a in accounts for f in a["failures"]]
     if not any(a["trading_enabled"] for a in accounts):
         failures.append("no enabled live account to accept")
-    digest, sig = _sign(payload)
-    doc = {"bundle_id": uuid.uuid4().hex, "payload": payload, "digest": digest, "signature": sig,
-           "algo": "hmac-sha256(LEDGER_ANCHOR_KEY)", "verdict": "PASS" if not failures else "FAIL",
+    doc = {"bundle_id": uuid.uuid4().hex, "payload": payload,
+           "algo": "hmac-sha256(LEDGER_ANCHOR_KEY) over bundle_id+payload+verdict+failures+account_ids+release+times",
+           "verdict": "PASS" if not failures else "FAIL",
            "failures": failures, "build_sha": rel["build_sha"], "image_digest": rel["image_digest"],
            "created_by": actor, "created_at": now.isoformat(),
            "expires_at": (now + timedelta(days=BUNDLE_TTL_DAYS)).isoformat(),
            "account_ids": [a["account_id"] for a in accounts if a["trading_enabled"]]}
+    doc["digest"], doc["signature"] = _sign(doc)
     await db.acceptance_bundles.insert_one(dict(doc))
     doc.pop("_id", None)
     return doc
@@ -189,7 +200,26 @@ def required() -> bool:
 
 
 async def current_status(db) -> dict:
+    """N97-11 — coverage is reported for EVERY enabled live account, not just the first."""
+    from broker_env import attested_environment
     rel = release_identity()
     b = await latest_bundle(db)
-    ok, why = bundle_covers(b, (b or {}).get("account_ids", [None])[0] if b and b.get("account_ids") else "", rel)
-    return {"required": required(), "release": rel, "latest": b, "valid_for_release": ok, "reason": why}
+    accounts = []
+    async for acc in db.accounts.find({"mode": {"$ne": "paper"}, "trading_enabled": True,
+                                       "status": {"$ne": "deleted"}}, {"label": 1, "display_name": 1,
+                                                                        "environment_attestation": 1, "broker": 1,
+                                                                        "server": 1, "broker_server": 1, "account_number": 1,
+                                                                        "account_type": 1, "ea_identity": 1,
+                                                                        "broker_account_id_reported": 1, "creds_version": 1,
+                                                                        "broker_environment": 1, "mode": 1}).limit(50):
+        env = attested_environment(acc)
+        ok, why = bundle_covers(b, str(acc["_id"]), rel)
+        accounts.append({"account_id": str(acc["_id"]), "label": acc.get("display_name") or acc.get("label") or acc.get("broker"),
+                         "environment": env, "covered": ok, "reason": why,
+                         "gate_applies": env == "LIVE"})
+    live = [a for a in accounts if a["gate_applies"]]
+    return {"required": required(), "release": rel, "latest": b,
+            "valid_for_release": bool(live) and all(a["covered"] for a in live),
+            "reason": ("all live accounts covered" if live and all(a["covered"] for a in live)
+                       else (next((a["reason"] for a in live if not a["covered"]), None) or "no live account enabled")),
+            "accounts": accounts}

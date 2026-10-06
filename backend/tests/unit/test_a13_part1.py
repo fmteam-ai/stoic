@@ -8,8 +8,8 @@ from unittest.mock import patch
 import pytest
 from bson import ObjectId
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "unit"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from fake_mongo import FakeDb  # noqa: E402
 
 pytestmark = pytest.mark.unit
@@ -34,7 +34,7 @@ def test_crypto_live_switch_default_off_blocks_before_any_exchange_call():
         assert out["blocked"] == "crypto_live_disabled" and calls == []
     with patch.dict(os.environ, {"BINANCE_LIVE_ENABLED": "true", "CRYPTO_LIVE_TRADING_ENABLED": "true"}):
         assert ccxt_engine._live_enabled() is True
-    assert "CRYPTO_LIVE_TRADING_ENABLED" in open(os.path.join(os.path.dirname(__file__), "..", ".env.example")).read()
+    assert "CRYPTO_LIVE_TRADING_ENABLED" in open(os.path.join(os.path.dirname(__file__), "..", "..", ".env.example")).read()
 
 
 # ── A13-2 no silent hash-key fallback ────────────────────────────────────────
@@ -85,6 +85,6 @@ def test_manual_ticks_carry_context_and_expire_on_deploy():
     ctx = {"fingerprint": "f"}
     assert dr.tick_valid({"checked": True, "context": "f", "expires_at": "2000-01-01T00:00:00+00:00"}, ctx)[0] is False
     assert dr.tick_valid({"checked": True, "context": "f", "expires_at": "2999-01-01T00:00:00+00:00"}, ctx)[0] is True
-    page = open(os.path.join(os.path.dirname(__file__), "..", "..", "frontend", "src", "pages", "DemoReadiness.jsx"), encoding="utf-8").read()
+    page = open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "src", "pages", "DemoReadiness.jsx"), encoding="utf-8").read()
     assert "READY FOR CONTROLLED DEMO TEST" in page and "grants no trading authority" in page and "demo-readiness-authority" in page
     assert "grants_authority\": False" in inspect.getsource(dr.build).replace("'", "\"")

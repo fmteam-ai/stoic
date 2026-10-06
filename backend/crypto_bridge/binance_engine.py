@@ -73,6 +73,13 @@ class BinanceCCXTEngine(ExecutionEngine):
 
     async def _engine_stage(self, *, user_id, account, signal, cfg_account_id, reservation_id) -> dict:
         db = get_db()
+        # N97-6 — a "testnet" account on an exchange without a sandbox would trade REAL money
+        # while every live gate sees it as testnet: refuse before anything else.
+        from crypto_bridge.ccxt_engine import sandbox_available
+        if account.get("testnet") and not sandbox_available(account):
+            return {"blocked": "testnet_unavailable",
+                    "reason": f"{account.get('exchange_id') or 'exchange'} has no sandbox — a testnet account "
+                              "cannot trade here (would hit live endpoints). Remove it or connect it as LIVE."}
         # A13-1 (P0-01 step 1) — operator kill switch: with live crypto OFF every non-testnet
         # order is refused HERE, before any exchange call. Default off.
         from crypto_bridge.ccxt_engine import _live_enabled, _wants_live
@@ -170,7 +177,8 @@ class BinanceCCXTEngine(ExecutionEngine):
         from crypto_bridge import crypto_execution as cx
         order_type, limit_price = _smart_route(signal)
         intent = await cx.begin(db, account_id=str(account["_id"]), user_id=user_id, signal=signal,
-                                order_type=order_type, ccxt_symbol=ccxt_symbol, side=side, amount=amount)
+                                order_type=order_type, ccxt_symbol=ccxt_symbol, side=side, amount=amount,
+                                reservation_id=reservation_id)
         if intent.get("blocked"):
             return intent
         cid = intent["client_order_id"]
@@ -267,14 +275,18 @@ class BinanceCCXTEngine(ExecutionEngine):
         except Exception:  # noqa: BLE001
             pass
 
-        r = await db.trades.insert_one(trade_doc)
-        trade_doc["id"] = str(r.inserted_id)
+        # N97-8 — protect / flatten what we actually HOLD (filled minus base-asset fees)
+        held = cx.filled_base_amount(order_resp, ccxt_symbol.split("/")[0]) if intent_state == "filled" else 0.0
+        trade_doc["held_amount"] = held
+        inserted_id, _new_row = await cx.insert_trade_once(db, trade_doc)      # N97-9 — sweep race safe
+        await cx.mark_trade_recorded(db, intent["intent_id"], inserted_id)
+        trade_doc["id"] = str(inserted_id)
         trade_doc.pop("_id", None)
         # 6. Exchange-side protection for filled positions (fail closed → flatten + alert).
         try:
             if intent_state == "filled":
                 trade_doc["protection"] = await cx.protect(
-                    db, client, trade_id=r.inserted_id, ccxt_symbol=ccxt_symbol, side=side, amount=amount,
+                    db, client, trade_id=inserted_id, ccxt_symbol=ccxt_symbol, side=side, amount=held,
                     stop_loss=sl_px or None, take_profit=trade_doc["take_profit"], cid=cid, account=account)
                 if trade_doc["protection"]["status"] == cx.PROTECTION_FLATTENED:
                     trade_doc["status"] = "closed"
@@ -287,7 +299,7 @@ class BinanceCCXTEngine(ExecutionEngine):
             sent = await notify_trade_opened(user_id, trade_doc)
             if sent:
                 await db.trades.update_one(
-                    {"_id": r.inserted_id}, {"$set": {"notified_opened": True}},
+                    {"_id": inserted_id}, {"$set": {"notified_opened": True}},
                 )
         except Exception:  # noqa: BLE001
             pass

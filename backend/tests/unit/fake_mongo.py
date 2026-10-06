@@ -108,7 +108,14 @@ class FakeCollection:
 
     def _apply(self, r, upd):
         for k, v in (upd.get("$set") or {}).items():
-            r[k] = v
+            if "." in k:                                   # dotted $set → nested dict
+                cur = r
+                parts = k.split(".")
+                for part in parts[:-1]:
+                    cur = cur.setdefault(part, {}) if isinstance(cur.get(part), dict) or part not in cur else cur[part]
+                cur[parts[-1]] = v
+            else:
+                r[k] = v
         for k, v in (upd.get("$inc") or {}).items():
             r[k] = r.get(k, 0) + v
         for k in (upd.get("$unset") or {}):

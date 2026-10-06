@@ -4,6 +4,7 @@ import api, { formatApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { CheckCircle2, XCircle, AlertTriangle, Info, RefreshCw, Printer, Loader2 } from "lucide-react";
 import { AcceptanceBundleCard } from "@/components/AcceptanceBundleCard";
+import { CryptoLiveBadge } from "@/components/CryptoLiveBadge";
 
 const ICON = {
     pass: <CheckCircle2 className="w-4 h-4 text-[#00FF41]" />,
@@ -103,7 +104,10 @@ export default function DemoReadiness() {
                                     canonical trading authority: {d.authority?.summary?.length ? d.authority.summary.join(" · ") : "no demo accounts"} · build {String(d.context?.build_sha || "dev").slice(0, 12)} · {d.context?.environment} · EA {d.context?.ea_version}
                                 </div>
                             </div>
-                            <div className="font-mono text-[10px] text-[#52525B]">generated {String(d.generated_at).slice(11, 19)} UTC</div>
+                            <div className="flex flex-col items-end gap-2">
+                                <CryptoLiveBadge />
+                                <div className="font-mono text-[10px] text-[#52525B]">generated {String(d.generated_at).slice(11, 19)} UTC</div>
+                            </div>
                         </div>
 
                         <section className="border border-[#1F1F1F] bg-[#0A0A0A]">

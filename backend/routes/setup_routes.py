@@ -221,6 +221,10 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
                                                          "message": f"device public key rejected: {e}"})
     # Q-2 — superseded installations are revoked ONLY when the new one heartbeats (see below);
     # stale pending registrations from earlier installer runs are cleared here.
+    # Q-2 — a stale pending registration means the CURRENT token was never used by any EA:
+    # the running terminal's token (grace slot) must survive this re-run (keep_prev_grace).
+    _stale_pending = await db.installations.count_documents(
+        {"account_id": account_id_str, "revoked": {"$ne": True}, "pending_first_heartbeat": True}) > 0
     await db.installations.update_many(
         {"account_id": account_id_str, "revoked": {"$ne": True}, "pending_first_heartbeat": True},
         {"$set": {"revoked": True,
@@ -269,11 +273,12 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
     import bridge_tokens as _bt
     from auth import generate_bridge_token as _gen
     fresh_token = _gen()
-    await db.accounts.update_one(
-        {"_id": account["_id"]},
-        _bt.rotation_update(account, fresh_token,
-                            grace_until=(datetime.now(timezone.utc) + timedelta(hours=PAIRING_PREV_TOKEN_GRACE_H)).isoformat(),
-                            suspended=bool(account.get("bridge_token_suspended"))))
+    _upd = _bt.rotation_update(account, fresh_token,
+                               grace_until=(datetime.now(timezone.utc) + timedelta(hours=PAIRING_PREV_TOKEN_GRACE_H)).isoformat(),
+                               suspended=bool(account.get("bridge_token_suspended")),
+                               keep_prev_grace=_stale_pending)
+    _upd["$set"]["installation_pending"] = True          # Q-2 — promoted on first heartbeat even without a grace slot
+    await db.accounts.update_one({"_id": account["_id"]}, _upd)
     return {
         "bridge_token": fresh_token,
         "installation_id": installation_id,

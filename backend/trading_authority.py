@@ -311,8 +311,8 @@ async def acceptance_domain(db, account: dict | None = None) -> dict:
         return {"level": "FULL", "reason": "acceptance applies to live accounts"}
     if not required():
         return {"level": "FULL", "reason": "acceptance bundle not required outside production"}
-    from broker_env import demo_proof
-    if demo_proof(account).get("ok"):
+    from broker_env import attested_environment
+    if attested_environment(account) == "DEMO":      # N97-11 — attestation, not heartbeat freshness
         return {"level": "FULL", "reason": "attested DEMO account — acceptance applies to real money"}
     ok, why = bundle_covers(await latest_bundle(db), _acct_id(account), release_identity())
     if ok:

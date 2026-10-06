@@ -83,7 +83,8 @@ class TestEngineWiring:
     def test_submit_live_reserves_and_transitions(self):
         from scalp import engine
         src = inspect.getsource(engine)
-        assert "await risk_reservations.reserve(" in src
+        # N97-2 — the reservation is taken through the ACCOUNT-WIDE service (caps + lease)
+        assert "await _ar.reserve_entry(" in src
         assert '"QUEUED_UNCONFIRMED"' in src
         assert '"SLOT_LINKED"' in src
         assert "uncertain=True" in src
@@ -92,7 +93,7 @@ class TestEngineWiring:
         assert 'await risk_reservations.release_for_trade(' in src
         assert '"broker_ack"' in src
         # reservation must exist BEFORE the order intent / queue
-        assert src.index("await risk_reservations.reserve(") \
+        assert src.index("await _ar.reserve_entry(") \
             < src.index('self._emit(db, "OrderIntentCreated"')
 
     def test_exposure_preflight_counts_unaccounted(self):

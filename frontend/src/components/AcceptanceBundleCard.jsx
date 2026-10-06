@@ -51,8 +51,22 @@ export function AcceptanceBundleCard() {
                     <div className="flex-1">
                         <div className="text-[#E4E4E7]">Operational acceptance bundle · {b ? `${b.verdict} · ${String(b.created_at).slice(0, 16).replace("T", " ")} UTC · by ${b.created_by}` : "none generated"}{s && !s.required && <span className="text-[#71717A]"> · not required outside production</span>}</div>
                         <div className="font-mono text-[10px] text-[#71717A] mt-1" data-testid="acceptance-bundle-reason">{s?.reason} · {b?.account_ids?.length ?? 0} enabled account(s) evaluated · build {String(b?.build_sha || "-").slice(0, 7)} vs running {String(s?.release?.build_sha || "-").slice(0, 7)}</div>
+                        {s?.accounts?.length > 0 && (
+                            <div className="mt-2" data-testid="acceptance-bundle-accounts-wrap">
+                                <div className="font-mono text-[10px] text-[#71717A]" data-testid="acceptance-bundle-accounts-summary">
+                                    {s.accounts.filter((a) => a.gate_applies).length} live account(s) · {s.accounts.filter((a) => a.gate_applies && a.covered).length} covered · {s.accounts.filter((a) => !a.gate_applies).length} demo/paper (gate does not apply)
+                                </div>
+                                <ul className="font-mono text-[10px] mt-1 space-y-0.5 max-h-40 overflow-y-auto pr-2" data-testid="acceptance-bundle-accounts">
+                                    {s.accounts.map((a) => (
+                                        <li key={a.account_id} className={a.gate_applies ? (a.covered ? "text-[#00FF41]" : "text-[#FFB020]") : "text-[#52525B]"} data-testid={`acceptance-account-${a.account_id}`}>
+                                            · {a.label} · {a.environment}{a.gate_applies ? ` · ${a.covered ? "COVERED" : `NOT COVERED — ${a.reason}`}` : " · gate does not apply (not real money)"}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
                         {b?.failures?.length > 0 && <ul className="font-mono text-[10px] text-[#FF4D4D] mt-1 space-y-0.5" data-testid="acceptance-bundle-failures">{b.failures.slice(0, 8).map((f) => <li key={f}>· {f}</li>)}</ul>}
-                        {b && <div className="font-mono text-[10px] text-[#52525B] mt-1 break-all">digest {b.digest} · {b.algo}</div>}
+                        {b && <div className="font-mono text-[10px] text-[#52525B] mt-1 break-all">digest {b.digest} · signed: verdict, accounts, release, expiry + evidence</div>}
                     </div>
                 </div>
                 <div className="font-mono text-[10px] text-[#52525B]">Live (real-money) authority stays CLOSE_ONLY until the release gate passes AND a PASSING bundle covers the account for this exact build/digest. Demo and paper accounts are not affected.</div>
