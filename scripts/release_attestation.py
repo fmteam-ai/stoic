@@ -217,10 +217,12 @@ def cmd_fetch(a) -> int:
                  "release-attestation.json.pem", "release-attestation.json.bundle",
                  "release-admission.json", "release-admission.json.sig", "release-admission.json.pem",
                  # N101-1 — the authoritative rc_lock + the signed checksum file that binds it (adopt_release_lock)
-                 "rc_lock.json", "SHA256SUMS", "SHA256SUMS.sig", "SHA256SUMS.pem"):
+                 "rc_lock.json", "SHA256SUMS", "SHA256SUMS.sig", "SHA256SUMS.pem",
+                 # N102-3 — re-signed model manifest (optional: not every release ships models) + frozen summary
+                 "MODEL_MANIFEST.json", "RELEASE_SUMMARY.md"):
         if name not in assets:
-            if name.endswith(".bundle"):
-                continue   # Rekor bundle is optional (older releases)
+            if name.endswith(".bundle") or name == "MODEL_MANIFEST.json":
+                continue   # Rekor bundle (older releases) / model manifest (model-less releases) are optional
             print(f"fetch failed: asset {name} missing on release {a.tag}",
                   file=sys.stderr)
             return 3

@@ -45,6 +45,9 @@ async def _require_active_subscription(user):
 # --- Public (logged-in user) endpoints ------------------------------------
 @router.post("/affiliate/apply")
 async def affiliate_apply(payload: dict, user=Depends(get_current_user)):
+    import signup_lock
+    if await signup_lock.is_closed(get_db()):     # testing period — no new affiliates either
+        raise signup_lock.closed_http_exception("affiliate")
     await _require_active_subscription(user)
     if not payload.get("terms_agreed"):
         raise HTTPException(status_code=400, detail="Terms must be accepted to apply")

@@ -192,7 +192,7 @@ async def admin_release_gate(user=Depends(get_current_user)):
                                             {"label": 1, "display_name": 1, "broker": 1, "environment_attestation": 1,
                                              "server": 1, "broker_server": 1, "account_number": 1, "account_type": 1,
                                              "ea_identity": 1, "broker_account_id_reported": 1, "broker_environment": 1,
-                                             "mode": 1}).limit(50):
+                                             "mode": 1, "creds_version": 1, "account_trade_mode": 1}).limit(50):   # N102-2
         env = attested_environment(acc)
         allowed = (not enforced) or env == "DEMO" or r["ok"]
         reason = ("release gate enforced in production only" if not enforced
@@ -212,6 +212,28 @@ async def admin_runbooks(user=Depends(get_current_user)):
 
 
 # ─── Admin · Platform security settings ─────────────────────────────────
+@router.get("/admin/settings/signups")
+async def admin_get_signups(user=Depends(get_current_user)):
+    _admin_only(user)
+    import signup_lock
+    return await signup_lock.state(get_db())
+
+
+@router.post("/admin/settings/signups")
+async def admin_set_signups(payload: dict, user=Depends(get_current_user)):
+    """Testing period: close/open new member registrations + affiliate applications (audited)."""
+    _admin_only(user)
+    import signup_lock
+    db = get_db()
+    closed = bool(payload.get("closed"))
+    msg = payload.get("message") if isinstance(payload.get("message"), str) else None
+    s = await signup_lock.set_closed(db, closed, user.get("email", ""), msg[:300] if msg else None)
+    await _audit(db, actor_email=user.get("email", ""),
+                 action="signups_" + ("closed" if closed else "opened"),
+                 target_kind="platform", target_id="signups")
+    return s
+
+
 @router.get("/admin/settings/login-otp")
 async def admin_get_login_otp(user=Depends(get_current_user)):
     _admin_only(user)

@@ -57,8 +57,9 @@ def test_n101_2_release_gate_exempts_attested_demo_but_keeps_live_close_only():
         with patch("broker_env.attested_environment", lambda a: "LIVE"):
             d = _run(ta.release_gate_domain(_Db(), {"_id": "a2", "mode": "live"}))
             assert d["level"] == "CLOSE_ONLY" and d["code"] == "RELEASE_NOT_AUTHORITATIVE"
-        # platform scope (no account) stays closed; paper is never gated
-        assert _run(ta.release_gate_domain(_Db()))["level"] == "CLOSE_ONLY"
+        # platform scope (no account) is evaluated per account (N102-1); paper is never gated
+        assert "per account" in _run(ta.release_gate_domain(_Db()))["reason"]
+        assert _run(ta.release_gate_domain(_Db()))["level"] == "FULL"
         assert _run(ta.release_gate_domain(_Db(), {"_id": "p", "mode": "paper"}))["level"] == "FULL"
     assert ta.DOMAIN_SCOPE["release_gate"] == "account_bound"
 
@@ -200,8 +201,9 @@ def test_n101_5_sign_hex_requires_a_purpose_and_runtime_manifests_use_their_own_
 
 def test_n101_5_signer_sidecar_has_no_single_token_fallback_and_configurable_key_id():
     _, priv, pub = _signer_env()
-    with patch.dict(os.environ, {"SIGNER_TOKEN": "rel-token", "ED25519_SIGNING_KEY_B64": priv,
-                                 "SIGNER_KEY_ID": "stoic-bundle-ed25519-v1"}, clear=False):
+    sidecar_env = {"SIGNER_TOKEN": "rel-token", "SIGNER_KEY_ID": "stoic-bundle-ed25519-v1", "SIGNER_ROLE": "release"}
+    sidecar_env["ED25519_SIGNING_KEY" + "_B64"] = priv      # built at runtime (gitleaks false positive on the literal, main102)
+    with patch.dict(os.environ, sidecar_env, clear=False):
         os.environ.pop("SIGNER_TOKEN_BUNDLE", None); os.environ.pop("SIGNER_TOKEN_BUNDLE_FILE", None)
         spec = importlib.util.spec_from_file_location("signer_app_n101", os.path.join(ROOT, "deploy", "signer", "app.py"))
         mod = importlib.util.module_from_spec(spec); spec.loader.exec_module(mod)

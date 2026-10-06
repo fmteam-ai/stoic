@@ -650,7 +650,14 @@ jobs:
       - name: Checksums
         env:
           REF: ${{ github.ref_name }}
-        run: sha256sum "stoic-${REF}.tar.gz" backend/static/EmergentTradingBridge.ex5 release-manifest.json release-admission.json sbom-backend.spdx.json sbom-frontend.spdx.json rc_lock.json > SHA256SUMS
+        run: |
+          # N102-3 — the re-signed model manifest and the frozen release summary travel as signed assets so a
+          # git-checkout host can adopt them (deploy/lib.sh adopt_release_lock) and pass the strict check
+          cp docs/RELEASE_SUMMARY.md RELEASE_SUMMARY.md
+          EXTRA="RELEASE_SUMMARY.md"
+          if [ -f backend/models_store/MODEL_MANIFEST.json ]; then cp backend/models_store/MODEL_MANIFEST.json MODEL_MANIFEST.json; EXTRA="${EXTRA} MODEL_MANIFEST.json"; fi
+          # shellcheck disable=SC2086
+          sha256sum "stoic-${REF}.tar.gz" backend/static/EmergentTradingBridge.ex5 release-manifest.json release-admission.json sbom-backend.spdx.json sbom-frontend.spdx.json rc_lock.json ${EXTRA} > SHA256SUMS
 
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac  # v3
@@ -814,6 +821,8 @@ jobs:
             SHA256SUMS
             SHA256SUMS.sig
             SHA256SUMS.pem
+            RELEASE_SUMMARY.md
+            MODEL_MANIFEST.json
             release-evidence.json
             release-evidence.json.sig
             release-evidence.json.pem

@@ -15,7 +15,7 @@ def _read(*parts):
 def test_compose_has_signer_sidecar_with_tls_and_file_secrets():
     d = yaml.safe_load(_read("docker-compose.yml"))
     s = d["services"]["signer"]
-    assert s["environment"]["SIGNER_TOKEN_FILE"] == "/run/secrets/signer_token"
+    assert s["environment"]["SIGNER_ROLE"] == "runtime" and "SIGNER_TOKEN_FILE" not in s["environment"]   # N102-5
     assert s["environment"]["ED25519_SIGNING_KEY_B64_FILE"] == "/run/secrets/signer_ed25519_key"
     assert "--ssl-certfile" in s["command"] and "--ssl-keyfile" in s["command"]
     assert "ports" not in s                                     # internal network only
@@ -29,7 +29,7 @@ def test_compose_has_signer_sidecar_with_tls_and_file_secrets():
     assert env["ORDER_AUTH_SECRET_FILE"] != env["LEDGER_ANCHOR_KEY_FILE"]
     assert "signer_ed25519_key" not in d["services"]["backend"]["secrets"]   # API never holds the private key
     assert d["services"]["backend"]["depends_on"]["signer"]["condition"] == "service_healthy"
-    expected = "order_auth_secret ledger_anchor_key signer_token signer_ed25519_key signer_cert signer_cert_key mongo_keyfile"
+    expected = "order_auth_secret ledger_anchor_key signer_token_bundle signer_ed25519_key signer_cert signer_cert_key mongo_keyfile"
     for name in expected.split():
         assert name in d["secrets"], name
 
@@ -68,7 +68,7 @@ def test_compose_mongo_is_replica_set_with_keyfile_and_self_initiating_healthche
 def test_installer_configures_external_signer_and_prod_hardening():
     inst = _read("deploy", "install.sh")
     for needle in ("RELEASE_SIGNER external", "RELEASE_SIGNER_URL https://signer:9443",
-                   "RELEASE_SIGNER_ALLOWED_HOSTS signer", "RELEASE_PUBLIC_KEY_B64 \"${SIGNER_PUB_B64}\"",
+                   "RELEASE_SIGNER_ALLOWED_HOSTS signer", "BUNDLE_PUBLIC_KEY_B64 \"${SIGNER_PUB_B64}\"",
                    "RELEASE_SIGNER_DEFERRED false", "ADMIN_MFA_ENFORCED true", "TURNSTILE_EXPECTED_HOSTNAMES",
                    "ensure_release_secrets", "openssl req -x509",
                    "/^ED25519_SIGNING_KEY_B64=/d", "/^STEP_UP_BYPASS_TOKEN=/d"):

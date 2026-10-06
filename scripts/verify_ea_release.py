@@ -70,10 +70,11 @@ def sha256_source(p):
     return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
-def _canonical_payload(ea: dict) -> bytes:
+def _canonical_payload(ea: dict, key_id: str | None = None) -> bytes:
     body = {k: ea.get(k) for k in
             ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
              "windows_build", "mt5_build", "source_commit")}
+    body["key_id"] = key_id or (ea.get("signature") or {}).get("key_id")   # N102-5 — key id is signed
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
 
 
@@ -129,9 +130,10 @@ def record(args):
         "verified_at": datetime.now(timezone.utc).isoformat(),
     })
     if args.sign:
-        from release_signing import KEY_ID, sign_hex
-        ea["signature"] = {"key_id": KEY_ID,
-                           "sig_hex": sign_hex(_canonical_payload(ea), purpose="ea-release"),
+        from release_signing import key_id as _kid, sign_hex
+        kid = _kid(purpose="ea-release")
+        ea["signature"] = {"key_id": kid,
+                           "sig_hex": sign_hex(_canonical_payload(ea, kid), purpose="ea-release"),
                            "signed_at": datetime.now(timezone.utc).isoformat()}
     doc["ea"] = ea
     json.dump(doc, open(HASHES, "w"), indent=2)

@@ -110,12 +110,18 @@ ensure_backup_passphrase() {
 # API host — strip it from backend/.env (compose mounts only secrets/signer_token_bundle).
 ensure_bundle_key_pins() {
   [ -s secrets/signer_public_key ] || return 0
+  local sidecar; sidecar=$(cat secrets/signer_public_key)
   grep -q "^BUNDLE_PUBLIC_KEY_B64=." backend/.env 2>/dev/null || {
-    set_kv backend/.env BUNDLE_PUBLIC_KEY_B64 "$(cat secrets/signer_public_key)"
+    set_kv backend/.env BUNDLE_PUBLIC_KEY_B64 "${sidecar}"
     set_kv backend/.env BUNDLE_SIGNER_KEY_ID stoic-bundle-ed25519-v1
     set_kv .env SIGNER_KEY_ID stoic-bundle-ed25519-v1
-    echo "   pinned the sidecar as runtime key stoic-bundle-ed25519-v1 (BUNDLE_PUBLIC_KEY_B64); RELEASE_PUBLIC_KEY_B64 stays the CI release key"
+    echo "   pinned the sidecar as runtime key stoic-bundle-ed25519-v1 (BUNDLE_PUBLIC_KEY_B64)"
   }
+  # N102-5 — the sidecar key must never double as the CI release pin (root here could sign EA records).
+  if [ "$( { grep -E '^RELEASE_PUBLIC_KEY_B64=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")" = "${sidecar}" ]; then
+    sed -i '/^RELEASE_PUBLIC_KEY_B64=/d' backend/.env
+    echo "!! RELEASE_PUBLIC_KEY_B64 was the LOCAL sidecar key — removed. Pin the CI signer's public key (docs/RELEASE_SIGNER.md); until then EA records / model manifests do not verify here (runtime signing is unaffected)."
+  fi
   if grep -qE '^RELEASE_SIGNER_TOKEN=.' backend/.env 2>/dev/null; then
     sed -i '/^RELEASE_SIGNER_TOKEN=/d' backend/.env
     echo "   removed RELEASE_SIGNER_TOKEN from backend/.env (CI release token — the API holds only the bundle token)"
@@ -156,7 +162,24 @@ PY
   cp "${dest}/rc_lock.json" "deploy/releases/rc_lock-${GIT_SHA}.json"
   cp "${dest}/rc_lock.json" release/rc_lock.json
   printf '%s\n' "${GIT_SHA}" > backend/BUILD_SHA
-  echo "   release lock: authoritative rc_lock of ${tag} adopted (signed SHA256SUMS ✓, commit ✓) · BUILD_SHA stamped"
+  # N102-3 — the release build also re-signs MODEL_MANIFEST.json and regenerates RELEASE_SUMMARY.md; the
+  # checkout's copies never match the lock, so the strict check fails. Adopt both from the same signed
+  # SHA256SUMS (model manifest only when the release ships one).
+  local f asset
+  for f in MODEL_MANIFEST.json RELEASE_SUMMARY.md; do
+    want=$(awk -v n="${f}" '$2 == n {print $1}' "${dest}/SHA256SUMS" | head -1)
+    if [ -z "${want}" ]; then
+      [ "${f}" = "MODEL_MANIFEST.json" ] && [ ! -f backend/models_store/MODEL_MANIFEST.json ] && continue
+      echo "!! release lock: ${f} is not covered by the signed SHA256SUMS of ${tag} — strict provenance cannot pass"; return 1
+    fi
+    [ -s "${dest}/${f}" ] || { echo "!! release lock: asset ${f} missing"; return 1; }
+    got=$(sha256sum "${dest}/${f}" | cut -d' ' -f1)
+    [ "${want}" = "${got}" ] || { echo "!! release lock: ${f} digest ${got} != signed SHA256SUMS ${want}"; return 1; }
+    case "${f}" in MODEL_MANIFEST.json) asset=backend/models_store/MODEL_MANIFEST.json ;; *) asset=docs/RELEASE_SUMMARY.md ;; esac
+    cp "${dest}/${f}" "deploy/releases/${f%.*}-${GIT_SHA}.${f##*.}"
+    cp "${dest}/${f}" "${asset}"
+  done
+  echo "   release lock: authoritative rc_lock of ${tag} adopted (signed SHA256SUMS ✓, commit ✓) · BUILD_SHA stamped · model manifest + release summary adopted"
   [ "$(deploy_mode)" = "registry" ] || echo "   note: LIVE release gate compares the running image digest with the locked CI digest — a locally BUILT image never matches; set DEPLOY_MODE=registry for live authority (demo accounts are exempt, N101-2)"
 }
 
@@ -166,13 +189,17 @@ restore_adopted_lock() {
   [ -s "deploy/releases/rc_lock-${sha}.json" ] || return 0
   cp "deploy/releases/rc_lock-${sha}.json" release/rc_lock.json
   printf '%s\n' "${sha}" > backend/BUILD_SHA
+  [ -s "deploy/releases/MODEL_MANIFEST-${sha}.json" ] && cp "deploy/releases/MODEL_MANIFEST-${sha}.json" backend/models_store/MODEL_MANIFEST.json
+  [ -s "deploy/releases/RELEASE_SUMMARY-${sha}.md" ] && cp "deploy/releases/RELEASE_SUMMARY-${sha}.md" docs/RELEASE_SUMMARY.md
   echo "   release lock: re-adopted authoritative rc_lock for ${sha}"
 }
 
-# Adopted lock + BUILD_SHA are tracked files — restore them so `git checkout` can switch trees.
+# Adopted lock + BUILD_SHA (+ model manifest / release summary) are tracked files — restore them so
+# `git checkout` can switch trees.
 restore_tracked_release_files() {
   local t
-  for t in .env.example backend/.env.example release/rc_lock.json backend/BUILD_SHA; do
+  for t in .env.example backend/.env.example release/rc_lock.json backend/BUILD_SHA \
+           backend/models_store/MODEL_MANIFEST.json docs/RELEASE_SUMMARY.md; do
     git ls-files --error-unmatch "$t" >/dev/null 2>&1 && git checkout -- "$t" 2>/dev/null || true
   done
 }
@@ -381,7 +408,9 @@ attestation_required() {
   # registry mode has no other source of truth for the digests — always required
   [ "$(deploy_mode)" = "registry" ] && return 0
   local v
-  v=$( { grep -E '^ATTESTATION_REQUIRED=' .env 2>/dev/null || true; } | cut -d= -f2-)
+  # N102-6 — an exported ATTESTATION_REQUIRED wins over the ./.env line (both are honoured)
+  v="${ATTESTATION_REQUIRED:-}"
+  [ -n "${v}" ] || v=$( { grep -E '^ATTESTATION_REQUIRED=' .env 2>/dev/null || true; } | cut -d= -f2- | tr -d "\"'")
   if [ -n "${v}" ]; then
     case "${v}" in
       true) return 0 ;;

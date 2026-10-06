@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { formatApiError } from "@/lib/api";
+import api, { formatApiError } from "@/lib/api";
 import { StoicMark } from "@/components/StoicLogo";
 import { MailCheck, RefreshCw, Loader2 } from "lucide-react";
 import { TurnstileWidget, TurnstileStatus, useTurnstile } from "@/components/TurnstileWidget";
@@ -13,6 +13,10 @@ export default function Register() {
     const [name, setName] = useState("");
     const [password, setPassword] = useState("");
     const [termsAgreed, setTermsAgreed] = useState(false);
+    const [signups, setSignups] = useState(null);   // testing period: {closed, message}
+    useEffect(() => {
+        api.get("/auth/signups-status").then((r) => setSignups(r.data)).catch(() => setSignups({ closed: false }));
+    }, []);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
 
@@ -68,6 +72,24 @@ export default function Register() {
             }
         } finally { setResending(false); }
     };
+
+    // ─── Testing period: registrations closed ───
+    if (signups?.closed) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-[#050505] p-6">
+                <div className="w-full max-w-sm" data-testid="register-closed">
+                    <div className="flex items-center gap-3 mb-10">
+                        <StoicMark size={40} />
+                        <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
+                    </div>
+                    <div className="font-mono text-[11px] text-[#FFB020] tracking-widest mb-3">// REGISTRATIONS CLOSED</div>
+                    <p className="text-sm text-[#A1A1AA] leading-relaxed" data-testid="register-closed-message">{signups.message}</p>
+                    <Link to="/login" data-testid="register-closed-login-link"
+                          className="inline-block mt-8 font-mono text-xs tracking-widest text-[#00FF41] hover:underline">SIGN IN →</Link>
+                </div>
+            </div>
+        );
+    }
 
     // ─── Success screen (post-register) ───
     if (registered) {

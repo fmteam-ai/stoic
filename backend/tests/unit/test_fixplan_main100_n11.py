@@ -71,7 +71,7 @@ def test_compose_never_hands_the_release_token_to_app_containers():
     import yaml
     c = yaml.safe_load(open(os.path.join(ROOT, "docker-compose.yml")))
     holders = [n for n, svc in c["services"].items() if "signer_token" in (svc.get("secrets") or [])]
-    assert holders == ["signer"]
+    assert holders == []   # N102-5 — the runtime sidecar loads no release token at all
     assert "signer_token_bundle" in c["secrets"]
     lib = open(os.path.join(ROOT, "deploy", "lib.sh")).read()
     assert "secrets/signer_token_bundle" in lib

@@ -104,6 +104,11 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     _started = time.monotonic()
     db = get_db()
     email = payload.email.lower()
+    # Testing period — new member sign-ups are closed (admin toggle / SIGNUPS_CLOSED). Checked before
+    # Turnstile and rate limiting so a closed door costs nothing and leaks nothing.
+    import signup_lock
+    if await signup_lock.is_closed(db):
+        raise signup_lock.closed_http_exception("member")
     from turnstile_gate import require_turnstile
     await require_turnstile(db, payload.turnstile_token, client_ip(request),
                             action="register")
@@ -196,6 +201,14 @@ async def register(payload: RegisterRequest, request: Request, response: Respons
     # email before the dashboard becomes accessible.
     await _pad_response(_started)
     return _register_public_response(email, user_doc["name"], uid, dev_link)
+
+
+@router.get("/signups-status")
+async def signups_status():
+    """Public — lets the Register / Affiliate pages show the testing-period notice instead of a form."""
+    import signup_lock
+    s = await signup_lock.state(get_db())
+    return {"closed": s["closed"], "message": s["message"] if s["closed"] else None}
 
 
 @router.post("/login")

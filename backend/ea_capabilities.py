@@ -215,7 +215,10 @@ def _signed_release_record() -> dict | None:
 
 
 def _canonical_payload(rec: dict) -> bytes:
+    """N102-5 — the signing key id is part of the signed statement: a record cannot be re-labelled
+    as signed by another key without invalidating the signature."""
     import json
     body = {k: rec.get(k) for k in ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
                                     "windows_build", "mt5_build", "source_commit")}
+    body["key_id"] = (rec.get("signature") or {}).get("key_id")
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()

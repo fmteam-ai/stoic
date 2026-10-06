@@ -232,8 +232,10 @@ provenance check (`deploy/lib.sh adopt_release_lock`):
 2. `cosign verify-blob` on `SHA256SUMS` against `release.yml@refs/tags/<tag>`;
 3. checks `sha256(rc_lock.json)` against the signed `SHA256SUMS` line and the lock's
    `authoritative: true` / `git_commit == source_sha == deployed SHA` / both image digests;
-4. writes it to `release/rc_lock.json`, stamps `backend/BUILD_SHA`, keeps a copy as
-   `deploy/releases/rc_lock-<sha>.json` so a rollback re-adopts the previous release's lock.
+4. writes it to `release/rc_lock.json`, stamps `backend/BUILD_SHA`, and (N102-3) adopts the
+   release build's re-signed `MODEL_MANIFEST.json` + frozen `RELEASE_SUMMARY.md` from the same
+   signed `SHA256SUMS`; copies are kept as `deploy/releases/*-<sha>.*` so a rollback re-adopts
+   the previous release's files.
 
 The image build copies both files, so the running backend sees the authoritative lock.
 **LIVE authority still needs `DEPLOY_MODE=registry`**: the release gate compares the running
@@ -247,13 +249,31 @@ acceptance bundle) exempts accounts whose **admin-attested environment is DEMO**
 close-only, so nothing is weakened for real money. To run the MT5 demo from `main` while the
 release path is finished:
 
+**Pre-step on a host still running main100/main101 (N102-4)** — the FIRST stage of an update runs
+the *old* `update.sh`/`backup.sh`, which require the passphrase but do not create it:
 ```bash
-# ./.env — keep APP_ENV=production, leave both crypto switches unset
-ATTESTATION_REQUIRED=false            # provenance runs non-strict (developer snapshot accepted)
+umask 077; [ -s /root/.stoic-backup-pass ] || openssl rand -base64 32 > /root/.stoic-backup-pass
+echo 'BACKUP_PASSPHRASE_FILE=/root/.stoic-backup-pass' >> .env     # plain line, no quotes
+deploy/backup.sh backup                                           # must succeed before updating
+```
+Keep a copy of the passphrase in your password manager. From this release on, `install.sh` and
+`update.sh` do this automatically.
+
+Then, in **`./.env`** (a line in the file — `update.sh` also honours an exported variable, N102-6):
+```
+APP_ENV=production            # keep
+ATTESTATION_REQUIRED=false    # provenance runs non-strict (developer snapshot accepted)
+# DEPLOY_MODE unset (= build) — registry mode ALWAYS requires attestation
+# CRYPTO_LIVE_TRADING_ENABLED / BINANCE_LIVE_ENABLED unset
+```
+```bash
 UPDATE_HOLD_ON_FAILURE=1 STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh
 ```
-Then Admin → Demo Readiness → *04 · Live authority gates* lists the release-gate verdict per
-account: `DEMO: allowed — attested DEMO`, `LIVE: blocked — release not authoritative`.
+Expect `attestation gate: not required` and `developer-snapshot` in the output. Then Admin →
+Demo Readiness → *04 · Live authority gates* lists the release-gate verdict per account:
+`DEMO: allowed — attested DEMO`, `LIVE: blocked — release not authoritative`. Judge trading
+capability by **Bot Pulse per account = FULL**; the account-less (user-level) authority banner is
+also FULL since N102-1 ("evaluated per account").
 **Never switch the host to `APP_ENV=development`** — that lifts the live gates for real-money
 accounts too. Remove `ATTESTATION_REQUIRED=false` once a tagged release deploys.
 

@@ -179,8 +179,10 @@ backend/models_store/_cache/
 diagnostics/
 .bootstrap-snapshots/
 deploy/releases/install-report-*.json
-# N101-1 — authoritative rc_lock adopted per deployed commit (deploy/lib.sh adopt_release_lock)
+# N101-1 / N102-3 — authoritative rc_lock, model manifest and release summary adopted per deployed commit
 deploy/releases/rc_lock-*.json
+deploy/releases/MODEL_MANIFEST-*.json
+deploy/releases/RELEASE_SUMMARY-*.md
 deploy/proxy/apache-*.conf
 deploy/proxy/nginx-*.conf
 deploy/cloudflare/Caddyfile

@@ -188,6 +188,19 @@ def run_preflight(check_signer_health: bool = False) -> dict:
         "RELEASE_SIGNER_BUNDLE_TOKEN only; RELEASE_SIGNER_TOKEN (CI release token) absent from backend/.env",
         "deploy/update.sh strips RELEASE_SIGNER_TOKEN from backend/.env; compose mounts secrets/signer_token_bundle as "
         "RELEASE_SIGNER_BUNDLE_TOKEN_FILE. The release token belongs to CI (GitHub secret) and the signer only."))
+    # N102-5 — the local runtime signer must never BE the release key: with one key, root on the API host
+    # could mint EA-release signatures that verify. FAIL in production when the two pins are the same key.
+    _rp = (env.get("RELEASE_PUBLIC_KEY_B64") or "").strip(); _bp = (env.get("BUNDLE_PUBLIC_KEY_B64") or "").strip()
+    _same = bool(_rp) and _rp == _bp
+    checks.append(_check(
+        "release_key_distinct", "CI release key ≠ runtime bundle key",
+        ("fail" if is_production() else "warn") if _same else ("pass" if (_rp and _bp) else "warn"),
+        "IDENTICAL pins" if _same else ("distinct" if (_rp and _bp) else
+                                         ("release pin missing — EA records / model manifests cannot verify" if not _rp
+                                          else "bundle pin missing — single-key install")),
+        "RELEASE_PUBLIC_KEY_B64 = CI signer (Fly) key; BUNDLE_PUBLIC_KEY_B64 = local sidecar key; never the same key",
+        "Re-key the CI signer (deploy/signer/deploy_fly.sh), re-run ea-release, pin its public key as RELEASE_PUBLIC_KEY_B64; "
+        "the sidecar key stays BUNDLE_PUBLIC_KEY_B64 (deploy/lib.sh ensure_bundle_key_pins)."))
     if check_signer_health and not _viols and _mode == "external":
         import time as _t
         _t0 = _t.monotonic()
