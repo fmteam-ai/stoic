@@ -71,3 +71,29 @@ docs/PRODUCTION_DEPLOY_CHECKLIST.md.
 - Preflight page: RELEASE_SIGNER row shows **pass — external**.
 - `GET https://<signer-host>:9443/healthz` → `{"status":"ok"}`.
 - Signature round-trip is verified automatically on first signing call.
+
+## N100-11 — signer separation (per-purpose tokens + domain prefixes)
+Every signature is Ed25519 over `<domain>\0<data>` with a fixed domain per purpose
+(`backend/release_signing.PURPOSES`, mirrored byte-for-byte in `deploy/signer/app.py`):
+`ea-release`, `model-manifest` (**release purposes — CI only**) and `acceptance-bundle`,
+`audit-anchor`, `differentiation`, `canary` (**runtime purposes — API**). A signature minted for one
+purpose can never verify as another.
+
+The signer enforces WHICH token may request WHICH purpose:
+- `SIGNER_TOKEN` (release token) → release purposes only. Lives in GitHub secret `RELEASE_SIGNER_TOKEN`
+  and the signer; it is **never mounted into app containers** (compose hands the API only
+  `signer_token_bundle`).
+- `SIGNER_TOKEN_BUNDLE` (bundle token) → runtime purposes only. The API reads it as
+  `RELEASE_SIGNER_BUNDLE_TOKEN(_FILE)`; `RELEASE_SIGNER_TOKEN` on the API host is the same value.
+  ⇒ a compromised trading API cannot obtain an EA-release or model-manifest signature.
+- Single-token installs (no `SIGNER_TOKEN_BUNDLE`) keep working: the release token signs everything
+  (logged as such); run `deploy/update.sh` once — `ensure_release_secrets` mints
+  `secrets/signer_token_bundle` and compose mounts it.
+
+Cut-over notes: pre-N100-11 artefacts signed WITHOUT a prefix are accepted only where history must
+stay verifiable (audit anchors, the developer model manifest on re-sign). EA release records and
+acceptance bundles are NOT grandfathered — re-run `ea-release` once after deploying this change.
+Fly signer: redeploy the updated `app.py` (`cd deploy/signer && flyctl deploy -a stoic-signer`); CI
+only needs the release token, so no bundle token is required on Fly.
+Independent verification of performance attestations: prepend `domain_prefix` from
+`POST /api/performance/attestation/verify` (`stoic:differentiation:v1\0`) to `payload_hash`.

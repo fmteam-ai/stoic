@@ -35,7 +35,9 @@ def test_a14_1_dot_env_examples_are_not_tracked_and_every_reader_uses_deploy_env
     assert "/.env.example" in gi and "/backend/.env.example" in gi and "!.env.example" not in gi
     assert "deploy/env/root.env.example deploy/env/backend.env.example" in _src(".github", "workflows", "release.yml")
     upd = _src("deploy", "update.sh")
-    assert "sync_env_examples.py --check" in upd and upd.index("sync_env_examples.py") < upd.index("ensure_release_secrets || rollback")
+    # N100-7 — pre-build steps REFUSE (gate_refused), never restore the database
+    assert "sync_env_examples.py" in upd and upd.index("sync_env_examples.py") < upd.index("ensure_release_secrets || gate_refused")
+    assert "ensure_release_secrets || rollback" not in upd
     assert "env_templates_in_sync" in _src("scripts", "release_preflight.sh")
     assert 'deploy", "env", "backend.env.example' in _src("scripts", "check_compose_secrets.py")
     for rel in ("docs/RUNBOOK.md", "docs/SELF_HOSTING_GUIDE.md", "docs/DEPLOYMENT.md"):

@@ -37,7 +37,7 @@ def canonical_hash(payload: dict) -> str:
 def perf_attestation(payload: dict) -> dict:
     from release_signing import public_key_b64, sign_hex
     h = canonical_hash(payload)
-    sig = sign_hex(h.encode())
+    sig = sign_hex(h.encode(), purpose="differentiation")
     return {"payload_hash": h, "signature": sig, "key_id": KEY_ID,
             "algo": "Ed25519(sha256-canonical-JSON)",
             "public_key_b64": public_key_b64(),
@@ -49,7 +49,7 @@ def perf_attestation(payload: dict) -> dict:
 
 def verify_attestation(payload_hash: str, signature: str) -> bool:
     from release_signing import verify_hex
-    if verify_hex(payload_hash.encode(), signature):
+    if verify_hex(payload_hash.encode(), signature, purpose="differentiation"):
         return True
     # legacy HMAC attestations — only until the published retirement date
     if datetime.now(timezone.utc).isoformat() >= LEGACY_HMAC_ACCEPTED_UNTIL:

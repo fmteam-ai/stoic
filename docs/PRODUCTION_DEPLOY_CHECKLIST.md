@@ -178,7 +178,9 @@ Rollout: push to main → `ea-release.yml` signs the 1.60 EX5; keep the previous
 
 ### ✅ 1.60 SIGNED — 2026-10-06 (ea-release run on commit `23943e2`, record commit `b7fa7d9`)
 Public facts (no secrets) — `release/ea_release.json` is the source of truth:
-- EX5 sha256 **`73b2661463dc85b52a5228fba0c512331222cfe69762546281a4b0e6a6afcfa6`** → `EA_RELEASE_SHA256`
+- EX5 sha256 is recorded in `release/ea_release.json` (signed). **Do NOT set `EA_RELEASE_SHA256`** —
+  the signed record IS the pin; an env pin is only for emergency overrides and never needed while a
+  signed record exists (N100-6). `EA_RELEASE_SHA256_PREVIOUS` alone is allowed during a terminal rollout.
 - MQ5 sha256 `897d6bf8768862b55e1432f897fc523dd0938431e8e8661f77cc16f7e20edc12` (matches shipped source)
 - Compile: 0 errors / 0 warnings, Windows 10.0.26100, `compiled_by: github-actions`
 - Signer: `https://stoic-signer.fly.dev` (Fly app `stoic-signer`, region ams), key id

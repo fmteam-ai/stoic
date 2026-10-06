@@ -236,7 +236,7 @@ function AddCryptoModal({ form, setForm, onSubmit, onClose, submitting, formErr,
                             </span>
                         </label>
                         <select required value={form.exchange_id}
-                            onChange={(e) => set("exchange_id", e.target.value)} data-testid="form-exchange"
+                            onChange={(e) => { const ex = exchanges.find(x => x.id === e.target.value); setForm(f => ({ ...f, exchange_id: e.target.value, testnet: ex?.capabilities && !ex.capabilities.live_allowed ? true : f.testnet })); }} data-testid="form-exchange"
                             className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none">
                             {exchanges.map(x => {
                                 // Plain-text reachability marker that survives <option> styling

@@ -357,10 +357,11 @@ async def verify_performance(body: VerifyBody):
     Review P1-4: Ed25519 — independently verifiable without trusting this
     server (legacy HMAC attestations still accepted)."""
     from differentiation import LEGACY_HMAC_ACCEPTED_UNTIL
-    from release_signing import public_key_b64
+    from release_signing import public_key_b64, PURPOSES
     return {"valid": verify_attestation(body.payload_hash, body.signature),
-            "algo": "Ed25519(sha256-canonical-JSON); legacy HMAC accepted "
+            "algo": "Ed25519 over domain_prefix + payload_hash (sha256-canonical-JSON); legacy HMAC accepted "
                     f"until {LEGACY_HMAC_ACCEPTED_UNTIL}",
+            "domain_prefix": PURPOSES["differentiation"].decode(),   # N100-11 — independent verifiers prepend this
             "legacy_hmac_accepted_until": LEGACY_HMAC_ACCEPTED_UNTIL,
             "public_key_b64": public_key_b64(),
             "key_id": KEY_ID}

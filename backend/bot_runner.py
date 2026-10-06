@@ -35,6 +35,7 @@ from pip_utils import floor_to_lot_step, symbol_match, lot_spec
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
+from account_reservations import trade_counter_filter
 
 logger = logging.getLogger("bot-runner")
 _CURRENT_SIGNAL: contextvars.ContextVar = contextvars.ContextVar("current_signal")
@@ -580,7 +581,7 @@ async def _process_user_account_locked(db, cfg: dict):
     # (per-account when scoped). origin=auto only — manual trades must NEVER
     # consume the bot's slots.
     inflight_q = {"user_id": user_id, "status": {"$in": ["pending", "open"]},
-                  "origin": "auto"}
+                  **trade_counter_filter("auto")}   # N100-4 — scalp fills never consume the AI bot's slots
     if cfg_account_id:
         inflight_q["account_id"] = cfg_account_id
     inflight = await db.trades.count_documents(inflight_q)
@@ -617,7 +618,7 @@ async def _process_user_account_locked(db, cfg: dict):
             tod_q = {
                 "user_id": user_id,
                 "symbol": symbol_match(sym),   # step 5: broker-suffixed spellings count too
-                "origin": "auto",
+                **trade_counter_filter("auto"),   # N100-4 — one scalp fill must not block the AI bot for the day
                 "opened_at": {"$gte": day_start.isoformat()},   # fix plan R2: trades carry opened_at, not created_at
             }
             if cfg_account_id:

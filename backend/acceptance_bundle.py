@@ -55,11 +55,12 @@ def _sign(bundle: dict) -> tuple[str, str]:
     from release_signing import sign_hex, key_id
     body = _canonical(bundle)
     digest = hashlib.sha256(body).hexdigest()
-    return digest, sign_hex(body)
+    return digest, sign_hex(body, purpose="acceptance-bundle")
 
 
 def revoked_key_ids() -> set:
-    return {k.strip() for k in (os.environ.get("RELEASE_REVOKED_KEY_IDS") or "").split(",") if k.strip()}
+    from release_signing import revoked_key_ids as _r
+    return _r()
 
 
 def verify_signature(bundle: dict) -> bool:
@@ -75,26 +76,38 @@ def verify_signature(bundle: dict) -> bool:
         body = _canonical(bundle)
         if hashlib.sha256(body).hexdigest() != bundle.get("digest"):
             return False
-        return verify_hex(body, str(bundle.get("signature") or ""))
+        return verify_hex(body, str(bundle.get("signature") or ""), purpose="acceptance-bundle")
     except Exception:  # noqa: BLE001
         return False
 
 
+_FP_ACCOUNT_FIELDS = ("ea_binary_sha256", "ea_binary_sha256_method", "broker_server", "server", "account_number",
+                      "creds_version", "trading_enabled", "mode", "account_type", "environment_attestation")
+_FP_BOT_FIELDS = ("active", "symbols", "strategy", "strategy_mode", "risk_level", "risk_percent", "lot_size",
+                  "max_concurrent", "max_concurrent_trades", "trade_of_day_cap", "max_trades_per_day",
+                  "daily_drawdown_limit", "weekly_drawdown_limit", "max_daily_loss", "max_drawdown_pct",
+                  "max_lot", "max_exposure", "sl_pips", "tp_pips", "timeframe", "account_id", "user_id")
+
+
+def _fp_view(doc: dict, fields: tuple) -> dict:
+    """N100-12 — ONLY configuration: an explicit field list; never `_`-prefixed runtime fields
+    (_last_pulse, _tick_lock_until…) nor *_at / verified_identity stamps every heartbeat rewrites."""
+    return {k: doc.get(k) for k in fields if k in doc}
+
+
 async def config_fingerprint(db, account_ids: list, rel: dict) -> str:
     """A14-11 — everything the acceptance vouches for: accounts, bots (risk config), credentials,
-    EA hashes, broker servers, inventory approval, release. Any change ⇒ coverage void at once."""
+    EA hashes, broker servers, inventory approval, release. Any CONFIG change ⇒ coverage void at once."""
     parts = {"release": f"{rel.get('build_sha')}|{rel.get('image_digest')}"}
     for aid in sorted(account_ids):
-        a = await db.accounts.find_one({"_id": ObjectId(aid)}, {"ea_binary_sha256": 1, "broker_server": 1, "server": 1,
-                                                                "account_number": 1, "creds_version": 1, "trading_enabled": 1,
-                                                                "bridge_token_rotated_at": 1, "verified_identity": 1,
-                                                                "environment_attestation": 1}) or {}
+        a = await db.accounts.find_one({"_id": ObjectId(aid)}) or {}
         bots = []
         async for b in db.bot_configs.find({"account_id": aid}):
-            bots.append(json.dumps({k: v for k, v in b.items() if k not in ("_id", "updated_at")}, sort_keys=True, default=str))
-        parts[aid] = json.dumps({k: v for k, v in a.items() if k != "_id"}, sort_keys=True, default=str) + "|" + "|".join(sorted(bots))
+            bots.append(json.dumps(_fp_view(b, _FP_BOT_FIELDS), sort_keys=True, default=str))
+        parts[aid] = json.dumps(_fp_view(a, _FP_ACCOUNT_FIELDS), sort_keys=True, default=str) + "|" + "|".join(sorted(bots))
     exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
-    parts["inventory_expectation"] = json.dumps({k: v for k, v in exp.items() if k != "_id"}, sort_keys=True, default=str)
+    parts["inventory_expectation"] = json.dumps({k: v for k, v in exp.items() if k not in ("_id",) and not k.endswith("_at")},
+                                                sort_keys=True, default=str)
     return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()
 
 

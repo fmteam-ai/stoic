@@ -488,12 +488,14 @@ jobs:
           image: stoic-backend:${{ github.sha }}
           format: spdx-json
           output-file: sbom-backend.spdx.json
+          upload-release-assets: false   # the release job attaches assets itself; `release` events must not let this action touch the GitHub Release
       - name: SBOM (frontend image)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
         with:
           image: stoic-frontend:${{ github.sha }}
           format: spdx-json
           output-file: sbom-frontend.spdx.json
+          upload-release-assets: false   # the release job attaches assets itself; `release` events must not let this action touch the GitHub Release
       # Image vulnerability gate — grype runs DIRECTLY (pinned binary from the
       # scan-action installer, DB restored from the Actions cache) against the
       # syft SBOMs produced above, so the gate never depends on docker-daemon

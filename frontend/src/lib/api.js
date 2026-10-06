@@ -148,9 +148,11 @@ export function formatApiError(err) {
             .map(x => (typeof x === "string" ? x
                 : (x?.message || x?.msg || x?.detail || JSON.stringify(x))))
             .filter(Boolean);
-        return items.length
+        // SEC-002 follow-up (main100): the reference lets support find the server-side log line
+        const ref = typeof detail.ref === "string" && detail.ref ? ` (ref ${detail.ref})` : "";
+        return (items.length
             ? `${detail.message} ${items.join(" · ")}`
-            : detail.message;
+            : detail.message) + ref;
     }
     if (detail && typeof detail.msg === "string") return detail.msg;
     return _sanitizeErrorText(String(detail)) || "Something went wrong.";

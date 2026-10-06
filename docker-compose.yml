@@ -26,7 +26,10 @@ x-app-common: &app-common
     BRIDGE_TOKEN_HASH_KEY_FILE: /run/secrets/bridge_token_hash_key
     # Release signing: the private key lives ONLY in the signer sidecar. The
     # API presents a bearer token over TLS (self-signed cert pinned via CA bundle).
-    RELEASE_SIGNER_TOKEN_FILE: /run/secrets/signer_token
+    # N100-11 — the API holds ONLY the bundle token; the release token (signer_token) is never
+    # mounted into app containers, so the API cannot obtain an EA-release / model-manifest signature.
+    RELEASE_SIGNER_TOKEN_FILE: /run/secrets/signer_token_bundle
+    RELEASE_SIGNER_BUNDLE_TOKEN_FILE: /run/secrets/signer_token_bundle
     RELEASE_SIGNER_CA_BUNDLE: /run/secrets/signer_cert
     # Exact backend image identity — REQUIRED in production risk snapshots
     # (deploy/install.sh writes it to .env after the image build).
@@ -40,7 +43,7 @@ x-app-common: &app-common
     - order_auth_secret
     - ledger_anchor_key
     - bridge_token_hash_key
-    - signer_token
+    - signer_token_bundle
     - signer_cert
   depends_on:
     mongo:
@@ -91,11 +94,13 @@ services:
     restart: unless-stopped
     environment:
       SIGNER_TOKEN_FILE: /run/secrets/signer_token
+      SIGNER_TOKEN_BUNDLE_FILE: /run/secrets/signer_token_bundle
       ED25519_SIGNING_KEY_B64_FILE: /run/secrets/signer_ed25519_key
     command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9443",
               "--ssl-certfile", "/run/secrets/signer_cert", "--ssl-keyfile", "/run/secrets/signer_cert_key"]
     secrets:
       - signer_token
+      - signer_token_bundle
       - signer_ed25519_key
       - signer_cert
       - signer_cert_key
@@ -150,7 +155,7 @@ services:
       - order_auth_secret
       - ledger_anchor_key
       - bridge_token_hash_key
-      - signer_token
+      - signer_token_bundle
       - security_telegram_token
 
   worker-model:
@@ -207,6 +212,8 @@ secrets:
     file: ./secrets/bridge_token_hash_key
   signer_token:
     file: ./secrets/signer_token
+  signer_token_bundle:
+    file: ./secrets/signer_token_bundle
   signer_ed25519_key:
     file: ./secrets/signer_ed25519_key
   signer_cert:

@@ -46,6 +46,11 @@ app_env() {
 ensure_release_secrets() {
   [ -d secrets ] || return 0
   local f
+  # N100-11 — existing installs predate the per-purpose signer token: mint the bundle token the
+  # API will hold (the release token stays with CI / the signer only). Compose mounts it next.
+  if [ -d secrets ] && [ -s secrets/signer_token ] && [ ! -s secrets/signer_token_bundle ]; then
+    ( umask 077; openssl rand -hex 32 > secrets/signer_token_bundle ) && echo "   generated secrets/signer_token_bundle (API-side signer token)"
+  fi
   # create with mode 0600 from the start (no umask window), regenerate zero-byte leftovers
   # main98 — bridge_token_hash_key: generated ONCE, never regenerated (changing it un-pairs every EA)
   # N99-5 — a key already living in backend/.env (or ./.env) must become the file value, never a
@@ -54,7 +59,7 @@ ensure_release_secrets() {
   local envkey envval
   for f in order_auth_secret ledger_anchor_key bridge_token_hash_key; do
     envkey=$(printf '%s' "${f}" | tr '[:lower:]' '[:upper:]')
-    envval=$( { grep -E "^${envkey}=." backend/.env 2>/dev/null || grep -E "^${envkey}=." .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+    envval=$( { grep -E "^${envkey}=." backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")   # N100-7 — backend/.env only
     if [ -s "secrets/${f}" ] && [ -n "${envval}" ] && [ "$(cat "secrets/${f}")" != "${envval}" ]; then
       echo "!! ${envkey} differs between backend/.env and secrets/${f} — keep ONE value:"
       echo "   copy the .env value into secrets/${f} (or vice-versa), then remove the .env line. Refusing to continue."

@@ -30,6 +30,7 @@ PROTECTION_FLATTENED = "flattened_unprotected"
 PROTECTION_MISSING = "MISSING"
 PROTECTED_STATES = (PROTECTION_PLACED, PROTECTION_NA)
 UNKNOWN_GRACE_SEC = 60
+UNKNOWN_FEE_HAIRCUT = 0.001   # N100-9 — 0.10 % max taker fee assumed when the fills lookup fails
 PLACING_LEASE_SEC = 120
 MAX_CLIENT_ID_LEN = 36          # Binance: ^[\.A-Z\:/a-z0-9_-]{1,36}$
 
@@ -131,6 +132,8 @@ def never_left_exchange(exc: BaseException) -> bool:
         import ccxt
         if isinstance(exc, ccxt.NetworkError):
             return False
+        if isinstance(exc, (ccxt.ExchangeNotAvailable, ccxt.OnMaintenance)):
+            return False                      # N100-9 — venue down/maintenance: outcome UNKNOWN, never "rejected"
         if isinstance(exc, getattr(ccxt, "BadResponse", ())):
             return False                      # main99 — the venue answered garbage: outcome UNKNOWN, never "rejected"
         if isinstance(exc, ccxt.ExchangeError):
@@ -230,7 +233,8 @@ async def protect(db, client, *, trade_id, ccxt_symbol: str, side: str, amount: 
                 "reason": f"OCO lookup failed ({type(e).__name__}) — not resent"}
         await db.trades.update_one({"_id": oid}, {"$set": {"protection": prot}})
         return prot
-    if live is not None and str(live.get("listOrderStatus") or "").upper() != "ALL_DONE":
+    if live is not None and str(live.get("listOrderStatus") or "").upper() not in ("ALL_DONE", "REJECT", "REJECTED"):
+        # N100-9 — only a LIVE list (EXECUTING / RESPONSE) is protection; REJECT is adopted as nothing
         prot = {"status": PROTECTION_PLACED, "at": _now(), "amount": amount, "list_id": str(live.get("orderListId") or ""),
                 "list_client_order_id": derived_id(cid, "-oco"), "tp_client_order_id": derived_id(cid, "-tp"),
                 "sl_client_order_id": derived_id(cid, "-sl"), "raw_status": live.get("listOrderStatus"), "adopted": True}
@@ -308,12 +312,22 @@ async def _flatten_unprotected(db, client, oid, ccxt_symbol, side, amount, cid, 
         prior = await client.fetch_order_by_client_id(ccxt_symbol, derived_id(cid, "-fl"))   # N98-9 — never resend
         if prior is not None:
             pst = str(prior.get("status") or "").lower()
-            if pst in ("canceled", "cancelled", "expired", "rejected") and float(prior.get("filled") or 0) <= 0:
+            pfilled = float(prior.get("filled") or 0)
+            if pst in ("canceled", "cancelled", "expired", "rejected") and pfilled <= 0:
                 # main99 — a dead flatten that sold NOTHING is not a flatten: still exposed, manual action
                 prot = {**prot, "status": PROTECTION_MISSING, "flatten_error": "flatten_cancelled_unfilled",
                         "flatten_order_id": str(prior.get("id") or "")}
                 await _alert(db, "crypto_protection_failed", "critical",
                              "Crypto flatten order was cancelled UNFILLED — position still OPEN and unprotected; manual action required.",
+                             f"crypto_protection_failed:{oid}", {"trade_id": str(oid), "symbol": ccxt_symbol, "protection_status": prot["status"]})
+                return prot
+            if pst in ("canceled", "cancelled", "expired", "rejected") and pfilled + 1e-12 < float(amount or 0):
+                # N100-9 — a PARTIALLY filled dead flatten leaves a remainder exposed: never FLATTENED
+                prot = {**prot, "status": PROTECTION_MISSING, "flatten_error": "flatten_cancelled_partial",
+                        "flatten_order_id": str(prior.get("id") or ""), "flatten_amount": pfilled,
+                        "remaining_amount": float(amount or 0) - pfilled}
+                await _alert(db, "crypto_protection_failed", "critical",
+                             "Crypto flatten order was cancelled after a PARTIAL fill — remainder still OPEN and unprotected; manual action required.",
                              f"crypto_protection_failed:{oid}", {"trade_id": str(oid), "symbol": ccxt_symbol, "protection_status": prot["status"]})
                 return prot
             return {**prot, "status": PROTECTION_FLATTENED, "flatten_order_id": str(prior.get("id") or ""),
@@ -442,6 +456,10 @@ async def held_from_fills(client, symbol: str, order: dict, base: str) -> float:
             base_fee = sum(float((f.get("fee") or {}).get("cost") or 0) for f in fills
                            if str((f.get("fee") or {}).get("currency") or "").upper() == base.upper())
             return max(0.0, filled - base_fee)
+        if fills is None:
+            # N100-9 — fills unknown ⇒ fee unknown: hold the CONSERVATIVE amount (fee assumed at the
+            # venue's max taker rate) rather than the full order size, and flag it for the sweep
+            return round(filled_base_amount(order, base) * (1.0 - UNKNOWN_FEE_HAIRCUT), 12)
     return filled_base_amount(order, base)
 
 
@@ -524,8 +542,10 @@ async def reconcile_intents(db, client_factory, now: datetime | None = None) -> 
         if it["status"] == "unknown":
             await transition(db, it["intent_id"], "reconciled", detail=f"exchange truth: {st} id {order.get('id')}")
         elif it["status"] in ("dispatched", "acked"):
-            await transition(db, it["intent_id"], "filled" if st in ("closed", "filled") else "rejected",
-                             detail=f"exchange truth: {st}")
+            # N100-9 — a cancelled remainder AFTER a partial fill is a position, not a rejection
+            partially = float(order.get("filled") or 0) > 0
+            await transition(db, it["intent_id"], "filled" if st in ("closed", "filled") or partially else "rejected",
+                             detail=f"exchange truth: {st}" + (" (partial fill held)" if partially and st not in ("closed", "filled") else ""))
         out["reconciled"] += 1
     return out
 

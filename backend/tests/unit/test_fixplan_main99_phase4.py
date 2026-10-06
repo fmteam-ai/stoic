@@ -47,7 +47,7 @@ def _proj(configured, enabled, bots, violations=()):
 # ── N99-2 ─────────────────────────────────────────────────────────────────────
 def test_n99_2_broker_demo_flag_trusted_only_from_accepted_ex5():
     import broker_env as be
-    acc = {"mode": "live", "ea_identity": {"authoritative": True, "trade_mode": "demo"}, "ea_binary_sha256": "a" * 64}
+    acc = {"mode": "live", "ea_identity": {"authoritative": True, "trade_mode": "demo"}, "ea_binary_sha256": "a" * 64, "ea_binary_sha256_method": "installer_attested"}
     with patch("ea_capabilities.accepted_ea_sha256s", lambda: ["a" * 64]):
         assert be.broker_reports_demo(acc) is True
     with patch("ea_capabilities.accepted_ea_sha256s", lambda: ["b" * 64]):
@@ -107,7 +107,13 @@ def test_a14_9_a14_10_a14_11_bundle_build_sign_verify_and_fingerprint():
         fp = run(ab.config_fingerprint(db, [str(acc_id)], rel))
         assert fp == b["config_fingerprint"]
         assert ab.bundle_covers(b, str(acc_id), rel, current_fingerprint=fp)[0] is True
-        db.bot_configs.rows[0]["risk_per_trade"] = 2.0
+        # N100-12 — runtime churn (bot pulse, heartbeat identity restamp) must NOT void coverage
+        db.bot_configs.rows[0]["_last_pulse"] = "2026-10-06T15:00:00+00:00"
+        db.bot_configs.rows[0]["_tick_lock_until"] = "2026-10-06T15:00:05+00:00"
+        db.accounts.rows[0]["verified_identity"] = {"login": "123", "stamped_at": "now"}
+        db.accounts.rows[0]["last_heartbeat"] = "2026-10-06T15:00:00+00:00"
+        assert run(ab.config_fingerprint(db, [str(acc_id)], rel)) == fp
+        db.bot_configs.rows[0]["risk_percent"] = 2.0
         fp2 = run(ab.config_fingerprint(db, [str(acc_id)], rel))
         ok, why = ab.bundle_covers(b, str(acc_id), rel, current_fingerprint=fp2)
         assert ok is False and "configuration changed" in why

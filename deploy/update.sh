@@ -52,6 +52,12 @@ else
 
   echo "-- fetching ${REF}"
   git fetch --all --tags --prune
+  # N100-1 — main99's installer wrote deploy/env/* over the (then tracked) template files; main100
+  # removes them from git, so a modified copy makes `git checkout` refuse. Templates carry no
+  # secrets (backend/.env is untouched) → restore them before switching trees.
+  for t in .env.example backend/.env.example; do
+    git ls-files --error-unmatch "$t" >/dev/null 2>&1 && git checkout -- "$t" 2>/dev/null || true
+  done
   git checkout --detach "${REF}"
   if [ "$(git rev-parse HEAD)" = "${PREV}" ]; then
     echo "   already on $(git rev-parse --short HEAD) — nothing to publish"
@@ -124,10 +130,9 @@ if [ "$(app_env)" = "production" ]; then
 fi
 
 # A14-1 — env templates: deploy/env/ is the source; materialise the dot-files, then refuse drift
-python3 scripts/sync_env_examples.py >/dev/null
-python3 scripts/sync_env_examples.py --check || { echo "!! env template drift — edit deploy/env/*.env.example and re-run scripts/sync_env_examples.py"; rollback; }
+python3 scripts/sync_env_examples.py >/dev/null || { echo "!! env templates could not be materialised from deploy/env/"; gate_refused; }
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
-ensure_release_secrets || rollback
+ensure_release_secrets || gate_refused   # N100-7 — nothing is built yet: refuse, never restore the database
 # N-R1 — hosts installed before the trusted-proxy chain existed: default the docker ranges once
 grep -q "^TRUSTED_PROXY_CIDRS=." backend/.env 2>/dev/null || set_kv backend/.env TRUSTED_PROXY_CIDRS "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8,::1/128,fd00::/8"
 provision_images || rollback

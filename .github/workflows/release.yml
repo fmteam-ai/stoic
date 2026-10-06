@@ -47,15 +47,20 @@ jobs:
     # (scripts/run_full_suite.sh).
     needs: tag-only
     runs-on: ubuntu-latest
-    services:
-      mongo:
-        image: mongo:7
-        ports:
-          - 27017:27017
     env:
-      MONGO_URL: mongodb://localhost:27017
+      MONGO_URL: mongodb://localhost:27017/?replicaSet=rs0&directConnection=true
       DB_NAME: stoic_release_ci
     steps:
+      - name: Start MongoDB replica set (rs0) — critical_controls transactional tests need it (no skips allowed)
+        run: |
+          docker run -d --name mongo-rs -p 27017:27017 mongo:7 --replSet rs0 --bind_ip_all
+          for i in $(seq 1 30); do
+            docker exec mongo-rs mongosh --quiet --eval 'db.runCommand({ping:1}).ok' >/dev/null 2>&1 && break; sleep 1
+          done
+          docker exec mongo-rs mongosh --quiet --eval 'rs.initiate({_id:"rs0", members:[{_id:0, host:"localhost:27017"}]})'
+          for i in $(seq 1 30); do
+            [ "$(docker exec mongo-rs mongosh --quiet --eval 'rs.isMaster().ismaster')" = "true" ] && break; sleep 1
+          done
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Export exact release archive
         run: git archive --format=tar.gz -o /tmp/stoic-release.tar.gz HEAD
@@ -293,8 +298,14 @@ jobs:
           pip install -q cryptography
           if (-not (Test-Path "release\ea_release.json")) { throw "RELEASE BLOCKED: release/ea_release.json missing — run the ea-release workflow first" }
           $rec = Get-Content release\ea_release.json -Raw | ConvertFrom-Json
+          # MetaEditor output is NOT byte-reproducible (per-build metadata): the shipped EX5 is the one the
+          # ea-release workflow compiled, hashed, signed AND committed. This job proves (a) the tagged source
+          # still compiles with 0 errors and (b) the committed EX5 is byte-identical to the SIGNED record.
+          $fresh = (Get-FileHash backend\static\EmergentTradingBridge.ex5 -Algorithm SHA256).Hash.ToLower()
+          git checkout -- backend/static/EmergentTradingBridge.ex5
           $now = (Get-FileHash backend\static\EmergentTradingBridge.ex5 -Algorithm SHA256).Hash.ToLower()
-          if ($rec.ex5_sha256 -ne $now) { throw "RELEASE BLOCKED: recorded EX5 $($rec.ex5_sha256) != freshly compiled $now (non-reproducible or stale record)" }
+          Write-Host "fresh compile $fresh / committed signed EX5 $now"
+          if ($rec.ex5_sha256 -ne $now) { throw "RELEASE BLOCKED: recorded EX5 $($rec.ex5_sha256) != committed EX5 $now (stale record or EX5 not committed — run ea-release)" }
           if ($rec.compiled_by -ne "github-actions") { throw "RELEASE BLOCKED: record not produced by the sanctioned job" }
           python scripts/verify_ea_release.py --check
           "EA_RELEASE_SHA256=$now" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -514,6 +525,7 @@ jobs:
           image: stoic-backend:${{ github.ref_name }}
           format: spdx-json
           output-file: sbom-backend.spdx.json
+          upload-release-assets: false   # the release job attaches assets itself; `release` events must not let this action touch the GitHub Release
 
       - name: SBOM (frontend image)
         uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610  # v0
@@ -521,6 +533,7 @@ jobs:
           image: stoic-frontend:${{ github.ref_name }}
           format: spdx-json
           output-file: sbom-frontend.spdx.json
+          upload-release-assets: false   # the release job attaches assets itself; `release` events must not let this action touch the GitHub Release
 
       - name: Bind RC lock to the release commit + image digests (round 9 P1-06)
         env:
