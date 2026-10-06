@@ -3,6 +3,16 @@ name: Release
 on:
   push:
     tags: ["v*"]
+  # A tag on a commit whose message carries "[skip ci]" (every ea-release bot commit)
+  # never fires `push` — GitHub skips it. Publishing the GitHub Release still fires.
+  release:
+    types: [published]
+  workflow_dispatch:   # "Use workflow from" → pick the v* tag
+
+# push + release for the same tag collapse into ONE run (the later cancels the earlier)
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
@@ -10,7 +20,17 @@ permissions:
   packages: write   # GHCR image publication
 
 jobs:
+  tag-only:
+    # Branches are never deployable to production — every path in (push / release /
+    # manual dispatch) must resolve to a v* tag before any gate runs.
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          case "${GITHUB_REF}" in refs/tags/v*) echo "release ref ${GITHUB_REF_NAME}" ;;
+            *) echo "::error::release.yml must run on a v* tag (got ${GITHUB_REF}) — pick the tag under 'Use workflow from'"; exit 1 ;; esac
+
   ci-gates:
+    needs: tag-only
     # Full CI suite (unit tests, gitleaks, pip-audit, static analysis,
     # frontend build, container vuln scan) MUST pass on the exact tagged
     # commit before any release artifact is published.
@@ -25,6 +45,7 @@ jobs:
     # execution-truth + DB-integration. The http/broker/external classes are
     # gated by install-from-archive below and the staging soak campaign
     # (scripts/run_full_suite.sh).
+    needs: tag-only
     runs-on: ubuntu-latest
     services:
       mongo:
@@ -131,6 +152,7 @@ jobs:
     # manifest currency, credential-literal scan. Results are HMAC-signed with the
     # dedicated evidence key and bound to the release commit; the attestation
     # gate `hermetic_verification` is REJECTED unless every step is PASS + signed.
+    needs: tag-only
     runs-on: ubuntu-latest
     services:
       mongo:
@@ -194,6 +216,7 @@ jobs:
     # image builds, full 9-container topology) and gate on release-readiness
     # reporting ready=true (Mongo round trip, every worker lease AND every
     # worker loop running, reconciliation, outbox, schema).
+    needs: tag-only
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
@@ -237,6 +260,7 @@ jobs:
   ea-compile:
     # Compile the exact tagged EA source with real MetaEditor so the release
     # ships a verified .ex5, never a locally built binary.
+    needs: tag-only
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
