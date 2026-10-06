@@ -62,3 +62,5 @@ a04f6a00ee22edfc6fa8cce5254d2e930ddf5acf:backend/tests/unit/test_admin_integrati
 618531ca5cd94a67fd49cff4a8af35ef40cdc7bb:backend/tests/unit/test_security_agent_sa1_sa2.py:stripe-access-token:56
 618531ca5cd94a67fd49cff4a8af35ef40cdc7bb:backend/tests/unit/test_security_agent_sa1_sa2.py:stripe-access-token:58
 618531ca5cd94a67fd49cff4a8af35ef40cdc7bb:backend/tests/unit/test_security_agent_sa1_sa2.py:jwt:54
+# false positive — test-name list in a testing-agent report (no secret): 'token_rotation_grace, test_iter54…'
+f2931989adba0a5d0177ccbbd9e943138a9ca76f:test_reports/iteration_231.json:generic-api-key:23
