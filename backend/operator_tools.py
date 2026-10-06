@@ -135,7 +135,12 @@ async def trade_replay(db, trade: dict) -> dict:
             seen_steps.add(k)
             dedup_steps.append(s)
 
+    from chart_provenance import build as _provenance
     return {"source": source, "symbol": sym,
+            # P2-01 — replay prices are market data (indicative), time-windowed around the trade
+            "provenance": _provenance(provider=f"replay:{source}", source_kind="indicative", points=ticks,
+                                      time_key="t", expected_interval_s=900 if source == "m15_bars" else 60,
+                                      cache_status="live" if source == "ticks" else "fallback_m15"),
             "ticks": ticks, "markers": markers, "steps": dedup_steps,
             "levels": {"entry": trade.get("entry_price"),
                        "stop_loss": trade.get("original_stop_loss")

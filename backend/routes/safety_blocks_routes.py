@@ -229,7 +229,10 @@ async def block_stats(
         d = (datetime.now(timezone.utc) - timedelta(days=i)).strftime("%Y-%m-%d")
         by_day.append({"date": d, "count": buckets.get(d, 0)})
 
+    from chart_provenance import build as _provenance
     return {
+        "provenance": _provenance(provider="stoic_safety_blocks", source_kind="derived", points=by_day,
+                                  note="counts derived from the safety-block ledger"),   # P2-01
         "by_reason": by_reason,
         "by_day": by_day,
         "by_account": by_account,

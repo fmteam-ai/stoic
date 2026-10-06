@@ -159,10 +159,11 @@ export default function Login() {
                             {sysState === "checking" ? "// CHECKING SYSTEM STATE…" : sysState === "unreachable" ? "// BACKEND UNREACHABLE" : headline ? `// ${headline.toUpperCase()}` : `// PLATFORM ${sysState.toUpperCase().replaceAll("_", " ")}`}
                         </div>
                         <h1 className="font-display font-bold text-5xl tracking-tighter leading-[1.05]">
-                            Automated gold &amp; crypto<br/>trading, <span className="text-[#00FF41]">risk-controlled</span>.
+                            Controlled gold &amp; crypto<br/>workflows, <span className="text-[#00FF41]">risk-first</span>.
                         </h1>
-                        <p className="text-[#A1A1AA] text-sm leading-relaxed max-w-sm">
-                            Multi-engine AI consensus. Four risk profiles. Veto-first execution. Built for traders who refuse to panic.
+                        <p className="text-[#A1A1AA] text-sm leading-relaxed max-w-sm" data-testid="login-capability-claim">
+                            Supports controlled gold and crypto trading workflows in eligible, verified environments. Multi-engine consensus, four risk profiles, veto-first execution. Nothing trades until the readiness requirements are met —{" "}
+                            <a href="/status" className="text-[#00FF41] underline underline-offset-2" data-testid="login-readiness-link">see the live status &amp; readiness requirements</a>.
                         </p>
                     </div>
 

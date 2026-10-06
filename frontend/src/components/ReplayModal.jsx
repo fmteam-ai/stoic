@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { X, Play, Pause, Film } from "lucide-react";
+import { ChartProvenance } from "@/components/ChartProvenance";
 
 const W = 640, H = 260, PAD = 34;
 
@@ -110,6 +111,7 @@ export const ReplayModal = ({ trade, onClose }) => {
                         </div>
                     )}
                     {chart}
+                    <ChartProvenance p={d?.provenance} testid="replay-provenance" loading={!d} />
                     {d && ticks.length > 1 && (
                         <div className="flex items-center gap-3 mt-2">
                             <button onClick={() => setPlaying(p => !p)} data-testid="replay-play"

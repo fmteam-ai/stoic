@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import RrWatchPanel from "@/components/RrWatchPanel";
+import { ChartProvenance } from "@/components/ChartProvenance";
 import { CalibrationCard } from "@/components/CalibrationCard";
 import { ResearchPanel } from "@/components/ResearchPanel";
 import { WhatIfCard } from "@/components/WhatIfCard";
@@ -291,6 +292,8 @@ export default function Analytics() {
             />
 
             <div className="p-4 md:p-8 space-y-6">
+                {/* P1-05 — every performance figure on this page is labelled by origin */}
+                <ChartProvenance p={data?.provenance} testid="analytics-provenance" loading={!data} />
                 <WhatIfCard />
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="analytics-error">{err}</div>}
 

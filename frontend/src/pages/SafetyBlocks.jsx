@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { ChartProvenance } from "@/components/ChartProvenance";
 import { ShieldCheck, RefreshCw, AlertTriangle, ChevronDown, ChevronUp, Sparkles, Check } from "lucide-react";
 import { toast } from "sonner";
 
@@ -324,6 +325,7 @@ export default function SafetyBlocks() {
                         </div>
                         <Sparkline data={stats?.by_day || []}
                                    color={stats?.total > 0 ? "#FF3B30" : "#00FF41"} />
+                        <ChartProvenance p={stats?.provenance} testid="safety-blocks-provenance" loading={!stats} />
                         <div className="mt-3 text-[10px] text-[#52525B] font-mono">
                             Total: {stats?.total ?? 0} block{stats?.total === 1 ? "" : "s"} · Window: {days}d
                         </div>

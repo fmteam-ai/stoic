@@ -164,8 +164,9 @@ const CloneCard = ({ t }) => (
     </div>
 );
 
+// P2-04 — real cards carry a UNIQUE id (clones carry none, so duplicate ids never occur)
 const Card = ({ t, idx }) => (
-    <figure className="tst-card" data-testid={`testimonial-card-${idx}`}>
+    <figure className="tst-card" id={`testimonial-${idx}`} data-testid={`testimonial-card-${idx}`}>
         <span className="tst-illustrative">Illustrative example</span>
         <Stars n={t.rating} />
         <blockquote className="tst-quote">&ldquo;{t.quote}&rdquo;</blockquote>
@@ -209,7 +210,8 @@ export const LandingTestimonials = () => {
                 {" "}<span data-testid="testimonials-stats-status">{statsLine}</span>
             </p>
             <TrustBar onStatus={setStatsStatus} />
-            <div className="tst-marquee" data-testid="testimonials-marquee" data-reduced-motion={reducedMotion ? "true" : "false"}>
+            <div className="tst-marquee" data-testid="testimonials-marquee" data-reduced-motion={reducedMotion ? "true" : "false"}
+                 role="region" aria-roledescription="carousel" aria-label="Illustrative testimonials — decorative scrolling duplicates are hidden from assistive technology">
                 <div className="tst-track">
                     {rowA.map((t, i) => <Card key={`a${i}`} t={t} idx={i * 2} />)}
                     {/* audit F-19 / round-8 P2-5 — clones are decorative, semantic-free and absent under reduced motion */}

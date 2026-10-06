@@ -192,7 +192,14 @@ async def compute_attribution(user_id: str) -> dict:
 
     overall = _summarise(rows)
 
+    # P1-05 — attribution figures are PLATFORM BOOKS (closed trades), labelled so on
+    # every chart; broker-reconciled figures live on Verified Performance only.
+    from chart_provenance import build as _provenance
     return {
+        "provenance": _provenance(provider="stoic_trades", source_kind="derived",
+                                  points=[{"date": r.get("opened_at")} for r in rows],
+                                  note="platform books from closed trades — NOT broker-reconciled; "
+                                       "attested figures: Verified Performance"),
         "overall": overall,
         "by_symbol": _bucketize(rows, lambda r: r["symbol"]),
         "by_action": _bucketize(rows, lambda r: r["action"]),
