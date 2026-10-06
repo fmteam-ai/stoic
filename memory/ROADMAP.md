@@ -1,6 +1,6 @@
 # STOIC — Roadmap
 
-- **A13 Audit Fix List** (PDF uploaded by user): ~~Part 1~~ DONE · ~~Part 2~~ DONE · ~~main97 review N97-1..11 + Q-1 + Q-2~~ DONE 2026-06 → **P1 P1-05 reconciled performance evidence (chart labels simulated/indicative/broker-reconciled, withhold attestation on gaps)** → **P2 Part 3 (P2-01 chart provenance, P2-02 Turnstile tests, P2-03 public claims wording, P2-04 testimonials a11y)**.
+- **A13 Audit Fix List** (PDF uploaded by user): ~~Part 1~~ DONE · ~~Part 2~~ DONE · ~~main97 review N97-1..11 + Q-1 + Q-2~~ DONE 2026-06 · ~~P1-05~~ · ~~Part 3 (P2-01..04)~~ DONE 2026-06. Audit list complete — remaining: operator release run (ea-release, digests, authoritative lock, PASS bundle) + 4-week demo.
 - **User ops**: rotate Telegram bot token (appeared in chat); SECURITY_AGENT_PROTECTED_IPS + enforce mode (SA4, currently observe); production env needs BRIDGE_TOKEN_HASH_KEY (boot refuses without it since A13-2).
 
 - **P0** Production deployment to stoicaibot.com (K8s timeout on last attempt — retry with `deployment_agent` readiness check; export state from Preview → import to Production for EA token sync).

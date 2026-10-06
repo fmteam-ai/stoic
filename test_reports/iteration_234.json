@@ -1,0 +1,31 @@
+{
+  "summary": "iter234 P1-05/P2-01..P2-04 verification. Unit lane 25/25 green on tests/unit/test_a13_part3.py (23) + tests/unit/test_r28_chart_provenance.py (2). New HTTP tests/test_iter234_p1_05_provenance_http.py (4/4 green) confirm chart_provenance contract on /api/analytics/attribution (source_kind=derived, provider=stoic_trades, note mentions 'NOT broker-reconciled'), /api/safety-blocks/stats?days=7 (derived, stoic_safety_blocks, points==len(by_day)), /api/trades/{id}/replay (indicative, provider starts with 'replay:', cache_status live|fallback_m15), and unauth=401 on all three. Frontend: /login shows new H1 'Controlled gold & crypto workflows, risk-first.' and the data-testid=login-capability-claim paragraph with exact capability wording and /status readiness link; forbidden phrase 'Automated gold & crypto trading' NOT present. /analytics renders data-testid=analytics-provenance = 'DERIVED · LEDGER · STOIC_TRADES ...' (not 'PROVENANCE MISSING'). /safety-blocks renders data-testid=safety-blocks-provenance = 'DERIVED · LEDGER · STOIC_SAFETY_BLOCKS ...'. Replay modal skipped gracefully (admin has no trades surfacing a Replay button on /trades). LandingTestimonials browser-side check could not run on public / and /welcome because Cloudflare bot-challenge blocked unauthenticated navigation from the test runner; verified in source: real cards use <figure id=testimonial-N data-testid=testimonial-card-N>, clones have data-marquee-clone=true + aria-hidden=true + inert and carry no id/testid/focusable descendants (CloneCard components have no buttons/links/anchors), marquee container has role=region + aria-roledescription=carousel.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iter234_p1_05_provenance_http.py",
+    "/app/test_reports/pytest/iter234_p1_05_provenance_http.xml",
+    "/app/backend/tests/unit/test_a13_part3.py",
+    "/app/backend/tests/unit/test_r28_chart_provenance.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "chart_provenance.build() emits a complete contract (contract_version=1, source_kind, provider, cache_status, environment, gaps up to 10 with weekend-aware filtering) and is correctly consumed by analytics/attribution (derived, stoic_trades, note 'NOT broker-reconciled'), safety-blocks stats (derived, stoic_safety_blocks, points=len(by_day)) and operator_tools.trade_replay (indicative, provider=replay:<source>, time_key='t', cache_status live|fallback_m15).",
+    "LandingTestimonials cleanly separates real <figure id=testimonial-N> cards from CloneCard duplicates; clones carry data-marquee-clone=true, aria-hidden=true, inert=true, and contain no [id] or focusable descendants — so Tab cannot land in a clone and ids remain unique.",
+    "Login.jsx hero copy uses the exact capability sentence specified (data-testid=login-capability-claim) and a readiness link data-testid=login-readiness-link to /status; forbidden phrase 'Automated gold & crypto trading' is not present on the page."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iter234_p1_05_provenance_http.py"
+  ],
+  "success_rate": {"backend": "100% (25/25 unit + 4/4 new HTTP)", "frontend": "100% of in-scope checks executed; LandingTestimonials browser-side check blocked by Cloudflare bot-challenge on public routes but verified via source review"},
+  "test_credentials": "admin@trading.bot / TEST_ADMIN_PASSWORD from backend/.env (never embedded in test file).",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Admin on preview has no trades with a Replay button on /trades (/api/trades returned no entries with id in the sample path), so the /trades UI replay flow could not be exercised end-to-end; the backend replay endpoint is covered directly in test_iter234_p1_05_provenance_http.py::test_trade_replay_provenance. The public '/' and '/welcome' landing pages are gated by Cloudflare Turnstile when hit from the preview test runner; for UI a11y of LandingTestimonials rely on source inspection or run tests from a non-bot-flagged environment. Run new HTTP file with: `cd /app/backend && set -a && . .env && set +a && STOIC_TESTS_ALLOW_DB_NAME=1 DB_NAME=ai_trading_bot python -m pytest tests/test_iter234_p1_05_provenance_http.py -q`.",
+  "rca of the issue": "No product bugs. One self-induced test-side correction: initial assertion expected provenance.time_key='t' at the top level, but chart_provenance.build() consumes time_key as an input to compute gaps/freshness and does NOT echo it in the output dict (expected contract shape). Removed that assertion; cache_status assertion retained and passes."
+}
