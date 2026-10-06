@@ -105,6 +105,21 @@ def _hash_variants(token: str) -> list[str]:
     return [h, lh] if lh else [h]
 
 
+PREV_GRACE_SLIDE_HOURS = 24
+
+
+async def extend_prev_grace(db, acc: dict) -> None:
+    """Q-2 (main98) — slide the grace window while the replacement token is still unused
+    (throttled to once per hour so a 1-second heartbeat does not write every time)."""
+    now = datetime.now(timezone.utc)
+    cur = str(acc.get("bridge_token_prev_expires") or "")
+    target = (now + timedelta(hours=PREV_GRACE_SLIDE_HOURS)).isoformat()
+    if cur and cur > (now + timedelta(hours=PREV_GRACE_SLIDE_HOURS - 1)).isoformat():
+        return
+    await db.accounts.update_one({"_id": acc["_id"], "installation_pending": True},
+                                 {"$set": {"bridge_token_prev_expires": target}})
+
+
 def token_fields(token: str) -> dict:
     """Fields to $set when a NEW token is issued (never the plaintext)."""
     return {"bridge_token_hash": token_hash(token), "bridge_token_last4": str(token)[-4:]}
@@ -164,7 +179,8 @@ def is_suspended(acc: dict | None, token: str) -> bool:
     susp = (acc or {}).get("bridge_token_suspended") or {}
     if not susp:
         return False
-    return susp.get("token_hash") == token_hash(token) or susp.get("token") == token
+    # N98-4 — a token suspended under the legacy (JWT_SECRET) hash stays suspended after re-hash
+    return susp.get("token_hash") in _hash_variants(token) or susp.get("token") == token
 
 
 def suspension_record(acc: dict, **extra) -> dict:

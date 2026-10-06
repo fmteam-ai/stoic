@@ -94,10 +94,11 @@ async def begin(db, *, account_id: str, user_id: str, signal: dict, order_type: 
 
 def outcome_state(order_resp: dict) -> str:
     st = str((order_resp or {}).get("status") or "").lower()
+    filled = float((order_resp or {}).get("filled") or 0)
     if st in ("closed", "filled"):
         return "filled"
     if st in ("canceled", "cancelled", "rejected", "expired"):
-        return "rejected"
+        return "filled" if filled > 0 else "rejected"   # N98-10 — a partly filled order IS a position
     return "acked"                                   # open / partially filled / pending
 
 
@@ -112,9 +113,19 @@ def filled_base_amount(order: dict, base_asset: str) -> float:
     return max(0.0, filled - base_fee)
 
 
+SETUP_ERRORS = (ValueError, TypeError, KeyError, AttributeError, RuntimeError)
+
+
 def never_left_exchange(exc: BaseException) -> bool:
     """ccxt: an ExchangeError means the venue ANSWERED (safe to reject); network
-    failures/timeouts may have executed → UNKNOWN. Else the generic classifier."""
+    failures/timeouts may have executed → UNKNOWN. Client-setup faults (bad symbol,
+    SandboxUnavailable, decryption, precision) never reached the venue → rejected."""
+    try:
+        from crypto_bridge.ccxt_engine import SandboxUnavailable
+        if isinstance(exc, SandboxUnavailable):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
     try:
         import ccxt
         if isinstance(exc, ccxt.NetworkError):
@@ -123,6 +134,8 @@ def never_left_exchange(exc: BaseException) -> bool:
             return True
     except Exception:  # noqa: BLE001
         pass
+    if isinstance(exc, SETUP_ERRORS) and not isinstance(exc, (TimeoutError, ConnectionError, OSError)):
+        return True
     return request_never_left(exc)
 
 
@@ -186,7 +199,8 @@ async def _claim_protection(db, oid) -> bool:
     res = await db.trades.update_one(
         {"_id": oid, "status": "open",
          "$or": [{"protection.status": {"$nin": [PROTECTION_PLACED, PROTECTION_NA, PROTECTION_PLACING]}},
-                 {"protection.status": PROTECTION_PLACING, "protection.at": {"$lt": lease_floor}}]},
+                 {"protection.status": PROTECTION_PLACING, "protection.at": {"$lt": lease_floor}},
+                 {"protection.status": PROTECTION_PLACING, "protection.uncertain": True}]},
         {"$set": {"protection.status": PROTECTION_PLACING, "protection.at": _now()}})
     return res.matched_count == 1
 
@@ -203,6 +217,20 @@ async def protect(db, client, *, trade_id, ccxt_symbol: str, side: str, amount: 
     if not await _claim_protection(db, oid):
         cur = await db.trades.find_one({"_id": oid}, {"protection": 1})
         return (cur or {}).get("protection") or {"status": PROTECTION_PLACING}
+    # N98-9 — never resend blind: an earlier attempt (timeout / expired lease) may have placed the list
+    try:
+        live = await client.fetch_oco_status(derived_id(cid, "-oco"))
+    except Exception as e:  # noqa: BLE001 — transport fault: UNCERTAIN, keep the lease, try next sweep
+        prot = {"status": PROTECTION_PLACING, "at": _now(), "uncertain": True,
+                "reason": f"OCO lookup failed ({type(e).__name__}) — not resent"}
+        await db.trades.update_one({"_id": oid}, {"$set": {"protection": prot}})
+        return prot
+    if live is not None:
+        prot = {"status": PROTECTION_PLACED, "at": _now(), "amount": amount, "list_id": str(live.get("orderListId") or ""),
+                "list_client_order_id": derived_id(cid, "-oco"), "tp_client_order_id": derived_id(cid, "-tp"),
+                "sl_client_order_id": derived_id(cid, "-sl"), "raw_status": live.get("listOrderStatus"), "adopted": True}
+        await db.trades.update_one({"_id": oid}, {"$set": {"protection": prot}})
+        return prot
     if amount <= 0:
         prot = {"status": PROTECTION_MISSING, "reason": "no held base amount after fees", "at": _now()}
     elif not (stop_loss and take_profit):
@@ -215,6 +243,15 @@ async def protect(db, client, *, trade_id, ccxt_symbol: str, side: str, amount: 
             prot = {"status": PROTECTION_PLACED, "at": _now(), "amount": qty, **placed}
         except Exception as e:  # noqa: BLE001
             logger.error("protection failed for %s (%s): %s", trade_id, cid, e)
+            if not never_left_exchange(e):
+                # N98-9 — a TIMEOUT may have placed the OCO: uncertain, never flatten over a live list
+                prot = {"status": PROTECTION_PLACING, "at": _now(), "uncertain": True,
+                        "reason": f"OCO outcome unknown ({type(e).__name__}) — verified by client id next sweep"}
+                await db.trades.update_one({"_id": oid}, {"$set": {"protection": prot}})
+                await _alert(db, "crypto_protection_uncertain", "warning",
+                             "Crypto OCO outcome unknown after a transport failure — will be verified by client id.",
+                             f"crypto_protection_uncertain:{oid}", {"trade_id": str(oid), "symbol": ccxt_symbol})
+                return prot
             prot = {"status": PROTECTION_MISSING, "reason": str(e)[:200], "at": _now()}
     if prot["status"] != PROTECTION_PLACED:
         prot = await _flatten_unprotected(db, client, oid, ccxt_symbol, side, amount, cid, prot)
@@ -229,6 +266,11 @@ async def protect(db, client, *, trade_id, ccxt_symbol: str, side: str, amount: 
 async def _flatten_unprotected(db, client, oid, ccxt_symbol, side, amount, cid, prot) -> dict:
     close_side = "sell" if side.lower() == "buy" else "buy"
     try:
+        prior = await client.fetch_order_by_client_id(ccxt_symbol, derived_id(cid, "-fl"))   # N98-9 — never resend
+        if prior is not None:
+            return {**prot, "status": PROTECTION_FLATTENED, "flatten_order_id": str(prior.get("id") or ""),
+                    "flatten_price": prior.get("average") or prior.get("price"), "flatten_amount": prior.get("filled"),
+                    "adopted": True}
         qty = client.amount_to_precision(ccxt_symbol, amount)
         if qty <= 0:
             raise ValueError("nothing to flatten")
@@ -251,7 +293,8 @@ def trade_from_exchange_order(intent: dict, order: dict) -> dict:
     px = float(order.get("average") or order.get("price") or 0)
     st = str(order.get("status") or "").lower()
     base = str(p.get("exchange_symbol") or "/").split("/")[0]
-    held = filled_base_amount(order, base) if st in ("closed", "filled") else 0.0
+    partial = st in ("canceled", "cancelled", "expired") and float(order.get("filled") or 0) > 0
+    held = filled_base_amount(order, base) if (st in ("closed", "filled") or partial) else 0.0
     return {"user_id": intent.get("actor"), "account_id": intent.get("account_id"),
             "signal_id": p.get("signal_id"), "symbol": p.get("symbol"), "exchange_symbol": p.get("exchange_symbol"),
             "action": "BUY" if str(p.get("side", "")).lower() == "buy" else "SELL",
@@ -259,7 +302,7 @@ def trade_from_exchange_order(intent: dict, order: dict) -> dict:
             "held_amount": held,
             "entry_price": round(px, 5), "stop_loss": p.get("stop_loss"), "take_profit": p.get("take_profit"),
             "pnl": 0.0, "exit_price": None,
-            "status": "open" if st in ("closed", "filled") else ("pending" if st == "open" else "cancelled"),
+            "status": "open" if (st in ("closed", "filled") or partial) else ("pending" if st == "open" else "cancelled"),
             "broker": "BINANCE_SPOT", "broker_kind": "binance", "source": "binance", "mt5_ticket": None,
             "exchange_order_id": str(order.get("id") or ""), "exchange_order_status": order.get("status"),
             "execution_intent_id": intent["intent_id"], "client_order_id": intent.get("client_order_id"),
@@ -307,11 +350,16 @@ async def _apply_exchange_truth(db, intent: dict, order: dict) -> tuple[str, boo
             sets.update({"status": "open", "entry_price": round(float(order.get("average") or order.get("price") or 0), 5),
                          "held_amount": filled_base_amount(order, base), "filled_at": _now()})
         elif st in ("canceled", "cancelled", "rejected", "expired") and existing.get("status") == "pending":
-            sets.update({"status": "cancelled", "closed_at": _now(), "close_reason": f"exchange_{st}"})
+            if float(order.get("filled") or 0) > 0:          # N98-10 — partial fill before cancel = open position
+                sets.update({"status": "open", "entry_price": round(float(order.get("average") or order.get("price") or 0), 5),
+                             "held_amount": filled_base_amount(order, base), "filled_at": _now(), "partial_fill": True})
+            else:
+                sets.update({"status": "cancelled", "closed_at": _now(), "close_reason": f"exchange_{st}"})
         await db.trades.update_one({"_id": tid}, {"$set": sets})
     await mark_trade_recorded(db, intent["intent_id"], tid)
     if st not in ("open",):
-        await _settle_reservation(db, intent, trade_id=tid) if st in ("closed", "filled") \
+        is_position = st in ("closed", "filled") or float(order.get("filled") or 0) > 0
+        await _settle_reservation(db, intent, trade_id=tid) if is_position \
             else await _settle_reservation(db, intent, released_reason=f"exchange_{st}")
     return st, recorded
 
@@ -378,7 +426,8 @@ async def reconcile_protection(db, client_factory) -> dict:
     async for t in db.trades.find({"broker_kind": "binance", "status": "open",
                                    "protection.status": {"$nin": list(PROTECTED_STATES)}}):
         prot = t.get("protection") or {}
-        if prot.get("status") == PROTECTION_PLACING and str(prot.get("at") or "") >= lease_floor:
+        if prot.get("status") == PROTECTION_PLACING and str(prot.get("at") or "") >= lease_floor \
+                and not prot.get("uncertain"):
             out["skipped"] += 1                      # the request path is on it
             continue
         acc = await db.accounts.find_one({"_id": ObjectId(t["account_id"])})
@@ -429,6 +478,9 @@ async def reconcile_protected_positions(db, client_factory) -> int:
             logger.warning("protected-position sweep failed for %s: %s", t["_id"], type(e).__name__)
             continue
         if leg is None:
+            # N98-10 — list finished with NO fill (cancelled/expired): the position is unprotected again
+            await db.trades.update_one({"_id": t["_id"]}, {"$set": {"protection": {
+                "status": PROTECTION_MISSING, "reason": "OCO list ended without a fill", "at": _now()}}})
             continue
         o, reason = leg
         exit_px = float(o.get("average") or o.get("price") or 0)

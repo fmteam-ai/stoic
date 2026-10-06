@@ -87,7 +87,9 @@ rollback() {
     deploy/backup.sh backup || true
     echo "-- restoring pre-update database ${PRE_BACKUP} (stack stopped; old code starts on it next)"
     if ! RESTORE_NO_START=1 deploy/backup.sh restore "${PRE_BACKUP}"; then
-      # N97-5 — never start old code on a half-restored database: leave the stack STOPPED.
+      # N97-5 / N98-7 — never start old code on a half-restored database AND never leave the
+      # new release running (restore may fail at decryption, before it stopped anything).
+      docker compose stop >/dev/null 2>&1 || true
       echo "!! database restore FAILED — stack left STOPPED. Restore manually: deploy/rollback.sh ${PREV} --with-db ${PRE_BACKUP}"
       echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-db-restore-FAILED=${PRE_BACKUP} stack-stopped" >> deploy/releases.log
       exit 1
@@ -169,6 +171,7 @@ if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 0 ]; then
   [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY}"; rollback; }
   [ -n "${RECONCILE_SCOPE}" ] || { echo "!! production requires RECONCILE_SCOPE_USER_ID (explicit tenant scope)"; rollback; }
   [ -n "$(_envval LEDGER_ANCHOR_KEY)" ] || [ -s secrets/ledger_anchor_key ] || { echo "!! production requires LEDGER_ANCHOR_KEY (dedicated evidence signing key — secrets/ledger_anchor_key or ./.env)"; rollback; }
+  [ -n "$(_envval BRIDGE_TOKEN_HASH_KEY)" ] || [ -s secrets/bridge_token_hash_key ] || { echo "!! production requires BRIDGE_TOKEN_HASH_KEY (dedicated EA token hash key — secrets/bridge_token_hash_key; generated once by ensure_release_secrets)"; rollback; }
 fi
 if [ -n "${RECONCILE_EXPECT}" ]; then
   echo "-- verifying production topology policy (${RECONCILE_EXPECT}, signed read-only reconciliation)"

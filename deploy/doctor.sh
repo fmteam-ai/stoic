@@ -125,7 +125,7 @@ if [ -f .stoic-installed ]; then ok "installer: LOCKED since $(grep '^installed_
 elif [ "$(envval backend/.env APP_ENV)" = production ]; then warn "installer: not locked — a re-run of bootstrap/install.sh would rebuild the stack (finish an install via deploy/bootstrap.sh to lock it)"; fi
 for f in .env backend/.env; do [ -f "$f" ] && ok "$f present" || fail "$f missing (run deploy/install.sh)"; done
 if [ -d secrets ]; then
-  for s in mongo_url mongo_keyfile jwt_secret key_vault_master metrics_token order_auth_secret ledger_anchor_key signer_token signer_ed25519_key signer_cert.pem signer_cert_key.pem; do
+  for s in mongo_url mongo_keyfile jwt_secret key_vault_master metrics_token order_auth_secret ledger_anchor_key bridge_token_hash_key signer_token signer_ed25519_key signer_cert.pem signer_cert_key.pem; do
     [ -s "secrets/$s" ] || fail "secrets/$s missing or empty"; done
   ok "secrets/ ($(ls secrets | wc -l) files, mode $(stat -c %a secrets))"
   [ "$(stat -c %a secrets)" = 700 ] || warn "secrets/ should be mode 700"

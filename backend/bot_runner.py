@@ -2488,6 +2488,7 @@ async def _process_user_account_locked(db, cfg: dict):
             account=target_account,
             signal={
                 "signal_id": signal_id,
+                "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
                 "decision_id": signal.get("decision_id"),
                 "latency_trace": signal.get("latency_trace"),
                 "symbol": signal["symbol"],

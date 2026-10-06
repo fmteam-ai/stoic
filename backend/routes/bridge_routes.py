@@ -72,6 +72,10 @@ async def _account_by_token(token: str) -> dict:
     acc = await bt.find_by_prev(db, token, now)
     if acc:
         await bt.alert_legacy_token_use(db, acc, "prev")        # A13-2 — no token material in the alert
+        # Q-2 (main98) — an ABANDONED installer re-run must never cut the working EA off: while the
+        # new token has never been used (installation still pending), the grace slot keeps sliding.
+        if acc.get("installation_pending"):
+            await bt.extend_prev_grace(db, acc)
         return acc
     if not acc:
         from security_agent.events import emit_throttled as _sa_emit_t
@@ -623,8 +627,12 @@ async def heartbeat(payload: BridgeHeartbeat):
                     "profit": float(p.profit or 0.0),
                 })
             # Already tracked?
+            # N98-5 — on netting the ticket is shared by several legs; a CLOSED leg must never
+            # satisfy the lookup, or the open legs keep a stale live_volume.
             existing = await db.trades.find_one({
-                "account_id": account_id, "mt5_ticket": int(p.ticket),
+                "account_id": account_id, "mt5_ticket": int(p.ticket), "status": "open",
+            }) or await db.trades.find_one({
+                "account_id": account_id, "mt5_ticket": int(p.ticket), "status": {"$ne": "open"},
             })
             if existing:
                 # iter-45 · Persist the broker-live P&L/price on the open

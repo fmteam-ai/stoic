@@ -906,14 +906,23 @@ function PPToggle({ cfg, setCfg, field, label, icon: Icon, desc, color = "#FFD70
 }
 
 function PPNumInput({ cfg, setCfg, field, label, suffix, step = 0.1, min = 0, max = 100, fallback = 0 }) {
-    // `fallback` mirrors the SERVER default for an unset field (main92 P3: empty cap = 1/symbol/day), never a misleading 0
+    // `fallback` mirrors the SERVER default for an unset field (main92 P3: empty cap = 1/symbol/day), never a misleading 0.
+    // main98 — the field keeps its EMPTY text while typing (no snap-back: clear + "2" must give 2, not 12);
+    // the server default is applied only on blur (and the saved config never carries an empty value).
+    const [draft, setDraft] = useState(null);
+    const shown = draft !== null ? draft : String(cfg[field] ?? fallback);
     return (
         <div>
             <label htmlFor={`input-${field}`} className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{label}</label>
             <div className="flex items-center bg-[#050505] border border-[#1F1F1F] focus-within:border-[#FFD700]">
-                <input type="number" step={step} min={min} max={max} value={cfg[field] ?? fallback}
-                    onChange={e => { const v = parseFloat(e.target.value); setCfg({ ...cfg, [field]: Number.isFinite(v) ? v : fallback }); }}
-                    onBlur={e => { if (e.target.value === "") setCfg({ ...cfg, [field]: fallback }); }}
+                <input type="number" step={step} min={min} max={max} value={shown}
+                    onChange={e => {
+                        const txt = e.target.value;
+                        setDraft(txt);
+                        const v = parseFloat(txt);
+                        if (Number.isFinite(v)) setCfg({ ...cfg, [field]: v });
+                    }}
+                    onBlur={e => { if (e.target.value === "") setCfg({ ...cfg, [field]: fallback }); setDraft(null); }}
                     data-testid={`input-${field}`}
                     id={`input-${field}`} name={field}
                     className="flex-1 bg-transparent px-3 py-2 text-sm font-mono outline-none" />

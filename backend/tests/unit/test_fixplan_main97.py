@@ -347,4 +347,5 @@ def test_ui_live_crypto_badge_and_empty_cap_field_keeps_server_default():
     assert "CryptoLiveBadge" in _src("frontend", "src", "pages", "Crypto.jsx")
     bot = _src("frontend", "src", "pages", "BotConfig.jsx")
     pp = bot.split("function PPNumInput(")[1].split("\n}\n")[0]
-    assert "Number.isFinite(v) ? v : fallback" in pp and 'parseFloat(e.target.value) || 0' not in pp
+    # main98 — no snap-back while typing; the server default is applied on blur only
+    assert "setDraft" in pp and 'parseFloat(e.target.value) || 0' not in pp and "[field]: fallback" in pp

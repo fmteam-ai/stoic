@@ -230,6 +230,7 @@ async def test_engine_places_market_order_and_persists_trade():
     })
     fake_client.place_oco_protection = AsyncMock(return_value={"list_id": "L1"})   # A13 P0-01
     fake_client.amount_to_precision = lambda sym, amt: float(amt)
+    fake_client.fetch_oco_status = AsyncMock(return_value=None)                    # N98-9 — look before placing
     fake_client.__aenter__ = AsyncMock(return_value=fake_client)
     fake_client.__aexit__ = AsyncMock(return_value=False)
 

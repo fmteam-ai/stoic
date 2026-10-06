@@ -22,6 +22,8 @@ x-app-common: &app-common
     METRICS_TOKEN_FILE: /run/secrets/metrics_token
     ORDER_AUTH_SECRET_FILE: /run/secrets/order_auth_secret
     LEDGER_ANCHOR_KEY_FILE: /run/secrets/ledger_anchor_key
+    # A13-2 / main98 — EA bridge tokens are HMAC-hashed under their OWN key (never JWT_SECRET)
+    BRIDGE_TOKEN_HASH_KEY_FILE: /run/secrets/bridge_token_hash_key
     # Release signing: the private key lives ONLY in the signer sidecar. The
     # API presents a bearer token over TLS (self-signed cert pinned via CA bundle).
     RELEASE_SIGNER_TOKEN_FILE: /run/secrets/signer_token
@@ -37,6 +39,7 @@ x-app-common: &app-common
     - metrics_token
     - order_auth_secret
     - ledger_anchor_key
+    - bridge_token_hash_key
     - signer_token
     - signer_cert
   depends_on:
@@ -146,6 +149,7 @@ services:
       - metrics_token
       - order_auth_secret
       - ledger_anchor_key
+      - bridge_token_hash_key
       - signer_token
       - security_telegram_token
 
@@ -199,6 +203,8 @@ secrets:
     file: ./secrets/order_auth_secret
   ledger_anchor_key:
     file: ./secrets/ledger_anchor_key
+  bridge_token_hash_key:
+    file: ./secrets/bridge_token_hash_key
   signer_token:
     file: ./secrets/signer_token
   signer_ed25519_key:

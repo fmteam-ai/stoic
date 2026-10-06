@@ -164,7 +164,7 @@ def test_engine_order_path_is_intent_first_with_client_id_and_protection():
     assert "count_documents" not in src                               # caps come from the reservation
     from crypto_bridge.ccxt_engine import CCXTClient
     assert "clientOrderId" in inspect.getsource(CCXTClient.create_market_order)
-    assert "privatePostOrderOco" in inspect.getsource(CCXTClient.place_oco_protection)
+    assert "privatePostOrderlistOco" in inspect.getsource(CCXTClient.place_oco_protection)   # N98-10 current endpoint
     import background_loops
     assert "reconcile_all" in inspect.getsource(background_loops._scalp_reconcile_loop)
 

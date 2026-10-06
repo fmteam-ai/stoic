@@ -80,6 +80,10 @@ class BinanceCCXTEngine(ExecutionEngine):
             return {"blocked": "testnet_unavailable",
                     "reason": f"{account.get('exchange_id') or 'exchange'} has no sandbox — a testnet account "
                               "cannot trade here (would hit live endpoints). Remove it or connect it as LIVE."}
+        # N98-10 — spot has no short side: a SELL "entry" would sell the user's other coins. Refuse.
+        if str(signal.get("action", "")).upper() == "SELL" and not account.get("futures"):
+            return {"blocked": "spot_sell_entry_refused",
+                    "reason": "spot accounts cannot open SELL positions — only BUY entries are accepted"}
         # A13-1 (P0-01 step 1) — operator kill switch: with live crypto OFF every non-testnet
         # order is refused HERE, before any exchange call. Default off.
         from crypto_bridge.ccxt_engine import _live_enabled, _wants_live

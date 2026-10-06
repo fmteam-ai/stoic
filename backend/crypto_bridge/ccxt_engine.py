@@ -224,6 +224,8 @@ class CCXTClient:
 
     async def __aenter__(self) -> "CCXTClient":
         self.exchange = _new_exchange(self.account)
+        # N98-8 — market() / amount_to_precision() need the market table on a FRESH client
+        await self.exchange.load_markets()
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
@@ -279,34 +281,39 @@ class CCXTClient:
         """Exchange-side SL/TP as ONE OCO list on the opposite side (Binance spot).
         Other venues have no uniform OCO → raise so the caller fails closed."""
         eid = (self.account.get("exchange_id") or DEFAULT_EXCHANGE_ID).lower()
-        if eid != "binance" or not hasattr(self.exchange, "privatePostOrderOco"):
+        if eid != "binance" or not hasattr(self.exchange, "privatePostOrderlistOco"):
             raise RuntimeError(f"{eid}: exchange-side OCO protection unsupported")
         market = self.exchange.market(symbol)
         close_side = "SELL" if position_side.lower() == "buy" else "BUY"
         stop_limit = stop_loss * (0.998 if close_side == "SELL" else 1.002)
-        params = {
-            "symbol": market["id"], "side": close_side,
-            "quantity": self.exchange.amount_to_precision(symbol, amount),
-            "price": self.exchange.price_to_precision(symbol, take_profit),
-            "stopPrice": self.exchange.price_to_precision(symbol, stop_loss),
-            "stopLimitPrice": self.exchange.price_to_precision(symbol, stop_limit),
-            "stopLimitTimeInForce": "GTC",
-            "listClientOrderId": f"{client_order_id}-oco",
-            "limitClientOrderId": f"{client_order_id}-tp",
-            "stopClientOrderId": f"{client_order_id}-sl",
-        }
-        resp = await self.exchange.privatePostOrderOco(params)
+        # N98-10 — current endpoint POST /api/v3/orderList/oco (the /order/oco form is deprecated).
+        # For a SELL list: above = take-profit LIMIT_MAKER, below = STOP_LOSS_LIMIT; mirrored for BUY.
+        tp_leg = {"Type": "LIMIT_MAKER", "Price": self.exchange.price_to_precision(symbol, take_profit),
+                  "ClientOrderId": f"{client_order_id}-tp"}
+        sl_leg = {"Type": "STOP_LOSS_LIMIT", "StopPrice": self.exchange.price_to_precision(symbol, stop_loss),
+                  "Price": self.exchange.price_to_precision(symbol, stop_limit), "TimeInForce": "GTC",
+                  "ClientOrderId": f"{client_order_id}-sl"}
+        above, below = (tp_leg, sl_leg) if close_side == "SELL" else (sl_leg, tp_leg)
+        params = {"symbol": market["id"], "side": close_side,
+                  "quantity": self.exchange.amount_to_precision(symbol, amount),
+                  "listClientOrderId": f"{client_order_id}-oco"}
+        params.update({f"above{k}": v for k, v in above.items()})
+        params.update({f"below{k}": v for k, v in below.items()})
+        resp = await self.exchange.privatePostOrderlistOco(params)
         return {"list_id": str(resp.get("orderListId") or ""), "list_client_order_id": params["listClientOrderId"],
-                "tp_client_order_id": params["limitClientOrderId"], "sl_client_order_id": params["stopClientOrderId"],
+                "tp_client_order_id": f"{client_order_id}-tp", "sl_client_order_id": f"{client_order_id}-sl",
                 "raw_status": resp.get("listOrderStatus")}
 
     async def fetch_oco_status(self, list_client_order_id: str) -> dict | None:
-        if not hasattr(self.exchange, "privateGetOrderList"):
+        """None = the list does not exist at the exchange; raises on transport errors (uncertain)."""
+        if not hasattr(self.exchange, "privateGetOrderlist"):
             return None
         try:
-            return await self.exchange.privateGetOrderList({"origClientOrderId": list_client_order_id})
-        except Exception:  # noqa: BLE001
-            return None
+            return await self.exchange.privateGetOrderlist({"origClientOrderId": list_client_order_id})
+        except Exception as e:  # noqa: BLE001
+            if "does not exist" in str(e).lower() or "-2018" in str(e) or "OrderNotFound" in type(e).__name__:
+                return None
+            raise
 
 
 # Backwards-compat alias — old code calls BinanceClient(account).

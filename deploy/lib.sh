@@ -40,14 +40,15 @@ app_env() {
 
 # Docker secrets introduced by later releases — generated when missing so an
 # existing install upgrades without manual steps (install.sh + update.sh).
-#   order_auth_secret / ledger_anchor_key : signing keys distinct from JWT (boot rule)
+#   order_auth_secret / ledger_anchor_key / bridge_token_hash_key : keys distinct from JWT (boot rule)
 #   secrets_master_key                    : dedicated integrations-vault key (audit r28 P2-02);
 #                                           legacy JWT-derived records are migrated at boot
 ensure_release_secrets() {
   [ -d secrets ] || return 0
   local f
   # create with mode 0600 from the start (no umask window), regenerate zero-byte leftovers
-  for f in order_auth_secret ledger_anchor_key; do
+  # main98 — bridge_token_hash_key: generated ONCE, never regenerated (changing it un-pairs every EA)
+  for f in order_auth_secret ledger_anchor_key bridge_token_hash_key; do
     [ -s "secrets/${f}" ] || { (umask 077; python3 -c "import secrets;print(secrets.token_urlsafe(32))" > "secrets/${f}"); echo "   generated ${f}"; }
   done
   [ -s secrets/secrets_master_key ] || {
@@ -58,7 +59,7 @@ ensure_release_secrets() {
   # on hosts installed before the secret was introduced (update.sh path). Empty placeholder:
   # the operator pastes the BotFather token to enable security alerts.
   [ -f secrets/security_telegram_token ] || { (umask 077; : > secrets/security_telegram_token); echo "   created empty security_telegram_token (paste the BotFather token to enable security alerts)"; }
-  chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/secrets_master_key secrets/security_telegram_token
+  chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/bridge_token_hash_key secrets/secrets_master_key secrets/security_telegram_token
 }
 
 # After a failed `compose up`, an app container CREATED BY THIS PASS that exited

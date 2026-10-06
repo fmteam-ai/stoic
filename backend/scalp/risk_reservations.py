@@ -133,6 +133,9 @@ async def sweep_stale(db, older_than_sec: int = STALE_TTL_SEC) -> dict:
             {"state": {"$in": list(ACTIVE_STATES)},
              "updated_at": {"$lt": cutoff}}):
         reason = None
+        if r.get("uncertain"):
+            kept += 1                          # N98-10 — exchange outcome UNKNOWN: only broker truth settles it
+            continue
         if not r.get("trade_id"):
             reason = "expired"
         else:

@@ -1722,9 +1722,9 @@ class ScalpRunner:
                 db, account_id=self.account_id, user_id=self.user_id, source="scalp",
                 decision_id=decision["decision_id"],
                 risk_usd=fc.stop_pips * _pv_strict(self.symbol) * final_lot,
-                lot=final_lot, symbol=self.symbol, origin="auto",
+                lot=final_lot, symbol=self.symbol, origin="scalp",
                 caps=await _ar.caps_for(db, user_id=self.user_id, cfg_account_id=self.account_id,
-                                        max_concurrent=None))
+                                        max_concurrent=None, origin="scalp"))
         except Exception:
             # review item 8 — the DB refused: fail closed, free the slot.
             await release_broker_submission_slot(db, slot)
@@ -1758,7 +1758,7 @@ class ScalpRunner:
                         "entry_price": round_to_tick(entry, tick),
                         "stop_loss": round_to_tick(sl, tick),
                         "take_profit": round_to_tick(tp, tick),
-                        "origin": "auto", "scope": "scalp_fast",
+                        "origin": "scalp", "scope": "scalp_fast",            # N98-3 — own counter
                         "_reservation_id": _resv["reservation_id"],
                         "scalp_decision_id": decision["decision_id"],
                         "scalp_lease_epoch": lease_epoch,

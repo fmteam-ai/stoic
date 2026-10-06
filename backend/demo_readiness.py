@@ -248,7 +248,7 @@ async def set_manual(db, cid: str, checked: bool, actor: str) -> dict:
                                        "detail": {"step": cid, "checked": bool(checked), "actor": actor,
                                                   "build_sha": ctx["build_sha"], "environment": ctx["environment"],
                                                   "expires_at": expires},
-                                       "step_up_verified": False, "at": now})
+                                       "step_up_verified": True, "at": now})   # N98 — endpoint enforces step-up
     except Exception as e:  # noqa: BLE001 — audit r31 P3: never silent, surface as an ops alert
         logger.error("demo_readiness audit write failed (%s) step=%s actor=%s", type(e).__name__, cid, actor)
         try:
