@@ -509,7 +509,7 @@ class TestInventoryTwoAdmin:
                "accounts": 4, "enabled": 4, "bots": 4, "account_ids": list("abcd"), "reason": "four live desks approved",
                "issuer": "release-ops", "issued_at": now.isoformat(), "expires_at": (now + timedelta(hours=1)).isoformat(),
                "nonce": uuid.uuid4().hex}
-        mig["signature_hex"] = sign_hex(ip.migration_body(mig))
+        mig["signature_hex"] = sign_hex(ip.migration_body(mig), purpose="policy-migration")
         payload = {"accounts": 4, "enabled": 4, "bots": 4, "account_ids": list("abcd"), "policy_migration": mig}
         assert ip.migration_problems(payload, current_policy_version=ip.DEPLOYMENT_POLICY_VERSION) == []
         assert ip.migration_problems(payload, current_policy_version="4/4/4-v2")           # wrong previous version

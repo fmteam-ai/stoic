@@ -302,7 +302,7 @@ def test_release_gate_blocks_non_authoritative_release_in_production():
         assert d["level"] == "CLOSE_ONLY" and d["code"] == "RELEASE_NOT_AUTHORITATIVE"
     with patch.dict(os.environ, {"APP_ENV": "preview"}):
         assert run(ta.release_gate_domain(FakeDb()))["level"] == "FULL"
-    assert ta.DOMAIN_SCOPE["release_gate"] == "platform_global" and ta.DOMAIN_SCOPE["acceptance"] == "account_bound"
+    assert ta.DOMAIN_SCOPE["release_gate"] == "account_bound" and ta.DOMAIN_SCOPE["acceptance"] == "account_bound"   # N101-2
     import deploy_preflight
     assert '"release_gate"' in inspect.getsource(deploy_preflight.run_preflight)
     summary = open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts", "generate_release_summary.py"), encoding="utf-8").read()

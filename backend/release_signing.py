@@ -25,8 +25,25 @@ from app_env import removable_secret
 
 logger = logging.getLogger("release_signing")
 
-KEY_ID = "stoic-release-ed25519-v1"
+KEY_ID = "stoic-release-ed25519-v1"          # CI release key: EA records, model manifests, policy migrations
+BUNDLE_KEY_ID = "stoic-bundle-ed25519-v1"    # N101-5 — runtime (sidecar) key: bundles, anchors, artifact manifests
 DEFAULT_TIMEOUT = 10.0
+
+# N100-11 — domain separation. Every signature is over `<domain>\0<data>`, so a signature minted
+# for one purpose can never verify as another, and the signer enforces WHICH token may request
+# WHICH purpose: the API only ever holds the bundle token, CI holds the release token.
+PURPOSES = {
+    "ea-release":        b"stoic:ea-release:v1\0",        # CI only (release token)
+    "model-manifest":    b"stoic:model-manifest:v1\0",    # CI only (release token)
+    "policy-migration":  b"stoic:policy-migration:v1\0",  # operator/CI (release token) — inventory policy transitions
+    "acceptance-bundle": b"stoic:acceptance-bundle:v1\0", # API (bundle token)
+    "artifact-manifest": b"stoic:artifact-manifest:v1\0", # API (bundle token) — N101-5 EA/agent artifact manifests
+    "audit-anchor":      b"stoic:audit-anchor:v1\0",      # API
+    "differentiation":   b"stoic:differentiation:v1\0",   # API
+    "canary":            b"stoic:canary:v1\0",            # API (chaos drill round-trip)
+}
+RELEASE_PURPOSES = {"ea-release", "model-manifest", "policy-migration"}
+API_PURPOSES = set(PURPOSES) - RELEASE_PURPOSES   # what a running trading API may ask the signer for
 
 
 class SignerDeferred(RuntimeError):
@@ -76,9 +93,20 @@ def _b64_key_ok(b64: str, length: int = 32) -> bool:
         return False
 
 
-def key_id(env=None) -> str:
+def key_id(env=None, purpose: str = "ea-release") -> str:
+    """Key id that must sign `purpose`: runtime purposes use the bundle key (BUNDLE_SIGNER_KEY_ID),
+    release purposes the CI release key. A single-key install leaves BUNDLE_* unset (same key)."""
     env = env if env is not None else os.environ
+    if purpose in API_PURPOSES and (env.get("BUNDLE_SIGNER_KEY_ID") or "").strip():
+        return env["BUNDLE_SIGNER_KEY_ID"].strip()
     return (env.get("RELEASE_SIGNER_KEY_ID") or KEY_ID).strip()
+
+
+def _pinned_pub(env, purpose: str) -> str:
+    """Pinned public key for `purpose` (N101-5: the CI release key and the runtime bundle key are pinned separately)."""
+    if purpose in API_PURPOSES and (env.get("BUNDLE_PUBLIC_KEY_B64") or "").strip():
+        return env["BUNDLE_PUBLIC_KEY_B64"].strip()
+    return (env.get("RELEASE_PUBLIC_KEY_B64") or "").strip()
 
 
 def _tls_verify(env):
@@ -148,11 +176,14 @@ def signer_config_violations(env) -> list[str]:
                 v.append("RELEASE_SIGNER_ALLOWED_HOSTS is required in production (comma list of permitted signer hosts).")
         elif (p.hostname or "").lower() not in allowed:
             v.append(f"RELEASE_SIGNER_URL host {p.hostname!r} is not in RELEASE_SIGNER_ALLOWED_HOSTS.")
-    if not (env.get("RELEASE_SIGNER_TOKEN") or "").strip():
-        v.append("RELEASE_SIGNER=external requires RELEASE_SIGNER_TOKEN (credential reference; *_FILE supported).")
+    if not ((env.get("RELEASE_SIGNER_TOKEN") or "").strip() or (env.get("RELEASE_SIGNER_BUNDLE_TOKEN") or "").strip()):
+        v.append("RELEASE_SIGNER=external requires RELEASE_SIGNER_BUNDLE_TOKEN (API host) or RELEASE_SIGNER_TOKEN (CI only); *_FILE supported.")
     pinned = (env.get("RELEASE_PUBLIC_KEY_B64") or "").strip()
     if not _b64_key_ok(pinned):
         v.append("RELEASE_SIGNER=external requires a pinned, valid RELEASE_PUBLIC_KEY_B64 (base64 of 32 raw bytes).")
+    bpinned = (env.get("BUNDLE_PUBLIC_KEY_B64") or "").strip()
+    if bpinned and not _b64_key_ok(bpinned):
+        v.append("BUNDLE_PUBLIC_KEY_B64 is set but is not a valid Ed25519 public key (base64 of 32 raw bytes).")
     if not (env.get("RELEASE_SIGNER_KEY_ID") or "").strip():
         v.append("RELEASE_SIGNER=external requires RELEASE_SIGNER_KEY_ID.")
     if _timeout(env) is None:
@@ -175,21 +206,6 @@ def _private_key() -> Ed25519PrivateKey:
     return Ed25519PrivateKey.from_private_bytes(base64.b64decode(b64))
 
 
-# N100-11 — domain separation. Every signature is over `<domain>\0<data>`, so a signature minted
-# for one purpose can never verify as another, and the signer enforces WHICH token may request
-# WHICH purpose: the API only ever holds the acceptance-bundle token, CI holds the release token.
-PURPOSES = {
-    "ea-release":        b"stoic:ea-release:v1\0",        # CI only (release token)
-    "model-manifest":    b"stoic:model-manifest:v1\0",    # CI only (release token)
-    "acceptance-bundle": b"stoic:acceptance-bundle:v1\0", # API (bundle token)
-    "audit-anchor":      b"stoic:audit-anchor:v1\0",      # API
-    "differentiation":   b"stoic:differentiation:v1\0",   # API
-    "canary":            b"stoic:canary:v1\0",            # API (chaos drill round-trip)
-}
-RELEASE_PURPOSES = {"ea-release", "model-manifest"}
-API_PURPOSES = set(PURPOSES) - RELEASE_PURPOSES   # what a running trading API may ask the signer for
-
-
 def domain_bytes(purpose, data: bytes) -> bytes:
     if purpose is None:            # raw/legacy: externally produced signatures (broker statements) and pre-N100-11 anchors
         return data
@@ -200,18 +216,27 @@ def domain_bytes(purpose, data: bytes) -> bytes:
 
 
 def _token_for(purpose: str, env) -> str:
-    """Per-purpose bearer tokens: the bundle token lives on the API host, the release token only in CI.
-    RELEASE_SIGNER_BUNDLE_TOKEN(_FILE) falls back to RELEASE_SIGNER_TOKEN for single-token installs."""
-    if purpose in API_PURPOSES and (env.get("RELEASE_SIGNER_BUNDLE_TOKEN") or "").strip():
-        return env["RELEASE_SIGNER_BUNDLE_TOKEN"].strip()
-    return env["RELEASE_SIGNER_TOKEN"].strip()
+    """Per-purpose bearer tokens, no fallback (N101-5): runtime purposes need the bundle token the API
+    holds; release purposes need the CI release token. A missing token fails closed."""
+    if purpose in API_PURPOSES:
+        tok = (env.get("RELEASE_SIGNER_BUNDLE_TOKEN") or "").strip()
+        if not tok:
+            raise RuntimeError(f"runtime purpose {purpose!r} requires RELEASE_SIGNER_BUNDLE_TOKEN — "
+                               "the release token never signs runtime artefacts")
+        return tok
+    tok = (env.get("RELEASE_SIGNER_TOKEN") or "").strip()
+    if not tok:
+        raise RuntimeError(f"release purpose {purpose!r} requires RELEASE_SIGNER_TOKEN (CI only)")
+    return tok
 
 
-def sign_hex(data: bytes, purpose: str = "ea-release") -> str:
-    """Sign `data` (domain-prefixed by `purpose`) → hex Ed25519 signature via the configured backend.
+def sign_hex(data: bytes, purpose: str) -> str:
+    """Sign `data` (domain-prefixed by `purpose`, REQUIRED) → hex Ed25519 signature via the configured backend.
     Refuses to sign with an incoherent configuration (same validator as boot)."""
     env = os.environ
     msg = domain_bytes(purpose, data)
+    if purpose is None:
+        raise ValueError("signing purpose is required")
     if _mode(env) == "deferred":
         raise SignerDeferred(DEFERRED_MESSAGE)
     if _mode(env) == "external":
@@ -227,15 +252,19 @@ def signer_status() -> dict:
     env = os.environ
     return {"mode": _mode(env),
             "deferred": _mode(env) == "deferred",
-            "external_configured": bool(env.get("RELEASE_SIGNER_URL") and env.get("RELEASE_SIGNER_TOKEN")),
+            "external_configured": bool(env.get("RELEASE_SIGNER_URL")
+                                        and (env.get("RELEASE_SIGNER_BUNDLE_TOKEN") or env.get("RELEASE_SIGNER_TOKEN"))),
             "public_key_pinned": bool(env.get("RELEASE_PUBLIC_KEY_B64")),
+            "bundle_key_pinned": bool(env.get("BUNDLE_PUBLIC_KEY_B64")),
             "key_id": key_id(env),
+            "bundle_key_id": key_id(env, "acceptance-bundle"),
+            "release_token_present": bool(removable_secret(env, "RELEASE_SIGNER_TOKEN")),
             "config_violations": len(signer_config_violations(env))}
 
 
-def _external_sign(data: bytes, purpose: str = "ea-release") -> str:
+def _external_sign(data: bytes, purpose: str) -> str:
     """POST {url}/sign  Authorization: Bearer <token>
-    body {"key_id", "data_hex"} → {"signature_hex", "key_id"}. Fail closed on
+    body {"key_id", "data_hex", "purpose"} → {"signature_hex", "key_id"}. Fail closed on
     any config, transport, shape, key-id or signature-verification problem."""
     import requests
     env = os.environ
@@ -243,7 +272,7 @@ def _external_sign(data: bytes, purpose: str = "ea-release") -> str:
     if viol:
         raise RuntimeError("external signer configuration invalid: " + viol[0])
     url = env["RELEASE_SIGNER_URL"].strip().rstrip("/")
-    kid = key_id(env)
+    kid = key_id(env, purpose)
     try:
         r = requests.post(f"{url}/sign", json={"key_id": kid, "data_hex": data.hex(), "purpose": purpose},
                           headers={"Authorization": f"Bearer {_token_for(purpose, env)}"},
@@ -261,17 +290,19 @@ def _external_sign(data: bytes, purpose: str = "ea-release") -> str:
     sig = body.get("signature_hex")
     if not isinstance(sig, str) or len(sig) != 128:
         raise RuntimeError("external signer returned no/invalid signature_hex")
-    if not verify_hex(data, sig, env["RELEASE_PUBLIC_KEY_B64"].strip(), purpose=purpose):
+    if not verify_hex(data, sig, _pinned_pub(env, purpose), purpose=purpose):
         raise RuntimeError("external signer signature failed local verification against the pinned public key")
     return sig
 
 
 def signer_health(env=None) -> dict:
     """Non-signing connectivity/identity check: GET {url}/health must answer
-    {ok:true, key_id, public_key_b64} matching the pinned identity."""
+    {ok:true, key_id, public_key_b64} matching the pinned identity of the key THIS host talks to
+    (the bundle key when the host holds the bundle token, else the CI release key)."""
     import requests
     env = env if env is not None else os.environ
-    out = {"mode": _mode(env), "ok": False, "key_id": key_id(env)}
+    purpose = "acceptance-bundle" if (env.get("RELEASE_SIGNER_BUNDLE_TOKEN") or "").strip() else "ea-release"
+    out = {"mode": _mode(env), "ok": False, "key_id": key_id(env, purpose)}
     viol = signer_config_violations(env)
     if viol:
         out["error"] = viol[0]
@@ -284,7 +315,7 @@ def signer_health(env=None) -> dict:
         return out
     try:
         r = requests.get(f"{env['RELEASE_SIGNER_URL'].strip().rstrip('/')}/health",
-                         headers={"Authorization": f"Bearer {env['RELEASE_SIGNER_TOKEN'].strip()}"},
+                         headers={"Authorization": f"Bearer {_token_for(purpose, env)}"},
                          timeout=_timeout(env), verify=_tls_verify(env))
         r.raise_for_status()
         body = r.json()
@@ -292,18 +323,18 @@ def signer_health(env=None) -> dict:
         out["error"] = f"signer unreachable/malformed: {type(e).__name__}"
         return out
     out["remote_key_id"] = body.get("key_id")
-    out["identity_matches"] = (body.get("key_id") == key_id(env)
-                               and (body.get("public_key_b64") or "").strip() == env["RELEASE_PUBLIC_KEY_B64"].strip())
+    out["identity_matches"] = (body.get("key_id") == key_id(env, purpose)
+                               and (body.get("public_key_b64") or "").strip() == _pinned_pub(env, purpose))
     out["ok"] = bool(body.get("ok")) and out["identity_matches"]
     if not out["ok"]:
         out["error"] = "signer identity mismatch" if not out["identity_matches"] else "signer reports not ok"
     return out
 
 
-def public_key_b64() -> str:
-    pinned = os.environ.get("RELEASE_PUBLIC_KEY_B64")
+def public_key_b64(purpose: str = "ea-release") -> str:
+    pinned = _pinned_pub(os.environ, purpose)
     if pinned:
-        return pinned.strip()
+        return pinned
     if _mode(os.environ) == "deferred":
         raise SignerDeferred(DEFERRED_MESSAGE)
     pub = _private_key().public_key().public_bytes(
@@ -315,16 +346,17 @@ def revoked_key_ids() -> set:
     return {k.strip() for k in (os.environ.get("RELEASE_REVOKED_KEY_IDS") or "").split(",") if k.strip()}
 
 
-def key_id_accepted(kid) -> bool:
-    """A14-7 — a signature only counts under the CURRENT, un-revoked key id."""
-    return bool(kid) and kid == key_id() and kid not in revoked_key_ids()
+def key_id_accepted(kid, purpose: str = "ea-release") -> bool:
+    """A14-7 — a signature only counts under the CURRENT, un-revoked key id for its purpose."""
+    return bool(kid) and kid == key_id(purpose=purpose) and kid not in revoked_key_ids()
 
 
 def verify_hex(data: bytes, signature_hex: str,
-               pub_b64: str | None = None, purpose: str = "ea-release") -> bool:
+               pub_b64: str | None = None, *, purpose) -> bool:
+    """`purpose` is REQUIRED (N101-5): None = raw/legacy externally produced signatures only."""
     try:
         pub = Ed25519PublicKey.from_public_bytes(
-            base64.b64decode(pub_b64 or public_key_b64()))
+            base64.b64decode(pub_b64 or public_key_b64(purpose or "ea-release")))
         pub.verify(bytes.fromhex(signature_hex), domain_bytes(purpose, data))
         return True
     except Exception:  # noqa: BLE001

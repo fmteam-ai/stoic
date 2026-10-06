@@ -41,9 +41,9 @@ async def create_anchor(db) -> dict | None:
         return existing
     body = {"seq": head["seq"], "entry_hash": head["entry_hash"],
             "collection": CHAIN_COLLECTION, "anchored_at": _now().isoformat()}
-    from release_signing import KEY_ID, public_key_b64, sign_hex
+    from release_signing import key_id, public_key_b64, sign_hex
     doc = {**body, "signature": sign_hex(_canon(body).encode(), purpose="audit-anchor"),
-           "key_id": KEY_ID, "public_key_b64": public_key_b64()}
+           "key_id": key_id(purpose="audit-anchor"), "public_key_b64": public_key_b64("audit-anchor")}
     await db.audit_anchors.insert_one(dict(doc))
     await _push_external(doc)
     logger.info("audit anchor created at seq=%s", head["seq"])

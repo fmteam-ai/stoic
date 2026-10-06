@@ -33,7 +33,7 @@ def test_domain_prefix_makes_purposes_mutually_unverifiable():
         assert not rs.verify_hex(b"payload", sig, purpose="model-manifest")
         with pytest.raises(ValueError):
             rs.sign_hex(b"x", purpose="made-up")
-    assert rs.RELEASE_PURPOSES == {"ea-release", "model-manifest"} and "acceptance-bundle" in rs.API_PURPOSES
+    assert rs.RELEASE_PURPOSES == {"ea-release", "model-manifest", "policy-migration"} and "acceptance-bundle" in rs.API_PURPOSES
 
 
 def test_api_uses_bundle_token_for_runtime_purposes_and_release_token_only_for_release():
@@ -41,7 +41,8 @@ def test_api_uses_bundle_token_for_runtime_purposes_and_release_token_only_for_r
     env = {"RELEASE_SIGNER_TOKEN": "rel", "RELEASE_SIGNER_BUNDLE_TOKEN": "bun"}
     assert rs._token_for("acceptance-bundle", env) == "bun" and rs._token_for("audit-anchor", env) == "bun"
     assert rs._token_for("ea-release", env) == "rel"
-    assert rs._token_for("acceptance-bundle", {"RELEASE_SIGNER_TOKEN": "rel"}) == "rel"   # single-token install
+    with pytest.raises(RuntimeError):      # N101-5 — no single-token fallback
+        rs._token_for("acceptance-bundle", {"RELEASE_SIGNER_TOKEN": "rel"})
 
 
 def test_signer_sidecar_refuses_release_purposes_with_the_bundle_token(tmp_path):

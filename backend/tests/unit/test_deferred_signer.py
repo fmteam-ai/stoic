@@ -33,7 +33,7 @@ def test_deferred_never_signs_and_gates_live_exposure(monkeypatch):
     monkeypatch.delenv("RELEASE_PUBLIC_KEY_B64", raising=False)
     import release_signing as rs
     with pytest.raises(rs.SignerDeferred):
-        rs.sign_hex(b"anything")
+        rs.sign_hex(b"anything", purpose="ea-release")
     with pytest.raises(rs.SignerDeferred):
         rs.public_key_b64()
     assert rs.deferred_gate()["code"] == "RELEASE_SIGNER_DEFERRED"

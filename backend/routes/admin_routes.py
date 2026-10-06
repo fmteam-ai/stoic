@@ -177,11 +177,31 @@ async def admin_acceptance_list(user=Depends(get_current_user)):
 
 @router.get("/admin/release-gate")
 async def admin_release_gate(user=Depends(get_current_user)):
-    """A13 P0-02 — authoritative lock / digest / signed EX5 check for the running process."""
+    """A13 P0-02 — authoritative lock / digest / signed EX5 check for the running process.
+    N101-2 — plus the per-account verdict: attested DEMO accounts trade before an authoritative
+    release, LIVE accounts stay close-only until it is installed."""
     _admin_only(user)
     from release_gate import evaluate
     from app_env import is_production
-    return {"enforced": is_production(), **evaluate()}
+    from broker_env import attested_environment
+    r = evaluate()
+    enforced = is_production()
+    accounts = []
+    async for acc in get_db().accounts.find({"mode": {"$ne": "paper"}, "trading_enabled": True,
+                                             "status": {"$ne": "deleted"}},
+                                            {"label": 1, "display_name": 1, "broker": 1, "environment_attestation": 1,
+                                             "server": 1, "broker_server": 1, "account_number": 1, "account_type": 1,
+                                             "ea_identity": 1, "broker_account_id_reported": 1, "broker_environment": 1,
+                                             "mode": 1}).limit(50):
+        env = attested_environment(acc)
+        allowed = (not enforced) or env == "DEMO" or r["ok"]
+        reason = ("release gate enforced in production only" if not enforced
+                  else "attested DEMO — release gate applies to real money" if env == "DEMO"
+                  else "authoritative release" if r["ok"]
+                  else "blocked — release not authoritative")
+        accounts.append({"account_id": str(acc["_id"]), "label": acc.get("display_name") or acc.get("label") or acc.get("broker"),
+                         "environment": env, "allowed": allowed, "reason": reason})
+    return {"enforced": enforced, **r, "accounts": accounts}
 
 
 @router.get("/admin/runbooks")

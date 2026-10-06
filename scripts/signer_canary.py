@@ -40,13 +40,15 @@ def run(require_external: bool) -> dict:
         rec["error"] = health.get("error", "health check failed")
         return rec
     nonce = b"stoic-signer-canary:" + secrets.token_bytes(32)
+    # N101-5 — the CI canary holds the RELEASE token, so it must ask for a release purpose
+    purpose = "ea-release"
     try:
-        sig = rs.sign_hex(nonce)
+        sig = rs.sign_hex(nonce, purpose=purpose)
     except Exception as e:  # noqa: BLE001
         rec["error"] = f"sign failed: {e}"
         return rec
-    ok = rs.verify_hex(nonce, sig, env["RELEASE_PUBLIC_KEY_B64"].strip())
-    wrong = rs.verify_hex(nonce + b"x", sig, env["RELEASE_PUBLIC_KEY_B64"].strip())
+    ok = rs.verify_hex(nonce, sig, env["RELEASE_PUBLIC_KEY_B64"].strip(), purpose=purpose)
+    wrong = rs.verify_hex(nonce + b"x", sig, env["RELEASE_PUBLIC_KEY_B64"].strip(), purpose=purpose)
     rec.update(nonce_sha256=__import__("hashlib").sha256(nonce).hexdigest(), signature_verified=ok,
                tamper_rejected=not wrong, result="PASS" if ok and not wrong else "FAIL")
     if rec["result"] != "PASS":

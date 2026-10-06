@@ -292,15 +292,22 @@ else
 fi
 
 # 2b · release signing → external sidecar (every mode). The API env must NOT
-# hold the private key; the sidecar's public key is pinned here.
+# hold the private key. N101-5: the sidecar is the RUNTIME (bundle) key with its own id;
+# the CI release key (EA records, model manifests) is pinned separately as RELEASE_PUBLIC_KEY_B64 —
+# until the operator pastes it, the sidecar key stands in so the validator stays coherent.
 set_kv backend/.env RELEASE_SIGNER external
 set_kv backend/.env RELEASE_SIGNER_URL https://signer:9443
 set_kv backend/.env RELEASE_SIGNER_ALLOWED_HOSTS signer
 set_kv backend/.env RELEASE_SIGNER_KEY_ID stoic-release-ed25519-v1
 set_kv backend/.env RELEASE_SIGNER_TIMEOUT 10
-set_kv backend/.env RELEASE_PUBLIC_KEY_B64 "${SIGNER_PUB_B64}"
+grep -q "^RELEASE_PUBLIC_KEY_B64=." backend/.env || set_kv backend/.env RELEASE_PUBLIC_KEY_B64 "${SIGNER_PUB_B64}"
+set_kv backend/.env BUNDLE_SIGNER_KEY_ID stoic-bundle-ed25519-v1
+set_kv backend/.env BUNDLE_PUBLIC_KEY_B64 "${SIGNER_PUB_B64}"
+set_kv .env SIGNER_KEY_ID stoic-bundle-ed25519-v1
 set_kv backend/.env RELEASE_SIGNER_DEFERRED false
 sed -i '/^ED25519_SIGNING_KEY_B64=/d; /^RELEASE_SIGNER_TOKEN=/d; /^RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD=/d' backend/.env
+echo "   signer: runtime key stoic-bundle-ed25519-v1 pinned (BUNDLE_PUBLIC_KEY_B64). Set RELEASE_PUBLIC_KEY_B64 to the CI release key (docs/RELEASE_SIGNER.md) so CI-signed EA records verify here."
+ensure_backup_passphrase
 # test-only bypass secrets never exist on a server install
 sed -i '/^STEP_UP_BYPASS_TOKEN=/d; /^RATE_LIMIT_BYPASS_TOKEN=/d' backend/.env
 

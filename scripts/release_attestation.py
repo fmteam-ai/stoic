@@ -215,7 +215,9 @@ def cmd_fetch(a) -> int:
     os.makedirs(a.dest, exist_ok=True)
     for name in ("release-attestation.json", "release-attestation.json.sig",
                  "release-attestation.json.pem", "release-attestation.json.bundle",
-                 "release-admission.json", "release-admission.json.sig", "release-admission.json.pem"):
+                 "release-admission.json", "release-admission.json.sig", "release-admission.json.pem",
+                 # N101-1 — the authoritative rc_lock + the signed checksum file that binds it (adopt_release_lock)
+                 "rc_lock.json", "SHA256SUMS", "SHA256SUMS.sig", "SHA256SUMS.pem"):
         if name not in assets:
             if name.endswith(".bundle"):
                 continue   # Rekor bundle is optional (older releases)

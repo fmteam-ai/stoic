@@ -363,7 +363,7 @@ async def verify_performance(body: VerifyBody):
                     f"until {LEGACY_HMAC_ACCEPTED_UNTIL}",
             "domain_prefix": PURPOSES["differentiation"].decode(),   # N100-11 — independent verifiers prepend this
             "legacy_hmac_accepted_until": LEGACY_HMAC_ACCEPTED_UNTIL,
-            "public_key_b64": public_key_b64(),
+            "public_key_b64": public_key_b64("differentiation"),
             "key_id": KEY_ID}
 
 

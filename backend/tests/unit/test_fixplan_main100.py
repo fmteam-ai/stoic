@@ -72,11 +72,11 @@ def test_n100_9_crypto_partial_flatten_oco_reject_and_fee_haircut():
 
 def test_n100_1_2_3_7_deploy_scripts():
     upd = _read("deploy", "update.sh")
-    assert 'git checkout -- "$t"' in upd and upd.index('git checkout -- "$t"') < upd.index('git checkout --detach "${REF}"')
+    assert "restore_tracked_release_files" in upd and upd.index("restore_tracked_release_files") < upd.index('git checkout --detach "${REF}"')   # N101-1 moved the N100-1 restore into lib.sh
     assert "ensure_release_secrets || gate_refused" in upd and "sync_env_examples.py --check" not in upd
     bk = _read("deploy", "backup.sh")
     assert "BACKUP_[A-Z_]*=*" in bk and "must live OUTSIDE ./secrets" in bk
-    assert "trap 'rm -rf \"${tmp}\"' RETURN EXIT" in bk and bk.count("SECRETS_ENC") >= 3
+    assert "trap _restore_cleanup EXIT" in bk and bk.count("SECRETS_ENC") >= 3   # N101-3 — single EXIT trap on globals
     lib = _read("deploy", "lib.sh")
     assert 'grep -E "^${envkey}=." .env' not in lib
     rel = _read(".github", "workflows", "release.yml")

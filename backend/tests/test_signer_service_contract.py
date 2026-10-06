@@ -63,8 +63,8 @@ def test_sign_verifies_against_pinned_key_and_rejects_bad_inputs(signer):
     assert r.status_code == 200
     sig = r.json()["signature_hex"]
     assert len(sig) == 128 and r.json()["key_id"] == rs.KEY_ID
-    assert rs.verify_hex(data, sig, pub)
-    assert not rs.verify_hex(data + b"x", sig, pub)
+    assert rs.verify_hex(data, sig, pub, purpose="ea-release")
+    assert not rs.verify_hex(data + b"x", sig, pub, purpose="ea-release")
     assert c.post("/sign", json={"key_id": rs.KEY_ID, "data_hex": data.hex()}).status_code == 401
     assert c.post("/sign", json={"key_id": "other", "data_hex": data.hex()}, headers=h).status_code == 400
     assert c.post("/sign", json={"key_id": rs.KEY_ID, "data_hex": "zz"}, headers=h).status_code == 400

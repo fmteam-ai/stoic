@@ -266,14 +266,14 @@ async def health_release(user: dict = Depends(get_current_user)):
     """P1-05 (A9e) — the RUNNING release identity: image digest + the EX5 hashes this build
     admits for live terminals, compared against the promoted digests. Admin only (audit r30)."""
     require_admin(user)
-    from ea_capabilities import accepted_ea_sha256s, shipped_ea_version
+    from ea_capabilities import _signed_release_record, accepted_ea_sha256s, shipped_ea_version
     _accepted = accepted_ea_sha256s()
     return {"release_identity": {
         "image_digest": os.environ.get("STOIC_IMAGE_DIGEST") or None,
         "ea_shipped_version": shipped_ea_version(),
         "ea_expected_sha256": _accepted[0] if _accepted else None,
         "ea_accepted_sha256s": _accepted,
-        "ea_signed_record": bool(_accepted) and not os.environ.get("EA_RELEASE_SHA256"),
+        "ea_signed_record": bool(_signed_release_record()),   # N100-6 — an EA_RELEASE_SHA256 pin never hides the signed record
     }}
 
 

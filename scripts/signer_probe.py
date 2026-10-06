@@ -59,9 +59,9 @@ def main() -> int:
     os.environ.update(env)
     try:
         nonce = b"stoic-signer-probe:" + secrets.token_bytes(32)
-        sig = rs._external_sign(nonce)
+        sig = rs._external_sign(nonce, "ea-release")   # probe holds the release token
         rec["checks"]["sign_roundtrip"] = {
-            "ok": rs.verify_hex(nonce, sig, a.public_key) and not rs.verify_hex(nonce + b"x", sig, a.public_key)}
+            "ok": rs.verify_hex(nonce, sig, a.public_key, purpose="ea-release") and not rs.verify_hex(nonce + b"x", sig, a.public_key, purpose="ea-release")}
     except Exception as e:  # noqa: BLE001
         rec["checks"]["sign_roundtrip"] = {"ok": False, "error": str(e)}
     finally:

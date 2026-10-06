@@ -72,28 +72,44 @@ docs/PRODUCTION_DEPLOY_CHECKLIST.md.
 - `GET https://<signer-host>:9443/healthz` → `{"status":"ok"}`.
 - Signature round-trip is verified automatically on first signing call.
 
-## N100-11 — signer separation (per-purpose tokens + domain prefixes)
+## N100-11 / N101-5 — signer separation (per-purpose tokens, domain prefixes, two keys)
 Every signature is Ed25519 over `<domain>\0<data>` with a fixed domain per purpose
 (`backend/release_signing.PURPOSES`, mirrored byte-for-byte in `deploy/signer/app.py`):
-`ea-release`, `model-manifest` (**release purposes — CI only**) and `acceptance-bundle`,
-`audit-anchor`, `differentiation`, `canary` (**runtime purposes — API**). A signature minted for one
-purpose can never verify as another.
+`ea-release`, `model-manifest`, `policy-migration` (**release purposes — CI / operator**) and
+`acceptance-bundle`, `artifact-manifest`, `audit-anchor`, `differentiation`, `canary`
+(**runtime purposes — API**). A signature minted for one purpose can never verify as another.
+`sign_hex` / `verify_hex` REQUIRE a purpose (N101-5) — there is no default.
 
-The signer enforces WHICH token may request WHICH purpose:
+The signer enforces WHICH token may request WHICH purpose — **no single-token fallback**:
 - `SIGNER_TOKEN` (release token) → release purposes only. Lives in GitHub secret `RELEASE_SIGNER_TOKEN`
-  and the signer; it is **never mounted into app containers** (compose hands the API only
-  `signer_token_bundle`).
+  and the signer; it is **never on the API host** (compose hands the API only `signer_token_bundle`;
+  `deploy/update.sh` deletes a stray `RELEASE_SIGNER_TOKEN=` line from `backend/.env`; preflight check
+  `release_signer_token_scope` FAILS while it is present).
 - `SIGNER_TOKEN_BUNDLE` (bundle token) → runtime purposes only. The API reads it as
-  `RELEASE_SIGNER_BUNDLE_TOKEN(_FILE)`; `RELEASE_SIGNER_TOKEN` on the API host is the same value.
-  ⇒ a compromised trading API cannot obtain an EA-release or model-manifest signature.
-- Single-token installs (no `SIGNER_TOKEN_BUNDLE`) keep working: the release token signs everything
-  (logged as such); run `deploy/update.sh` once — `ensure_release_secrets` mints
-  `secrets/signer_token_bundle` and compose mounts it.
+  `RELEASE_SIGNER_BUNDLE_TOKEN(_FILE)`. Without it the signer runs **release-only** and refuses every
+  runtime purpose with 403 (this is the Fly/CI signer's normal state).
+  ⇒ a compromised trading API cannot obtain an EA-release or model-manifest signature, and a leaked
+  CI token cannot mint acceptance bundles.
+
+Two keys, two ids, two pins (N101-5):
+| | key id | pinned in `backend/.env` | signs |
+|---|---|---|---|
+| CI release key (Fly `stoic-signer`) | `RELEASE_SIGNER_KEY_ID` = `stoic-release-ed25519-v1` | `RELEASE_PUBLIC_KEY_B64` | EA release records, model manifests, policy migrations |
+| runtime key (self-hosted sidecar) | `BUNDLE_SIGNER_KEY_ID` = `stoic-bundle-ed25519-v1` (compose `SIGNER_KEY_ID`) | `BUNDLE_PUBLIC_KEY_B64` | acceptance bundles, artifact manifests, anchors, attestations |
+
+`install.sh` pins the sidecar as the runtime key; `update.sh` (`ensure_bundle_key_pins`) migrates an
+existing host the same way and leaves `RELEASE_PUBLIC_KEY_B64` as the CI release key — **set it to the
+Fly signer's public key** (`flyctl secrets`/`/public-key`) so CI-signed EA records verify on your server.
+Unset `BUNDLE_*` = single-key install (both roles use the release key — only valid when the sidecar and
+CI really share one private key).
 
 Cut-over notes: pre-N100-11 artefacts signed WITHOUT a prefix are accepted only where history must
 stay verifiable (audit anchors, the developer model manifest on re-sign). EA release records and
-acceptance bundles are NOT grandfathered — re-run `ea-release` once after deploying this change.
-Fly signer: redeploy the updated `app.py` (`cd deploy/signer && flyctl deploy -a stoic-signer`); CI
-only needs the release token, so no bundle token is required on Fly.
+acceptance bundles are NOT grandfathered — the EA 1.60 record signed before the prefix no longer
+verifies (N101-4): **redeploy the Fly signer, then re-run `ea-release`**:
+```bash
+cd deploy/signer && flyctl deploy -a stoic-signer          # new app.py (purpose-required, release-only)
+# GitHub → Actions → ea-release → Run workflow  (commits release/ea_release.json + the EX5)
+```
 Independent verification of performance attestations: prepend `domain_prefix` from
 `POST /api/performance/attestation/verify` (`stoic:differentiation:v1\0`) to `payload_hash`.

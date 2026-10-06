@@ -123,8 +123,8 @@ class TestExternalSignerFailClosed:
         _env(monkeypatch, {"APP_ENV": "production", **EXTERNAL_OK})
         data = b"round-9"
         seen = self._fake(monkeypatch, {"signature_hex": _K.sign(data).hex(), "key_id": EXTERNAL_OK["RELEASE_SIGNER_KEY_ID"]})
-        sig = rs.sign_hex(data)
-        assert rs.verify_hex(data, sig, PUB_B64)
+        sig = rs.sign_hex(data, purpose="ea-release")
+        assert rs.verify_hex(data, sig, PUB_B64, purpose="ea-release")
         assert seen["url"] == "https://signer.internal.example/sign" and seen["timeout"] == 10.0
 
     def test_wrong_key_malformed_wrong_keyid_and_timeout_fail_closed(self, monkeypatch):
@@ -135,19 +135,19 @@ class TestExternalSignerFailClosed:
         other = Ed25519PrivateKey.generate()
         self._fake(monkeypatch, {"signature_hex": other.sign(data).hex()})
         with pytest.raises(RuntimeError, match="pinned public key"):
-            rs.sign_hex(data)
+            rs.sign_hex(data, purpose="ea-release")
         self._fake(monkeypatch, raw="garbage")
         with pytest.raises(RuntimeError, match="malformed"):
-            rs.sign_hex(data)
+            rs.sign_hex(data, purpose="ea-release")
         self._fake(monkeypatch, {"signature_hex": _K.sign(data).hex(), "key_id": "some-other-key"})
         with pytest.raises(RuntimeError, match="key_id"):
-            rs.sign_hex(data)
+            rs.sign_hex(data, purpose="ea-release")
         self._fake(monkeypatch, exc=requests.ConnectTimeout("slow"))
         with pytest.raises(RuntimeError, match="unavailable"):
-            rs.sign_hex(data)
+            rs.sign_hex(data, purpose="ea-release")
         self._fake(monkeypatch, {"signature_hex": _K.sign(data).hex()}, status=503)
         with pytest.raises(RuntimeError, match="unavailable"):
-            rs.sign_hex(data)
+            rs.sign_hex(data, purpose="ea-release")
 
     def test_health_check_is_non_signing_and_checks_identity(self, monkeypatch):
         import requests

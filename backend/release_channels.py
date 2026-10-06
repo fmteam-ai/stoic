@@ -114,9 +114,10 @@ async def manifest_for_agent(db, agent_id: str | None = None) -> dict:
     body = json.dumps({k: m[k] for k in ("artifacts", "update_policy")},
                       sort_keys=True, separators=(",", ":"),
                       default=str).encode()
-    m["signature"] = {"alg": "Ed25519", "key_id": release_signing.KEY_ID,
-                      "public_key_b64": release_signing.public_key_b64(),
-                      "value": release_signing.sign_hex(body)}
+    m["signature"] = {"alg": "Ed25519", "key_id": release_signing.key_id(purpose="artifact-manifest"),
+                      "purpose": "artifact-manifest",   # N101-5
+                      "public_key_b64": release_signing.public_key_b64("artifact-manifest"),
+                      "value": release_signing.sign_hex(body, purpose="artifact-manifest")}
     return m
 
 

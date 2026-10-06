@@ -184,10 +184,10 @@ def test_artifact_manifest_is_signed():
                       sort_keys=True, separators=(",", ":"),
                       default=str).encode()
     assert release_signing.verify_hex(body, sig["value"],
-                                      sig["public_key_b64"])
+                                      sig["public_key_b64"], purpose="artifact-manifest")
     # tampered body must fail verification
     assert not release_signing.verify_hex(body + b"x", sig["value"],
-                                          sig["public_key_b64"])
+                                          sig["public_key_b64"], purpose="artifact-manifest")
     assert m["update_policy"]["rollback"]
 
 

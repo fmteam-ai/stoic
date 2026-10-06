@@ -84,6 +84,99 @@ ensure_release_secrets() {
   chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/bridge_token_hash_key secrets/secrets_master_key secrets/security_telegram_token
 }
 
+# N101-6 — backups encrypt secrets/ with BACKUP_PASSPHRASE_FILE; nothing ever provisioned it, so a
+# fresh install hard-failed its first backup (and update.sh/rollback.sh with it). Generate ONE
+# passphrase OUTSIDE ./secrets and ./backups (it decrypts them), record it in ./.env.
+ensure_backup_passphrase() {
+  [ -d secrets ] || return 0
+  local f
+  f="${BACKUP_PASSPHRASE_FILE:-$( { grep -E '^BACKUP_PASSPHRASE_FILE=' .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")}"
+  [ -n "${f}" ] || f="${HOME:-/root}/.stoic-backup-pass"
+  case "$(readlink -f "${f}" 2>/dev/null || echo "${f}")" in
+    "$(readlink -f ./secrets)"/*|"$(readlink -f "${BACKUP_DIR:-./backups}" 2>/dev/null || echo "$PWD/backups")"/*)
+      echo "!! BACKUP_PASSPHRASE_FILE=${f} lives inside ./secrets or the backup directory — refusing (it decrypts them)"; return 1 ;;
+  esac
+  if [ ! -s "${f}" ]; then
+    ( umask 077; openssl rand -base64 32 > "${f}" ) || { echo "!! could not write backup passphrase ${f}"; return 1; }
+    echo "   generated backup passphrase ${f} — COPY IT TO YOUR PASSWORD MANAGER NOW: without it no backup of secrets/ can be restored"
+  fi
+  touch .env
+  set_kv .env BACKUP_PASSPHRASE_FILE "${f}"
+  export BACKUP_PASSPHRASE_FILE="${f}"
+}
+
+# N101-5 — hosts installed before the key split: the sidecar key becomes the RUNTIME (bundle) key with its
+# own id; RELEASE_PUBLIC_KEY_B64 keeps pinning the CI release key. The CI release token never lives on the
+# API host — strip it from backend/.env (compose mounts only secrets/signer_token_bundle).
+ensure_bundle_key_pins() {
+  [ -s secrets/signer_public_key ] || return 0
+  grep -q "^BUNDLE_PUBLIC_KEY_B64=." backend/.env 2>/dev/null || {
+    set_kv backend/.env BUNDLE_PUBLIC_KEY_B64 "$(cat secrets/signer_public_key)"
+    set_kv backend/.env BUNDLE_SIGNER_KEY_ID stoic-bundle-ed25519-v1
+    set_kv .env SIGNER_KEY_ID stoic-bundle-ed25519-v1
+    echo "   pinned the sidecar as runtime key stoic-bundle-ed25519-v1 (BUNDLE_PUBLIC_KEY_B64); RELEASE_PUBLIC_KEY_B64 stays the CI release key"
+  }
+  if grep -qE '^RELEASE_SIGNER_TOKEN=.' backend/.env 2>/dev/null; then
+    sed -i '/^RELEASE_SIGNER_TOKEN=/d' backend/.env
+    echo "   removed RELEASE_SIGNER_TOKEN from backend/.env (CI release token — the API holds only the bundle token)"
+  fi
+}
+
+# N101-1 — a git checkout of a tag carries the DEVELOPER rc_lock (authoritative:false) and an
+# unsubstituted BUILD_SHA; the authoritative lock is frozen inside release.yml and shipped as a release
+# asset. Adopt it: fetch rc_lock.json + SHA256SUMS(.sig/.pem), verify the checksum file's Sigstore
+# signature against the release workflow identity, check the lock's digest + commit, then write it into
+# the checkout (release/rc_lock.json, backend/BUILD_SHA) and keep a copy per commit for rollbacks.
+adopt_release_lock() {
+  attestation_required || { echo "   release lock: attestation not required — developer lock kept"; return 0; }
+  local dest=release/attestation tag repo ident want got
+  repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${repo}" ] || repo=$(_repo_slug)
+  tag=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("tag",""))' release/attestation.current.json 2>/dev/null || true)
+  [ -n "${tag}" ] || tag=$(git tag --points-at "${GIT_SHA}" | grep -E '^v[0-9]' | head -1 || true)
+  [ -n "${tag}" ] || { echo "!! release lock: no release tag for ${GIT_SHA}"; return 1; }
+  for f in rc_lock.json SHA256SUMS SHA256SUMS.sig SHA256SUMS.pem; do
+    [ -s "${dest}/${f}" ] || { echo "!! release lock: asset ${f} missing (release_attestation.py fetch)"; return 1; }
+  done
+  ident="https://github.com/${repo}/.github/workflows/release.yml@refs/tags/${tag}"
+  cosign verify-blob "${dest}/SHA256SUMS" --signature "${dest}/SHA256SUMS.sig" --certificate "${dest}/SHA256SUMS.pem" \
+      --certificate-identity "${ident}" --certificate-github-workflow-repository "${repo}" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null 2>&1 \
+    || { echo "!! release lock: SHA256SUMS signature invalid or not issued by ${ident}"; return 1; }
+  want=$(awk '$2 == "rc_lock.json" {print $1}' "${dest}/SHA256SUMS" | head -1)
+  got=$(sha256sum "${dest}/rc_lock.json" | cut -d' ' -f1)
+  [ -n "${want}" ] && [ "${want}" = "${got}" ] || { echo "!! release lock: rc_lock.json digest ${got} != signed SHA256SUMS ${want:-absent}"; return 1; }
+  python3 - "${dest}/rc_lock.json" "${GIT_SHA}" <<'PY' || { echo "!! release lock: rc_lock.json is not the authoritative lock of ${GIT_SHA}"; return 1; }
+import json, sys
+lock = json.load(open(sys.argv[1])); sha = sys.argv[2]
+ok = (lock.get("authoritative") is True and lock.get("git_commit") == sha and lock.get("source_sha") == sha
+      and bool((lock.get("images") or {}).get("backend")) and bool((lock.get("images") or {}).get("frontend")))
+sys.exit(0 if ok else 1)
+PY
+  mkdir -p deploy/releases release
+  cp "${dest}/rc_lock.json" "deploy/releases/rc_lock-${GIT_SHA}.json"
+  cp "${dest}/rc_lock.json" release/rc_lock.json
+  printf '%s\n' "${GIT_SHA}" > backend/BUILD_SHA
+  echo "   release lock: authoritative rc_lock of ${tag} adopted (signed SHA256SUMS ✓, commit ✓) · BUILD_SHA stamped"
+  [ "$(deploy_mode)" = "registry" ] || echo "   note: LIVE release gate compares the running image digest with the locked CI digest — a locally BUILT image never matches; set DEPLOY_MODE=registry for live authority (demo accounts are exempt, N101-2)"
+}
+
+# Put a previously adopted authoritative lock back after `git checkout` (rollback to PREV).
+restore_adopted_lock() {
+  local sha="$1"
+  [ -s "deploy/releases/rc_lock-${sha}.json" ] || return 0
+  cp "deploy/releases/rc_lock-${sha}.json" release/rc_lock.json
+  printf '%s\n' "${sha}" > backend/BUILD_SHA
+  echo "   release lock: re-adopted authoritative rc_lock for ${sha}"
+}
+
+# Adopted lock + BUILD_SHA are tracked files — restore them so `git checkout` can switch trees.
+restore_tracked_release_files() {
+  local t
+  for t in .env.example backend/.env.example release/rc_lock.json backend/BUILD_SHA; do
+    git ls-files --error-unmatch "$t" >/dev/null 2>&1 && git checkout -- "$t" 2>/dev/null || true
+  done
+}
+
 # After a failed `compose up`, an app container CREATED BY THIS PASS that exited
 # or is unhealthy is a boot failure of the new build — not a mount leak. Print its
 # log and stop retrying so the cause is visible instead of buried under 6 identical

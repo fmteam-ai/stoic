@@ -51,7 +51,7 @@ def test_manifest_is_cohort_aware_and_signed():
     body = json.dumps({k: m[k] for k in ("artifacts", "update_policy")},
                       sort_keys=True, separators=(",", ":"),
                       default=str).encode()
-    assert release_signing.verify_hex(body, m["signature"]["value"])
+    assert release_signing.verify_hex(body, m["signature"]["value"], purpose="artifact-manifest")
     for a in m["artifacts"]:
         if a.get("sha256"):
             assert a["url"] == f"/api/artifacts/{a['sha256']}"

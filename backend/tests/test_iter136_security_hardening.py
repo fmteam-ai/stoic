@@ -104,11 +104,11 @@ def test_admin_audit_writer_is_chained():
 def test_ed25519_sign_verify_roundtrip():
     import release_signing
     body = b"artifact-manifest-body"
-    sig = release_signing.sign_hex(body)
+    sig = release_signing.sign_hex(body, purpose="ea-release")
     pub = release_signing.public_key_b64()
-    assert release_signing.verify_hex(body, sig, pub)
-    assert not release_signing.verify_hex(body + b"!", sig, pub)
-    assert not release_signing.verify_hex(body, "00" * 64, pub)
+    assert release_signing.verify_hex(body, sig, pub, purpose="ea-release")
+    assert not release_signing.verify_hex(body + b"!", sig, pub, purpose="ea-release")
+    assert not release_signing.verify_hex(body, "00" * 64, pub, purpose="ea-release")
 
 
 def test_manifest_signed_with_ed25519():
@@ -121,7 +121,7 @@ def test_manifest_signed_with_ed25519():
                       sort_keys=True, separators=(",", ":"),
                       default=str).encode()
     assert release_signing.verify_hex(body, sig["value"],
-                                      sig["public_key_b64"])
+                                      sig["public_key_b64"], purpose="artifact-manifest")
 
 
 # ---------------------------------------------------------------- rotation grace
