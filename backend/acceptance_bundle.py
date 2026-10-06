@@ -70,7 +70,7 @@ def verify_signature(bundle: dict) -> bool:
     if int(bundle.get("schema_version") or 1) < SCHEMA_VERSION:
         return False
     kid = str(bundle.get("key_id") or "")
-    if not kid or kid in revoked_key_ids() or kid != key_id():
+    if not kid or kid in revoked_key_ids() or kid != key_id(purpose="acceptance-bundle"):
         return False
     try:
         body = _canonical(bundle)
@@ -237,7 +237,7 @@ async def build_bundle(db, *, actor: str) -> dict:
         failures.append("no enabled live account to accept")
     from release_signing import key_id
     doc = {"bundle_id": uuid.uuid4().hex, "payload": payload,
-           "algo": "ed25519", "schema_version": SCHEMA_VERSION, "key_id": key_id(),
+           "algo": "ed25519", "schema_version": SCHEMA_VERSION, "key_id": key_id(purpose="acceptance-bundle"),
            "config_fingerprint": await config_fingerprint(db, [a["account_id"] for a in accounts if a["trading_enabled"]], rel),
            "verdict": "PASS" if not failures else "FAIL",
            "failures": failures, "build_sha": rel["build_sha"], "image_digest": rel["image_digest"],

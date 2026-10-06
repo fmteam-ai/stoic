@@ -325,10 +325,18 @@ async def acceptance_domain(db, account: dict | None = None) -> dict:
 
 
 async def release_gate_domain(db, account: dict | None = None) -> dict:
-    """P0-02 — production must run an authoritative, digest-pinned, signed release."""
+    """P0-02 — production must run an authoritative, digest-pinned, signed release.
+    N101-2 — the gate protects REAL money: an attested DEMO (or paper) account trades on a
+    production host before an authoritative release; LIVE accounts stay close-only."""
     from app_env import is_production
     if not is_production():
         return {"level": "FULL", "reason": "release gate enforced in production only"}
+    if account is not None and account.get("mode") == "paper":
+        return {"level": "FULL", "reason": "paper account — release gate applies to broker accounts"}
+    if account is not None and "_id" in account:
+        from broker_env import attested_environment
+        if attested_environment(account) == "DEMO":      # identity-bound admin attestation, never a heartbeat
+            return {"level": "FULL", "reason": "attested DEMO account — release gate applies to real money"}
     from release_gate import evaluate
     r = evaluate()
     if r["ok"]:
@@ -389,7 +397,7 @@ DOMAIN_SCOPE = {"platform": "platform_global", "broker": "account_bound",
                 "certification": "account_bound", "bot_health": "account_bound",
                 "performance_truth": "account_bound", "recovery": "account_bound",
                 "inventory": "platform_global", "acceptance": "account_bound",
-                "release_gate": "platform_global", "crypto_protection": "account_bound"}
+                "release_gate": "account_bound", "crypto_protection": "account_bound"}
 # domains whose FRESH/FULL state is a precondition for RESIZING (REDUCED)
 HARD_TRUTH_DOMAINS = ("position_truth", "broker", "execution")
 

@@ -196,14 +196,14 @@ def _signed_release_record() -> dict | None:
             if ok:
                 from release_signing import verify_hex, key_id_accepted
                 # A14-7 — the record's key id must be the current, un-revoked release key
-                ok = key_id_accepted(sig.get("key_id")) and verify_hex(_canonical_payload(rec), sig["sig_hex"])
+                ok = key_id_accepted(sig.get("key_id")) and verify_hex(_canonical_payload(rec), sig["sig_hex"], purpose="ea-release")
             if ok:
                 prev = rec.get("previous") or None
                 # the previous release must carry its own valid signature (its MQ5 is gone)
                 if prev and not (len(str(prev.get("ex5_sha256") or "")) == 64 and prev.get("compiled_by") == "github-actions"
                                  and (prev.get("signature") or {}).get("sig_hex")
                                  and key_id_accepted((prev.get("signature") or {}).get("key_id"))
-                                 and verify_hex(_canonical_payload(prev), prev["signature"]["sig_hex"])):
+                                 and verify_hex(_canonical_payload(prev), prev["signature"]["sig_hex"], purpose="ea-release")):
                     prev = None
                 result = {**rec, "previous": prev}
         except Exception:  # noqa: BLE001 — unreadable/unverifiable record ⇒ fail closed

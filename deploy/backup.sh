@@ -45,9 +45,14 @@ _decrypt_to() {
 
 # N100-2 — update.sh / rollback.sh / cron call this script without a login shell: BACKUP_* are
 # read from ./.env so an exported variable is not the only way to configure the passphrase.
+# N101-7 — a last line without a trailing newline is read too; surrounding quotes are stripped.
 if [ -f .env ]; then
-  while IFS= read -r line; do
-    case "$line" in BACKUP_[A-Z_]*=*) k="${line%%=*}"; [ -z "${!k:-}" ] && export "$k=${line#*=}" ;; esac
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in BACKUP_[A-Z_]*=*)
+      k="${line%%=*}"; v="${line#*=}"
+      case "$v" in \"*\") v="${v#\"}"; v="${v%\"}" ;; \'*\') v="${v#\'}"; v="${v%\'}" ;; esac
+      [ -z "${!k:-}" ] && export "$k=$v" ;;
+    esac
   done < .env
 fi
 if [ -n "${BACKUP_PASSPHRASE_FILE:-}" ]; then
@@ -77,20 +82,32 @@ _backup_secrets() {
   echo "   $(tar -tzf <(openssl $(_encrypt_args) -d -in "${out}") | grep -c '^secrets/.') secret file(s) included"
 }
 
+# N101-3 — ONE restore-time cleanup for every temp path. The previous `trap … RETURN EXIT` on a
+# `local` variable fired after the function returned and died under `set -u` ("tmp: unbound
+# variable"), so EVERY restore exited 1 — auto-rollback reported "restore FAILED" and left the
+# stack stopped. Globals + a single EXIT trap: nothing is unbound when the trap runs.
+_RESTORE_PLAIN=""
+_SECRETS_TMP=""
+_restore_cleanup() {
+  [ -n "${_SECRETS_TMP:-}" ] && rm -rf "${_SECRETS_TMP}"
+  [ -n "${_RESTORE_PLAIN:-}" ] && rm -f "${_RESTORE_PLAIN}"
+  return 0
+}
+
 _restore_secrets() {
   # $1 = mongo archive path — the sibling stoic-secrets-<stamp>.tar.gz.enc is restored ONLY into an
   # absent/empty ./secrets; existing files are never overwritten (differences are reported).
-  local stamp sec tmp f
+  local stamp sec f
   stamp=$(basename "$1" | sed -E 's/^stoic-mongo-([0-9]{8}-[0-9]{6}).*/\1/')
   sec="$(dirname "$1")/stoic-secrets-${stamp}.tar.gz.enc"
   [ -f "${sec}" ] || { echo "   (no secrets archive ${sec} next to the dump — secrets/ left untouched)"; return 0; }
   [ -n "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -f "${BACKUP_PASSPHRASE_FILE}" ] || { echo "!! ${sec} present but BACKUP_PASSPHRASE_FILE unset — secrets/ NOT restored"; return 0; }
-  tmp="$(mktemp -d /tmp/stoic-secrets-XXXXXX)"
-  trap 'rm -rf "${tmp}"' RETURN EXIT   # N100-3 — a failed restore must never leave plaintext secrets in /tmp
+  _SECRETS_TMP="$(mktemp -d /tmp/stoic-secrets-XXXXXX)"
+  trap _restore_cleanup EXIT   # N100-3 — a failed restore must never leave plaintext secrets in /tmp
   # shellcheck disable=SC2046
-  openssl $(_encrypt_args) -d -in "${sec}" | tar -xzf - -C "${tmp}"
+  openssl $(_encrypt_args) -d -in "${sec}" | tar -xzf - -C "${_SECRETS_TMP}"
   mkdir -p secrets
-  for f in "${tmp}"/secrets/*; do
+  for f in "${_SECRETS_TMP}"/secrets/*; do
     [ -f "${f}" ] || continue
     if [ -s "secrets/$(basename "${f}")" ]; then
       cmp -s "${f}" "secrets/$(basename "${f}")" || echo "!! secrets/$(basename "${f}") differs from the backup copy — kept the CURRENT file (compare manually)"
@@ -98,7 +115,7 @@ _restore_secrets() {
       (umask 077; cp "${f}" "secrets/$(basename "${f}")"); chmod 600 "secrets/$(basename "${f}")"; echo "   restored secrets/$(basename "${f}")"
     fi
   done
-  rm -rf "${tmp}"
+  rm -rf "${_SECRETS_TMP}"; _SECRETS_TMP=""
 }
 
 _write_manifest() {
@@ -146,9 +163,10 @@ case "${1:-backup}" in
     FILE="${2:?usage: deploy/backup.sh restore <archive.gz[.enc]>}"
     [ -f "${FILE}" ] || { echo "ERROR: ${FILE} not found"; exit 1; }
     PLAIN="${FILE}"
+    trap _restore_cleanup EXIT   # N101-3 — one trap covers the decrypted dump AND the secrets scratch dir
     case "${FILE}" in *.enc)
       PLAIN="$(mktemp /tmp/stoic-restore-XXXXXX.archive.gz)"
-      trap 'rm -f "${PLAIN}"' EXIT
+      _RESTORE_PLAIN="${PLAIN}"
       echo "-- decrypting archive"
       _decrypt_to "${FILE}" "${PLAIN}" ;;
     esac

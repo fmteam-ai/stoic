@@ -267,6 +267,14 @@
 .tst-marquee:hover .tst-track,
 .tst-marquee[data-paused="true"] .tst-track { animation-play-state: paused; }   /* N99-8 — keyboard pause */
 .tst-marquee:focus-visible { outline: 1px solid rgba(0, 255, 65, 0.6); outline-offset: 4px; }
+.tst-pause {
+    align-self: flex-start; margin: 0 0 0.75rem;
+    font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: #71717A; background: transparent; border: 1px solid #1F1F1F; padding: 0.35rem 0.75rem; cursor: pointer;
+    transition: color 160ms ease, border-color 160ms ease;
+}
+.tst-pause:hover, .tst-pause:focus-visible { color: #00FF41; border-color: rgba(0, 255, 65, 0.4); outline: none; }
+.tst-pause[aria-pressed="true"] { color: #00FF41; border-color: rgba(0, 255, 65, 0.6); }
 @keyframes tstScroll     { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 @keyframes tstScrollBack { from { transform: translateX(-50%); } to { transform: translateX(0); } }
 @media (prefers-reduced-motion: reduce) {

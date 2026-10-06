@@ -40,7 +40,7 @@ def perf_attestation(payload: dict) -> dict:
     sig = sign_hex(h.encode(), purpose="differentiation")
     return {"payload_hash": h, "signature": sig, "key_id": KEY_ID,
             "algo": "Ed25519(sha256-canonical-JSON)",
-            "public_key_b64": public_key_b64(),
+            "public_key_b64": public_key_b64("differentiation"),
             "verify_hint": "Ed25519.verify(public_key_b64, "
                            "signature_hex, payload_hash_bytes) — "
                            "no server trust required",

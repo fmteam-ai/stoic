@@ -26,9 +26,9 @@ x-app-common: &app-common
     BRIDGE_TOKEN_HASH_KEY_FILE: /run/secrets/bridge_token_hash_key
     # Release signing: the private key lives ONLY in the signer sidecar. The
     # API presents a bearer token over TLS (self-signed cert pinned via CA bundle).
-    # N100-11 — the API holds ONLY the bundle token; the release token (signer_token) is never
+    # N100-11 / N101-5 — the API holds ONLY the bundle token; the release token (signer_token) is never
     # mounted into app containers, so the API cannot obtain an EA-release / model-manifest signature.
-    RELEASE_SIGNER_TOKEN_FILE: /run/secrets/signer_token_bundle
+    # RELEASE_SIGNER_TOKEN is deliberately ABSENT here (CI-only credential).
     RELEASE_SIGNER_BUNDLE_TOKEN_FILE: /run/secrets/signer_token_bundle
     RELEASE_SIGNER_CA_BUNDLE: /run/secrets/signer_cert
     # Exact backend image identity — REQUIRED in production risk snapshots
@@ -95,6 +95,10 @@ services:
     environment:
       SIGNER_TOKEN_FILE: /run/secrets/signer_token
       SIGNER_TOKEN_BUNDLE_FILE: /run/secrets/signer_token_bundle
+      # N101-5 — the self-hosted sidecar is the RUNTIME key (bundles, anchors, artifact manifests) and
+      # carries its own id; the CI release key (EA records, model manifests) is pinned separately
+      # in backend/.env as RELEASE_PUBLIC_KEY_B64 / RELEASE_SIGNER_KEY_ID.
+      SIGNER_KEY_ID: ${SIGNER_KEY_ID:-stoic-release-ed25519-v1}
       ED25519_SIGNING_KEY_B64_FILE: /run/secrets/signer_ed25519_key
     command: ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9443",
               "--ssl-certfile", "/run/secrets/signer_cert", "--ssl-keyfile", "/run/secrets/signer_cert_key"]

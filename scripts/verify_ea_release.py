@@ -176,7 +176,7 @@ def check_entry(ea: dict) -> list:
     else:
         try:
             from release_signing import verify_hex
-            if not verify_hex(_canonical_payload(ea), sig["sig_hex"]):
+            if not verify_hex(_canonical_payload(ea), sig["sig_hex"], purpose="ea-release"):
                 fails.append("Ed25519 signature does NOT verify")
         except Exception as e:  # noqa: BLE001
             fails.append(f"signature verification unavailable: {e}")

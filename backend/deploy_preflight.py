@@ -177,6 +177,17 @@ def run_preflight(check_signer_health: bool = False) -> dict:
         "absent / disabled" if not removable_secret(env, "ED25519_SIGNING_KEY_B64") else "PRESENT",
         "absent in production (external signer holds the key)",
         "Set ED25519_SIGNING_KEY_B64=disabled in the Secrets tab (the panel refuses empty values); sign via RELEASE_SIGNER=external."))
+    # N101-5 — the trading API must hold ONLY the bundle token: with the CI release token it could mint EA-release signatures
+    _rel_tok = bool(removable_secret(env, "RELEASE_SIGNER_TOKEN"))
+    _bun_tok = bool((env.get("RELEASE_SIGNER_BUNDLE_TOKEN") or "").strip())
+    checks.append(_check(
+        "release_signer_token_scope", "Signer token held by the API",
+        ("fail" if _rel_tok else ("pass" if _bun_tok else "warn")) if _mode == "external" else "pass",
+        ("RELEASE_SIGNER_TOKEN PRESENT (release token on the API host)" if _rel_tok
+         else "bundle token only" if _bun_tok else "no signer token (runtime signing unavailable)") if _mode == "external" else _mode,
+        "RELEASE_SIGNER_BUNDLE_TOKEN only; RELEASE_SIGNER_TOKEN (CI release token) absent from backend/.env",
+        "deploy/update.sh strips RELEASE_SIGNER_TOKEN from backend/.env; compose mounts secrets/signer_token_bundle as "
+        "RELEASE_SIGNER_BUNDLE_TOKEN_FILE. The release token belongs to CI (GitHub secret) and the signer only."))
     if check_signer_health and not _viols and _mode == "external":
         import time as _t
         _t0 = _t.monotonic()

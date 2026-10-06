@@ -258,7 +258,7 @@ def migration_problems(payload: dict, *, current_policy_version: str, now: datet
     problems = []
     try:
         from release_signing import verify_hex
-        if not verify_hex(migration_body(mig), str(mig["signature_hex"])):
+        if not verify_hex(migration_body(mig), str(mig["signature_hex"]), purpose="policy-migration"):
             problems.append("migration signature invalid")
     except Exception:  # noqa: BLE001
         problems.append("migration signature invalid")

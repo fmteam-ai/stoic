@@ -1,10 +1,11 @@
 # Zero-touch re-publish to YOUR server (opt-in).
 #
-# Trigger: push a release tag (v1.2.3) — or run manually from the Actions
-# tab. Either way the ref is resolved IN CI to a 40-hex commit SHA that MUST
-# be pointed at by a v* release tag (branches are refused), and only that
-# SHA is transmitted to the server. deploy/update.sh then backs up, rebuilds
-# with provenance, verifies the full topology and auto-rolls back on failure.
+# Trigger: the Release workflow (release.yml) COMPLETING SUCCESSFULLY for a v* tag — never in
+# parallel with it (N101-7: a server must only ever receive a tag whose release assets exist) —
+# or run manually from the Actions tab. Either way the ref is resolved IN CI to a 40-hex commit
+# SHA that MUST be pointed at by a v* release tag (branches are refused), and only that
+# SHA is transmitted to the server. deploy/update.sh then backs up, adopts the signed release
+# lock, rebuilds with provenance, verifies the full topology and auto-rolls back on failure.
 # Protect the `production` GitHub Environment with a required reviewer for a
 # manual approval step; use a least-privilege deploy user (docker group only).
 #
@@ -19,8 +20,9 @@
 name: deploy-production
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       ref:
@@ -33,6 +35,8 @@ concurrency:
 
 jobs:
   publish:
+    # workflow_run: only after a SUCCESSFUL Release run that was triggered by a tag
+    if: github.event_name == 'workflow_dispatch' || (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 40
@@ -46,7 +50,7 @@ jobs:
         id: ref
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "push" ]; then REQ="${GITHUB_REF_NAME}"; else REQ="${{ inputs.ref }}"; fi
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then REQ="${{ github.event.workflow_run.head_branch }}"; else REQ="${{ inputs.ref }}"; fi
           # only tags, branches or hex SHAs — no shell metacharacters ever reach the server
           echo "${REQ}" | grep -qE '^[A-Za-z0-9._/-]{1,128}$' || { echo "::error::invalid ref '${REQ}'"; exit 1; }
           SHA=$(git rev-parse --verify "${REQ}^{commit}")

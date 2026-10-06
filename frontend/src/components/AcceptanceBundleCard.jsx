@@ -44,6 +44,16 @@ export function AcceptanceBundleCard() {
                         <div className="text-[#E4E4E7]">Release gate · {gate?.ok ? "authoritative, digest-pinned, signed" : "NOT authoritative"}{gate && !gate.enforced && <span className="text-[#71717A]"> · enforced in production only</span>}</div>
                         {gate?.failures?.length > 0 && <ul className="font-mono text-[10px] text-[#FFB020] mt-1 space-y-0.5">{gate.failures.map((f) => <li key={f}>· {f}</li>)}</ul>}
                         <div className="font-mono text-[10px] text-[#52525B] mt-1">lock {String(gate?.lock_commit || "-").slice(0, 12)} · image {String(gate?.image_digest || "not injected").slice(0, 24)}</div>
+                        {gate?.accounts?.length > 0 && (
+                            <ul className="font-mono text-[10px] mt-2 space-y-0.5 max-h-32 overflow-y-auto pr-2" data-testid="release-gate-accounts">
+                                {/* N101-2 — per-account verdict: attested DEMO trades before an authoritative release, LIVE stays close-only */}
+                                {gate.accounts.map((a) => (
+                                    <li key={a.account_id} className={a.allowed ? "text-[#00FF41]" : "text-[#FFB020]"} data-testid={`release-gate-account-${a.account_id}`}>
+                                        · {a.label} · {a.environment}: {a.allowed ? "allowed" : "blocked"} — {a.reason}
+                                    </li>
+                                ))}
+                            </ul>
+                        )}
                     </div>
                 </div>
                 <div className="flex items-start gap-3" data-testid="acceptance-bundle-row">
@@ -69,7 +79,7 @@ export function AcceptanceBundleCard() {
                         {b && <div className="font-mono text-[10px] text-[#52525B] mt-1 break-all">digest {b.digest} · signed: verdict, accounts, release, expiry + evidence</div>}
                     </div>
                 </div>
-                <div className="font-mono text-[10px] text-[#52525B]">Live (real-money) authority stays CLOSE_ONLY until the release gate passes AND a PASSING bundle covers the account for this exact build/digest. Demo and paper accounts are not affected.</div>
+                <div className="font-mono text-[10px] text-[#52525B]">Live (real-money) authority stays CLOSE_ONLY until the release gate passes AND a PASSING bundle covers the account for this exact build/digest. Attested DEMO and paper accounts are exempt from both gates (N101-2).</div>
             </div>
         </section>
     );

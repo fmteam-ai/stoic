@@ -499,9 +499,10 @@ def build_artifact_manifest() -> dict:
                        sort_keys=True, separators=(",", ":"),
                        default=str).encode()
     manifest["signature"] = {
-        "alg": "Ed25519", "key_id": release_signing.KEY_ID,
-        "value": release_signing.sign_hex(body),
-        "public_key_b64": release_signing.public_key_b64(),
+        "alg": "Ed25519", "key_id": release_signing.key_id(purpose="artifact-manifest"),
+        "purpose": "artifact-manifest",   # N101-5 — runtime purpose: the API never asks for an EA-release signature
+        "value": release_signing.sign_hex(body, purpose="artifact-manifest"),
+        "public_key_b64": release_signing.public_key_b64("artifact-manifest"),
         "signed_fields": ["artifacts", "update_policy"],
     }
     return manifest

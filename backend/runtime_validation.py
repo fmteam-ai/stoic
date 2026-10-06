@@ -72,13 +72,13 @@ async def s_artifact_verification(db):
     body = json.dumps({k: m[k] for k in ("artifacts", "update_policy")},
                       sort_keys=True, separators=(",", ":"),
                       default=str).encode()
-    assert release_signing.verify_hex(body, m["signature"]["value"]), \
+    assert release_signing.verify_hex(body, m["signature"]["value"], purpose="artifact-manifest"), \
         "genuine manifest failed signature verification"
     tampered = json.loads(body)
     tampered["artifacts"][0]["sha256"] = "0" * 64
     tam_body = json.dumps(tampered, sort_keys=True,
                           separators=(",", ":")).encode()
-    assert not release_signing.verify_hex(tam_body, m["signature"]["value"]), \
+    assert not release_signing.verify_hex(tam_body, m["signature"]["value"], purpose="artifact-manifest"), \
         "TAMPERED manifest passed signature verification"
     return True, (f"Ed25519 manifest verified; tampered sha256 rejected; "
                   f"{len(m['artifacts'])} artifacts content-addressed")

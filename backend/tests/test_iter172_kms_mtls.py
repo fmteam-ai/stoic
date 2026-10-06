@@ -24,9 +24,9 @@ def _run(coro):
 def test_local_sign_verify_roundtrip():
     import release_signing
     body = b"iter172-payload"
-    sig = release_signing.sign_hex(body)
-    assert release_signing.verify_hex(body, sig)
-    assert not release_signing.verify_hex(body + b"x", sig)
+    sig = release_signing.sign_hex(body, purpose="ea-release")
+    assert release_signing.verify_hex(body, sig, purpose="ea-release")
+    assert not release_signing.verify_hex(body + b"x", sig, purpose="ea-release")
 
 
 def test_external_mode_requires_config(monkeypatch):
@@ -38,7 +38,7 @@ def test_external_mode_requires_config(monkeypatch):
     monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", raising=False)
     monkeypatch.delenv("ED25519_SIGNING_KEY_B64", raising=False)
     with pytest.raises(RuntimeError, match="RELEASE_SIGNER_URL"):
-        release_signing.sign_hex(b"x")
+        release_signing.sign_hex(b"x", purpose="ea-release")
 
 
 def _external_env(monkeypatch, release_signing):
@@ -91,8 +91,8 @@ def test_external_signer_delegates_and_verifies(monkeypatch):
 
     monkeypatch.setattr(requests, "post", fake_post)
     body = b"iter172-external"
-    sig = release_signing.sign_hex(body)
-    assert release_signing.verify_hex(body, sig)
+    sig = release_signing.sign_hex(body, purpose="ea-release")
+    assert release_signing.verify_hex(body, sig, purpose="ea-release")
     assert seen["url"] == "https://signer.internal/sign"
     assert seen["auth"] == "Bearer tok"
 
@@ -113,7 +113,7 @@ def test_external_signer_bad_signature_rejected(monkeypatch):
     monkeypatch.setattr(requests, "post",
                         lambda *a, **k: _Resp())
     with pytest.raises(RuntimeError, match="failed local verification"):
-        release_signing.sign_hex(b"forged")
+        release_signing.sign_hex(b"forged", purpose="ea-release")
 
 
 def test_local_signing_forbidden_in_production(monkeypatch):
@@ -124,11 +124,11 @@ def test_local_signing_forbidden_in_production(monkeypatch):
     monkeypatch.delenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", raising=False)
     monkeypatch.delenv("RELEASE_SIGNER_DEFERRED", raising=False)
     with pytest.raises(RuntimeError, match="forbids RELEASE_SIGNER=local"):
-        release_signing.sign_hex(b"x")
+        release_signing.sign_hex(b"x", purpose="ea-release")
     # v56: the escape hatch was REMOVED — the override no longer works
     monkeypatch.setenv("RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD", "true")
     with pytest.raises(RuntimeError, match="forbids RELEASE_SIGNER=local"):
-        release_signing.sign_hex(b"x")
+        release_signing.sign_hex(b"x", purpose="ea-release")
 
 
 def test_signer_status_exposed_on_release_key():

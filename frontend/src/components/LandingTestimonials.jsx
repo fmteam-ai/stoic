@@ -211,10 +211,15 @@ export const LandingTestimonials = () => {
                 {" "}<span data-testid="testimonials-stats-status">{statsLine}</span>
             </p>
             <TrustBar onStatus={setStatsStatus} />
-            <div className="tst-marquee" data-testid="testimonials-marquee" data-reduced-motion={reducedMotion ? "true" : "false"}
+            {/* N101-7 — aria-pressed belongs on a real toggle button, never on the role=region carousel */}
+            <button type="button" className="tst-pause" onClick={() => setPaused((v) => !v)}
+                    aria-pressed={paused} aria-controls="testimonials-marquee" data-testid="testimonials-pause-button">
+                {paused ? "Resume scrolling" : "Pause scrolling"}
+            </button>
+            <div className="tst-marquee" id="testimonials-marquee" data-testid="testimonials-marquee" data-reduced-motion={reducedMotion ? "true" : "false"}
                  role="region" aria-roledescription="carousel" tabIndex={0}
                  onKeyDown={(e) => { if (e.key === " " || e.key === "Enter") { e.preventDefault(); setPaused((v) => !v); } }}
-                 data-paused={paused ? "true" : "false"} aria-pressed={paused}
+                 data-paused={paused ? "true" : "false"}
                  aria-label="Illustrative testimonials — press Space or Enter to pause or resume the scrolling; decorative scrolling duplicates are hidden from assistive technology">
                 <div className="tst-track">
                     {rowA.map((t, i) => <Card key={`a${i}`} t={t} idx={i * 2} />)}

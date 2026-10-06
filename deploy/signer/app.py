@@ -13,12 +13,18 @@ Contract (matches backend/release_signing.py::_external_sign):
                    (identity check used by release_signing.signer_health)
   GET  /healthz    → {"status": "ok"}   (unauthenticated liveness for the platform)
 
-Env (both REQUIRED — the service refuses to start without them):
-  SIGNER_TOKEN               bearer token the API must present
+Env:
+  SIGNER_TOKEN               release token — CI only (ea-release, model-manifest, policy-migration)
+  SIGNER_TOKEN_BUNDLE        runtime token — the trading API (acceptance-bundle, artifact-manifest, …).
+                             Missing ⇒ RELEASE-ONLY mode: runtime purposes are refused (403). There is
+                             no "one token signs everything" fallback (N101-5).
+  SIGNER_KEY_ID              key id this signer answers for (default stoic-release-ed25519-v1; the
+                             self-hosted runtime sidecar uses stoic-bundle-ed25519-v1)
   ED25519_SIGNING_KEY_B64    base64 raw 32-byte Ed25519 private key
 """
 import base64
 import hmac
+import logging
 import os
 
 from cryptography.hazmat.primitives import serialization
@@ -26,7 +32,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
 
-KEY_ID = "stoic-release-ed25519-v1"
+KEY_ID = (os.environ.get("SIGNER_KEY_ID") or "stoic-release-ed25519-v1").strip()
+_log = logging.getLogger("stoic.signer")
 
 def _secret(name: str) -> str:
     """Env value, or the contents of the file named by <NAME>_FILE (Docker secrets)."""
@@ -39,20 +46,24 @@ def _secret(name: str) -> str:
 
 _token = _secret("SIGNER_TOKEN")                       # release token — CI only: ea-release, model-manifest
 try:
-    _bundle_token = _secret("SIGNER_TOKEN_BUNDLE")      # API token — acceptance-bundle & other runtime purposes
+    _bundle_token = _secret("SIGNER_TOKEN_BUNDLE") or None   # API token — runtime purposes
 except (KeyError, FileNotFoundError):
-    _bundle_token = None                                # single-token install: release token signs everything
+    _bundle_token = None
+if not _bundle_token:
+    _log.warning("SIGNER_TOKEN_BUNDLE not configured — RELEASE-ONLY mode: runtime purposes are refused (N101-5)")
 
 # N100-11 — domain separation. Mirrors backend/release_signing.PURPOSES byte-for-byte.
 PURPOSES = {
     "ea-release":        b"stoic:ea-release:v1\0",
     "model-manifest":    b"stoic:model-manifest:v1\0",
+    "policy-migration":  b"stoic:policy-migration:v1\0",
     "acceptance-bundle": b"stoic:acceptance-bundle:v1\0",
+    "artifact-manifest": b"stoic:artifact-manifest:v1\0",
     "audit-anchor":      b"stoic:audit-anchor:v1\0",
     "differentiation":   b"stoic:differentiation:v1\0",
     "canary":            b"stoic:canary:v1\0",
 }
-RELEASE_PURPOSES = {"ea-release", "model-manifest"}
+RELEASE_PURPOSES = {"ea-release", "model-manifest", "policy-migration"}
 _key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(_secret("ED25519_SIGNING_KEY_B64")))
 
 app = FastAPI(title="STOIC Release Signer", docs_url=None, redoc_url=None)
@@ -82,8 +93,10 @@ def _authorize_purpose(role: str, purpose: str) -> bytes:
     if purpose in RELEASE_PURPOSES and role != "release":
         # the trading API holds only the bundle token → it can NEVER obtain an EA-release signature
         raise HTTPException(status_code=403, detail="this token may not sign release artefacts")
-    if purpose not in RELEASE_PURPOSES and role == "release" and _bundle_token:
-        raise HTTPException(status_code=403, detail="release token may not sign runtime artefacts")
+    if purpose not in RELEASE_PURPOSES and role != "bundle":
+        # N101-5 — no single-token fallback: the release token never signs runtime artefacts,
+        # even when no bundle token is configured (release-only signer)
+        raise HTTPException(status_code=403, detail="runtime purposes require the bundle token")
     return PURPOSES[purpose]
 
 
@@ -106,7 +119,8 @@ def public_key():
 @app.get("/health")
 def health(authorization: str | None = Header(None)):
     _auth(authorization)
-    return {"ok": True, "key_id": KEY_ID, "public_key_b64": _public_key_b64()}
+    return {"ok": True, "key_id": KEY_ID, "public_key_b64": _public_key_b64(),
+            "release_only": _bundle_token is None}
 
 
 @app.post("/sign")

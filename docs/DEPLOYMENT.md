@@ -221,12 +221,53 @@ cd /opt/stoic && git fetch --all --tags --prune && git checkout --detach origin/
   && STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV=$(git rev-parse HEAD@{1}) deploy/update.sh
 ```
 
+### Tagged release on a git-checkout host (N101-1)
+A git checkout of a tag always carries the **developer** `release/rc_lock.json`
+(`authoritative: false`, no image digests) and an unsubstituted `backend/BUILD_SHA`; the
+authoritative lock is frozen *inside* `release.yml` and attached to the GitHub Release. After
+the attestation gate passes, `update.sh` therefore **adopts** the release lock before the strict
+provenance check (`deploy/lib.sh adopt_release_lock`):
+
+1. fetches `rc_lock.json`, `SHA256SUMS`, `SHA256SUMS.sig`, `SHA256SUMS.pem` from the release assets;
+2. `cosign verify-blob` on `SHA256SUMS` against `release.yml@refs/tags/<tag>`;
+3. checks `sha256(rc_lock.json)` against the signed `SHA256SUMS` line and the lock's
+   `authoritative: true` / `git_commit == source_sha == deployed SHA` / both image digests;
+4. writes it to `release/rc_lock.json`, stamps `backend/BUILD_SHA`, keeps a copy as
+   `deploy/releases/rc_lock-<sha>.json` so a rollback re-adopts the previous release's lock.
+
+The image build copies both files, so the running backend sees the authoritative lock.
+**LIVE authority still needs `DEPLOY_MODE=registry`**: the release gate compares the running
+image digest with the digest locked by CI, and a locally *built* image never matches
+(docs/PUBLISH_RUNBOOK.md "registry mode"). Attested DEMO accounts are exempt (N101-2).
+
+### Demo-only install mode (production host, before the first authoritative release)
+Since main97 a production host (`APP_ENV=production`) sets **every** broker account close-only
+until an authoritative signed release is installed. With N101-2 the release gate (like the
+acceptance bundle) exempts accounts whose **admin-attested environment is DEMO**; LIVE stays
+close-only, so nothing is weakened for real money. To run the MT5 demo from `main` while the
+release path is finished:
+
+```bash
+# ./.env — keep APP_ENV=production, leave both crypto switches unset
+ATTESTATION_REQUIRED=false            # provenance runs non-strict (developer snapshot accepted)
+UPDATE_HOLD_ON_FAILURE=1 STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh
+```
+Then Admin → Demo Readiness → *04 · Live authority gates* lists the release-gate verdict per
+account: `DEMO: allowed — attested DEMO`, `LIVE: blocked — release not authoritative`.
+**Never switch the host to `APP_ENV=development`** — that lifts the live gates for real-money
+accounts too. Remove `ATTESTATION_REQUIRED=false` once a tagged release deploys.
+
 ## Backups
 ```bash
 deploy/backup.sh backup           # timestamped gzip archive in ./backups (14-day retention)
 deploy/backup.sh restore <file>   # maintenance-mode restore (see below)
 deploy/backup.sh schedule         # prints the nightly crontab line
 ```
+`BACKUP_PASSPHRASE_FILE` (encrypts the dump and the `secrets/` tarball) is provisioned
+automatically (N101-6): `install.sh` and `update.sh` create `~/.stoic-backup-pass`
+(`openssl rand -base64 32`, mode 600, **outside** `./secrets` and `./backups`) and record it in
+`./.env` when it is missing. **Copy it to your password manager** — without it no backup of
+`secrets/` (bridge_token_hash_key, ledger_anchor_key, …) can be restored.
 Restore procedure: stops the API and all workers (no writes), **validates the
 archive with a dry run** before touching data, restores, then restarts the
 API only — workers stay stopped until the operator verifies broker

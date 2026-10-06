@@ -44,6 +44,7 @@ else
   echo "== STOIC update: $(git rev-parse --short HEAD) -> ${REF} =="
 
   echo "-- pre-update backup"
+  ensure_backup_passphrase || exit 1    # N101-6 — never reach backup.sh without a passphrase for secrets/
   deploy/backup.sh backup
   # R-1 — remember THIS archive: an auto-rollback restores code AND data together
   # (main94 rewrites bridge tokens + indexes at first boot; old code cannot start on new data).
@@ -55,9 +56,8 @@ else
   # N100-1 — main99's installer wrote deploy/env/* over the (then tracked) template files; main100
   # removes them from git, so a modified copy makes `git checkout` refuse. Templates carry no
   # secrets (backend/.env is untouched) → restore them before switching trees.
-  for t in .env.example backend/.env.example; do
-    git ls-files --error-unmatch "$t" >/dev/null 2>&1 && git checkout -- "$t" 2>/dev/null || true
-  done
+  # N101-1 — the adopted authoritative rc_lock/BUILD_SHA are tracked too (kept per commit in deploy/releases/).
+  restore_tracked_release_files
   git checkout --detach "${REF}"
   if [ "$(git rev-parse HEAD)" = "${PREV}" ]; then
     echo "   already on $(git rev-parse --short HEAD) — nothing to publish"
@@ -74,7 +74,9 @@ fi
 # and stop — never rebuild/restart the running stack for a refused release.
 gate_refused() {
   echo "!! release refused before build — nothing was changed; checkout restored to ${PREV}"
+  restore_tracked_release_files
   git checkout --detach "${PREV}"
+  restore_adopted_lock "${PREV}"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) gate-refused ref=${REF}" >> deploy/releases.log
   exit 1
 }
@@ -104,7 +106,9 @@ rollback() {
   else
     echo "!! no pre-update archive to restore (or UPDATE_ROLLBACK_RESTORE_DB=0) — database keeps the NEW release's state"
   fi
+  restore_tracked_release_files
   git checkout --detach "${PREV}"
+  restore_adopted_lock "${PREV}"
   if [ "$(deploy_mode)" = "registry" ]; then verify_attestation >/dev/null 2>&1 || true; fi
   provision_images || true
   compose_up
@@ -115,6 +119,9 @@ rollback() {
 
 echo "-- release attestation gate (signed CI record: SHA · tests · scans · gates)"
 verify_attestation || gate_refused
+
+echo "-- release lock adoption (N101-1: authoritative rc_lock + BUILD_SHA from the signed release assets)"
+adopt_release_lock || gate_refused
 
 echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test manifest bind to one commit)"
 verify_release_provenance || gate_refused
@@ -133,6 +140,8 @@ fi
 python3 scripts/sync_env_examples.py >/dev/null || { echo "!! env templates could not be materialised from deploy/env/"; gate_refused; }
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
 ensure_release_secrets || gate_refused   # N100-7 — nothing is built yet: refuse, never restore the database
+ensure_bundle_key_pins                   # N101-5 — runtime key id/pin; CI release token never on the API host
+ensure_backup_passphrase || gate_refused # N101-6 — second stage too (first stage may have run an older script)
 # N-R1 — hosts installed before the trusted-proxy chain existed: default the docker ranges once
 grep -q "^TRUSTED_PROXY_CIDRS=." backend/.env 2>/dev/null || set_kv backend/.env TRUSTED_PROXY_CIDRS "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8,::1/128,fd00::/8"
 provision_images || rollback
