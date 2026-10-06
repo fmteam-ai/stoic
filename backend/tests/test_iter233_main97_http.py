@@ -84,7 +84,7 @@ def test_acceptance_bundle_generate_shape(admin_session):
     # N97 bundle signature coverage — verdict + accounts + release + expiry
     assert "verdict" in body
     assert "account_ids" in body
-    assert "signature" in body and "digest" in body
+    assert "signature" not in body and "digest" in body                       # audit P3: HMAC stays server-side
     payload = body.get("payload") or {}
     assert "release" in payload, f"release missing from payload: {list(payload)}"
     assert any(k in body for k in ("expiry", "expires_at", "ttl", "valid_until")), (

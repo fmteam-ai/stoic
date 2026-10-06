@@ -111,7 +111,7 @@ class TestAcceptanceBundleGenerate:
         assert "failures" in data and isinstance(data["failures"], list)
         assert len(data["failures"]) > 0
         assert "digest" in data
-        assert "signature" in data and isinstance(data["signature"], str) and len(data["signature"]) > 0
+        assert "signature" not in data and len(data.get("digest", "")) == 64      # audit P3: HMAC stays server-side
         payload = data.get("payload") or {}
         accounts = payload.get("accounts")
         assert isinstance(accounts, list)

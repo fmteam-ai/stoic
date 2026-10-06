@@ -204,6 +204,7 @@ async def current_status(db) -> dict:
     from broker_env import attested_environment
     rel = release_identity()
     b = await latest_bundle(db)
+    public_b = {k: v for k, v in (b or {}).items() if k != "signature"} if b else None   # audit P3
     accounts = []
     async for acc in db.accounts.find({"mode": {"$ne": "paper"}, "trading_enabled": True,
                                        "status": {"$ne": "deleted"}}, {"label": 1, "display_name": 1,
@@ -218,7 +219,7 @@ async def current_status(db) -> dict:
                          "environment": env, "covered": ok, "reason": why,
                          "gate_applies": env == "LIVE"})
     live = [a for a in accounts if a["gate_applies"]]
-    return {"required": required(), "release": rel, "latest": b,
+    return {"required": required(), "release": rel, "latest": public_b,
             "valid_for_release": bool(live) and all(a["covered"] for a in live),
             "reason": ("all live accounts covered" if live and all(a["covered"] for a in live)
                        else (next((a["reason"] for a in live if not a["covered"]), None) or "no live account enabled")),

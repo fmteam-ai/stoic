@@ -19,7 +19,7 @@ from scalp import risk_reservations as rr
 
 logger = logging.getLogger("account.reservations")
 
-LOCK_TTL_SEC = 5
+LOCK_TTL_SEC = 15          # audit P3: must outlive the snapshot (several counts + aggregate) under DB latency
 LOCK_RETRIES = 40          # 40 × 50 ms = 2 s worst case before "busy"
 
 
@@ -33,7 +33,8 @@ def _day_start_iso(now=None) -> str:
 
 
 async def ensure_reservation_lock_indexes(db) -> None:
-    await db.account_reservation_locks.create_index("locked_until")
+    # audit P3: abandoned leases self-clean (TTL on the lease timestamp; released docs set it to None)
+    await db.account_reservation_locks.create_index("locked_until", expireAfterSeconds=300)
 
 
 async def _acquire_lock(db, account_id: str, owner: str) -> bool:

@@ -156,6 +156,7 @@ async def admin_acceptance_generate(request: Request, user=Depends(get_current_u
         doc = await build_bundle(db, actor=actor)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
+    doc.pop("signature", None)                                   # audit P3: the HMAC stays server-side
     await _audit(db, actor_email=actor, action="acceptance_bundle_generated", target_kind="release",
                  target_id=str(doc["build_sha"])[:12], target_label=doc["verdict"],
                  meta={"bundle_id": doc["bundle_id"], "failures": len(doc["failures"])})
@@ -166,7 +167,7 @@ async def admin_acceptance_generate(request: Request, user=Depends(get_current_u
 async def admin_acceptance_list(user=Depends(get_current_user)):
     _admin_only(user)
     rows = await get_db().acceptance_bundles.find(
-        {}, {"_id": 0, "payload": 0}).sort("created_at", -1).to_list(20)
+        {}, {"_id": 0, "payload": 0, "signature": 0}).sort("created_at", -1).to_list(20)   # audit P3: digest only
     return {"bundles": rows}
 
 
