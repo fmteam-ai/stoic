@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { PlansEditor } from "@/components/admin/PlansEditor";
 import { EmailTemplatesPanel } from "@/components/admin/EmailTemplatesPanel";
+import { SecurityAlertsCard } from "@/components/admin/SecurityAlertsCard";
 
 const ORDER = ["stripe", "turnstile", "email", "ai"];
 
@@ -94,7 +95,7 @@ export default function AdminIntegrations() {
 
     return (
         <AppLayout>
-            <PageHeader title="Integrations" subtitle="Stripe · Cloudflare Turnstile · E-mail · AI — status, live tests and sealed key updates" />
+            <PageHeader title="Integrations" subtitle="Stripe · Cloudflare Turnstile · E-mail · AI · Security Telegram — status, live tests and sealed key updates" />
             {!data ? <div className="flex justify-center py-16"><Loader2 className="w-6 h-6 animate-spin text-[#52525B]" /></div> : (
                 <>
                     <div data-testid="integrations-vault-note" className="mb-5 text-[11px] font-mono text-[#71717A] border border-[#1F1F1F] px-3 py-2 flex items-start gap-2">
@@ -108,6 +109,7 @@ export default function AdminIntegrations() {
                             <ProviderCard key={id} id={id} label={data.providers[id]} signals={data.signals} onEdit={(k) => { setEdit(k); setForm({ value: "", password: "", otp: "" }); }}
                                 keys={Object.entries(data.keys).filter(([, k]) => k.provider === id)} />
                         ))}
+                        <SecurityAlertsCard />
                     </div>
                     <div className="mt-6 space-y-6">
                         <PlansEditor />

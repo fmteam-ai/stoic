@@ -739,6 +739,28 @@ async def admin_integrations_test(provider: str, user=Depends(get_current_user))
     return await integ.test_provider(get_db(), provider, user)
 
 
+# ── Security alerts (Telegram) — the chat that receives pairing / security-agent alerts ─────────
+@router.get("/admin/security-alerts/status")
+async def admin_security_alerts_status(user=Depends(get_current_user)):
+    from auth import require_admin
+    require_admin(user)
+    import security_alert_test as sat
+    return await sat.status(get_db())
+
+
+@router.post("/admin/security-alerts/test")
+async def admin_security_alerts_test(request: Request, user=Depends(get_current_user)):
+    """Send ONE test message to the security Telegram chat so the operator can prove the channel
+    works before the demo starts. Admin only, rate limited, audited."""
+    from auth import require_admin
+    from security import rate_limit
+    require_admin(user)
+    db = get_db()
+    await rate_limit(db, "security_alert_test", f"user:{user['id']}", 3, 600, "Too many test alerts — try again in 10 minutes", request=request)
+    import security_alert_test as sat
+    return await sat.send_test(db, user)
+
+
 async def _reauth(db, user: dict, password: str, otp: str | None) -> None:
     """Secret changes need fresh proof of the admin's password (+ TOTP when enrolled)."""
     from auth import verify_password
