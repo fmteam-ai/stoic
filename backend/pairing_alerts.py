@@ -126,9 +126,15 @@ async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None)
     accounts = [a async for a in db.accounts.find(
         {"installer_paired_at": {"$exists": True, "$ne": None}, "status": {"$ne": "deleted"}},
         {"label": 1, "broker": 1, "account_number": 1, "installer_paired_at": 1, "installer_paired_hostname": 1,
-         "installer_version": 1, "last_heartbeat": 1, "synthetic": 1, "status": 1, "user_id": 1}).limit(SCAN_LIMIT)]
+         "installer_version": 1, "last_heartbeat": 1, "synthetic": 1, "status": 1, "user_id": 1}
+    ).sort("installer_paired_at", -1).limit(SCAN_LIMIT)]                       # newest pairings first — deterministic
     open_keys = {a["dedup_key"] async for a in db.ops_alerts.find({"kind": KIND, "acked_at": None}, {"dedup_key": 1})}
     p = plan(accounts, open_keys, now, url=webrequest_url(), is_test=is_test)
+    if len(accounts) >= SCAN_LIMIT:
+        # N107-note1 — a truncated scan proves nothing about the accounts it did not see: keep their open
+        # alerts active (never silently close + reopen them), they are re-evaluated once they fall inside.
+        scanned = {dedup_key(a.get("_id")) for a in accounts}
+        p["active"] |= {k for k in open_keys if k not in scanned}
     raised = 0
     for key, text, meta, acc in p["raise"]:
         synthetic = bool(is_test(acc))

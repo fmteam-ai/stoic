@@ -899,6 +899,13 @@ async def on_startup():
         await _da.ensure_indexes(get_db())   # r26 P1-02 nonce TTL + uniqueness
         from close_commands import ensure_indexes as _close_idx   # r25 P2-01: unique (trade_id, close_seq)
         await _close_idx(get_db())
+        try:
+            import scalp_rows_migration as _srm   # A15-7 — legacy origin:scalp rows → origin:auto + engine:scalp (idempotent)
+            _srm_res = await _srm.migrate(get_db())
+            if _srm_res["modified"]:
+                logger.info("scalp rows migration rewrote %d legacy rows", _srm_res["modified"])
+        except Exception as _e:  # noqa: BLE001 — a migration hiccup must not keep the API down
+            logger.warning("scalp rows migration skipped: %s", type(_e).__name__)
         import plan_settings as _plans
         await _plans.load(get_db())   # Admin → Integrations → Plans pricing/trial overlay
         # Safety review — DEFAULT_MODE is observe; grandfather migration

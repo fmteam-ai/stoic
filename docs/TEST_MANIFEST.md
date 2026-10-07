@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 882 |
+| unit | pure logic, no external I/O | every CI job | 895 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4166 |
-| ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
+| ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5314 tests across 551 files.**
+**Total: 5333 tests across 555 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -483,6 +483,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_r29_audit.py` | integration | 8 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 5 |
+| `e2e/tests/chart_provenance.spec.ts` | ui-e2e | 6 |
 | `e2e/tests/dashboard.spec.ts` | ui-e2e | 1 |
 | `e2e/tests/helpers.ts` | ui-e2e | 0 |
 | `e2e/tests/pages.spec.ts` | ui-e2e | 2 |
@@ -516,11 +517,14 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_a13_part3.py` | unit | 13 |
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
 | `backend/tests/unit/test_admin_integrations.py` | unit | 6 |
+| `backend/tests/unit/test_alert_test_and_scalp_migration.py` | unit | 4 |
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
 | `backend/tests/unit/test_env_template_sync.py` | unit | 4 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
+| `backend/tests/unit/test_fixplan_a16_part1.py` | unit | 5 |
+| `backend/tests/unit/test_fixplan_a16_part2.py` | unit | 3 |
 | `backend/tests/unit/test_fixplan_main100.py` | unit | 7 |
 | `backend/tests/unit/test_fixplan_main100_n11.py` | unit | 4 |
 | `backend/tests/unit/test_fixplan_main101.py` | unit | 14 |
@@ -543,7 +547,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_install_report_healthwatch.py` | unit | 3 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
 | `backend/tests/unit/test_llm_models_single_source.py` | unit | 6 |
-| `backend/tests/unit/test_pairing_alerts.py` | unit | 4 |
+| `backend/tests/unit/test_pairing_alerts.py` | unit | 5 |
 | `backend/tests/unit/test_public_status_bounded.py` | unit | 2 |
 | `backend/tests/unit/test_r25_close_writers_migrated.py` | unit | 7 |
 | `backend/tests/unit/test_r25_ea_binary_proof.py` | unit | 5 |

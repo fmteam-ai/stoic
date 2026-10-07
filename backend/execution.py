@@ -658,6 +658,8 @@ class PaperEngine(ExecutionEngine):
             "closed_at": None,
             "error": None,
             "origin": signal.get("origin", "manual"),
+            "engine": signal.get("engine"),           # N99-1 / A15-7 — paper rows carry the engine too: scalp vs auto caps stay separate
+            "scope": signal.get("scope"),
             "strategy_class": signal.get("strategy_class"),
             "market_regime": signal.get("market_regime"),
             "risk_pct": (signal.get("risk_pct")

@@ -90,6 +90,16 @@ def env_checks(env=None) -> list[dict]:
 
 async def db_checks(db) -> list[dict]:
     out = []
+    # A16-4 — lifetime of the approved signed (demo) policy
+    from inventory_projection import policy_expiry
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
+    pe = policy_expiry(exp)
+    if pe["expires_at"]:
+        st = "fail" if pe["expired"] else ("warn" if pe["reminder_due"] else "pass")
+        out.append(_check("policy_expiry", f"Signed {'DEMO-only ' if exp.get('demo_only') else ''}policy {exp.get('policy_version')} in force",
+                          st, ("EXPIRED " if pe["expired"] else f"expires in {pe['days_left']} day(s) · ") + pe["expires_at"][:16] + " UTC"
+                          + (" · approved single-admin" if exp.get("single_admin_approval") else ""),
+                          "" if st == "pass" else "sign the next policy (Actions → policy-migration) and approve it; expired = inventory close-only"))
     plain = await db.accounts.count_documents({"bridge_token": {"$type": "string"}})
     out.append(_check("token_migration", "Bridge tokens stored as hashes only (P1-01 migration complete)",
                       "pass" if plain == 0 else "fail",
@@ -127,6 +137,33 @@ async def _cap_config(db, acc: dict):
     return cfg
 
 
+def demo_evidence(account: dict) -> dict:
+    """A16-5 — WHY this account counts as DEMO, in operator words.
+    kind: broker_signed | broker_demo_binary | server_name | admin_override | none
+    binary: signed | local (demo-only binary) | unknown."""
+    from broker_env import reported_trade_mode, broker_reports_real, ea_binary_accepted, demo_proof, attestation_state
+    att = account.get("environment_attestation") or {}
+    verifier = (att.get("proof") or {}).get("verifier")
+    binary = "signed" if ea_binary_accepted(account) else ("local" if account.get("ea_binary_sha256") else "unknown")
+    binary_label = {"signed": "signed EX5", "local": "locally compiled — demo-only binary", "unknown": "no binary measured"}[binary]
+    if broker_reports_real(account):
+        return {"kind": "real_money", "label": "BROKER REPORTS REAL/CONTEST — attestation void", "binary": binary, "binary_label": binary_label, "verifier": verifier}
+    if attestation_state(account) != "valid":
+        return {"kind": "none", "label": "not attested" if attestation_state(account) == "none" else "attestation invalidated (identity changed)",
+                "binary": binary, "binary_label": binary_label, "verifier": verifier}
+    if verifier == "admin_override":
+        return {"kind": "admin_override", "label": "admin override (no broker/server evidence)", "binary": binary, "binary_label": binary_label, "verifier": verifier}
+    if reported_trade_mode(account) == "demo":
+        # broker_env.broker_reports_demo counts "demo" as EVIDENCE only on a signed EX5; a locally compiled
+        # EA saying "demo" is shown for what it is: broker word on a demo-only binary
+        kind = "broker_signed" if binary == "signed" else "broker_demo_binary"
+        return {"kind": kind, "label": "broker reported DEMO (" + ("signed EX5" if binary == "signed" else "demo-only binary") + ")",
+                "binary": binary, "binary_label": binary_label, "verifier": verifier}
+    if demo_proof(account)["checks"].get("server_demo_named"):
+        return {"kind": "server_name", "label": "server-name rule (broker mode not reported — EA < 1.60)", "binary": binary, "binary_label": binary_label, "verifier": verifier}
+    return {"kind": "none", "label": "attested without current evidence", "binary": binary, "binary_label": binary_label, "verifier": verifier}
+
+
 async def fleet(db) -> list[dict]:
     """Accounts that matter for the demo: enabled or heartbeating in the last 24 h."""
     since = (_now() - timedelta(hours=FLEET_WINDOW_H)).isoformat()
@@ -139,6 +176,8 @@ async def fleet(db) -> list[dict]:
                                    "account_number": 1, "trading_authority": 1,
                                    "ea_identity": 1, "account_trade_mode": 1, "creds_version": 1,   # N102-2 — identity-bound attestation
                                    "broker": 1,                                                       # A15-4 — part of the attestation identity hash
+                                   "ea_binary_sha256": 1, "ea_binary_sha256_method": 1,
+                                   "broker_account_mismatch": 1,                                      # A16-5 — demo evidence
                                    "broker_account_id_reported": 1}).to_list(length=FLEET_LIMIT)
     from broker_env import attested_environment, reported_trade_mode
     from routes.bridge_routes import position_mode_resolution
@@ -163,6 +202,7 @@ async def fleet(db) -> list[dict]:
             # D-1 — until a signed 1.60 exists, attested DEMO terminals legitimately run 1.57–1.59
             "ea_version": a.get("ea_version"), "ea_current": ea_v == LATEST_EA or (demo and ea_v in DEMO_ACCEPTED_EA),
             "attested_demo": demo,
+            "demo_evidence": demo_evidence(a),                   # A16-5 — how DEMO was proven + signed vs local binary
             # N98-6 — broker's own ACCOUNT_TRADE_MODE (EA 1.60+); None on older EAs
             "broker_trade_mode": reported_trade_mode(a),
             "position_mode": pm.get("mode"), "position_mode_source": pm.get("source"),

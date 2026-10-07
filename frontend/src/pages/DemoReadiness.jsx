@@ -37,7 +37,7 @@ function FleetTable({ rows }) {
         <div className="overflow-x-auto">
             <table className="w-full font-mono text-[11px]" data-testid="demo-fleet-table">
                 <thead><tr className="text-[#71717A] text-left">
-                    <th className="py-1 pr-3">ACCOUNT</th><th className="pr-3">HEARTBEAT</th><th className="pr-3">EA</th><th className="pr-3">DEMO</th><th className="pr-3">MODE</th><th className="pr-3">CAPS</th><th>BRAKE</th>
+                    <th className="py-1 pr-3">ACCOUNT</th><th className="pr-3">HEARTBEAT</th><th className="pr-3">EA</th><th className="pr-3">DEMO</th><th className="pr-3">EVIDENCE</th><th className="pr-3">BINARY</th><th className="pr-3">MODE</th><th className="pr-3">CAPS</th><th>BRAKE</th>
                 </tr></thead>
                 <tbody>
                     {rows.slice(0, 12).map((r) => (
@@ -46,6 +46,8 @@ function FleetTable({ rows }) {
                             <td className="pr-3"><Flag ok={r.heartbeat_fresh} /> {r.last_heartbeat ? String(r.last_heartbeat).slice(11, 19) : "never"}</td>
                             <td className="pr-3"><Flag ok={r.ea_current} /> {r.ea_version || "—"}</td>
                             <td className="pr-3"><Flag ok={r.attested_demo} /> {r.attested_demo ? "attested" : "LIVE"}</td>
+                            <td className={`pr-3 ${r.demo_evidence?.kind === "real_money" ? "text-[#FF3B30]" : r.demo_evidence?.kind === "admin_override" ? "text-[#FFB020]" : ""}`} data-testid={`demo-evidence-${r.id}`}>{r.demo_evidence?.label || "—"}</td>
+                            <td className={`pr-3 ${r.demo_evidence?.binary === "signed" ? "text-[#00FF41]" : "text-[#FFB020]"}`} data-testid={`demo-binary-${r.id}`}>{r.demo_evidence?.binary_label || "—"}</td>
                             <td className="pr-3"><Flag ok={r.position_mode_explicit} /> {r.position_mode} · {r.position_mode_source}</td>
                             <td className="pr-3"><Flag ok={r.caps_explicit} /> day {r.trade_of_day_cap ?? "—"} · open {r.max_concurrent_trades ?? "—"}</td>
                             <td>{r.braked ? <span className="text-[#FF3B30]">ACTIVE</span> : <span className="text-[#52525B]">none</span>}</td>

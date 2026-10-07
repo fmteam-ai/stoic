@@ -63,6 +63,9 @@ class _Cursor:
     def limit(self, _n):
         return self
 
+    def sort(self, *_a, **_k):
+        return self
+
     def __aiter__(self):
         async def gen():
             for r in self.rows:
@@ -116,3 +119,22 @@ def test_wired_into_the_ops_alert_evaluator_with_auto_resolve():
     body = src[src.index("async def evaluate_ops_alerts"):src.index("# 6 · AUTO-RESOLVE")]
     assert "pairing_alerts.evaluate(db, now, raise_alert=raise_alert)" in body and "active |= _pa_active" in body
     assert pa.alert_sec() == 600 and pa.max_age_sec() == 7 * 86400
+
+
+def test_truncated_scan_keeps_unscanned_open_alerts_active(monkeypatch):
+    monkeypatch.setattr(pa, "SCAN_LIMIT", 1)
+    sent = []
+
+    async def notify(text):
+        sent.append(text)
+
+    async def raise_alert(*a, **k):
+        return None
+
+    db = _DB([_acc("seen", installer_paired_at=_iso(900), last_heartbeat=_iso(3))],      # the one row the scan returned
+             [{"dedup_key": pa.dedup_key("seen")}, {"dedup_key": pa.dedup_key("unseen")}])
+    active, n = asyncio.new_event_loop().run_until_complete(pa.evaluate(db, NOW, raise_alert=raise_alert, notify=notify))
+    assert pa.dedup_key("unseen") in active and pa.dedup_key("seen") not in active and n == 0   # unseen stays open, seen recovers
+    assert len(sent) == 1 and "Demo seen" in sent[0]
+    src = open(os.path.join(ROOT, "backend", "pairing_alerts.py"), encoding="utf-8").read()
+    assert '.sort("installer_paired_at", -1).limit(SCAN_LIMIT)' in src
