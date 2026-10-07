@@ -299,7 +299,12 @@ async def inventory_domain(db, account: dict | None = None) -> dict:
     proj = await projection(db, exp.get("scope_user_id"))
     if proj["blocking"]:
         return {"level": "CLOSE_ONLY", "reason": "; ".join(proj["violations"][:3])}
-    return {"level": "FULL", "reason": "inventory matches approved configuration"}
+    if exp.get("demo_only") and account is not None and "_id" in account:
+        # A15-1 — a signed DEMO-only policy never authorises a real-money account
+        from broker_env import attested_environment
+        if attested_environment(account) != "DEMO":
+            return {"level": "CLOSE_ONLY", "reason": "inventory policy is DEMO-only — this account is not an attested DEMO account"}
+    return {"level": "FULL", "reason": "inventory matches approved configuration" + (" (signed demo-only policy)" if exp.get("demo_only") else "")}
 
 
 # ── A13 Part 2 domains ───────────────────────────────────────────────────────

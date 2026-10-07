@@ -25,6 +25,13 @@ async def is_closed(db) -> bool:
     return (await state(db))["closed"]
 
 
+async def refuse_if_closed(db, kind: str) -> None:
+    """Raise the 403 carrying the operator's custom message (N103-7)."""
+    s = await state(db)
+    if s["closed"]:
+        raise closed_http_exception(kind, s["message"])
+
+
 async def set_closed(db, closed: bool, actor_email: str, message: str | None = None) -> dict:
     await db.platform_state.update_one(
         {"_id": STATE_ID},
@@ -34,6 +41,6 @@ async def set_closed(db, closed: bool, actor_email: str, message: str | None = N
     return await state(db)
 
 
-def closed_http_exception(kind: str):
+def closed_http_exception(kind: str, message: str | None = None):
     from fastapi import HTTPException
-    return HTTPException(status_code=403, detail={"code": "signups_closed", "kind": kind, "message": CLOSED_MESSAGE})
+    return HTTPException(status_code=403, detail={"code": "signups_closed", "kind": kind, "message": message or CLOSED_MESSAGE})

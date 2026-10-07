@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { ClosedBetaBanner } from "@/components/ClosedBetaBanner";
 import { useNavigate } from "react-router-dom";
 import { LandingTestimonials } from "@/components/LandingTestimonials";
 import "@/styles/intro_trailer.css";
@@ -161,6 +162,7 @@ export default function WelcomeTrailer() {
 
     return (
         <div className="trailer-stage" data-testid="welcome-page" data-page="welcome">
+            <ClosedBetaBanner />
             <div className="particle-field" />
             {/* Ticker rails for ambient motion */}
             <div ref={tickerRef} className="ticker-rail" style={{ left: "12%" }} />

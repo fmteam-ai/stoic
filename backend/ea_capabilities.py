@@ -203,7 +203,9 @@ def _signed_release_record() -> dict | None:
                 if prev and not (len(str(prev.get("ex5_sha256") or "")) == 64 and prev.get("compiled_by") == "github-actions"
                                  and (prev.get("signature") or {}).get("sig_hex")
                                  and key_id_accepted((prev.get("signature") or {}).get("key_id"))
-                                 and verify_hex(_canonical_payload(prev), prev["signature"]["sig_hex"], purpose="ea-release")):
+                                 and (verify_hex(_canonical_payload(prev), prev["signature"]["sig_hex"], purpose="ea-release")
+                                      # N103-6 — the previous release was signed before key_id joined the payload
+                                      or verify_hex(_canonical_payload(prev, legacy=True), prev["signature"]["sig_hex"], purpose="ea-release"))):
                     prev = None
                 result = {**rec, "previous": prev}
         except Exception:  # noqa: BLE001 — unreadable/unverifiable record ⇒ fail closed
@@ -214,11 +216,13 @@ def _signed_release_record() -> dict | None:
     return None
 
 
-def _canonical_payload(rec: dict) -> bytes:
+def _canonical_payload(rec: dict, legacy: bool = False) -> bytes:
     """N102-5 — the signing key id is part of the signed statement: a record cannot be re-labelled
-    as signed by another key without invalidating the signature."""
+    as signed by another key without invalidating the signature. `legacy` = pre-N102-5 payload, accepted
+    ONLY for the `previous` record during a rollout (N103-6) — never for the current release."""
     import json
     body = {k: rec.get(k) for k in ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
                                     "windows_build", "mt5_build", "source_commit")}
-    body["key_id"] = (rec.get("signature") or {}).get("key_id")
+    if not legacy:
+        body["key_id"] = (rec.get("signature") or {}).get("key_id")
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()

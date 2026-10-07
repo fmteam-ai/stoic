@@ -52,11 +52,11 @@ def test_toggle_closes_and_reopens_with_audit_fields_and_env_override():
 def test_register_and_affiliate_apply_are_gated_before_any_side_effect():
     auth = open(os.path.join(ROOT, "backend", "routes", "auth_routes.py"), encoding="utf-8").read()
     reg = auth[auth.index('@router.post("/register")'):]
-    assert reg.index("signup_lock.is_closed") < reg.index("require_turnstile") < reg.index("rate_limit(")
+    assert reg.index("signup_lock.refuse_if_closed") < reg.index("require_turnstile") < reg.index("rate_limit(")
     assert '@router.get("/signups-status")' in auth
     aff = open(os.path.join(ROOT, "backend", "routes", "affiliate_routes.py"), encoding="utf-8").read()
     body = aff[aff.index('@router.post("/affiliate/apply")'):]
-    assert body.index("signup_lock.is_closed") < body.index("_require_active_subscription")
+    assert body.index("signup_lock.refuse_if_closed") < body.index("_require_active_subscription")
     adm = open(os.path.join(ROOT, "backend", "routes", "admin_routes.py"), encoding="utf-8").read()
     assert '@router.post("/admin/settings/signups")' in adm and 'action="signups_" +' in adm
     for f, tid in (("Register.jsx", "register-closed"), ("Affiliate.jsx", "affiliate-closed"), ("AdminUsers.jsx", "signups-toggle")):

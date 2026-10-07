@@ -72,7 +72,9 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
     async for g in db.trades.aggregate([{"$match": open_match},
                                         {"$group": {"_id": "$account_id", "n": {"$sum": 1}}}]):
         open_by_account[str(g["_id"])] = int(g["n"])
+    docs = []
     async for acc in db.accounts.find(q):
+        docs.append(acc)
         aid = str(acc["_id"])
         account_ids_seen.add(aid)
         acc_bots = bot_rows.get(aid, [])
@@ -123,7 +125,16 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
                 violations.append(f"{len(outside)} active bot(s) outside the approved account set")
         if exp.get("accounts") is not None and counts["configured"] != exp["accounts"]:
             violations.append(f"configured accounts {counts['configured']} != expected {exp['accounts']}")
-        if exp.get("enabled") is not None and counts["live_enabled"] != exp["enabled"]:
+        if exp.get("demo_only"):
+            # A15-1 — signed DEMO-only policy: every listed account must be an attested DEMO account and enabled
+            from broker_env import attested_environment
+            if exp.get("enabled") is not None and counts["enabled"] != exp["enabled"]:
+                violations.append(f"enabled accounts {counts['enabled']} != expected {exp['enabled']} (demo-only policy)")
+            not_demo = [a.get("label") or str(a["_id"]) for a in docs
+                        if str(a["_id"]) in ids and attested_environment(a) != "DEMO"]
+            if not_demo:
+                violations.append("demo-only policy but account(s) not attested DEMO: " + ", ".join(not_demo[:3]))
+        elif exp.get("enabled") is not None and counts["live_enabled"] != exp["enabled"]:
             violations.append(f"enabled LIVE accounts {counts['live_enabled']} != expected {exp['enabled']} "
                               "(demo/paper never satisfy a live requirement)")
         if exp.get("bots") is not None and counts["bots_enabled"] != exp["bots"]:
@@ -225,7 +236,7 @@ async def confirm_current(db, approver_email: str) -> dict:
 
 DEPLOYMENT_POLICY = {"accounts": 6, "enabled": 3, "bots": 3}       # signed installation policy (round 11 P1-02)
 DEPLOYMENT_POLICY_VERSION = "6/3/3-v1"
-MIGRATION_SCHEMA = "stoic.policy-migration/v2"
+MIGRATION_SCHEMA = "stoic.policy-migration/v3"   # v3 (A15-1): signed `demo_only` flag
 
 
 def installation_id() -> str | None:
@@ -243,9 +254,10 @@ def environment_label() -> str:
 def migration_body(mig: dict) -> bytes:
     """Canonical signed statement of the COMPLETE policy transition (round 12 P2-06)."""
     fields = ("schema", "installation_id", "environment", "previous_policy_version", "policy_version",
-              "accounts", "enabled", "bots", "account_ids", "reason", "issuer", "issued_at", "expires_at", "nonce")
+              "accounts", "enabled", "bots", "account_ids", "demo_only", "reason", "issuer", "issued_at", "expires_at", "nonce")
     body = {k: mig.get(k) for k in fields}
     body["account_ids"] = sorted(body.get("account_ids") or [])
+    body["demo_only"] = bool(body.get("demo_only"))     # A15-1 — DEMO-only policies are signed as such
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
 
 
@@ -327,7 +339,11 @@ def validate_expectation(payload: dict, *, require_policy: bool,
     if ids and len(ids) != en:
         errors.append("len(account_ids) must equal enabled")
     policy_version = current_policy_version
-    if require_policy and (acc, en, bots) != (DEPLOYMENT_POLICY["accounts"], DEPLOYMENT_POLICY["enabled"], DEPLOYMENT_POLICY["bots"]):
+    mig = payload.get("policy_migration") or {}
+    demo_only = bool(mig.get("demo_only"))
+    if demo_only and not mig.get("signature_hex"):
+        errors.append("demo_only is only accepted inside a SIGNED policy migration")
+    if require_policy and ((acc, en, bots) != (DEPLOYMENT_POLICY["accounts"], DEPLOYMENT_POLICY["enabled"], DEPLOYMENT_POLICY["bots"]) or demo_only):
         probs = migration_problems(payload, current_policy_version=current_policy_version)
         if probs:
             errors.append("production target must be 6/3/3 unless a valid signed policy migration is supplied: " + "; ".join(probs))
@@ -337,7 +353,8 @@ def validate_expectation(payload: dict, *, require_policy: bool,
         errors.append("production expectation must name the approved account ids")
     if errors:
         raise HTTPException(status_code=400, detail={"code": "expectation_invalid", "errors": errors})
-    return {"accounts": acc, "enabled": en, "bots": bots, "account_ids": ids, "policy_version": policy_version}
+    return {"accounts": acc, "enabled": en, "bots": bots, "account_ids": ids, "policy_version": policy_version,
+            "demo_only": demo_only}
 
 
 async def current_policy_version(db) -> str:
@@ -372,6 +389,7 @@ async def approve_expectation(db, approver_email: str) -> dict:
         await consume_migration_nonce(db, pending["policy_migration"])                  # single use, atomic
     doc = {k: pending.get(k) for k in ("accounts", "enabled", "bots", "account_ids", "scope_user_id", "proposed_by", "proposed_at")}
     doc.update(_id="inventory_expectation", approved_by=approver_email, set_at=_now(), policy_version=v["policy_version"],
+               demo_only=bool(v.get("demo_only")),            # SEC-002 (audit #5) — the signed DEMO-only guard must persist
                approval_mode=approval_mode())
     await db.platform_state.replace_one({"_id": "inventory_expectation"}, doc, upsert=True)
     await db.platform_state.delete_one({"_id": "inventory_expectation_pending"})

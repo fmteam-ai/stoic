@@ -1,0 +1,108 @@
+# A15-1 — signed inventory policy migration (dual approval via the `policy-approval` GitHub environment:
+# configure it with 2 required reviewers in Settings → Environments). The policy is signed with the CI
+# release key (purpose policy-migration) and committed to release/policy_migrations/<version>.json; the
+# Inventory Go-Live panel (Admin → Brokers) loads it and submits it with the expectation.
+name: policy-migration
+
+on:
+  workflow_dispatch:
+    inputs:
+      installation_id:
+        description: "STOIC_INSTALLATION_ID of the target host (Admin → System, or backend/.env)"
+        required: true
+      previous_policy_version:
+        description: "policy version currently in force (default install: 6/3/3-v1)"
+        required: true
+        default: "6/3/3-v1"
+      policy_version:
+        description: "new policy version, e.g. demo-2x2-v1"
+        required: true
+      accounts:
+        description: "configured accounts"
+        required: true
+      enabled:
+        description: "enabled accounts (= bots)"
+        required: true
+      account_ids:
+        description: "comma-separated platform account ids of the ENABLED accounts"
+        required: true
+      demo_only:
+        description: "DEMO-only policy — every listed account must be an attested DEMO account"
+        type: boolean
+        default: true
+      reason:
+        description: "why (>= 10 chars) — recorded in the signed statement"
+        required: true
+      expires_days:
+        description: "validity in days"
+        default: "45"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: policy-migration
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    environment: policy-approval
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6 (pinned)
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5 (pinned)
+        with:
+          python-version: "3.11"
+      - run: pip install -q cryptography requests
+      - name: Sign policy migration with the CI release key
+        # SEC-001 (audit #5) — workflow inputs reach the shell ONLY through env vars, never via ${{ }} interpolation
+        env:
+          APP_ENV: production
+          RELEASE_SIGNER: external
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_SIGNER_KEY_ID: stoic-release-ed25519-v1
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          STOIC_INSTALLATION_ID: ${{ inputs.installation_id }}
+          IN_INSTALLATION_ID: ${{ inputs.installation_id }}
+          IN_PREVIOUS: ${{ inputs.previous_policy_version }}
+          IN_VERSION: ${{ inputs.policy_version }}
+          IN_ACCOUNTS: ${{ inputs.accounts }}
+          IN_ENABLED: ${{ inputs.enabled }}
+          IN_ACCOUNT_IDS: ${{ inputs.account_ids }}
+          IN_DEMO_ONLY: ${{ inputs.demo_only }}
+          IN_REASON: ${{ inputs.reason }}
+          IN_EXPIRES_DAYS: ${{ inputs.expires_days }}
+          IN_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          # strict shapes before anything touches the signer
+          [[ "$IN_VERSION" =~ ^[A-Za-z0-9._/-]{1,64}$ ]] || { echo "bad policy_version"; exit 1; }
+          [[ "$IN_PREVIOUS" =~ ^[A-Za-z0-9._/-]{1,64}$ ]] || { echo "bad previous_policy_version"; exit 1; }
+          [[ "$IN_ACCOUNTS" =~ ^[0-9]{1,3}$ && "$IN_ENABLED" =~ ^[0-9]{1,3}$ && "$IN_EXPIRES_DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "bad counts"; exit 1; }
+          [[ "$IN_ACCOUNT_IDS" =~ ^[A-Za-z0-9,_-]{1,512}$ ]] || { echo "bad account_ids"; exit 1; }
+          [[ "$IN_INSTALLATION_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo "bad installation_id"; exit 1; }
+          DEMO=(); [ "$IN_DEMO_ONLY" = "true" ] && DEMO=(--demo-only)
+          python scripts/sign_policy_migration.py \
+            --installation-id "$IN_INSTALLATION_ID" --environment production \
+            --previous "$IN_PREVIOUS" --version "$IN_VERSION" \
+            --accounts "$IN_ACCOUNTS" --enabled "$IN_ENABLED" --bots "$IN_ENABLED" \
+            --account-ids "$IN_ACCOUNT_IDS" "${DEMO[@]}" \
+            --reason "$IN_REASON" --issuer "$IN_ACTOR via policy-approval" \
+            --expires-days "$IN_EXPIRES_DAYS"
+      - name: Commit the signed policy
+        env:
+          IN_VERSION: ${{ inputs.policy_version }}
+          IN_DEMO_ONLY: ${{ inputs.demo_only }}
+        run: |
+          set -euo pipefail
+          git config user.name "stoic-policy-bot"
+          git config user.email "policy-bot@users.noreply.github.com"
+          git add release/policy_migrations/
+          git commit -m "policy-migration: ${IN_VERSION} (demo_only=${IN_DEMO_ONLY}) [skip ci]"
+          git push origin HEAD:main

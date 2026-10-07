@@ -17,11 +17,21 @@ export const InventoryGoLivePanel = () => {
     const [pend, setPend] = useState(null);
     const [busy, setBusy] = useState("");
     const [exp, setExp] = useState({ accounts: "", enabled: "", bots: "" });
+    const [accountIds, setAccountIds] = useState("");          // A15-1 — production requires the approved account ids
+    const [policies, setPolicies] = useState([]);              // A15-1 — signed policy migrations from release/policy_migrations/
+    const [policyFile, setPolicyFile] = useState("");
+    const policy = policies.find((p) => p.file === policyFile) || null;
+    const choosePolicy = (file) => {
+        setPolicyFile(file);
+        const pol = policies.find((p) => p.file === file);
+        if (pol) { setExp({ accounts: String(pol.accounts), enabled: String(pol.enabled), bots: String(pol.bots) }); setAccountIds(pol.account_ids.join(",")); }
+    };
 
     const load = useCallback(async () => {
         try {
-            const [a, b] = await Promise.all([api.get("/authority/inventory"), api.get("/authority/inventory/pending")]);
-            setInv(a.data); setPend(b.data);
+            const [a, b, c] = await Promise.all([api.get("/authority/inventory"), api.get("/authority/inventory/pending"),
+                                                 api.get("/authority/inventory/policies").catch(() => ({ data: { policies: [] } }))]);
+            setInv(a.data); setPend(b.data); setPolicies(c.data?.policies || []);
             const cur = b.data?.expectation || {};
             setExp((e) => ({
                 accounts: e.accounts === "" && cur.accounts != null ? String(cur.accounts) : e.accounts,
@@ -99,6 +109,20 @@ export const InventoryGoLivePanel = () => {
                         ))}
                         <Button variant="ghost" size="sm" data-testid="expectation-fill-current" onClick={fill}>use current</Button>
                     </div>
+                    <Input data-testid="expectation-account-ids" placeholder="approved account ids, comma-separated (required in production)"
+                        value={accountIds} onChange={(e) => setAccountIds(e.target.value)} className="font-mono text-xs" />
+                    {policies.length > 0 && (
+                        <select data-testid="expectation-policy" value={policyFile} onChange={(e) => choosePolicy(e.target.value)}
+                            className="w-full bg-[#0A0A0A] border border-[#1F1F1F] text-xs font-mono text-white p-2">
+                            <option value="">no signed policy (6/3/3 live default)</option>
+                            {policies.map((p) => (
+                                <option key={p.file} value={p.file} disabled={!p.matches_host}>
+                                    {p.policy_version} · {p.accounts}/{p.enabled}/{p.bots} · {p.demo_only ? "DEMO-only" : "LIVE"}{p.matches_host ? "" : " · other host"}
+                                </option>
+                            ))}
+                        </select>
+                    )}
+                    {policy && <div data-testid="expectation-policy-info" className="text-[11px] font-mono text-[#71717A]">signed by {policy.issuer} · expires {String(policy.expires_at).slice(0, 10)} · {policy.demo_only ? "every listed account must be an attested DEMO account" : "real-money policy"}</div>}
                     {pend.expectation_pending ? (
                         <div data-testid="expectation-pending" className="text-xs text-[#FFB000] font-mono">pending {pend.expectation_pending.accounts}/{pend.expectation_pending.enabled}/{pend.expectation_pending.bots} proposed by {pend.expectation_pending.proposed_by} — a DIFFERENT admin must approve</div>
                     ) : null}
@@ -108,7 +132,8 @@ export const InventoryGoLivePanel = () => {
                     {lastError && <div data-testid="golive-last-error" className="text-xs text-[#FF3B30] font-mono">{lastError}</div>}
                     <div className="flex gap-2">
                         <Button size="sm" data-testid="expectation-propose" disabled={!!busy || !exp.accounts || !exp.enabled || !exp.bots}
-                            onClick={() => run("prop", () => api.post("/authority/inventory/expectation", { accounts: +exp.accounts, enabled: +exp.enabled, bots: +exp.bots }), singleAdmin ? "expectation proposed — approve with a fresh step-up" : "expectation proposed — second admin must approve")}>
+                            onClick={() => run("prop", () => api.post("/authority/inventory/expectation", { accounts: +exp.accounts, enabled: +exp.enabled, bots: +exp.bots,
+                                account_ids: accountIds.split(",").map((x) => x.trim()).filter(Boolean), ...(policy ? { policy_migration: policy.migration } : {}) }), singleAdmin ? "expectation proposed — approve with a fresh step-up" : "expectation proposed — second admin must approve")}>
                             {busy === "prop" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Propose"}
                         </Button>
                         <Button size="sm" variant="outline" data-testid="expectation-approve" disabled={!!busy || !pend.expectation_pending || selfBlocked(pend.expectation_pending?.proposed_by)}
