@@ -48,8 +48,8 @@ def test_plan_raises_recovers_and_texts_carry_the_fix():
     assert "15 min" in text and "never heartbeated" in text and "allow WebRequest for https://stoic.example" in text and "installer v1.4" in text
     assert meta["webrequest_url"] == "https://stoic.example" and meta["never_heartbeated"] is True
     assert "token" not in text.lower()                                                       # nothing secret in the chat
-    # a2 heartbeated → its open alert recovers; an alert for an unknown account recovers too (deleted account)
-    assert [k for k, _ in p["recovered"]] == sorted([pa.dedup_key("a2"), pa.dedup_key("gone")])
+    # a2 heartbeated after pairing → its open alert recovers; an alert whose account is gone recovers SILENTLY (N106-4)
+    assert [k for k, _ in p["recovered"]] == [pa.dedup_key("a2")]
     assert "Demo a2" in dict(p["recovered"])[pa.dedup_key("a2")] and "RECOVERED" in dict(p["recovered"])[pa.dedup_key("a2")]
 
 

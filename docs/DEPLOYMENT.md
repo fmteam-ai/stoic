@@ -295,6 +295,15 @@ reconciliation and release readiness, then resumes with `docker compose up -d`.
 Weekly restore drills into a staging copy are part of the soak plan
 (docs/MT5_VALIDATION_CAMPAIGN.md §7).
 
+**Full server rebuild — restore order (N106-3).** `install.sh` creates a fresh `secrets/`
+(new `installation_id`, new `bridge_token_hash_key`, …) and `backup.sh restore` only fills
+**missing** files. On a rebuilt host therefore: clone the repo → `deploy/backup.sh restore
+<dump>` (puts `secrets/` back) **before** `deploy/install.sh` — or, if `install.sh` already
+ran, delete the freshly minted `secrets/installation_id` (and any other key you intend to
+restore) before restoring. `ensure_installation_id` then mirrors the restored id into
+`backend/.env`; a host whose `.env` already carries a *different* id stops the update with a
+mismatch message instead of silently orphaning the signed policies.
+
 ## Production configuration checklist
 Set in `backend/.env` (see `deploy/env/backend.env.example` for every key):
 

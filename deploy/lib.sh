@@ -92,7 +92,7 @@ ensure_release_secrets() {
 ensure_installation_id() {
   [ -f backend/.env ] || return 0
   local id="" envid
-  envid=$( { grep -E '^STOIC_INSTALLATION_ID=.' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+  envid=$( { grep -E '^STOIC_INSTALLATION_ID=.' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'" | tr -d '[:space:]')   # N106-3 — trailing spaces / CRLF never fake a mismatch
   # N105-4 — secrets/installation_id is the durable copy (backup.sh encrypts ./secrets; backend/.env is
   # not backed up): a rebuilt host restores secrets/ and keeps the id every signed policy names.
   if [ -d secrets ] && [ -s secrets/installation_id ]; then
@@ -110,7 +110,7 @@ ensure_installation_id() {
   if [ -d secrets ] && [ ! -s secrets/installation_id ]; then
     ( umask 077; printf '%s\n' "${id}" > secrets/installation_id ) && echo "   stored the installation id in secrets/installation_id (included in encrypted backups)"
   fi
-  [ "${envid}" = "${id}" ] || set_kv backend/.env STOIC_INSTALLATION_ID "${id}"
+  grep -qxF "STOIC_INSTALLATION_ID=${id}" backend/.env || set_kv backend/.env STOIC_INSTALLATION_ID "${id}"   # rewrites a padded/CRLF line clean
 }
 
 # N101-6 — backups encrypt secrets/ with BACKUP_PASSPHRASE_FILE; nothing ever provisioned it, so a

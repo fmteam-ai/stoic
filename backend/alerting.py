@@ -220,6 +220,13 @@ async def evaluate_ops_alerts(db) -> int:
         raised += _pa_raised
     except Exception as e:  # noqa: BLE001 — one failing detector must not stop the others
         logger.warning("pairing alert evaluation failed: %s", type(e).__name__)
+        # N106-5 — a failed check is not a recovery: keep its open alerts out of the auto-resolve
+        # below, otherwise they close now and are raised (and pushed to Telegram) again next cycle.
+        try:
+            active |= {a["dedup_key"] async for a in db.ops_alerts.find(
+                {"kind": "pairing_no_heartbeat", "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("pairing alert keep-open failed: %s", type(e2).__name__)
 
     # 6 · AUTO-RESOLVE — evaluator-managed alerts whose condition no longer
     # holds are closed automatically (acked_by system:auto-resolved) so a
