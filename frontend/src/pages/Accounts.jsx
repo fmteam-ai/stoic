@@ -3,6 +3,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import api, { formatApiError, API } from "@/lib/api";
 import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
+import { InstallProgressChip } from "@/components/InstallProgressPanel";
 import { TrustedTerminals } from "@/components/TrustedTerminals";
 import PartnerBrokerCard from "@/components/PartnerBrokerCard";
 import MultiAccountOverview from "@/components/MultiAccountOverview";
@@ -574,6 +575,7 @@ export default function Accounts() {
                                                 }`}>
                                                     {live ? <><PlugsConnected className="w-3 h-3 inline mr-1" /> CONNECTED</> : "● DISCONNECTED"}
                                                 </span>
+                                                {a.mode !== "paper" && <InstallProgressChip accountId={a.id} />}
                                                 <button
                                                     onClick={() => patchAccount(a.id, { trading_enabled: a.trading_enabled !== true },
                                                         a.trading_enabled !== true ? `Trading enabled on ${a.label}` : `Trading disabled on ${a.label}`)}

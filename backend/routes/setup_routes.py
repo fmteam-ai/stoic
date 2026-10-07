@@ -317,3 +317,28 @@ async def pairing_status(account_id: str, user=Depends(get_current_user)):
         "token_outstanding": bool(pairing and not pairing.get("consumed_at")),
         "token_consumed_at": pairing.get("consumed_at") if pairing else None,
     }
+
+
+
+# ─────────────── Installer progress (Accounts page panel) ───────────────
+@router.get("/setup/install-progress/{account_id}")
+async def install_progress(account_id: str, request: Request, user=Depends(get_current_user)):
+    """Five derived steps (token → installer → .ex5 → heartbeat/WebRequest → identity) so a
+    stuck VPS pairing is visible on the Accounts page. Read-only; grants nothing."""
+    db = get_db()
+    oid = parse_object_id(account_id, "Account")
+    account = await db.accounts.find_one({"_id": oid})
+    if not account or (account.get("user_id") != user["id"] and user.get("role") != "admin"):
+        raise HTTPException(status_code=404, detail="Account not found")
+    pairing = await db.pairing_tokens.find_one({"account_id": account_id}, sort=[("issued_at", -1)])
+    installation = await db.installations.find_one(
+        {"account_id": account_id, "revoked": {"$ne": True}}, sort=[("created_at", -1)],
+        projection={"installation_id": 1, "host_fingerprint": 1, "ex5_sha256": 1, "ex5_measured_by": 1,
+                    "attestation": 1, "device_key": 1, "pending_first_heartbeat": 1, "created_at": 1})
+    import device_attestation as da
+    import install_progress as ip
+    from ea_capabilities import accepted_ea_sha256s
+    return ip.derive(account, pairing, installation, attested=da.attested_hash(installation),
+                     accepted_hashes=accepted_ea_sha256s(), request_base=str(request.base_url),
+                     forwarded_proto=request.headers.get("x-forwarded-proto"),
+                     forwarded_host=request.headers.get("x-forwarded-host") or request.headers.get("host"))

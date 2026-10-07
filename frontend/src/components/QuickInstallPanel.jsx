@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import api, { formatApiError, API } from "@/lib/api";
 import { Copy, Loader2, Terminal as TerminalIcon, CheckCircle2, RefreshCw, Server } from "lucide-react";
 import { toast } from "sonner";
+import { InstallProgressPanel } from "@/components/InstallProgressPanel";
 
 /**
  * QuickInstallPanel — one-stop pairing UX for the PowerShell auto-installer.
@@ -136,6 +137,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
     if (pairedAt) {
         return (
             <div className="border border-[#00FF41]/30 bg-[#00FF41]/5 p-4" data-testid="quick-install-paired">
+                <InstallProgressPanel accountId={accountId} />
                 {trustSection}
                 <div className="flex items-center gap-2 mb-2">
                     <CheckCircle2 className="w-5 h-5 text-[#00FF41]" />
@@ -144,7 +146,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                 <div className="text-sm text-[#A1A1AA] space-y-1">
                     <div>Paired host: <code className="text-[#FFD700] font-mono">{pairedHost || "—"}</code></div>
                     <div className="text-xs text-[#52525B] mt-2">
-                        Open MT5 on this host and drag <strong>EmergentTradingBridge</strong> from Navigator → Experts onto any chart. AutoTrading must be ON (green ▶).
+                        Open MT5 on this host: Tools → Options → Expert Advisors → allow WebRequest for the URL above (once per terminal), then drag <strong>EmergentTradingBridge</strong> from Navigator → Experts onto any chart. AutoTrading must be ON (green ▶).
                     </div>
                 </div>
                 <button
@@ -161,6 +163,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
 
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="quick-install-panel">
+            <InstallProgressPanel accountId={accountId} />
             {trustSection}
             <div className="flex items-center gap-2 mb-2">
                 <TerminalIcon className="w-5 h-5 text-[#FFD700]" />
@@ -169,7 +172,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
             <p className="text-sm text-[#A1A1AA] mb-4">
                 {trustEligible
                     ? "Prefer the strongest pairing instead? Generate a one-time token and paste a single PowerShell command on your MT5 host."
-                    : "Skip MetaEditor, F7 compile, and the WebRequest URL whitelist dance. Generate a one-time token, then paste a single PowerShell command on your MT5 host."}
+                    : "Skip MetaEditor and the F7 compile. Generate a one-time token, paste a single PowerShell command on your MT5 host, then allow the WebRequest URL once in MT5 (the installer prints it)."}
             </p>
 
             {!token ? (
@@ -211,8 +214,8 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
 
                     <div className="text-xs text-[#A1A1AA] space-y-1.5">
                         <div><strong className="text-white">Step 2 —</strong> Open <strong>PowerShell as Administrator</strong> on your MT5 host (your PC or broker VPS) and paste.</div>
-                        <div><strong className="text-white">Step 3 —</strong> The installer will discover MT5, deploy the EA, write your bridge token, and compile. <strong className="text-[#00FF41]">~60 seconds.</strong></div>
-                        <div><strong className="text-white">Step 4 —</strong> In MT5, drag <strong>EmergentTradingBridge</strong> onto any chart, ensure AutoTrading is ON.</div>
+                        <div><strong className="text-white">Step 3 —</strong> The installer picks the MT5 terminal, deploys the EA, writes your bridge token, and installs the .ex5. <strong className="text-[#00FF41]">~60 seconds.</strong></div>
+                        <div><strong className="text-white">Step 4 —</strong> In MT5: Tools → Options → Expert Advisors → allow WebRequest for the URL the installer prints; drag <strong>EmergentTradingBridge</strong> onto any chart; AutoTrading ON.</div>
                         <div className="text-[#52525B] mt-2">
                             This page will auto-detect when the installer completes.
                         </div>
