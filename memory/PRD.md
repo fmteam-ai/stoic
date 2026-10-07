@@ -3339,3 +3339,6 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 - N106-3: `.env` installation id stripped of spaces/CRLF (padded line rewritten clean); DEPLOYMENT.md "Full server rebuild — restore order" (restore before install.sh / delete the fresh secrets/installation_id).
 - N106-4: RECOVERED only when `last_heartbeat >= installer_paired_at` for a still-existing, non-test account (abandoned / re-paired / deleted → silent auto-resolve); `user_id` projected so `is_synthetic_account` can match; N106-5: a failing pairing check keeps its open `pairing_no_heartbeat` keys in `active` so auto-resolve does not close + re-raise them.
 - Tests: tests/unit/test_fixplan_main106.py (5), pairing test updated. Manifest + rc_lock regenerated.
+
+## 2026-10-07 — SECURITY AUDIT #6 (incremental main104–106 + progress panel + pairing alerts): PASS, no material findings
+- 3 P3 hardenings applied: per-user rate limit on `GET /api/setup/install-progress` (240/min), `SCAN_LIMIT=2000` on the pairing-alert account scan, broker login number masked (`…345`) in Telegram alert text. Host-header fallback for URLs stays (self-scoped; production sets PUBLIC_BACKEND_URL — Demo Readiness checks it). Unit lane 1046 green.

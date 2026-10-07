@@ -48,6 +48,9 @@ def test_plan_raises_recovers_and_texts_carry_the_fix():
     assert "15 min" in text and "never heartbeated" in text and "allow WebRequest for https://stoic.example" in text and "installer v1.4" in text
     assert meta["webrequest_url"] == "https://stoic.example" and meta["never_heartbeated"] is True
     assert "token" not in text.lower()                                                       # nothing secret in the chat
+    long_num = pa.alert_text(_acc("a9", account_number=5012345, installer_paired_at=_iso(900)),
+                             pa.silent_pairing(_acc(installer_paired_at=_iso(900)), NOW, alert_after=600, ceiling=86400), "")
+    assert "…345" in long_num and "5012345" not in long_num                                  # SA6-P3: login number masked
     # a2 heartbeated after pairing → its open alert recovers; an alert whose account is gone recovers SILENTLY (N106-4)
     assert [k for k, _ in p["recovered"]] == [pa.dedup_key("a2")]
     assert "Demo a2" in dict(p["recovered"])[pa.dedup_key("a2")] and "RECOVERED" in dict(p["recovered"])[pa.dedup_key("a2")]
@@ -56,6 +59,9 @@ def test_plan_raises_recovers_and_texts_carry_the_fix():
 class _Cursor:
     def __init__(self, rows):
         self.rows = rows
+
+    def limit(self, _n):
+        return self
 
     def __aiter__(self):
         async def gen():

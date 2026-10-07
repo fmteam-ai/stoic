@@ -14,6 +14,7 @@ logger = logging.getLogger("pairing_alerts")
 KIND = "pairing_no_heartbeat"
 DEFAULT_ALERT_SEC = 600            # 10 minutes after pairing without a heartbeat
 DEFAULT_MAX_AGE_SEC = 7 * 86400    # a pairing silent for a week is abandoned, not an incident
+SCAN_LIMIT = 2000                  # SA6-P3 — bounded scan per cycle (a fleet is tens of terminals, not thousands)
 
 
 def _parse(v) -> datetime | None:
@@ -58,7 +59,9 @@ def silent_pairing(acc: dict, now: datetime, *, alert_after: int, ceiling: int) 
 
 def alert_text(acc: dict, info: dict, url: str) -> str:
     label = acc.get("label") or str(acc.get("_id"))
-    ident = " · ".join(str(x) for x in (acc.get("broker"), acc.get("account_number")) if x)
+    num = str(acc.get("account_number") or "")
+    masked = ("…" + num[-3:]) if len(num) > 3 else num           # SA6-P3 — never the full login number in a chat
+    ident = " · ".join(str(x) for x in (acc.get("broker"), masked) if x)
     mins = info["silent_s"] // 60
     return (
         "STOIC · VPS PAIRING SILENT\n"
@@ -123,7 +126,7 @@ async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None)
     accounts = [a async for a in db.accounts.find(
         {"installer_paired_at": {"$exists": True, "$ne": None}, "status": {"$ne": "deleted"}},
         {"label": 1, "broker": 1, "account_number": 1, "installer_paired_at": 1, "installer_paired_hostname": 1,
-         "installer_version": 1, "last_heartbeat": 1, "synthetic": 1, "status": 1, "user_id": 1})]
+         "installer_version": 1, "last_heartbeat": 1, "synthetic": 1, "status": 1, "user_id": 1}).limit(SCAN_LIMIT)]
     open_keys = {a["dedup_key"] async for a in db.ops_alerts.find({"kind": KIND, "acked_at": None}, {"dedup_key": 1})}
     p = plan(accounts, open_keys, now, url=webrequest_url(), is_test=is_test)
     raised = 0
