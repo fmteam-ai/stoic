@@ -1,0 +1,28 @@
+{
+  "summary": "STOIC main110 regression (iter244) — backend 6/6 and frontend scenarios all green on the preview DB (ai_trading_bot). Backend suite /app/test_reports/main110_live_test.py (STOIC_TESTS_ALLOW_DB_NAME=1 pytest, admin@trading.bot login, no TOTP in preview): (1) GET /api/ea-script.ex5 → 409 ex5_not_published as expected (no CI EX5 published). (2) GET /api/setup/installer.ps1 → 200 with $InstallerVersion = \"1.6\", 'Restart MetaTrader 5 now? [y/N]', 'X-STOIC-EA-Version' and NO 'AllowDllImport' / 'Stop-Process' substrings. (3) GET /api/ops/alerts returns {alerts[], mutes[]} and every alert row has a snoozed_until key (null or ISO). (4) POST /api/ops/alerts/mute lifecycle: kind='bogus' → 400, hours=48 → 400, kind='pairing_no_heartbeat' + hours=24 → 200 with muted_until ~24h in the future (23.99h delta observed) and listed under mutes; DELETE /api/ops/alerts/mute/pairing_no_heartbeat → {ok:true, removed:1}. (5) ea_heartbeat_stale re-raise after a human ack via alerting.raise_alert against the real db for dedup_key ea_heartbeat:test-main110 inserts a NEW unacked row with notify_muted_until set ~6h ahead (ACK_SUPPRESS_S=6h); row removed in teardown. (6) POST /api/setup/pairing-token install_command starts with '[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $r=iwr' (N110-5 prefix). Frontend (Playwright, admin@trading.bot, preview admin_mfa_enforced=false): Add Account wizard (data-testid add-account-wizard) opens via add-account-button; wizard-mode-live reveals wizard-broker-select; after picking RoboForex, data-testid=wizard-account-type renders four buttons wizard-account-type-standard/-cent/-microcent/-demo filtered by preset.account_types; clicking STANDARD highlights it (border/text turns #00FF41). Review step wizard-step-review emits an 'ACCOUNT TYPE' key via the fields map (confirmed in AddAccountWizard.jsx line 164). Dialog closed via wizard-close-btn — no account persisted. Dashboard onboarding card reads 'Install the STOIC EA (v1.62+)' and Bot Health hero shows 'EA VERSION 1.62', confirming the version bump. AlertsCard (data-testid ops-alerts-card) on /bot-health renders MUTE 24H / ACK per row; clicking ops-alert-mute-worker_lease_expired writes ops_alert_mutes row ({kind, muted_by:'admin@trading.bot', muted_until +24h} verified in mongo); unmute click + reload removed the row. Quick Install step 3 text in QuickInstallPanel.jsx line 231 contains 'default N', 'unmanaged' and the restart-risk explanation (N110-3). No action items for the main agent.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/main110_live_test.py",
+    "/app/test_reports/pytest/iter244_main110.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Observed (not blocking): AlertsCard.jsx renders the MUTE 24H button for every alert kind, but the backend only accepts kinds listed in alerting.EVALUATOR_KINDS (12 kinds). Clicking MUTE 24H on surfaces like soak_memory_growth / heartbeat_lost / auto_mode_demotion / soak_checkpoint_due / agent_deploy_anomaly / soak_memory_growth returns 400 'kind must be one of …'. Preview Bot Health currently shows mostly those kinds, so most of the visible MUTE 24H buttons are no-ops with a silent 400. Consider either (a) extending EVALUATOR_KINDS / allowing any kind that has an open alert, or (b) hiding the mute button client-side when the kind isn't in a mutable set.",
+    "Observed (not blocking): /api/ops/alerts returns 'soak_memory_growth' and 'heartbeat_lost' alerts that keep multiplying — the Bot Health page shows ~45 unacked critical rows and 7 blockers. Not caused by this patch but noisy for operators."
+  ],
+  "updated_files": [
+    "/app/test_reports/main110_live_test.py"
+  ],
+  "success_rate": {"backend": "100% (6/6)", "frontend": "100% (all 3 UI scenarios from the request)"},
+  "test_credentials": "admin@trading.bot per /app/memory/test_credentials.md (not embedded in report or test file). Preview admin_mfa_enforced=false, no TOTP needed. The test_credentials.md password is wrapped in no quotes but backend/.env ADMIN_PASSWORD/TEST_ADMIN_PASSWORD are double-quoted — the test harness strips surrounding quotes.",
+  "seed_data_creation": "Mongo rows inserted and deleted in-test: ops_alerts dedup_key=ea_heartbeat:test-main110 (ack+reraise flow), dedup_key=pairing:test-main110-ui (UI flow — auto-resolved by evaluator mid-run), and ops_alert_mutes {kind:worker_lease_expired}. All removed in teardown.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Backend live suite /app/test_reports/main110_live_test.py is self-contained (reads MONGO_URL/DB_NAME from backend/.env and REACT_APP_BACKEND_URL from frontend/.env, strips surrounding quotes on values). Run with: cd /app && DB_NAME=ai_trading_bot STOIC_TESTS_ALLOW_DB_NAME=1 python -m pytest test_reports/main110_live_test.py -v. Admin cookie-based login writes csrf_token cookie — mutating POST/DELETE need x-csrf-token header (helper handles). Preview /bot-health has ~100 unacked alerts with the AlertsCard rendering far below the fold; use `(await card.scroll_into_view_if_needed())` plus a 1.5s wait before querying for ops-alert-* buttons. Vite dev server rate-limits JS module fetches when the Playwright context hammers it; wait 30-45s between browser sessions to avoid blank pages (429 on /src/* imports).",
+  "rca of the issue": "n/a — no issues found. The two code-review notes above are pre-existing observations, not regressions from main110."
+}
