@@ -1,12 +1,17 @@
 #!/usr/bin/env bash
-# One-command Fly.io deploy of the isolated STOIC release signer.
+# FIRST-TIME provisioning of the isolated STOIC release signer on Fly.io — INIT ONLY.
 #
-#   ./deploy_fly.sh [app-name] [region]
+#   ./init_fly_signer.sh [app-name] [region]
 #
 # Generates a fresh Ed25519 keypair + bearer token LOCALLY, stores the private
 # key and token ONLY as Fly secrets, deploys, verifies /healthz + /public-key,
-# and prints the exact Secrets-tab block for the API deployment.
+# and prints the GitHub Actions secrets block (the release token lives in CI only).
 # The private key is never written to disk outside ~/.stoic-signer/ (chmod 600).
+#
+# N105-2 — this script MINTS A NEW KEY under the same key id. Running it against an existing
+# signer silently breaks the GitHub secrets, the server's RELEASE_PUBLIC_KEY_B64 pin, the signed
+# EA record and every signed policy. It REFUSES when the app already holds a signing key.
+# To redeploy the signer CODE with the existing key:   cd deploy/signer && flyctl deploy -a <app>
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -23,6 +28,16 @@ need curl "curl"
 python3 -c "import cryptography" 2>/dev/null || { echo "missing python module: pip install cryptography"; exit 1; }
 
 flyctl auth whoami >/dev/null 2>&1 || { echo "run: flyctl auth login"; exit 1; }
+
+# N105-2 — init only: an existing signing key means this app is LIVE (GitHub secrets, server pin,
+# EA record and signed policies all depend on it). Never rotate it from here.
+if flyctl apps list --json 2>/dev/null | grep -q "\"Name\": *\"$APP\"" \
+   && flyctl secrets list -a "$APP" 2>/dev/null | grep -q 'ED25519_SIGNING_KEY_B64'; then
+  echo "!! $APP already holds ED25519_SIGNING_KEY_B64 — refusing to mint a new key under key id $KEY_ID."
+  echo "   Redeploy the signer code with the existing key:   cd deploy/signer && flyctl deploy -a $APP --ha=false"
+  echo "   Rotating the key is a deliberate ceremony: new key id, new GitHub secrets, new server pin, re-run ea-release and re-sign every policy."
+  exit 3
+fi
 
 mkdir -p "$OUT_DIR"; chmod 700 "$OUT_DIR"
 KEYS=$(python3 - <<'EOF'
@@ -71,18 +86,20 @@ echo "signer OK — public key pinned: $PUBLIC_B64"
 
 cat <<EOF
 
-================ API deployment → Secrets tab (copy exactly) ================
-APP_ENV=production
-ADMIN_MFA_ENFORCED=true
-RELEASE_SIGNER=external
+========= GitHub → Settings → Secrets and variables → Actions (CI signs releases) =========
 RELEASE_SIGNER_URL=$URL
 RELEASE_SIGNER_ALLOWED_HOSTS=$HOST
 RELEASE_SIGNER_TOKEN=$TOKEN
 RELEASE_SIGNER_KEY_ID=$KEY_ID
 RELEASE_PUBLIC_KEY_B64=$PUBLIC_B64
-RELEASE_SIGNER_TIMEOUT=10
 
-DELETE (or leave empty) in the API deployment:
+========= API host backend/.env (VERIFY only — N101-5: the release token NEVER lives on the API host) =========
+RELEASE_SIGNER_KEY_ID=$KEY_ID
+RELEASE_PUBLIC_KEY_B64=$PUBLIC_B64
+(runtime signing uses the local sidecar: BUNDLE_PUBLIC_KEY_B64 / secrets/signer_token_bundle, set by install.sh)
+
+DELETE (or leave empty) on the API host:
+RELEASE_SIGNER_TOKEN
 STEP_UP_BYPASS_TOKEN
 RATE_LIMIT_BYPASS_TOKEN
 ED25519_SIGNING_KEY_B64
@@ -90,6 +107,7 @@ RELEASE_SIGNER_ALLOW_LOCAL_IN_PROD
 =============================================================================
 Signer host URL to hand back: $URL
 Local copies (chmod 600): $OUT_DIR/$APP.{private.b64,token,public.b64}
+Redeploy the signer CODE later with:  cd deploy/signer && flyctl deploy -a $APP --ha=false   (never re-run this script)
 
 Round-trip check from any machine:
   python3 scripts/signer_probe.py --url $URL --token-file $OUT_DIR/$APP.token --public-key $PUBLIC_B64

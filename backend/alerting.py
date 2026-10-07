@@ -23,7 +23,7 @@ SEVERITIES = ("info", "warning", "critical")
 EVALUATOR_KINDS = (
     "ea_heartbeat_stale", "worker_lease_expired", "worker_loop_crashloop",
     "worker_loop_stalled", "outbox_backlog", "outbox_failed",
-    "unprotected_positions", "reconciliation_stuck")
+    "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat")
 
 
 def _now():
@@ -210,6 +210,16 @@ async def evaluate_ops_alerts(db) -> int:
                 f"{stuck} broker-accepted order(s) unresolved for >5m",
                 dedup_key="reconciliation_stuck"):
             raised += 1
+
+    # 5b · paired VPS terminal silent since the installer ran (WebRequest / EA attach / AutoTrading) —
+    #      ops alert + security Telegram push, recovery announced when the first heartbeat lands
+    try:
+        import pairing_alerts
+        _pa_active, _pa_raised = await pairing_alerts.evaluate(db, now, raise_alert=raise_alert)
+        active |= _pa_active
+        raised += _pa_raised
+    except Exception as e:  # noqa: BLE001 — one failing detector must not stop the others
+        logger.warning("pairing alert evaluation failed: %s", type(e).__name__)
 
     # 6 · AUTO-RESOLVE — evaluator-managed alerts whose condition no longer
     # holds are closed automatically (acked_by system:auto-resolved) so a

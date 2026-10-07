@@ -1,0 +1,137 @@
+"""Pairing alerts — a VPS terminal that was paired by the installer but never heartbeats is the #1
+demo blocker (WebRequest URL missing, EA not attached, AutoTrading off). Detect it after
+PAIRING_HEARTBEAT_ALERT_SEC (default 10 min), raise an ops alert and push it to the security
+Telegram chat; announce the recovery when the first heartbeat lands. Pure planning here, I/O in
+`evaluate()` (called by alerting.evaluate_ops_alerts every cycle)."""
+from __future__ import annotations
+
+import logging
+import os
+from datetime import datetime, timezone
+
+logger = logging.getLogger("pairing_alerts")
+
+KIND = "pairing_no_heartbeat"
+DEFAULT_ALERT_SEC = 600            # 10 minutes after pairing without a heartbeat
+DEFAULT_MAX_AGE_SEC = 7 * 86400    # a pairing silent for a week is abandoned, not an incident
+
+
+def _parse(v) -> datetime | None:
+    if not v:
+        return None
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    try:
+        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def alert_sec() -> int:
+    return int(os.environ.get("PAIRING_HEARTBEAT_ALERT_SEC", DEFAULT_ALERT_SEC))
+
+
+def max_age_sec() -> int:
+    return int(os.environ.get("PAIRING_ALERT_MAX_AGE_SEC", DEFAULT_MAX_AGE_SEC))
+
+
+def dedup_key(account_id) -> str:
+    return f"pairing_heartbeat:{account_id}"
+
+
+def silent_pairing(acc: dict, now: datetime, *, alert_after: int, ceiling: int) -> dict | None:
+    """The pairing facts when `acc` was paired ≥ alert_after seconds ago and no heartbeat arrived since."""
+    paired = _parse(acc.get("installer_paired_at"))
+    if not paired or acc.get("status") == "deleted":
+        return None
+    since = (now - paired).total_seconds()
+    if since < alert_after or since > ceiling:
+        return None
+    hb = _parse(acc.get("last_heartbeat"))
+    if hb and hb >= paired:
+        return None
+    return {"paired_at": paired, "silent_s": int(since), "never": hb is None,
+            "host": acc.get("installer_paired_hostname") or "unknown host",
+            "installer_version": acc.get("installer_version")}
+
+
+def alert_text(acc: dict, info: dict, url: str) -> str:
+    label = acc.get("label") or str(acc.get("_id"))
+    ident = " · ".join(str(x) for x in (acc.get("broker"), acc.get("account_number")) if x)
+    mins = info["silent_s"] // 60
+    return (
+        "STOIC · VPS PAIRING SILENT\n"
+        f"Account: {label}" + (f" ({ident})" if ident else "") + "\n"
+        f"Paired: {info['host']} at {info['paired_at'].strftime('%Y-%m-%d %H:%M')} UTC"
+        + (f" (installer v{info['installer_version']})" if info.get("installer_version") else "") + "\n"
+        f"No EA heartbeat for {mins} min since pairing" + (" (never heartbeated)" if info["never"] else "") + ".\n"
+        "Likely: WebRequest URL not allowed, EA not attached, or AutoTrading off.\n"
+        f"Fix in MT5: Tools → Options → Expert Advisors → allow WebRequest for {url or '<your STOIC URL>'};\n"
+        "attach EmergentTradingBridge to a chart; AutoTrading ON. Accounts → Installer Progress shows the live steps."
+    )
+
+
+def recovery_text(acc: dict) -> str:
+    label = acc.get("label") or str(acc.get("_id"))
+    return f"STOIC · VPS PAIRING RECOVERED\nAccount: {label} — EA heartbeat received, terminal is talking again."
+
+
+def plan(accounts: list[dict], open_keys: set[str], now: datetime | None = None, *, url: str = "",
+         alert_after: int | None = None, ceiling: int | None = None) -> dict:
+    """{'active': keys that hold now, 'raise': [(key, text, meta, acc)], 'recovered': [(key, text)]}."""
+    now = now or datetime.now(timezone.utc)
+    alert_after = alert_sec() if alert_after is None else alert_after
+    ceiling = max_age_sec() if ceiling is None else ceiling
+    active, to_raise = set(), []
+    by_key = {}
+    for acc in accounts:
+        key = dedup_key(acc.get("_id"))
+        by_key[key] = acc
+        info = silent_pairing(acc, now, alert_after=alert_after, ceiling=ceiling)
+        if info:
+            active.add(key)
+            to_raise.append((key, alert_text(acc, info, url),
+                             {"account_id": str(acc.get("_id")), "host": info["host"], "silent_s": info["silent_s"],
+                              "never_heartbeated": info["never"], "webrequest_url": url}, acc))
+    recovered = [(k, recovery_text(by_key.get(k, {"_id": k.split(":", 1)[-1]}))) for k in sorted(open_keys) if k not in active]
+    return {"active": active, "raise": to_raise, "recovered": recovered}
+
+
+async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None) -> tuple[set, int]:
+    """Runs inside alerting.evaluate_ops_alerts: returns (active dedup keys, alerts raised).
+    New alerts and recoveries are pushed to the security Telegram chat (best effort)."""
+    now = now or datetime.now(timezone.utc)
+    if notify is None:
+        from security_agent.alerts import send_telegram as notify
+    from install_progress import webrequest_url
+    accounts = [a async for a in db.accounts.find(
+        {"installer_paired_at": {"$exists": True, "$ne": None}, "status": {"$ne": "deleted"}},
+        {"label": 1, "broker": 1, "account_number": 1, "installer_paired_at": 1, "installer_paired_hostname": 1,
+         "installer_version": 1, "last_heartbeat": 1, "synthetic": 1, "status": 1})]
+    open_keys = {a["dedup_key"] async for a in db.ops_alerts.find({"kind": KIND, "acked_at": None}, {"dedup_key": 1})}
+    p = plan(accounts, open_keys, now, url=webrequest_url())
+    raised = 0
+    for key, text, meta, acc in p["raise"]:
+        synthetic = False
+        try:
+            from synthetic_data import is_synthetic_account
+            synthetic = is_synthetic_account(acc)
+        except Exception:  # noqa: BLE001
+            pass
+        new_id = await raise_alert(db, KIND, "critical", text.splitlines()[0] + f" — {acc.get('label') or acc.get('_id')}: "
+                                   f"no heartbeat {meta['silent_s'] // 60} min after pairing on {meta['host']}",
+                                   dedup_key=key, meta=meta, synthetic=synthetic)
+        if new_id:
+            raised += 1
+            if not synthetic:
+                try:
+                    await notify(text)
+                except Exception as e:  # noqa: BLE001 — Telegram must never break the evaluator
+                    logger.warning("pairing alert telegram failed: %s", type(e).__name__)
+    for key, text in p["recovered"]:
+        try:
+            await notify(text)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("pairing recovery telegram failed: %s", type(e).__name__)
+    return p["active"], raised

@@ -104,15 +104,18 @@ signatures). The self-hosted sidecar runs with `SIGNER_ROLE=runtime` (compose): 
 token and refuses release purposes for every caller. Preflight `release_key_distinct` FAILS in
 production while both pins are the same key. **Set `RELEASE_PUBLIC_KEY_B64` to the Fly signer's
 public key** (`GET https://<fly-app>/public-key`) so CI-signed EA records verify on your server;
-if the Fly signer was ever keyed with the sidecar's private key, re-key it
-(`deploy/signer/deploy_fly.sh`) and re-run `ea-release`. The EA record's signed statement includes
+if the Fly signer was ever keyed with the sidecar's private key, that is a deliberate key-rotation
+ceremony (new key id → new GitHub secrets → new server pin → re-run `ea-release` → re-sign every
+policy) — **never** re-run `deploy/signer/init_fly_signer.sh` against a live signer (N105-2: it mints a
+new key under the same key id and refuses when the app already holds one). To redeploy the signer
+CODE with the existing key use only `cd deploy/signer && flyctl deploy -a stoic-signer`. The EA record's signed statement includes
 `signature.key_id` (N102-5), so a record cannot be relabelled to another key.
 Unset `BUNDLE_*` = single-key install (only valid outside production).
 
 Cut-over notes: pre-N100-11 artefacts signed WITHOUT a prefix are accepted only where history must
 stay verifiable (audit anchors, the developer model manifest on re-sign). EA release records and
 acceptance bundles are NOT grandfathered — the EA 1.60 record signed before the prefix no longer
-verifies (N101-4): **redeploy the Fly signer, then re-run `ea-release`**:
+verifies (N101-4): **redeploy the Fly signer code (`flyctl deploy -a stoic-signer`, NOT the init script), then re-run `ea-release`**:
 ```bash
 cd deploy/signer && flyctl deploy -a stoic-signer          # new app.py (purpose-required, release-only)
 # GitHub → Actions → ea-release → Run workflow  (commits release/ea_release.json + the EX5)

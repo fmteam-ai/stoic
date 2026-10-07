@@ -199,7 +199,8 @@ def run_preflight(check_signer_health: bool = False) -> dict:
                                          ("release pin missing — EA records / model manifests cannot verify" if not _rp
                                           else "bundle pin missing — single-key install")),
         "RELEASE_PUBLIC_KEY_B64 = CI signer (Fly) key; BUNDLE_PUBLIC_KEY_B64 = local sidecar key; never the same key",
-        "Re-key the CI signer (deploy/signer/deploy_fly.sh), re-run ea-release, pin its public key as RELEASE_PUBLIC_KEY_B64; "
+        "Pin the CI (Fly) signer's public key as RELEASE_PUBLIC_KEY_B64 (GET https://<fly-app>/public-key); if the Fly signer really "
+        "shares the sidecar key, run a key-rotation ceremony (new key id, GitHub secrets, ea-release) — never re-run the init script; "
         "the sidecar key stays BUNDLE_PUBLIC_KEY_B64 (deploy/lib.sh ensure_bundle_key_pins)."))
     if check_signer_health and not _viols and _mode == "external":
         import time as _t

@@ -79,6 +79,11 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
     if pairing is None and not paired_at:
         steps.append(_step("token", "Pairing token", "pending", "no token generated yet",
                            "Generate a pairing token below and paste the one-liner in PowerShell on the MT5 host"))
+    elif pairing and not pairing.get("consumed_at") and paired_at and _iso(pairing.get("issued_at")) and (_iso(pairing.get("issued_at")) >= (_iso(paired_at) or now)):
+        # N105-6 — a spare token minted AFTER a successful pairing is not a problem: the pairing stands
+        host = account.get("installer_paired_hostname") or "unknown host"
+        steps.append(_step("token", "Pairing token", "done",
+                           f"paired by {host} {_fmt_age(_age_s(now, paired_at))} · a later token was never used"))
     elif pairing and not pairing.get("consumed_at"):
         exp = _age_s(now, pairing.get("expires_at"))
         if exp is not None and exp > 0 and (trusted_only or account.get("verified_identity")):

@@ -1,4 +1,4 @@
-# STOIC-Installer.ps1 — one-shot MetaTrader 5 EA installer for STOIC
+﻿# STOIC-Installer.ps1 — one-shot MetaTrader 5 EA installer for STOIC
 # ============================================================================
 # Usage on a Windows MT5 host (your PC or broker VPS):
 #
@@ -212,6 +212,21 @@ function Resolve-StoicTerminal {
     return $found[[int]$pick - 1]
 }
 
+function Test-StoicCompileLog {
+    # N105-5 — $true ONLY when a MetaEditor log exists and reports 0 errors ("Result: 0 errors, N warnings" /
+    # "0 error(s), N warning(s)"). MetaEditor writes UTF-16; fall back to the default decoding.
+    param([Parameter(Mandatory = $true)][string]$LogPath)
+    if (-not (Test-Path $LogPath)) { return $false }
+    $text = ""
+    try { $text = Get-Content $LogPath -Encoding Unicode -Raw -ErrorAction Stop } catch { $text = "" }
+    if (-not $text -or $text -notmatch 'error') { try { $text = Get-Content $LogPath -Raw -ErrorAction Stop } catch { $text = "" } }
+    if (-not $text) { return $false }
+    $m = [regex]::Match($text, '(?i)result:?\s*(\d+)\s*errors?')
+    if (-not $m.Success) { $m = [regex]::Match($text, '(?i)(\d+)\s*error\(s\)') }
+    if (-not $m.Success) { return $false }
+    return ([int]$m.Groups[1].Value -eq 0)
+}
+
 function Get-StoicTerminalOrigin {
     # first non-empty line of <data folder>\origin.txt (install folder of THIS terminal) — "" when absent/empty (N104-4)
     param([Parameter(Mandatory = $true)][string]$DataFolder)
@@ -242,7 +257,7 @@ function Install-Stoic {
         [switch]$NoCompile
     )
 
-    $InstallerVersion = "1.3"
+    $InstallerVersion = "1.4"
     $ServerUrl = $ServerUrl.TrimEnd('/')
     $script:RotateDeviceKey = [bool]$RotateDeviceKey
     $devicePublicKey = Get-StoicDevicePublicKey
@@ -403,13 +418,19 @@ $installationId
             }
             if ($editor) {
                 $log = Join-Path $env:TEMP "stoic-compile.log"
+                $ex5 = [System.IO.Path]::ChangeExtension($destMq5, ".ex5")
+                # N105-5 — a stale .ex5 from an earlier build must never pass as "compiled": remove it first,
+                # then trust the compile ONLY when MetaEditor's log reports 0 errors AND the file exists.
+                Remove-Item -Force $ex5 -ErrorAction SilentlyContinue
+                Remove-Item -Force $log -ErrorAction SilentlyContinue
                 & $editor /compile:"$destMq5" /log:"$log" | Out-Null
                 Start-Sleep -Milliseconds 600
-                $ex5 = [System.IO.Path]::ChangeExtension($destMq5, ".ex5")
-                if (Test-Path $ex5) {
-                    Write-Host "    ✓ $($t.Name)  →  EA + token deployed, compiled .ex5" -ForegroundColor Green
+                $compiled = Test-StoicCompileLog -LogPath $log
+                if ($compiled -and (Test-Path $ex5)) {
+                    Write-Host "    ✓ $($t.Name)  →  EA + token deployed, compiled .ex5 (0 errors)" -ForegroundColor Green
                 } else {
-                    Write-Host "    ⚠ $($t.Name)  →  EA + token deployed, .ex5 compile may have failed (open MetaEditor and press F7 manually)" -ForegroundColor Yellow
+                    Remove-Item -Force $ex5 -ErrorAction SilentlyContinue
+                    Write-Host "    ⚠ $($t.Name)  →  EA + token deployed, .ex5 compile FAILED or reported errors (open MetaEditor, press F7, read the Errors tab; log: $log)" -ForegroundColor Yellow
                 }
             } else {
                 Write-Host "    ✓ $($t.Name)  →  EA + token deployed (no MetaEditor found; open it once, press F7 to compile)" -ForegroundColor Yellow

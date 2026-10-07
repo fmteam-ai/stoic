@@ -116,7 +116,12 @@ def record(args):
     # live-admissible during the rollout (the backend accepts current + previous).
     previous = ea.get("previous")
     if ea.get("ex5_sha256") and (ea.get("signature") or {}).get("sig_hex") and ea.get("version") != version:
+        # N105-1 — the copy must stay verifiable on its OWN signature, which (N104-6) covers ITS
+        # previous.{version, ex5_sha256}: keep that pointer (and nothing more) inside the copy.
         previous = {k: v for k, v in ea.items() if k != "previous"}
+        pp = ea.get("previous") or None
+        if pp:
+            previous["previous"] = {"version": pp.get("version"), "ex5_sha256": pp.get("ex5_sha256")}
     ea.update({
         "version": version,
         "mq5_sha256": mq5_now,

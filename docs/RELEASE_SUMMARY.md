@@ -65,7 +65,7 @@
 - claim-pairing is 20/10 min per IP. — owner: operator
 - P3-r23-pamm-amount-check [P3] PAMM add_investor: add an explicit server-side positive/precision amount check ahead of the broker adapter (adapter currently the only guard). — owner: engineering
 - OPS-r24-signer-deferred [P1] Production runs with RELEASE_SIGNER deferred (nothing signed
-- live exposure CLOSE_ONLY via RELEASE_SIGNER_DEFERRED gate). Provision the external signer (deploy/signer/deploy_fly.sh), set RELEASE_SIGNER=external + URL/ALLOWED_HOSTS/TOKEN/KEY_ID/PUBLIC_KEY in Secrets, then set RELEASE_SIGNER_DEFERRED=false. — owner: operator
+- live exposure CLOSE_ONLY via RELEASE_SIGNER_DEFERRED gate). Provision the external signer (deploy/signer/init_fly_signer.sh (first time) / flyctl deploy (redeploy)), set RELEASE_SIGNER=external + URL/ALLOWED_HOSTS/TOKEN/KEY_ID/PUBLIC_KEY in Secrets, then set RELEASE_SIGNER_DEFERRED=false. — owner: operator
 - OPS-r24-provenance-source-digest [P2] Managed publish injects no image digest: production identity is the source-tree digest (PROVENANCE_KIND=source-tree). Acceptable
 - inject STOIC_IMAGE_DIGEST/STOIC_BUILD_SHA if the platform ever exposes them. — owner: operator
 - OPS-r24-turnstile-hostnames [P3] TURNSTILE_EXPECTED_HOSTNAMES in Secrets includes the preview host so the shared .env works in both environments

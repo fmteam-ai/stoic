@@ -61,7 +61,7 @@ def test_installer_ps1_public():
     r = requests.get(f"{BASE_URL}/api/setup/installer.ps1", timeout=30)
     assert r.status_code == 200, r.text[:400]
     body = r.text
-    assert '$InstallerVersion = "1.3"' in body, "missing InstallerVersion = 1.3"
+    assert re.search(r'\$InstallerVersion = "1\.[3-9]"', body), "missing InstallerVersion >= 1.3"
     assert "function Get-StoicEaDownloadUrl" in body
     assert "function Resolve-StoicTerminal" in body
     # Ordering: Resolve-StoicTerminal -TerminalPath must appear BEFORE /api/setup/claim-pairing INSIDE Install-Stoic

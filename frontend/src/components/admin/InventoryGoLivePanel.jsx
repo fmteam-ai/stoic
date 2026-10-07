@@ -110,6 +110,9 @@ export const InventoryGoLivePanel = () => {
                         ))}
                         <Button variant="ghost" size="sm" data-testid="expectation-fill-current" onClick={fill}>use current</Button>
                     </div>
+                    <div data-testid="expectation-live-counts" className="text-[11px] font-mono text-[#71717A]">
+                        live now: <span className="text-white">{c.configured ?? "—"}</span> account rows in the database (all users, disabled + paper included) · <span className="text-white">{c.enabled ?? "—"}</span> with trading on ({c.live_enabled ?? "—"} LIVE) · <span className="text-white">{c.bots_enabled ?? "—"}</span> active bots — the signed policy must match these exactly
+                    </div>
                     <Input data-testid="expectation-account-ids" placeholder="approved account ids, comma-separated (required in production)"
                         value={accountIds} onChange={(e) => setAccountIds(e.target.value)} className="font-mono text-xs" />
                     <div data-testid="expectation-host-id" className="text-[11px] font-mono text-[#71717A] select-all">
