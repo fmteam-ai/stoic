@@ -9,7 +9,7 @@
 //|       - Add your server URL (e.g. https://stoic-trading-bot.preview.emergentagent.com)
 //| 3. Compile in MetaEditor (F7) and attach to ANY chart            |
 //| 4. Inputs:                                                       |
-//|       ServerUrl   = https://stoic-trading-bot.preview.emergentagent.com   |
+//|       ServerUrl   = auto (installer writes MQL5\Files\STOIC-Server.txt)   |
 //|       BridgeToken = (paste from the dashboard > Accounts)         |
 //|       PollSeconds = 5                                             |
 //|                                                                  |
@@ -271,16 +271,16 @@
 //|         EURUSD from a GOLD/other-symbol chart).                   |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.60"
+#property version   "1.61"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.60"
+#define EA_CLIENT_VERSION "1.61"
 
-input string ServerUrl              = "https://stoic-trading-bot.preview.emergentagent.com";
+input string ServerUrl              = "https://www.stoicaibot.com";  // auto-loaded from MQL5\Files\STOIC-Server.txt (installer) when left at default
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
 input string InstallationId         = "";  // v1.55 — issued by pairing claim; auto-loaded from STOIC-Installation.txt when blank
 input string TrackedSymbols         = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat
@@ -470,6 +470,37 @@ string ResolveBridgeToken() {
 }
 
 //+------------------------------------------------------------------+
+// Installer v1.5 — server URL auto-load: STOIC-Installer.ps1 writes MQL5\Files\STOIC-Server.txt
+// (the host the pairing token was redeemed at). The file wins while the ServerUrl input is at its
+// compiled default; an operator who explicitly changed the input keeps that value.
+#define SERVER_URL_DEFAULT "https://www.stoicaibot.com"
+string g_server_url = SERVER_URL_DEFAULT;
+bool   g_webrequest_ok = true;   // false after a 4014 until a request succeeds (reported in heartbeats)
+string ResolveServerUrl() {
+   string input_trim = ServerUrl;
+   StringTrimLeft(input_trim); StringTrimRight(input_trim);
+   if (StringLen(input_trim) > 0 && input_trim != SERVER_URL_DEFAULT) {
+      Print("STOIC: using ServerUrl from EA inputs dialog.");
+      return input_trim;
+   }
+   if (!FileIsExist("STOIC-Server.txt")) return (StringLen(input_trim) > 0 ? input_trim : SERVER_URL_DEFAULT);
+   int fh = FileOpen("STOIC-Server.txt", FILE_READ | FILE_TXT | FILE_ANSI);
+   if (fh == INVALID_HANDLE) return input_trim;
+   string url = "";
+   while (!FileIsEnding(fh)) {
+      string line = FileReadString(fh);
+      StringTrimLeft(line); StringTrimRight(line);
+      if (StringLen(line) == 0 || StringGetCharacter(line, 0) == '#') continue;
+      url = line;
+      break;
+   }
+   FileClose(fh);
+   if (StringLen(url) < 8 || StringFind(url, "http") != 0) return input_trim;
+   while (StringLen(url) > 0 && StringGetCharacter(url, StringLen(url) - 1) == '/') url = StringSubstr(url, 0, StringLen(url) - 1);
+   Print("STOIC: server URL auto-loaded from MQL5\\Files\\STOIC-Server.txt: ", url);
+   return url;
+}
+
 int OnInit() {
    // EA v1.44 — tick streaming needs a sub-second timer; slow tasks below
    // keep their PollSeconds cadence via the _last_slow_run gate in OnTimer.
@@ -493,6 +524,8 @@ int OnInit() {
    // can stream the MarketWatch inventory aggressively for the first 10 min
    // (suffix discovery converges quickly on a freshly attached account).
    _ea_boot_time = TimeCurrent();
+   // Installer v1.5: server URL from inputs OR the installer drop file.
+   g_server_url = ResolveServerUrl();
    // EA v1.36: resolve token from inputs OR auto-installer drop file.
    EffectiveToken = ResolveBridgeToken();
    // EA v1.55: resolve the installation identity for verified heartbeats.
@@ -502,7 +535,11 @@ int OnInit() {
    if (DomEnabled) _dom_subscribed = MarketBookAdd(_Symbol);
    // EA v1.50: prune intent-journal Global Variables idle for 7+ days.
    SweepJournal();
-   Print("STOIC Bridge EA v", EA_CLIENT_VERSION, " started. Polling: ", ServerUrl);
+   Print("STOIC Bridge EA v", EA_CLIENT_VERSION, " started. Polling: ", g_server_url);
+   // EA v1.61 self-check — the same facts go out as heartbeat flags so the dashboard can say what to fix.
+   if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) Print("STOIC self-check: AutoTrading is OFF — click the AutoTrading button (top toolbar) so it turns green.");
+   if (!MQLInfoInteger(MQL_TRADE_ALLOWED))           Print("STOIC self-check: 'Allow Algo Trading' is unticked for this EA — chart → EA properties → Common tab.");
+   Print("STOIC self-check: account mode = ", TradeModeString(), ", trade allowed = ", (AccountInfoInteger(ACCOUNT_TRADE_ALLOWED) ? "yes" : "no"));
    SendHeartbeat();
    return INIT_SUCCEEDED;
 }
@@ -725,7 +762,7 @@ void AckMissingPosition(string trade_id, string mod_type, long ticket,
       (closed ? "\"terminal\":true," : "\"retryable\":true,"),
       intent,
       (closed ? "position_not_found" : "position_temporarily_unavailable"));
-   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   HttpPost(g_server_url + "/api/bridge/modification-ack", body);
    if (closed) MarkIntentDone(intent, 0, trade_id, 2);   // terminal — never retried
 }
 
@@ -778,7 +815,7 @@ void SendCandlesFor(string sym) {
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M15\",\"bars\":%s}",
       EffectiveToken, sym, bars);
-   HttpPost(ServerUrl + "/api/bridge/candles", body);
+   HttpPost(g_server_url + "/api/bridge/candles", body);
 }
 
 void SendCandles() {
@@ -838,7 +875,7 @@ void SendDom() {
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"bids\":[%s],\"asks\":[%s]}",
       EffectiveToken, _Symbol, bids, asks);
-   HttpPost(ServerUrl + "/api/bridge/dom", body);
+   HttpPost(g_server_url + "/api/bridge/dom", body);
 }
 
 //+------------------------------------------------------------------+
@@ -899,7 +936,7 @@ void OnTradeTransaction(const MqlTradeTransaction& trans,
       entry_str, symbol, action,
       volume, price, profit, commission, swap, deal_time, magic, pos_vol);
 
-   HttpPost(ServerUrl + "/api/bridge/external-deal", body);
+   HttpPost(g_server_url + "/api/bridge/external-deal", body);
 }
 
 //+------------------------------------------------------------------+
@@ -961,7 +998,7 @@ void SweepDealHistory() {
          entry_str, symbol, action,
          volume, price, profit, commission, swap, deal_time, magic);
 
-      HttpPost(ServerUrl + "/api/bridge/external-deal", body);
+      HttpPost(g_server_url + "/api/bridge/external-deal", body);
       pushed++;
       if ((datetime)deal_time > new_watermark) new_watermark = (datetime)deal_time;
    }
@@ -1020,7 +1057,7 @@ void SendTicks() {
    }
    body += "]}";
    _last_tick_msc = (ulong)ticks[n - 1].time_msc;
-   HttpPost(ServerUrl + "/api/bridge/ticks", body);
+   HttpPost(g_server_url + "/api/bridge/ticks", body);
 }
 
 //+------------------------------------------------------------------+
@@ -1031,7 +1068,13 @@ string HttpPost(string url, string body) {
    ResetLastError();
    int res = WebRequest("POST", url, req_headers, 10000, post, result, headers);
    if (res == -1) {
-      Print("WebRequest error: ", GetLastError(), " (Add ", url, " to allowed URLs)");
+      int err = GetLastError();
+      if (err == 4014) {
+         g_webrequest_ok = false;
+         Print("WebRequest error 4014 — FIX: Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' and add ", g_server_url);
+      } else {
+         Print("WebRequest error: ", err, " calling ", url, " (network/DNS? test the URL in a browser on this VPS)");
+      }
       return "";
    }
    return CharArrayToString(result, 0, ArraySize(result), CP_UTF8);
@@ -1364,15 +1407,20 @@ void SendHeartbeat() {
       "\"positions\":%s,\"client_version\":\"%s\","
       "\"symbol_specs\":%s,"
       "\"broker_time\":%s,"
-      "\"available_symbols\":%s}",
+      "\"available_symbols\":%s,"
+      "\"ea_self_check\":{\"autotrading\":%s,\"ea_trade_allowed\":%s,\"webrequest_ok\":%s}}",
       EffectiveToken, balance, equity, openPos, spreads, login, ccy,
       margin_mode, trade_mode,
       broker_srv, EffectiveInstallation, term_build, EA_CLIENT_VERSION,
       EffectiveProofHash,
       (long)TimeGMT() * 1000,
       positions, EA_CLIENT_VERSION, BuildSymbolSpecsJson(),
-      BuildBrokerTimeJson(), CACHED_AVAILABLE_SYMBOLS);
-   HttpPost(ServerUrl + "/api/bridge/heartbeat", body);
+      BuildBrokerTimeJson(), CACHED_AVAILABLE_SYMBOLS,
+      (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) ? "true" : "false"),
+      (MQLInfoInteger(MQL_TRADE_ALLOWED) ? "true" : "false"),
+      (g_webrequest_ok ? "true" : "false"));
+   string hb = HttpPost(g_server_url + "/api/bridge/heartbeat", body);
+   if (StringLen(hb) > 0) g_webrequest_ok = true;
 }
 
 void PollPendingTrades() {
@@ -1380,7 +1428,7 @@ void PollPendingTrades() {
    // open/modify/close is even fetched; the server re-dispatches after.
    if (IsEodQuietWindow()) return;
    string body = StringFormat("{\"bridge_token\":\"%s\"}", EffectiveToken);
-   string resp = HttpPost(ServerUrl + "/api/bridge/poll-trades", body);
+   string resp = HttpPost(g_server_url + "/api/bridge/poll-trades", body);
    if (StringLen(resp) == 0) return;
 
    // -------- 1. Process pending NEW trades from "trades":[...] block --------
@@ -1445,7 +1493,7 @@ bool PushDealById(ulong deal_id) {
       EffectiveToken, position_id, deal_id,
       entry_str, symbol, action,
       volume, price, profit, commission, swap, deal_time, magic);
-   HttpPost(ServerUrl + "/api/bridge/external-deal", body);
+   HttpPost(g_server_url + "/api/bridge/external-deal", body);
    return true;
 }
 
@@ -1469,7 +1517,7 @@ void DeepSyncHistory(int lookback_seconds) {
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"deals_pushed\":%d,\"lookback_seconds\":%d}",
       EffectiveToken, pushed, lookback_seconds);
-   HttpPost(ServerUrl + "/api/bridge/sync-complete", body);
+   HttpPost(g_server_url + "/api/bridge/sync-complete", body);
    Print("STOIC deep-sync complete: pushed ", pushed, " deals.");
 }
 
@@ -1603,7 +1651,7 @@ void ParseModificationsBlock(string resp) {
             EffectiveToken, trade_id, mod_type,
             (osucc ? "true" : "false"),
             (osucc ? "" : "\"terminal\":true,"), extra, intent);
-         HttpPost(ServerUrl + "/api/bridge/modification-ack", rebody);
+         HttpPost(g_server_url + "/api/bridge/modification-ack", rebody);
       } else if (seq > 0 && seq <= (long)JGet("S", trade_id)) {
          // v1.50 fence — superseded by a newer executed command: send a
          // structured TERMINAL ack so the server clears the queue entry
@@ -1612,7 +1660,7 @@ void ParseModificationsBlock(string resp) {
             "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"%s\",\"success\":false,\"superseded\":true,\"intent_id\":\"%s\",\"received_seq\":%I64d,\"latest_seq\":%I64d,\"error\":\"stale_sequence\"}",
             EffectiveToken, trade_id, mod_type, intent, seq,
             (long)JGet("S", trade_id));
-         HttpPost(ServerUrl + "/api/bridge/modification-ack", sbody);
+         HttpPost(g_server_url + "/api/bridge/modification-ack", sbody);
          Print("STOIC v1.50: superseded stale command seq=", seq, " trade=",
                trade_id, " newest=", (long)JGet("S", trade_id));
       } else if (mod_type == "MODIFY_SL" && ticket > 0 && new_sl > 0) {
@@ -1711,7 +1759,7 @@ void SendOpenReport(string trade_id, ulong ticket, string status,
       req_sl, app_sl, conf_sl, order_tk, deal_tk, pos_id, filled,
       (partial ? "true" : "false"), pos_volume,
       (replay ? "true" : "false"), err);
-   HttpPost(ServerUrl + "/api/bridge/report", body);
+   HttpPost(g_server_url + "/api/bridge/report", body);
 }
 
 // v1.50 — re-report a journaled result on redispatch (ack was lost).
@@ -2007,7 +2055,7 @@ void ApplyFullClose(string trade_id, long ticket, string intent = "", long seq =
       string gone = StringFormat(
          "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":true,\"intent_id\":\"%s\",\"error\":\"already_closed\"}",
          EffectiveToken, trade_id, intent);
-      HttpPost(ServerUrl + "/api/bridge/modification-ack", gone);
+      HttpPost(g_server_url + "/api/bridge/modification-ack", gone);
       MarkIntentDone(intent, seq, trade_id);
       return;
    }
@@ -2038,7 +2086,7 @@ void ApplyFullClose(string trade_id, long ticket, string intent = "", long seq =
       string pf = StringFormat(
          "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":false,\"retryable\":true,\"intent_id\":\"%s\",\"error\":\"%s\"}",
          EffectiveToken, trade_id, intent, perr);
-      HttpPost(ServerUrl + "/api/bridge/modification-ack", pf);
+      HttpPost(g_server_url + "/api/bridge/modification-ack", pf);
       return;
    }
    bool ok = OrderSend(req, res);
@@ -2058,7 +2106,7 @@ void ApplyFullClose(string trade_id, long ticket, string intent = "", long seq =
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"FULL_CLOSE\",\"success\":%s,%s\"intent_id\":\"%s\",\"error\":\"%s\"}",
       EffectiveToken, trade_id, (success ? "true" : "false"),
       (success ? "" : "\"retryable\":true,"), intent, err);
-   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   HttpPost(g_server_url + "/api/bridge/modification-ack", body);
    if (success) MarkIntentDone(intent, seq, trade_id);
    if (success) Print("STOIC: FULL_CLOSE executed ticket=", ticket, " (", vol, " lots)");
 }
@@ -2076,7 +2124,7 @@ void ClosePosition(string trade_id, long ticket) {
       string rbody = StringFormat(
          "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"status\":\"closed\",\"exit_price\":%.5f,\"pnl\":%.2f,\"replay\":true}",
          EffectiveToken, trade_id, JGet("X", trade_id), JGet("L", trade_id));
-      HttpPost(ServerUrl + "/api/bridge/report", rbody);
+      HttpPost(g_server_url + "/api/bridge/report", rbody);
       return;
    }
    if (!PositionSelectByTicket(ticket)) return;   // heartbeat/ghost reconciler owns absent-position truth
@@ -2122,7 +2170,7 @@ void ClosePosition(string trade_id, long ticket) {
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"status\":\"closed\",\"exit_price\":%.5f,\"pnl\":%.2f}",
       EffectiveToken, trade_id, res.price, pnl);
-   HttpPost(ServerUrl + "/api/bridge/report", body);
+   HttpPost(g_server_url + "/api/bridge/report", body);
 }
 
 // ----- v1.10: SL/TP modify -----
@@ -2163,7 +2211,7 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
          "\"intent_id\":\"%s\",\"error\":\"%s\"}",
          EffectiveToken, trade_id, adj_sl, new_sl, adj_sl,
          PositionGetDouble(POSITION_SL), intent, perr);
-      HttpPost(ServerUrl + "/api/bridge/modification-ack", pf);
+      HttpPost(g_server_url + "/api/bridge/modification-ack", pf);
       return;
    }
 
@@ -2190,7 +2238,7 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
       EffectiveToken, trade_id, (success ? "true" : "false"),
       ack_sl, new_sl, adj_sl, confirmed_sl,
       (stop_confirmed ? "true" : "false"), intent, err);
-   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   HttpPost(g_server_url + "/api/bridge/modification-ack", body);
    // v1.52 — 'request accepted' and 'stop confirmed' are SEPARATE states:
    // the intent is consumed ONLY once the live position shows the stop
    // (tick tolerance). Accepted-but-unconfirmed stays retryable — the
@@ -2224,7 +2272,7 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
       string tiny = StringFormat(
          "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":false,\"terminal\":true,\"intent_id\":\"%s\",\"error\":\"close_volume_below_min\"}",
          EffectiveToken, trade_id, intent);
-      HttpPost(ServerUrl + "/api/bridge/modification-ack", tiny);
+      HttpPost(g_server_url + "/api/bridge/modification-ack", tiny);
       MarkIntentDone(intent, seq, trade_id, 2);
       return;
    }
@@ -2255,7 +2303,7 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
       string pf = StringFormat(
          "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"PARTIAL_CLOSE\",\"success\":false,\"intent_id\":\"%s\",\"error\":\"%s\"}",
          EffectiveToken, trade_id, intent, perr);
-      HttpPost(ServerUrl + "/api/bridge/modification-ack", pf);
+      HttpPost(g_server_url + "/api/bridge/modification-ack", pf);
       return;
    }
 
@@ -2282,7 +2330,7 @@ void ApplyPartialClose(string trade_id, long ticket, double new_vol,
       "\"new_volume\":%.2f,\"remaining_volume\":%.2f,\"intent_id\":\"%s\",\"error\":\"%s\"}",
       EffectiveToken, trade_id, (success ? "true" : "false"),
       new_vol, remaining, intent, err);
-   HttpPost(ServerUrl + "/api/bridge/modification-ack", body);
+   HttpPost(g_server_url + "/api/bridge/modification-ack", body);
    // v1.50 — only broker-confirmed success consumes the intent
    if (success) MarkIntentDone(intent, seq, trade_id);
    if (success) Print("STOIC: Partial close ticket=", ticket, " closed=", close_vol, " remaining=", remaining);

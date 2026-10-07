@@ -438,6 +438,8 @@ class BridgeHeartbeat(BaseModel):
     trade_mode: Optional[str] = None
     terminal_build: Optional[int] = None
     ea_version: Optional[str] = None
+    # EA v1.61 — startup self-check flags {autotrading, ea_trade_allowed, webrequest_ok}; Install Progress turns them into fixes
+    ea_self_check: Optional[dict] = None
     # iter-212: explicit NTP/clock-health telemetry — the agent reports its
     # own GMT epoch ms; the server computes the skew bound on receipt.
     client_time_ms: Optional[int] = None

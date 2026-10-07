@@ -297,6 +297,13 @@ async def heartbeat(payload: BridgeHeartbeat):
     if hb_trade_mode:
         set_doc["account_trade_mode"] = hb_trade_mode
         set_doc["account_trade_mode_reported_at"] = now_iso
+    # EA v1.61 — self-check flags (bools only; anything else is dropped)
+    sc = getattr(payload, "ea_self_check", None)
+    if isinstance(sc, dict):
+        flags = {k: bool(sc[k]) for k in ("autotrading", "ea_trade_allowed", "webrequest_ok") if isinstance(sc.get(k), bool)}
+        if flags:
+            set_doc["ea_self_check"] = {**flags, "at": now_iso}
+    if hb_trade_mode:
         try:
             await _trade_mode_contradiction(db, acc, hb_trade_mode, now_iso)
         except Exception as _sw:  # noqa: BLE001 — alerting must never break the heartbeat

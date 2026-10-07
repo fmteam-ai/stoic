@@ -12,7 +12,7 @@ import MultiAccountOverview from "@/components/MultiAccountOverview";
 // Used in the download URL so the filename changes per release (e.g.
 // `EmergentTradingBridge_v1.35.mq5`) — defeats aggressive browser caching
 // of the prior .mq5, which otherwise re-downloads stale source.
-const LATEST_EA_VERSION = "1.60";
+const LATEST_EA_VERSION = "1.61";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning, ShieldCheck } from "lucide-react";
 const Warning = AlertTriangle;
@@ -1312,7 +1312,7 @@ function MT5ConnectionGuide() {
                 <div className="flex items-center gap-3">
                     <Info className="w-4 h-4 text-[#FFB000]" />
                     <div className="text-left">
-                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SETUP — 5 MIN</div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest">CONNECT YOUR VPS — 3 MIN</div>
                         <div className="font-display font-bold text-base tracking-tight">Connect an MT5 broker account to STOIC</div>
                     </div>
                 </div>
@@ -1320,46 +1320,22 @@ function MT5ConnectionGuide() {
             </button>
             {open && (
                 <div className="p-5 space-y-5">
-                    <Step n={1} title="Click ADD ACCOUNT (top-right)" testid="conn-step-1">
-                        <p>Pick <strong className="text-white">paper</strong> mode for sandboxing or <strong className="text-white">live</strong> for real trading. Choose a broker preset (RoboForex, Exness, IC Markets, Pepperstone, FXTM…) and STOIC auto-fills the server name. Enter your MT5 login number, account label, and click <strong>CREATE</strong>.</p>
-                        <p className="text-xs text-[#52525B] mt-2">A unique <code className="font-mono text-[#00FF41]">bridge_token</code> is generated for this account — that&apos;s what authenticates the EA to STOIC. Keep it private.</p>
+                    <Step n={1} title="Add the account" testid="conn-step-1">
+                        <p>Click <strong className="text-white">ADD ACCOUNT</strong> (top-right): broker, server, login. Pick <strong className="text-white">paper</strong> to sandbox or <strong className="text-white">live</strong> for the real terminal.</p>
                     </Step>
-
-                    <Step n={2} title="Download the EA bridge file" testid="conn-step-2">
-                        <p>Click <strong className="text-white">DOWNLOAD EA</strong> in the top-right of this page (next to ADD ACCOUNT). You&apos;ll get a file named:</p>
-                        <CopyBox value="EmergentTradingBridge.mq5" onCopy={() => copy("EmergentTradingBridge.mq5", "filename")} copied={copied === "filename"} testid="conn-ea-filename" />
+                    <Step n={2} title="On your VPS: MT5 open and logged in" testid="conn-step-2">
+                        <p>Install MetaTrader 5 from your broker on the Windows VPS, log into the account and leave it running. Any Windows VPS works (2 vCPU / 4 GB runs up to 4 terminals).</p>
                     </Step>
-
-                    <Step n={3} title="Open your MT5 Data Folder" testid="conn-step-3">
-                        <p>In MetaTrader 5: <strong className="text-white">File → Open Data Folder</strong>. A file explorer window opens — navigate to:</p>
-                        <CopyBox value={"MQL5\\Experts\\"} onCopy={() => copy("MQL5\\Experts\\", "path")} copied={copied === "path"} testid="conn-ea-path" />
-                        <p>Drop <code className="font-mono text-[#00FF41]">EmergentTradingBridge.mq5</code> into that folder. <span className="text-[#52525B]">(Typical full path: <code>{"C:\\Users\\YOU\\AppData\\Roaming\\MetaQuotes\\Terminal\\<ID>\\MQL5\\Experts\\"}</code>)</span></p>
+                    <Step n={3} title="Quick Install — one code, one line" testid="conn-step-3">
+                        <p>On the account row click <strong className="text-white">QUICK INSTALL</strong> → <strong className="text-white">GENERATE PAIRING TOKEN</strong> (valid 60 min, single use) and copy the PowerShell line. On the VPS open <strong className="text-white">PowerShell as Administrator</strong>, paste, Enter. The installer configures the MT5 you have open — EA, server URL, token, installation id — and offers to restart it with the EA already on a chart. <span className="text-[#52525B]">Nothing to type in the EA inputs.</span></p>
                     </Step>
-
-                    <Step n={4} title="Whitelist the STOIC server URL in MT5" testid="conn-step-4">
-                        <p>Still in MT5: <strong className="text-white">Tools → Options → Expert Advisors</strong>. Tick the box labelled <em>&quot;Allow WebRequest for listed URL&quot;</em>, then click <strong>add</strong> and paste:</p>
+                    <Step n={4} title="One MT5 setting (the installer prints it)" testid="conn-step-4">
+                        <p>In MT5: <strong className="text-white">Tools → Options → Expert Advisors</strong> → tick <em>&quot;Allow WebRequest for listed URL&quot;</em> → add:</p>
                         <CopyBox value={serverUrl} onCopy={() => copy(serverUrl, "url")} copied={copied === "url"} testid="conn-server-url" />
-                        <p className="text-xs text-[#52525B] mt-2">Click OK to close the dialog. Without this whitelist, the EA gets <code>WebRequest error 4060</code> on every poll.</p>
+                        <p className="text-xs text-[#52525B] mt-2">Without it the Experts tab shows <code>WebRequest error 4014</code>. AutoTrading (top toolbar) must be green.</p>
                     </Step>
-
-                    <Step n={5} title="Compile and attach the EA" testid="conn-step-5">
-                        <p>Back in MT5, press <strong className="text-white">Ctrl + N</strong> (or right-click in the Navigator → Refresh). You should now see <code className="font-mono text-[#00FF41]">EmergentTradingBridge</code> under <em>Expert Advisors</em>.</p>
-                        <p className="mt-2">Drag it onto <strong className="text-white">any chart</strong> (the symbol doesn&apos;t matter — the EA tracks XAUUSD/BTCUSD regardless). A configuration dialog opens with three inputs:</p>
-                        <ul className="font-mono text-xs space-y-1 mt-2 ml-2 text-[#A1A1AA]">
-                            <li>• <code className="text-[#00FF41]">ServerUrl</code> → paste the URL from step 4</li>
-                            <li>• <code className="text-[#00FF41]">BridgeToken</code> → copy it from this page&apos;s account row (the green token field)</li>
-                            <li>• <code className="text-[#00FF41]">PollSeconds</code> → leave at 5 (recommended)</li>
-                        </ul>
-                        <p className="mt-2">Confirm <strong>AutoTrading is ON</strong> (top-toolbar button is green, says <em>&quot;Algo Trading&quot;</em>), then click OK.</p>
-                    </Step>
-
-                    <Step n={6} title="Verify the connection" testid="conn-step-6">
-                        <p>Within 5 seconds, the account row below should switch to a green <span className="text-[#00FF41]">● CONNECTED</span> dot, and the EA prints in MT5&apos;s <em>Experts</em> tab:</p>
-                        <pre className="bg-[#050505] border border-[#1F1F1F] px-3 py-2 font-mono text-[11px] text-[#00FF41] overflow-x-auto">
-{`Heartbeat OK — balance: 10000.00  equity: 10000.00
-Polling /api/bridge/poll every 5s`}
-                        </pre>
-                        <p className="text-xs text-[#52525B] mt-2">You&apos;re live. The EA now polls STOIC every 5 seconds for new trades, executes them via MT5 <code>OrderSend()</code>, and reports fills back. To start auto-trading, go to <a href="/bot" className="text-[#00FF41] hover:underline">Bot Config</a> and click START BOT.</p>
+                    <Step n={5} title="Watch Install Progress turn green" testid="conn-step-5">
+                        <p>The Quick Install panel shows each step live — token used, installer paired, EA measured, heartbeat, identity verified → <span className="text-[#00FF41]">VPS READY 5/5</span>. If something is missing it tells you the exact fix, and you also get a Telegram/e-mail alert with the same instructions.</p>
                     </Step>
 
                     {/* Troubleshooting */}

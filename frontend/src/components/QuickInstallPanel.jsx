@@ -14,7 +14,7 @@ import { InstallProgressPanel } from "@/components/InstallProgressPanel";
  *   3. We poll /api/setup/pairing-status/{accountId} every 4s until
  *      `installer_paired_at` flips — then show the success state.
  *
- * Token TTL is 15 min; on expiry, the user clicks Generate again.
+ * Token TTL is 60 min; on expiry, the user clicks Generate again (GENERATE = "New code").
  */
 export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted }) {
     const [token, setToken] = useState(null);
@@ -146,7 +146,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                 <div className="text-sm text-[#A1A1AA] space-y-1">
                     <div>Paired host: <code className="text-[#FFD700] font-mono">{pairedHost || "—"}</code></div>
                     <div className="text-xs text-[#52525B] mt-2">
-                        Open MT5 on this host: Tools → Options → Expert Advisors → allow WebRequest for the URL above (once per terminal), then drag <strong>EmergentTradingBridge</strong> from Navigator → Experts onto any chart. AutoTrading must be ON (green ▶).
+                        If the Install Progress above is not green yet: in MT5 allow WebRequest for the URL above (Tools → Options → Expert Advisors) and make sure <strong>EmergentTradingBridge</strong> is on a chart with AutoTrading ON (green ▶). Leave the EA inputs at default — server URL, token and installation id are auto-loaded.
                     </div>
                 </div>
                 <button
@@ -213,11 +213,11 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                     </div>
 
                     <div className="text-xs text-[#A1A1AA] space-y-1.5">
-                        <div><strong className="text-white">Step 2 —</strong> Open <strong>PowerShell as Administrator</strong> on your MT5 host (your PC or broker VPS) and paste.
-                            <span className="block text-[#52525B]" data-testid="quick-install-terminalid-hint">Two MT5 terminals on that machine? Append <code className="text-[#FFD700]">-TerminalId &lt;32-hex folder name&gt;</code> (MT5: File → Open Data Folder) — or just answer the prompt.</span>
+                        <div><strong className="text-white">Step 2 —</strong> On the VPS, with MT5 <strong>open and logged in</strong>, open <strong>PowerShell as Administrator</strong> and paste.
+                            <span className="block text-[#52525B]" data-testid="quick-install-terminalid-hint">The installer configures the MT5 you have open (several installs → it asks). It deploys the EA, the server URL, your bridge token and the .ex5 — <strong className="text-[#00FF41]">~60 seconds</strong>. Advanced: <code className="text-[#FFD700]">-TerminalId &lt;32-hex folder&gt;</code>, <code className="text-[#FFD700]">-ChartSymbol EURUSD</code>.</span>
                         </div>
-                        <div><strong className="text-white">Step 3 —</strong> The installer picks the MT5 terminal, deploys the EA, writes your bridge token, and installs the .ex5. <strong className="text-[#00FF41]">~60 seconds.</strong></div>
-                        <div><strong className="text-white">Step 4 —</strong> In MT5: Tools → Options → Expert Advisors → allow WebRequest for the URL the installer prints; drag <strong>EmergentTradingBridge</strong> onto any chart; AutoTrading ON.</div>
+                        <div><strong className="text-white">Step 3 —</strong> Say <strong>Y</strong> when it offers to restart MT5 — it comes back with the EA on a chart and Algo Trading on. Nothing to type in the EA inputs.</div>
+                        <div><strong className="text-white">Step 4 —</strong> One MT5 setting the installer cannot write: Tools → Options → Expert Advisors → tick <em>Allow WebRequest for listed URL</em> → add the URL it prints (shown above). Skip it if the restart already shows a heartbeat.</div>
                         <div className="text-[#52525B] mt-2">
                             This page will auto-detect when the installer completes.
                         </div>
@@ -229,7 +229,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                         data-testid="quick-install-regenerate-btn"
                         className="w-full px-3 py-1.5 text-xs font-mono tracking-widest border border-[#1F1F1F] hover:border-[#52525B] text-[#A1A1AA] flex items-center justify-center gap-1.5"
                     >
-                        <RefreshCw className="w-3 h-3" /> REGENERATE TOKEN
+                        <RefreshCw className="w-3 h-3" /> NEW CODE
                     </button>
                 </div>
             )}

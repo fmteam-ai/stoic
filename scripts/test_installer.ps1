@@ -56,6 +56,14 @@ try {
     Set-Content -Path (Join-Path $portable "terminal64.exe") -Value "" -Encoding ASCII
     $t = Resolve-StoicTerminal -Root (Join-Path $tmp "nothing-here") -PortableRoots @((Join-Path $tmp "portable"))
     Assert-Equal $t.FullName $portable "single portable terminal auto-selected"
+
+    # v1.5 — several terminals: the RUNNING one (terminal64.exe folder == origin.txt) is picked without a prompt
+    function Get-Process { param($Name, $ErrorAction) [pscustomobject]@{ Path = "C:\Program Files\Broker MT5\terminal64.exe" } }
+    $t = Resolve-StoicTerminal -Root $tmp -PortableRoots @() -Prompt { throw "prompt must not be shown when one terminal is running" }
+    Assert-Equal $t.Name $idB "running terminal (origin.txt match) auto-selected among several"
+    function Get-Process { param($Name, $ErrorAction) @() }
+    Assert-Null (Get-StoicRunningTerminal -Candidates (@(Get-StoicTerminals -Root $tmp -PortableRoots @()))) "no MT5 running → no auto-pick (prompt path)"
+    Remove-Item Function:\Get-Process
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

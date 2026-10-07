@@ -1,9 +1,9 @@
 {
-  "captured_at": "2026-10-06T10:44:17.308274+00:00",
-  "git_commit": "4a99ea85f237782d469d13ad6e577477f7d1fec2",
+  "captured_at": "2026-10-07T18:39:35.718497+00:00",
+  "git_commit": "f17ae89ecbab8a790e3732f1670e60d1ae8c41a9",
   "ea": {
-    "version": "1.60",
-    "mq5_sha256": "897d6bf8768862b55e1432f897fc523dd0938431e8e8661f77cc16f7e20edc12",
+    "version": "1.61",
+    "mq5_sha256": "eb7a0790895e4618313167291f424246fd3d58efad215f6e558881d55fbad32b",
     "ex5_sha256": null,
     "ex5_note": "compiled ONLY by the release.yml MetaEditor gate on a real Windows runner \u2014 pending CI"
   },

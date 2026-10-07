@@ -8,7 +8,7 @@ End-to-end:
     POST /api/setup/pairing-token  {account_id}
             │
             ▼
-    Backend stores: {token, account_id, user_id, expires_at}  (15 min TTL)
+    Backend stores: {token, account_id, user_id, expires_at}  (60 min TTL)
             │
             ▼
     UI displays token + one-liner install command
@@ -28,12 +28,12 @@ End-to-end:
     copies EA to MQL5/Experts/, compiles, whitelists URL.
 
 Security model:
-  · Pairing-token is single-use and expires in 15 min.
+  · Pairing-token is single-use and expires in 60 min.
   · `claim-pairing` is UNAUTH'd by design (the installer runs before the
     user has any cookies on the VPS). The token IS the auth.
   · The token NEVER leaves the user's machine after they paste it into the
     PowerShell prompt — it's redeemed once, immediately consumed.
-  · An attacker who intercepts the token has at most 15 min to use it AND
+  · An attacker who intercepts the token has at most 60 min to use it AND
     only gets a bridge_token bound to ONE account (which the user can
     rotate from the dashboard the moment they suspect compromise).
 """
@@ -56,7 +56,7 @@ router = APIRouter(tags=["setup"])
 PAIRING_PREV_TOKEN_GRACE_H = 24   # R-3 — previous EA token survives a pairing until first new heartbeat, max 24 h
 
 
-PAIRING_TTL_MINUTES = 15
+PAIRING_TTL_MINUTES = 60   # Easy-Connect P1.3 — one hour (still single-use); 15 min expired while users were still in RDP
 
 
 # ─────────────── Models ───────────────
@@ -288,7 +288,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "server_url": backend_base,
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
-        "ea_latest_version": "1.60",
+        "ea_latest_version": "1.61",
         # r26 P1-02 — device key enrolled with THIS pairing (None when the installer sent none)
         "device_key_id": (device_key or {}).get("key_id"),
         "attestation_challenge_url": f"{backend_base}/api/infra/attestation/challenge",

@@ -458,6 +458,17 @@ to the Quick Install one-liner (or answer the prompt).
 CI runs `scripts/test_installer.ps1` on the Windows runner (URL building, terminal choice, compile-log
 verdict, ordering).
 
+**Easy MT5 Connect — Phase 1 (EA 1.61 · installer v1.5).** The user never edits EA inputs: the installer
+picks the MT5 terminal that is *running*, writes `MQL5\Files\STOIC-Server.txt` (EA auto-loads the server URL —
+the preview default is gone), `STOIC-Token.txt`, `STOIC-Installation.txt`, `MQL5\Presets\stoic.set` and a
+startup config `stoic-start.ini` (`[StartUp] Expert=EmergentTradingBridge`, `AllowLiveTrading=1`), then offers
+to restart MT5 with `terminal64.exe /config:stoic-start.ini` so the EA attaches itself (`-NoRestart`,
+`-ChartSymbol`, `-ChartPeriod` to override). Pairing codes last 60 min (single use). The EA reports a startup
+self-check (`ea_self_check`: autotrading · ea_trade_allowed · webrequest_ok) on every heartbeat; Install Progress
+turns a false flag into the exact fix. The one setting MT5 keeps outside any file — *Allow WebRequest for listed
+URL* — remains manual; the pairing-silent alert now also reaches the **account owner** (Telegram safety event +
+e-mail) with those steps.
+
 **Pairing alerts.** A terminal the installer paired that sends no heartbeat for
 `PAIRING_HEARTBEAT_ALERT_SEC` (default 600 s) raises the critical ops alert `pairing_no_heartbeat`
 (Bot Health) and pushes it to the security Telegram chat with the

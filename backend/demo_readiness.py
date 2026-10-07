@@ -12,7 +12,7 @@ logger = logging.getLogger("demo_readiness")
 HEARTBEAT_FRESH_SEC = 120
 FLEET_WINDOW_H = 24
 FLEET_LIMIT = 50
-DEMO_ACCEPTED_EA = ("1.57", "1.58", "1.59")   # D-1 — accepted on attested DEMO accounts until a signed 1.60 ships
+DEMO_ACCEPTED_EA = ("1.57", "1.58", "1.59", "1.60")   # D-1 — accepted on attested DEMO accounts until a signed 1.60 ships
 
 MANUAL_STEPS = [
     ("telegram_revoked", "Leaked security-bot token revoked in @BotFather; new token created",

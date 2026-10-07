@@ -75,6 +75,45 @@ def alert_text(acc: dict, info: dict, url: str) -> str:
     )
 
 
+def owner_lines(acc: dict, info: dict, url: str) -> list[str]:
+    """Easy-Connect P1.4 — the OWNER's message: what happened + the exact fix, no ops jargon."""
+    label = acc.get("label") or str(acc.get("_id"))
+    mins = info["silent_s"] // 60
+    return [
+        f"Your MT5 terminal on {info['host']} has not sent data for {mins} min since it was paired for {label}.",
+        "Fix (2 minutes, in MT5 on your VPS):",
+        f"1. Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' → add {url or '<your STOIC URL>'}",
+        "2. Make sure EmergentTradingBridge is on a chart and the AutoTrading button is green",
+        "3. Leave the EA inputs at default — server URL, token and installation id are auto-loaded",
+        "Accounts → Install Progress shows each step turn green; this alert closes itself on the first heartbeat.",
+    ]
+
+
+async def notify_owner(db, acc: dict, info: dict, url: str) -> None:
+    """Telegram (safety event → never paywalled) + e-mail to the account owner, best effort.
+    `info` is the alert meta ({host, silent_s, never_heartbeated, …})."""
+    uid = str(acc.get("user_id") or "")
+    if not uid:
+        return
+    lines = owner_lines(acc, info, url)
+    try:
+        from notifier import send_telegram as user_tg
+        await user_tg(uid, "heartbeat_lost", "VPS not sending data", lines)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("owner telegram failed: %s", type(e).__name__)
+    try:
+        from bson import ObjectId
+        from email_sender import send_email
+        user = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1}) if ObjectId.is_valid(uid) else None
+        email = (user or {}).get("email")
+        if email:
+            html = "<p>" + "</p><p>".join(lines) + "</p>"
+            await send_email(email, "STOIC — your VPS stopped sending data", html, text="\n".join(lines),
+                             idempotency_key=f"pairing_silent:{acc.get('_id')}:{acc.get('installer_paired_at')}")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("owner email failed: %s", type(e).__name__)
+
+
 def recovery_text(acc: dict) -> str:
     label = acc.get("label") or str(acc.get("_id"))
     return f"STOIC · VPS PAIRING RECOVERED\nAccount: {label} — EA heartbeat received, terminal is talking again."
@@ -111,12 +150,14 @@ def plan(accounts: list[dict], open_keys: set[str], now: datetime | None = None,
     return {"active": active, "raise": to_raise, "recovered": recovered}
 
 
-async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None) -> tuple[set, int]:
+async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None, owner_notify=None) -> tuple[set, int]:
     """Runs inside alerting.evaluate_ops_alerts: returns (active dedup keys, alerts raised).
     New alerts and real recoveries are pushed to the security Telegram chat (best effort)."""
     now = now or datetime.now(timezone.utc)
     if notify is None:
         from security_agent.alerts import send_telegram as notify
+    if owner_notify is None:
+        owner_notify = notify_owner
     from install_progress import webrequest_url
     try:
         from synthetic_data import is_synthetic_account as is_test
@@ -148,6 +189,10 @@ async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None)
                     await notify(text)
                 except Exception as e:  # noqa: BLE001 — Telegram must never break the evaluator
                     logger.warning("pairing alert telegram failed: %s", type(e).__name__)
+                try:   # P1.4 — the user is told what to fix, not only ops
+                    await owner_notify(db, acc, meta, webrequest_url())
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("pairing owner notify failed: %s", type(e).__name__)
     for key, text in p["recovered"]:
         try:
             await notify(text)

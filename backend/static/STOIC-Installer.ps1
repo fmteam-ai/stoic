@@ -169,6 +169,51 @@ function Get-StoicTerminals {
     return $found     # callers wrap in @(): 0 → empty, 1 → one DirectoryInfo (a unary-comma return would nest the array)
 }
 
+function Get-StoicRunningTerminal {
+    # v1.5 — the MT5 the operator has OPEN right now: match terminal64.exe process folders against each data
+    # folder's origin.txt (portable installs: data folder == exe folder). One match → that terminal, else $null.
+    param([Parameter(Mandatory = $true)][array]$Candidates)
+    $procs = @(Get-Process terminal64 -ErrorAction SilentlyContinue | ForEach-Object { try { Split-Path $_.Path -Parent } catch { $null } } | Where-Object { $_ })
+    if ($procs.Count -eq 0) { return $null }
+    $hits = @()
+    foreach ($c in $Candidates) {
+        $origin = Get-StoicTerminalOrigin $c.FullName
+        foreach ($p in $procs) {
+            if (($origin -and $origin.TrimEnd('\') -ieq $p.TrimEnd('\')) -or ($c.FullName.TrimEnd('\') -ieq $p.TrimEnd('\'))) { $hits += $c; break }
+        }
+    }
+    $hits = @($hits | Sort-Object FullName -Unique)
+    if ($hits.Count -eq 1) { return $hits[0] }
+    return $null
+}
+
+function Get-StoicTerminalExe {
+    # terminal64.exe for a data folder: origin.txt install dir, or the folder itself (portable mode). "" when unknown.
+    param([Parameter(Mandatory = $true)][string]$DataFolder)
+    foreach ($dir in @((Get-StoicTerminalOrigin $DataFolder), $DataFolder)) {
+        if ($dir) { $exe = Join-Path $dir "terminal64.exe"; if (Test-Path $exe) { return $exe } }
+    }
+    return ""
+}
+
+function Restart-StoicTerminal {
+    # v1.5 — close the running terminal of THIS install gracefully, relaunch with the startup config.
+    param([Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string]$DataFolder,
+          [Parameter(Mandatory = $true)][string]$StartupIni)
+    $exeDir = (Split-Path $Exe -Parent).TrimEnd('\')
+    $running = @(Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object { try { (Split-Path $_.Path -Parent).TrimEnd('\') -ieq $exeDir } catch { $false } })
+    foreach ($p in $running) {
+        Write-Host "    closing MT5 (pid $($p.Id)) ..." -ForegroundColor DarkGray
+        $null = $p.CloseMainWindow()
+        if (-not $p.WaitForExit(20000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+    }
+    Start-Sleep -Seconds 2
+    $args = @("/config:`"$StartupIni`"")
+    if ($exeDir -ieq $DataFolder.TrimEnd('\')) { $args = @("/portable") + $args }
+    Start-Process -FilePath $Exe -ArgumentList $args -WorkingDirectory $exeDir | Out-Null
+    Write-Host "    MT5 restarted with the STOIC EA attached (Experts tab: 'STOIC Bridge EA v… started')." -ForegroundColor Green
+}
+
 function Resolve-StoicTerminal {
     # ONE terminal: explicit path / id, the only one found, or the operator's choice. $null = nothing chosen.
     param([string]$TerminalPath, [string]$TerminalId,
@@ -198,6 +243,12 @@ function Resolve-StoicTerminal {
         return $null
     }
     if ($found.Count -eq 1) { return $found[0] }
+    # v1.5 — several terminals: the one that is RUNNING is the one the operator is looking at
+    $running = Get-StoicRunningTerminal -Candidates $found
+    if ($running) {
+        Write-Host "    Using the MT5 terminal that is open right now: $($running.FullName)" -ForegroundColor Green
+        return $running
+    }
     # A15-2 — never write one account's token into EVERY terminal: make the operator choose
     Write-Host "    Several terminals found — a pairing token belongs to ONE account. Choose the terminal for it:" -ForegroundColor Yellow
     for ($i = 0; $i -lt $found.Count; $i++) {
@@ -254,10 +305,16 @@ function Install-Stoic {
         [string]$TerminalId,
 
         [switch]$RotateDeviceKey,
-        [switch]$NoCompile
+        [switch]$NoCompile,
+
+        # v1.5 — zero-touch attach: the startup config opens this chart with the EA on it
+        [string]$ChartSymbol = "EURUSD",
+        [string]$ChartPeriod = "M15",
+        [switch]$NoRestart
     )
 
-    $InstallerVersion = "1.4"
+    $InstallerVersion = "1.5"
+    try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $ServerUrl = $ServerUrl.TrimEnd('/')
     $script:RotateDeviceKey = [bool]$RotateDeviceKey
     $devicePublicKey = Get-StoicDevicePublicKey
@@ -352,6 +409,34 @@ function Install-Stoic {
 # Generated: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
 $bridgeToken
 "@ | Set-Content -Path $tokenFile -Encoding UTF8 -NoNewline:$false
+
+        # v1.5 — server URL drop file: the EA auto-loads it, no inputs dialog edit needed
+        @"
+# STOIC server URL — the EA reads this when its ServerUrl input is left at default.
+# Generated: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
+$ServerUrl
+"@ | Set-Content -Path (Join-Path $filesDir "STOIC-Server.txt") -Encoding UTF8 -NoNewline:$false
+
+        # v1.5 — EA preset + MT5 startup config: terminal64.exe /config:<ini> opens a chart with the EA
+        # attached and Algo Trading allowed, so nobody drags the EA or edits inputs.
+        $presetsDir = Join-Path $t.FullName "MQL5\Presets"
+        if (-not (Test-Path $presetsDir)) { New-Item -ItemType Directory -Path $presetsDir -Force | Out-Null }
+        "ServerUrl=$ServerUrl`r`n" | Set-Content -Path (Join-Path $presetsDir "stoic.set") -Encoding Unicode -NoNewline
+        $startupIni = Join-Path $t.FullName "stoic-start.ini"
+        @"
+; STOIC startup config (installer v$InstallerVersion) — launch: terminal64.exe /config:"$startupIni"
+[Experts]
+AllowLiveTrading=1
+AllowDllImport=0
+Enabled=1
+Account=0
+Profile=0
+[StartUp]
+Expert=EmergentTradingBridge
+ExpertParameters=stoic.set
+Symbol=$ChartSymbol
+Period=$ChartPeriod
+"@ | Set-Content -Path $startupIni -Encoding ASCII
 
         # v1.55 — write the installation identity (EA sends it on every
         # heartbeat; the server rejects lease renewal without it).
@@ -467,20 +552,29 @@ $installationId
     }
     Write-Host ""
 
+    # ── 4b. Restart MT5 with the startup config (EA auto-attached) ───────
+    if (-not $NoRestart -and $installedTerminals.Count -gt 0) {
+        $exe = Get-StoicTerminalExe $terminal.FullName
+        if ($exe) {
+            $answer = Read-Host "    Restart MetaTrader 5 now so the EA attaches itself to a $ChartSymbol chart? [Y/n]"
+            if (-not $answer -or $answer -match '^[Yy]') { Restart-StoicTerminal -Exe $exe -DataFolder $terminal.FullName -StartupIni (Join-Path $terminal.FullName "stoic-start.ini") }
+        } else {
+            Write-Host "    (terminal64.exe not found for this data folder — attach the EA by hand, see below)" -ForegroundColor DarkGray
+        }
+    }
+
     # ── 5. Summary ────────────────────────────────────────────────────
     Write-Host "[5/5] All set." -ForegroundColor Cyan
     Write-Host ""
-    Write-Host "Next steps (do once in MT5):" -ForegroundColor White
-    Write-Host "  1. Open the MT5 terminal: $($terminal.FullName)" -ForegroundColor White
-    Write-Host "  2. Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' and ADD:" -ForegroundColor White
+    Write-Host "Two things left, in MT5 ($($terminal.FullName)):" -ForegroundColor White
+    Write-Host "  1. Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' → add:" -ForegroundColor White
     Write-Host "       $heartbeatHost" -ForegroundColor Yellow
-    Write-Host "     (the installer cannot set this for you — MT5 keeps it outside terminal.ini)" -ForegroundColor DarkGray
-    Write-Host "  3. Drag 'EmergentTradingBridge' from Navigator → Experts onto any chart (ServerUrl = $ServerUrl)." -ForegroundColor White
-    Write-Host "  4. Confirm 'AutoTrading' is ON (top toolbar, green ▶)." -ForegroundColor White
+    Write-Host "     (MT5 keeps this list outside any file — the installer cannot set it for you)" -ForegroundColor DarkGray
+    Write-Host "  2. If the EA is not on a chart after the restart: Navigator → Experts → drag 'EmergentTradingBridge' onto any chart → OK. AutoTrading ON (green ▶)." -ForegroundColor White
     Write-Host ""
-    Write-Host "  Your bridge token has been auto-saved at:" -ForegroundColor DarkGray
-    Write-Host "    $(Join-Path $terminal.FullName 'MQL5\Files\STOIC-Token.txt')" -ForegroundColor DarkGray
-    Write-Host "  The EA reads this automatically — no manual paste required." -ForegroundColor DarkGray
+    Write-Host "  Do NOT edit the EA inputs: server URL, bridge token and installation id are auto-loaded from" -ForegroundColor DarkGray
+    Write-Host "    $(Join-Path $terminal.FullName 'MQL5\Files')\STOIC-*.txt" -ForegroundColor DarkGray
+    Write-Host "  The dashboard (Accounts → Install Progress) turns green within a minute of the first heartbeat." -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "Deployed to $($installedTerminals.Count) terminal(s)." -ForegroundColor Green
     Write-Host ""
