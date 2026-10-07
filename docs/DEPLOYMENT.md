@@ -445,3 +445,10 @@ counts only on a `0 errors` log — N105-5). The file is saved with a UTF-8 BOM 
 to the Quick Install one-liner (or answer the prompt).
 CI runs `scripts/test_installer.ps1` on the Windows runner (URL building, terminal choice, compile-log
 verdict, ordering).
+
+**Pairing alerts.** A terminal the installer paired that sends no heartbeat for
+`PAIRING_HEARTBEAT_ALERT_SEC` (default 600 s) raises the critical ops alert `pairing_no_heartbeat`
+(Bot Health) and pushes it to the security Telegram chat (`SECURITY_AGENT_TELEGRAM_*`) with the
+WebRequest URL to add; the recovery is announced when the first heartbeat lands and the alert
+auto-resolves. Pairings silent for more than `PAIRING_ALERT_MAX_AGE_SEC` (default 7 days) are treated
+as abandoned, not incidents.
