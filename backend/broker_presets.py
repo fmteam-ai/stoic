@@ -55,4 +55,10 @@ BROKER_PRESETS = [
         "servers": ["Tickmill-Live01", "Tickmill-Live02", "Tickmill-Demo"],
         "account_types": ["standard", "demo"],
     },
+    # Easy MT5 Connect spec (Oct 2026) — operator's first broker list
+    {"broker": "Vantage", "servers": ["VantageInternational-Live", "VantageInternational-Live 2", "VantageInternational-Demo"], "account_types": ["standard", "demo"]},
+    {"broker": "VT Markets", "servers": ["VTMarkets-Live", "VTMarkets-Live 2", "VTMarkets-Demo"], "account_types": ["standard", "demo"]},
+    {"broker": "STARTRADER", "servers": ["StarTrader-Live", "StarTrader-Demo"], "account_types": ["standard", "demo"]},
+    {"broker": "OnEquity", "servers": ["OnEquity-Live", "OnEquity-Demo"], "account_types": ["standard", "demo"]},
+    {"broker": "Tauro Markets", "servers": ["TauroMarkets-Live", "TauroMarkets-Demo"], "account_types": ["standard", "demo"]},
 ]

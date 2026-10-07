@@ -162,3 +162,18 @@ def test_installer_hash_pin_in_one_liner_and_endpoint():
     assert '"installer_sha256": sha' in sr and '"install_command": install_command(base, token, sha)' in sr
     panel = _read("frontend", "src", "components", "QuickInstallPanel.jsx")
     assert "pin?.install_command" in panel and "quick-install-hash-pin" in panel
+
+
+def test_add_account_wizard_wired_and_spec_brokers_present():
+    from broker_presets import BROKER_PRESETS
+    names = {p["broker"] for p in BROKER_PRESETS}
+    for b in ("IC Markets", "Pepperstone", "Vantage", "RoboForex", "VT Markets", "STARTRADER", "OnEquity", "Tauro Markets"):
+        assert b in names, b
+    assert all(p["servers"] and p["account_types"] for p in BROKER_PRESETS)
+    wiz = _read("frontend", "src", "components", "AddAccountWizard.jsx")
+    for tid in ("wizard-broker-select", "wizard-server-select", "wizard-login-input", "wizard-vps-new", "wizard-step-review", "wizard-create-btn", "wizard-done"):
+        assert f'"{tid}"' in wiz or f"'{tid}'" in wiz or f"`{tid}`" in wiz or tid in wiz, tid
+    assert 'api.post("/accounts", payload)' in wiz and "<QuickInstallPanel" in wiz
+    acc = _read("frontend", "src", "pages", "Accounts.jsx")
+    assert "<AddAccountWizard" in acc and 'onClick={() => setShowWizard(true)} data-testid="add-account-button"' in acc
+    assert "installer_paired_hostname" in acc           # VPS picker lists already-paired hosts

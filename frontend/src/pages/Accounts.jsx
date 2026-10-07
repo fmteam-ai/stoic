@@ -3,6 +3,7 @@ import { useSearchParams, Link } from "react-router-dom";
 import api, { formatApiError, API } from "@/lib/api";
 import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
+import { AddAccountWizard } from "@/components/AddAccountWizard";
 import { InstallProgressChip } from "@/components/InstallProgressPanel";
 import { TrustedTerminals } from "@/components/TrustedTerminals";
 import PartnerBrokerCard from "@/components/PartnerBrokerCard";
@@ -99,6 +100,7 @@ export default function Accounts() {
     const [limits, setLimits] = useState(null);
     const [presets, setPresets] = useState([]);
     const [showForm, setShowForm] = useState(false);
+    const [showWizard, setShowWizard] = useState(false);   // Easy-Connect guided add (default); the classic form stays as "Advanced"
     const [form, setForm] = useState(empty);
     const [err, setErr] = useState("");
     const [msg, setMsg] = useState("");
@@ -390,7 +392,7 @@ export default function Accounts() {
                                 <ShieldCheck className="w-3.5 h-3.5" /> SIGNED EX5 <span>· {ex5Available === null ? "checking…" : "not published yet"}</span>
                             </span>
                         )}
-                        <button onClick={() => setShowForm(!showForm)} data-testid="add-account-button"
+                        <button onClick={() => setShowWizard(true)} data-testid="add-account-button"
                             className="flex items-center gap-2 px-3 py-2 bg-[#00FF41] hover:bg-[#00E53A] text-black font-medium text-xs tracking-widest transition-colors">
                             <Plus className="w-3.5 h-3.5" /> ADD ACCOUNT
                         </button>
@@ -401,6 +403,10 @@ export default function Accounts() {
             <div className="p-4 md:p-8 space-y-4" data-testid="accounts-page">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
+
+                <AddAccountWizard open={showWizard} onClose={() => setShowWizard(false)}
+                    pairedHosts={[...new Set(accounts.map(a => a.installer_paired_hostname).filter(Boolean))]}
+                    onCreated={() => load()} onAdvanced={() => { setShowWizard(false); setShowForm(true); }} />
 
                 {/* Multi-account portfolio overview (iter-137) */}
                 <MultiAccountOverview refreshKey={overviewKey} />
