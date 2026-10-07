@@ -1,0 +1,16 @@
+{
+  "summary": "STOIC main104 review retest (iter242). All 5 backend tests pass against preview: /api/health 200; /api/auth/login sets cookie; /api/admin/demo-readiness returns context.installation_id='dev-local' and a checks[] entry id='installation_id' status='info' with title starting 'STOIC_INSTALLATION_ID set'; /api/authority/inventory/policies returns {policies: [], installation_id: 'dev-local', environment: 'preview'}; /api/setup/installer.ps1 serves PS1 with $InstallerVersion = \"1.3\", Get-StoicEaDownloadUrl, Resolve-StoicTerminal, and inside Install-Stoic the call 'Resolve-StoicTerminal -TerminalPath' appears before '/api/setup/claim-pairing'; body does NOT contain '\"$eaScriptUrl?v=' (N104-1) nor 'config\\terminal.ini' (N104-4); /api/admin/release-gate 200 with accounts[]. Frontend: logged in as admin@trading.bot, /admin/demo-readiness renders normally and [data-testid=demo-readiness-installation-id] reads 'installation id: dev-local'; /admin/brokers renders normally and [data-testid=expectation-host-id] contains 'installation id (policy-migration input): dev-local' plus the 'no signed policy on this host yet' note. No blank pages, no page-level console errors (only pre-existing 401s from unrelated endpoints and recharts width warnings).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": ["/app/tests/test_main104_review.py", "/app/test_reports/pytest/iter242_main104.xml"],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": ["/app/tests/test_main104_review.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "test_credentials": "admin@trading.bot per /app/memory/test_credentials.md (not embedded in report)",
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "main104 corrections (N104-1..N104-6) are fully verified via /app/tests/test_main104_review.py (5/5 passing) and Playwright. Preview is APP_ENV=preview so installation_id falls back to 'dev-local' by design. Login is cookie-based (requests.Session captures cookies). Do not add tests under backend/tests/ (manifest frozen).",
+  "rca of the issue": "n/a — no issues found."
+}
