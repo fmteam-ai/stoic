@@ -3386,3 +3386,8 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 - PREVIEW: `SECURITY_AGENT_TELEGRAM_*` removed from backend/.env (preview no longer posts into the operator's chat); preview finding `agent_test_alert` resolved. Manual E2E script `tests/manual/security_telegram_vault_e2e.py` (creds from env).
 - Tests: tests/unit/test_security_telegram_vault.py (3); test_admin_integrations / test_alert_test_and_scalp_migration adjusted. Manifest 5344 / 558 + rc_lock regenerated.
 - OPERATOR: Save to GitHub → merge PR → `cd /opt/stoic && UPDATE_HOLD_ON_FAILURE=1 STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh origin/main` → Admin → Integrations → Security alerts (Telegram) → SET token + SET chat id 981306515 → SEND TEST ALERT. Then optionally empty `secrets/security_telegram_token` (it may still hold the literal `<FULL_TOKEN>` placeholder; the vault wins anyway).
+
+## 2026-10-07 — SECURITY AUDIT #9 (incremental: Security Telegram vault keys, refresh_keys, I2 index rename, KeyRow/SecurityAlertsCard, secret dialog/CSRF): PASS, no material findings
+- 2 of 3 P3 applied: `security_agent/redact.py` telegram_bot_token regex widened to the validator bounds (6–12 digit id, 30+ char secret) so every accepted token is masked in logs; `/admin/integrations/test/{provider}` throttled 12/10 min per admin (`integration_live_test`) on top of the 3/10 min Telegram limit.
+- P3 INFO accepted: the bot token is now decryptable by the API + 6 workers via SECRETS_MASTER_KEY (vault overlay design) instead of worker-security only — chat-post-only credential, operator-configurable channel preferred over file isolation.
+- Tests: +1 in tests/unit/test_security_telegram_vault.py. Unit lane 1071 green; manifest 5345 + rc_lock regenerated.

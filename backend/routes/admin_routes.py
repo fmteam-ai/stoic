@@ -730,13 +730,17 @@ async def admin_integrations_status(user=Depends(get_current_user)):
 
 
 @router.post("/admin/integrations/test/{provider}")
-async def admin_integrations_test(provider: str, user=Depends(get_current_user)):
+async def admin_integrations_test(provider: str, request: Request, user=Depends(get_current_user)):
     from auth import require_admin
+    from security import rate_limit
     require_admin(user)
     import integrations_settings as integ
     if provider not in integ.PROVIDERS:
         raise HTTPException(status_code=404, detail="unknown provider")
-    return await integ.test_provider(get_db(), provider, user)
+    db = get_db()
+    # audit #9 P3 — live tests call third parties (Stripe, Cloudflare, Resend): bounded per admin
+    await rate_limit(db, "integration_live_test", f"user:{user['id']}", 12, 600, "Too many live tests — try again in 10 minutes", request=request)
+    return await integ.test_provider(db, provider, user)
 
 
 # ── Security alerts (Telegram) — the chat that receives pairing / security-agent alerts ─────────

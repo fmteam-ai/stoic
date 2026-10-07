@@ -130,3 +130,16 @@ def test_i2_requires_the_hashed_bridge_token_index():
     from security_agent.checks import integrity_platform_trading as I
     assert I.REQUIRED_INDEXES["accounts"] == "bridge_token_hash_1"
     assert "bridge_token_hash" in _read("backend/bridge_tokens.py")
+
+
+def test_audit9_redaction_covers_every_token_the_validator_accepts_and_live_tests_are_throttled():
+    import re
+    import integrations_settings as integ
+    from security_agent import redact
+    pattern = re.compile(integ.VALIDATORS["SECURITY_AGENT_TELEGRAM_BOT_TOKEN"][0])
+    for tok in ("123456:" + "a" * 30, "864617013312:" + "Z" * 60, TOKEN):
+        assert pattern.match(tok)
+        assert tok not in redact.mask(f"sendMessage failed for {tok} chat=1")
+    src = _read("backend/routes/admin_routes.py")
+    body = src[src.index('@router.post("/admin/integrations/test/{provider}")'):]
+    assert 'rate_limit(db, "integration_live_test"' in body.split("@router.post", 2)[1]
