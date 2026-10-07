@@ -56,6 +56,11 @@ async def run_check(db, check_id: str, fn, cfg: dict) -> dict:
 
 async def tick(db, *, boot: bool = False) -> list[dict]:
     cfg = await config.load(db)
+    try:  # Admin → Integrations Telegram keys follow the vault (no restart)
+        from integrations_settings import refresh_keys
+        await refresh_keys(db)
+    except Exception as e:  # noqa: BLE001
+        log.warning("vault refresh skipped: %s", type(e).__name__)
     runs = []
     for cid, (fn, interval) in CHECKS.items():
         if due(cid, interval, boot=boot):

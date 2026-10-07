@@ -9,7 +9,8 @@ import threading
 
 PATTERNS = [
     ("jwt", re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")),
-    ("telegram_bot_token", re.compile(r"(?<!\d)\d{8,10}:[A-Za-z0-9_-]{34,36}(?![A-Za-z0-9_-])")),
+    # audit #9 — same bounds as integrations_settings.VALIDATORS (6–12 digit bot id, 30+ char secret)
+    ("telegram_bot_token", re.compile(r"(?<!\d)\d{6,12}:[A-Za-z0-9_-]{30,}(?![A-Za-z0-9_-])")),
     ("api_key", re.compile(r"\b(?:sk|rk|pk|re|sk_live|sk_test|whsec|xox[abp])[_-][A-Za-z0-9_-]{16,}\b")),
     ("bearer", re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{16,}")),
     ("password_kv", re.compile(r"(?i)\b(pass(?:word|wd)?|pwd|secret|token|api[_-]?key|bridge_token)\b(\s*[=:]\s*)(['\"]?)([^\s'\",;&]{6,})")),

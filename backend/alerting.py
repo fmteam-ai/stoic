@@ -112,6 +112,11 @@ async def evaluate_ops_alerts(db) -> int:
     now = _now()
     raised = 0
     active: set = set()
+    try:  # Admin → Integrations Telegram keys follow the vault in this worker too (no restart)
+        from integrations_settings import refresh_keys
+        await refresh_keys(db)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("vault refresh skipped: %s", type(e).__name__)
 
     # 1 · EA heartbeat stale on enabled accounts (recently-active only —
     #     accounts silent for >24h are decommissioned, not incidents)

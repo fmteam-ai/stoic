@@ -14,7 +14,9 @@ async def I1(db, cfg):
               f"{g.get('count', 2)} live rows share ticket {g['mt5_ticket']} on account {g['account_id']}", g) for g in groups]
 
 
-REQUIRED_INDEXES = {"users": "email_1", "accounts": "bridge_token_1", "trades": "uniq_account_ticket",
+# A13-2 / main98 — bridge tokens are stored hashed: the unique index is on bridge_token_hash (bridge_tokens.ensure_indexes
+# drops the legacy plaintext bridge_token_1), so I2 must require the hash index or it alerts forever.
+REQUIRED_INDEXES = {"users": "email_1", "accounts": "bridge_token_hash_1", "trades": "uniq_account_ticket",
                     "broker_deals": None, "order_authorizations": "nonce_1", "audit_anchors": "seq_1"}
 
 

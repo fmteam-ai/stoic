@@ -1,17 +1,21 @@
 import { useEffect, useState } from "react";
 import api, { formatApiError } from "@/lib/api";
 import { CheckCircle2, AlertTriangle, Loader2, Send } from "lucide-react";
+import { KeyRow } from "@/components/admin/KeyRow";
 
-/** Admin → Integrations: prove the security Telegram chat works before the demo (pairing alerts land there). */
-export function SecurityAlertsCard() {
+const SOURCE_LABEL = { vault: "sealed vault (this page)", secrets_file: "secrets/security_telegram_token", env: "backend/.env" };
+
+/** Admin → Integrations: set the security-bot token + chat id (vault) and prove the chat works (pairing alerts land there). */
+export function SecurityAlertsCard({ keys = [], onEdit }) {
     const [st, setSt] = useState(null);
     const [busy, setBusy] = useState(false);
     const [result, setResult] = useState(null);
+    const version = keys.map(([n, k]) => `${n}:${k.configured}:${k.updated_at || ""}`).join("|");
     const load = async () => {
         try { const { data } = await api.get("/admin/security-alerts/status"); setSt(data); }
         catch (e) { setSt({ configured: false, hint: formatApiError(e) }); }
     };
-    useEffect(() => { load(); }, []);
+    useEffect(() => { load(); }, [version]);
     const sendTest = async () => {
         setBusy(true); setResult(null);
         try { const { data } = await api.post("/admin/security-alerts/test"); setResult(data); }
@@ -33,13 +37,14 @@ export function SecurityAlertsCard() {
             </div>
             <div className="text-[11px] font-mono text-[#52525B] mb-2" data-testid="security-alert-status">
                 {st.configured
-                    ? <>bot token from <span className="text-[#A1A1AA]">{st.token_source === "secrets_file" ? "secrets/security_telegram_token" : "backend/.env"}</span> · chat <span className="text-[#A1A1AA]">{st.chat_id_masked}</span></>
+                    ? <>bot token from <span className="text-[#A1A1AA]">{SOURCE_LABEL[st.token_source] || st.token_source}</span> · chat <span className="text-[#A1A1AA]">{st.chat_id_masked}</span></>
                     : <span className="text-[#FFB020]">{st.hint || "not configured"}</span>}
                 {st.last_test?.at && <span className="block">last test {st.last_test.at.slice(0, 16)} · {st.last_test.ok ? "delivered" : "FAILED"} · by {st.last_test.by}</span>}
             </div>
             {result && <div data-testid="security-alert-test-result"
                 className={`text-xs mb-2 px-2 py-1.5 border ${result.ok ? "border-[#00FF41]/40 text-[#00FF41]" : "border-[#FF3B30]/40 text-[#FF3B30]"}`}>{result.detail}</div>}
-            <div className="text-[11px] text-[#52525B]">Pairing alerts (VPS terminal silent for 10 min) and security-agent findings are pushed to this chat. Max 3 tests per 10 minutes; every test is written to the audit chain.</div>
+            {keys.map(([name, k]) => <KeyRow key={name} name={name} k={k} onEdit={onEdit} />)}
+            <div className="mt-2 text-[11px] text-[#52525B]">Pairing alerts (VPS terminal silent for 10 min), policy-expiry, demo-mode and security-agent findings are pushed to this chat. Keys set here reach the API at once and every worker within a minute. Max 3 tests per 10 minutes; every test is written to the audit chain.</div>
         </div>
     );
 }

@@ -145,8 +145,10 @@ services:
   worker-security:
     <<: *app-common
     command: ["python", "-m", "workers.security"]
-    # S14 — the security Telegram bot token is a Docker secret visible ONLY to this
-    # worker (never in backend/.env, never in the API / other worker containers).
+    # S14 — the security Telegram bot token as a Docker secret is mounted ONLY into this worker.
+    # Operator default: set SECURITY_AGENT_TELEGRAM_BOT_TOKEN / _CHAT_ID on Admin → Integrations instead
+    # (sealed vault, re-auth, audited) — the API and every worker read it from there, so the status
+    # page, the test button and the pairing / policy / demo alerts (reconciliation worker) all work.
     environment:
       <<: *app-env
       SECURITY_AGENT_TELEGRAM_BOT_TOKEN_FILE: /run/secrets/security_telegram_token
