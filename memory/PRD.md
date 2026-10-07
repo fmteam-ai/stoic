@@ -3417,3 +3417,8 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 - `broker_presets.py`: + Vantage, VT Markets, STARTRADER, OnEquity, Tauro Markets (spec's first broker list; server names are typical defaults — admin should verify per broker). 15 presets.
 - VPS Agent service (Windows service, portable per-account terminals, watchdog): NOT built — deferred until the spike result (docs/EASY_CONNECT_SPIKE.md) decides the allow-list strategy; cannot be verified from this environment.
 - Tests: +1 in tests/unit/test_easy_connect_p1.py (9). Unit lane green; manifest 5359 + rc_lock regenerated. QA account created by the screenshot flow was removed.
+
+## 2026-10-07 — FOREXVPS = recommended VPS with the operator's partner link (verified on preview: wizard + Guide buttons → https://www.forexvps.net/partner/stoicaibot)
+- `integrations_settings`: vault key `VPS_REFERRAL_URL` (provider "vps", non-secret, https-only validator; default `DEFAULT_VPS_REFERRAL_URL = https://www.forexvps.net/partner/stoicaibot`), `vps_offer()`; `GET /api/public/vps-offer` (no auth). Admin → Integrations shows a "VPS provider (ForexVPS)" card (SET/UPDATE with re-auth) → change the link without a deploy. test_provider("vps") echoes the URL.
+- Frontend `components/VpsOffer.jsx` (`useVpsOffer`, `VpsOfferButton` with rel="noopener noreferrer sponsored") used in: AddAccountWizard VPS step + done state, Accounts connection guide step 2, Guide "Our VPS pick · ForexVPS" card (others demoted to "other Windows VPS that work"), QuickInstallPanel step 2.
+- Tests: +1 in test_easy_connect_p1.py (10); test_admin_integrations providers set updated. Unit lane green; manifest 5360 + rc_lock regenerated.

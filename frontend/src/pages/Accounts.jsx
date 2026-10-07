@@ -4,6 +4,7 @@ import api, { formatApiError, API } from "@/lib/api";
 import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 import { AddAccountWizard } from "@/components/AddAccountWizard";
+import { VpsOfferButton } from "@/components/VpsOffer";
 import { InstallProgressChip } from "@/components/InstallProgressPanel";
 import { TrustedTerminals } from "@/components/TrustedTerminals";
 import PartnerBrokerCard from "@/components/PartnerBrokerCard";
@@ -1330,7 +1331,8 @@ function MT5ConnectionGuide() {
                         <p>Click <strong className="text-white">ADD ACCOUNT</strong> (top-right): broker, server, login. Pick <strong className="text-white">paper</strong> to sandbox or <strong className="text-white">live</strong> for the real terminal.</p>
                     </Step>
                     <Step n={2} title="On your VPS: MT5 open and logged in" testid="conn-step-2">
-                        <p>Install MetaTrader 5 from your broker on the Windows VPS, log into the account and leave it running. Any Windows VPS works (2 vCPU / 4 GB runs up to 4 terminals).</p>
+                        <p>Install MetaTrader 5 from your broker on the Windows VPS, log into the account and leave it running. We recommend <strong className="text-[#FFD700]">ForexVPS</strong> (2 vCPU / 4 GB runs up to 4 terminals, datacentres next to the brokers).</p>
+                        <div className="mt-2"><VpsOfferButton compact testid="conn-vps-offer-link" /></div>
                     </Step>
                     <Step n={3} title="Quick Install — one code, one line" testid="conn-step-3">
                         <p>On the account row click <strong className="text-white">QUICK INSTALL</strong> → <strong className="text-white">GENERATE PAIRING TOKEN</strong> (valid 60 min, single use) and copy the PowerShell line. On the VPS open <strong className="text-white">PowerShell as Administrator</strong>, paste, Enter. The installer configures the MT5 you have open — EA, server URL, token, installation id — and offers to restart it with the EA already on a chart. <span className="text-[#52525B]">Nothing to type in the EA inputs.</span></p>

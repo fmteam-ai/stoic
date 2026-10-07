@@ -177,3 +177,25 @@ def test_add_account_wizard_wired_and_spec_brokers_present():
     acc = _read("frontend", "src", "pages", "Accounts.jsx")
     assert "<AddAccountWizard" in acc and 'onClick={() => setShowWizard(true)} data-testid="add-account-button"' in acc
     assert "installer_paired_hostname" in acc           # VPS picker lists already-paired hosts
+
+
+def test_forexvps_referral_is_the_recommended_vps_everywhere():
+    import integrations_settings as integ
+    from unittest.mock import patch
+    assert integ.REGISTRY["VPS_REFERRAL_URL"][0] == "vps" and not integ.REGISTRY["VPS_REFERRAL_URL"][1]
+    with patch.dict(os.environ, {}, clear=False):
+        os.environ.pop("VPS_REFERRAL_URL", None)
+        o = integ.vps_offer()
+        assert o["url"] == "https://www.forexvps.net/partner/stoicaibot" and o["provider"] == "ForexVPS"
+        os.environ["VPS_REFERRAL_URL"] = "http://evil.example"          # non-https override is ignored
+        assert integ.vps_offer()["url"] == integ.DEFAULT_VPS_REFERRAL_URL
+        os.environ["VPS_REFERRAL_URL"] = "https://www.forexvps.net/partner/other"
+        assert integ.vps_offer()["url"].endswith("/partner/other")
+    assert '@api_router.get("/public/vps-offer")' in _read("backend", "server.py")
+    for rel, tid in (("frontend/src/components/AddAccountWizard.jsx", "wizard-vps-offer-link"),
+                     ("frontend/src/pages/Accounts.jsx", "conn-vps-offer-link"),
+                     ("frontend/src/pages/Guide.jsx", "guide-vps-offer-link"),
+                     ("frontend/src/components/QuickInstallPanel.jsx", "quick-install-vps-offer-link")):
+        assert tid in _read(*rel.split("/")), rel
+    vo = _read("frontend", "src", "components", "VpsOffer.jsx")
+    assert 'api.get("/public/vps-offer")' in vo and 'rel="noopener noreferrer sponsored"' in vo

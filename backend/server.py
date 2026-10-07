@@ -447,6 +447,13 @@ async def installer_script():
                         })
 
 
+@api_router.get("/public/vps-offer")
+async def public_vps_offer():
+    """Recommended VPS + referral link (admin-editable on Integrations) — no auth, no PII."""
+    from integrations_settings import vps_offer
+    return vps_offer()
+
+
 @api_router.get("/setup/installer.sha256")
 async def installer_hash():
     """Hash pin for the one-liner: SHA-256 of the exact bytes /setup/installer.ps1 serves."""

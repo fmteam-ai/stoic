@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { VpsOfferButton } from "@/components/VpsOffer";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
@@ -990,8 +991,8 @@ function VpsSection() {
             </div>
 
             <Callout kind="info" testid="guide-vps-connect-only">
-                <strong>One supported way to connect:</strong> rent any Windows VPS (2 vCPU / 4 GB runs up to 4 terminals; London
-                for most brokers), install MT5 from your broker and log in, then on the dashboard open
+                <strong>One supported way to connect:</strong> rent a Windows VPS — we recommend <strong>ForexVPS</strong> (2 vCPU / 4 GB
+                runs up to 4 terminals; London for most brokers), install MT5 from your broker and log in, then on the dashboard open
                 <strong> Accounts → Quick Install</strong>: one code, one PowerShell line, and the installer deploys the EA,
                 server URL, token and installation id into the MT5 you have open and restarts it with the EA on a chart.
                 The only MT5 setting it cannot write for you is <em>Tools → Options → Expert Advisors → Allow WebRequest</em>
@@ -1001,13 +1002,16 @@ function VpsSection() {
                     className="text-[#00FF41] hover:underline">VPS service page</a>); the same Quick Install applies there.
             </Callout>
 
-            <div className="font-display font-bold text-base mt-7 mb-2">Alternative · paid third-party VPS</div>
+            <div className="font-display font-bold text-base mt-7 mb-2">Our VPS pick · ForexVPS</div>
+            <div className="border border-[#FFD700]/40 bg-[#FFD700]/5 p-4 flex flex-wrap items-center justify-between gap-3" data-testid="guide-vps-recommended">
+                <div>
+                    <div className="font-display font-bold text-sm">ForexVPS.net — recommended for STOIC</div>
+                    <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">Windows VPS built for MT5 · datacentres next to the brokers (LD4 / NY4 / TY3) · 2 vCPU / 4 GB runs up to 4 terminals · 1-click MT5</div>
+                </div>
+                <VpsOfferButton testid="guide-vps-offer-link" />
+            </div>
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-5 mb-2">OTHER WINDOWS VPS THAT WORK</div>
             <div className="grid sm:grid-cols-2 gap-2 mt-2">
-                <a href="https://forexvps.net" target="_blank" rel="noreferrer"
-                    className="border border-[#1F1F1F] hover:border-[#FFD700]/40 bg-[#0A0A0A] px-3 py-2 transition-colors">
-                    <div className="font-display font-bold text-sm">ForexVPS.net</div>
-                    <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">~$10/mo · low-latency to MT5 brokers · 1-click MT5</div>
-                </a>
                 <a href="https://accuwebhosting.com/forex-vps-hosting" target="_blank" rel="noreferrer"
                     className="border border-[#1F1F1F] hover:border-[#FFD700]/40 bg-[#0A0A0A] px-3 py-2 transition-colors">
                     <div className="font-display font-bold text-sm">AccuWeb Forex VPS</div>

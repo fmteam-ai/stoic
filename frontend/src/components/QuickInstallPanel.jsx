@@ -3,6 +3,7 @@ import api, { formatApiError, API } from "@/lib/api";
 import { Copy, Loader2, Terminal as TerminalIcon, CheckCircle2, RefreshCw, Server } from "lucide-react";
 import { toast } from "sonner";
 import { InstallProgressPanel } from "@/components/InstallProgressPanel";
+import { VpsOfferButton } from "@/components/VpsOffer";
 
 /**
  * QuickInstallPanel — one-stop pairing UX for the PowerShell auto-installer.
@@ -224,7 +225,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                         </div>
                     )}
                     <div className="text-xs text-[#A1A1AA] space-y-1.5">
-                        <div><strong className="text-white">Step 2 —</strong> On the VPS, with MT5 <strong>open and logged in</strong>, open <strong>PowerShell as Administrator</strong> and paste.
+                        <div><strong className="text-white">Step 2 —</strong> On the VPS, with MT5 <strong>open and logged in</strong>, open <strong>PowerShell as Administrator</strong> and paste. <span className="text-[#52525B]">No VPS yet?</span> <VpsOfferButton compact testid="quick-install-vps-offer-link" className="align-middle ml-1" />
                             <span className="block text-[#52525B]" data-testid="quick-install-terminalid-hint">The installer configures the MT5 you have open (several installs → it asks). It deploys the EA, the server URL, your bridge token and the .ex5 — <strong className="text-[#00FF41]">~60 seconds</strong>. Advanced: <code className="text-[#FFD700]">-TerminalId &lt;32-hex folder&gt;</code>, <code className="text-[#FFD700]">-ChartSymbol EURUSD</code>.</span>
                         </div>
                         <div><strong className="text-white">Step 3 —</strong> Say <strong>Y</strong> when it offers to restart MT5 — it comes back with the EA on a chart and Algo Trading on. Nothing to type in the EA inputs.</div>

@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 import { Loader2, Server, ChevronRight, ChevronLeft, CheckCircle2 } from "lucide-react";
+import { VpsOfferButton, useVpsOffer } from "@/components/VpsOffer";
 
 const STEPS = ["Broker & login", "VPS", "Review"];
 const INPUT = "w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono text-white outline-none";
@@ -21,6 +22,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
     const [created, setCreated] = useState(null);
     const [f, setF] = useState({ mode: "live", broker: "", server: "", account_number: "", label: "", account_type: "microcent", base_currency: "USD", vps: pairedHosts[0] ? pairedHosts[0] : "new" });
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+    const vpsOffer = useVpsOffer();
     useEffect(() => {
         if (!open) return;
         setStep(0); setCreated(null); setErr("");
@@ -70,6 +72,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                         <div className="flex items-center gap-2 text-sm text-[#00FF41]"><CheckCircle2 className="w-4 h-4" /> {created.label || "Account"} added{f.mode === "paper" ? " — paper account, no terminal needed." : "."}</div>
                         {f.mode !== "paper" && (
                             <>
+                                {f.vps === "new" && <div className="flex items-center justify-between gap-3 text-xs text-[#A1A1AA] border border-[#FFD700]/20 px-3 py-2"><span>No VPS yet? Order it first, install MT5 there and log in — then come back for the code (valid 60 min).</span><VpsOfferButton compact testid="wizard-done-vps-offer-link" /></div>}
                                 {f.vps !== "new" && <div className="text-xs text-[#A1A1AA]">Run the one-liner on <code className="text-[#FFD700] font-mono">{f.vps}</code> (the VPS you already use) with MT5 logged into <code className="font-mono">{f.account_number}</code>.</div>}
                                 <QuickInstallPanel accountId={created.id} accountLabel={created.label} account={created} />
                             </>
@@ -130,8 +133,9 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                 <button type="button" onClick={() => set("vps", "new")} data-testid="wizard-vps-new"
                                     className={`w-full flex items-center gap-3 px-3 py-2 border text-left ${f.vps === "new" ? "border-[#00FF41] bg-[#00FF41]/5" : "border-[#1F1F1F]"}`}>
                                     <Server className="w-4 h-4 text-[#FFD700]" />
-                                    <div><div className="text-sm text-white">A new Windows VPS</div><div className="text-[11px] text-[#52525B]">Any Windows VPS (2 vCPU / 4 GB runs up to 4 terminals). Install MT5 from your broker, log in, then paste the one-liner.</div></div>
+                                    <div><div className="text-sm text-white">A new Windows VPS</div><div className="text-[11px] text-[#52525B]">We recommend <strong className="text-[#FFD700]">{vpsOffer.provider}</strong> — 2 vCPU / 4 GB runs up to 4 terminals, datacentres next to the brokers. Install MT5 from your broker there, log in, then paste the one-liner.</div></div>
                                 </button>
+                                {f.vps === "new" && <div className="pl-10" data-testid="wizard-vps-offer"><VpsOfferButton testid="wizard-vps-offer-link" /></div>}
                             </>
                         )}
                     </div>
