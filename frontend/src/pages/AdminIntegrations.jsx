@@ -11,7 +11,7 @@ import { EmailTemplatesPanel } from "@/components/admin/EmailTemplatesPanel";
 import { SecurityAlertsCard } from "@/components/admin/SecurityAlertsCard";
 import { KeyRow } from "@/components/admin/KeyRow";
 
-const ORDER = ["stripe", "turnstile", "email", "ai"];
+const ORDER = ["stripe", "turnstile", "email", "ai", "vps"];
 const keysOf = (data, id) => Object.entries(data.keys).filter(([, k]) => k.provider === id);
 
 function ProviderCard({ id, label, keys, signals, onEdit }) {

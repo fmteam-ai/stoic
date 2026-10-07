@@ -31,15 +31,27 @@ REGISTRY = {
     "EMERGENT_LLM_KEY": ("ai", True, "Emergent Universal Key (Co-Pilot, Risk Commander, AI agents)"),
     "SECURITY_AGENT_TELEGRAM_BOT_TOKEN": ("security_telegram", True, "BotFather token of the security-alerts bot (123456789:AA…)"),
     "SECURITY_AGENT_TELEGRAM_CHAT_ID": ("security_telegram", False, "Chat id the bot posts to (your private chat, or -100… for a group)"),
+    "VPS_REFERRAL_URL": ("vps", False, "Recommended VPS link shown to users (ForexVPS partner/referral URL)"),
 }
+DEFAULT_VPS_REFERRAL_URL = "https://www.forexvps.net/partner/stoicaibot"
+
+
+def vps_offer() -> dict:
+    """What the dashboard shows wherever a VPS is needed — admin-editable (vault/env), ForexVPS by default."""
+    url = (os.environ.get("VPS_REFERRAL_URL") or DEFAULT_VPS_REFERRAL_URL).strip()
+    if not url.startswith("https://"):
+        url = DEFAULT_VPS_REFERRAL_URL
+    return {"provider": "ForexVPS", "url": url, "label": "Get a ForexVPS (recommended)",
+            "blurb": "Windows VPS tuned for MT5 — 2 vCPU / 4 GB runs up to 4 terminals; pick the datacentre closest to your broker (London for most)."}
 PROVIDERS = {
     "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Emergent)",
-    "security_telegram": "Security alerts (Telegram)"}
+    "security_telegram": "Security alerts (Telegram)", "vps": "VPS provider (ForexVPS)"}
 # keys workers re-read from the vault between restarts (alert channels must follow an admin change at once)
 SECURITY_TELEGRAM_KEYS = ("SECURITY_AGENT_TELEGRAM_BOT_TOKEN", "SECURITY_AGENT_TELEGRAM_CHAT_ID")
 VALIDATORS = {
     "SECURITY_AGENT_TELEGRAM_BOT_TOKEN": (r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", "expected a BotFather token like 123456789:AAH… (no 'bot' prefix)"),
     "SECURITY_AGENT_TELEGRAM_CHAT_ID": (r"^-?\d{5,20}$", "expected a numeric chat id (groups start with -100)"),
+    "VPS_REFERRAL_URL": (r"^https://[A-Za-z0-9.-]+(/[^\s]*)?$", "expected an https:// URL"),
 }
 _VAULT_LOADED: dict[str, str] = {}   # key → value this process last took from the vault (refresh_keys bookkeeping)
 _AAD = b"stoic-secrets-vault-v1"
@@ -387,6 +399,9 @@ async def test_provider(db, provider: str, actor: dict) -> dict:
         if not os.environ.get("EMERGENT_LLM_KEY"):
             return {"ok": False, "detail": "EMERGENT_LLM_KEY not configured"}
         return {"ok": True, "detail": "key present — ask the Co-Pilot a question to exercise it"}
+    if provider == "vps":
+        o = vps_offer()
+        return {"ok": True, "detail": f"users are sent to {o['url']}"}
     if provider == "security_telegram":
         from security import rate_limit
         import security_alert_test as sat

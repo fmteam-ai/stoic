@@ -38,7 +38,7 @@ def test_tail_never_leaks_more_than_four_chars():
 
 def test_registry_covers_the_three_requested_integrations_plus_ai():
     provs = {v[0] for v in integ.REGISTRY.values()}
-    assert provs == {"stripe", "turnstile", "email", "ai", "security_telegram"} == set(integ.PROVIDERS)
+    assert provs == {"stripe", "turnstile", "email", "ai", "security_telegram", "vps"} == set(integ.PROVIDERS)
     assert integ.REGISTRY["STRIPE_API_KEY"][1] and integ.REGISTRY["TURNSTILE_SECRET_KEY"][1] and integ.REGISTRY["RESEND_API_KEY"][1]
     assert integ.REGISTRY["SECURITY_AGENT_TELEGRAM_BOT_TOKEN"][1] and not integ.REGISTRY["SECURITY_AGENT_TELEGRAM_CHAT_ID"][1]
     assert not integ.REGISTRY["TURNSTILE_SITE_KEY"][1]          # public value shown in clear

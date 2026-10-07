@@ -42,8 +42,28 @@ def _base_url(request) -> str:
     return str(request.base_url).rstrip("/") if request else ""
 
 
-def install_command(base_url: str, token: str) -> str:
-    return (f'irm {base_url}/api/setup/installer.ps1 | iex; '
+_INSTALLER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "STOIC-Installer.ps1")
+_INSTALLER_HASH: dict = {}
+
+
+def installer_sha256() -> str:
+    """SHA-256 of the exact bytes GET /api/setup/installer.ps1 serves (cached per mtime) — pinned in the one-liner."""
+    import hashlib
+    st = os.stat(_INSTALLER)
+    if _INSTALLER_HASH.get("mtime") != st.st_mtime_ns:
+        with open(_INSTALLER, "rb") as f:
+            _INSTALLER_HASH.update(mtime=st.st_mtime_ns, sha256=hashlib.sha256(f.read()).hexdigest().upper())
+    return _INSTALLER_HASH["sha256"]
+
+
+def install_command(base_url: str, token: str, sha256: str | None = None) -> str:
+    """Easy-Connect hash pin: the one-liner downloads the installer, verifies its SHA-256 against the value
+    pinned at issue time and refuses to run on a mismatch (PowerShell 5.1 and 7)."""
+    sha256 = sha256 or installer_sha256()
+    return (f'$r=iwr "{base_url}/api/setup/installer.ps1" -UseBasicParsing; '
+            f'$h=(Get-FileHash -InputStream $r.RawContentStream -Algorithm SHA256).Hash; '
+            f'if($h -ne "{sha256}"){{throw "STOIC installer hash mismatch ($h) - do not run"}}; '
+            f'iex ([Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()).TrimStart([char]0xFEFF)); '
             f'Install-Stoic -Token "{token}" -ServerUrl "{base_url}"')
 
 

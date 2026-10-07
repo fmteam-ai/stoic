@@ -143,7 +143,16 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
     trade_mode = account.get("account_trade_mode")
     tail = f" · EA {ea_ver}" if ea_ver else ""
     tail += f" · broker says {trade_mode}" if trade_mode else ""
-    if hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing:
+    sc = account.get("ea_self_check") or {}
+    if hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing and sc.get("autotrading") is False:
+        steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "warn",
+                           f"heartbeating, last {_fmt_age(hb_age)}{tail} — but AutoTrading is OFF",
+                           "In MT5 click the AutoTrading button (top toolbar) so it turns green — the EA cannot place or close trades until then"))
+    elif hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing and sc.get("ea_trade_allowed") is False:
+        steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "warn",
+                           f"heartbeating, last {_fmt_age(hb_age)}{tail} — but 'Allow Algo Trading' is unticked for the EA",
+                           "In MT5: right-click the chart → Expert List → EmergentTradingBridge → Properties → Common tab → tick 'Allow Algo Trading'"))
+    elif hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing:
         steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "done",
                            f"heartbeating, last {_fmt_age(hb_age)}{tail}"))
     elif paired_at and not hb_after_pairing:
@@ -151,12 +160,12 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
         if since <= FIRST_HEARTBEAT_GRACE_S:
             steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "waiting",
                                f"paired {_fmt_age(since)} — waiting for the first heartbeat",
-                               f"In MT5: Tools → Options → Expert Advisors → allow WebRequest for {url or 'the STOIC server URL'}; attach EmergentTradingBridge to a chart; AutoTrading ON"))
+                               f"In MT5: Tools → Options → Expert Advisors → allow WebRequest for {url or 'the STOIC server URL'}; attach EmergentTradingBridge to a chart (leave its inputs at default); AutoTrading ON"))
         else:
             steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "blocked",
                                f"no heartbeat since pairing ({_fmt_age(since)})",
                                f"Most likely the WebRequest URL is missing: Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' and add {url or 'the STOIC server URL'}. "
-                               "Then attach EmergentTradingBridge (Navigator → Experts) with ServerUrl set to this server, AutoTrading ON, and check the Experts tab for errors"))
+                               "Then attach EmergentTradingBridge (Navigator → Experts) leaving its inputs at default (server URL, token and installation id are auto-loaded), AutoTrading ON, and check the Experts tab for errors"))
     elif hb_age is not None:
         steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "warn",
                            f"last heartbeat {_fmt_age(hb_age)}{tail} — terminal closed or VPS offline",

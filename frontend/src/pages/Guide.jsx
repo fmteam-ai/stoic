@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { VpsOfferButton } from "@/components/VpsOffer";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
@@ -132,7 +133,7 @@ function H2({ id, icon: Icon, children }) {
 
 function P({ children }) { return <p className="text-sm text-[#A1A1AA] leading-relaxed">{children}</p>; }
 
-function Callout({ kind = "info", children }) {
+function Callout({ kind = "info", children, testid }) {
     const palettes = {
         info:    { bd: "border-[#1F1F1F]",     bg: "bg-[#0A0A0A]",     fg: "text-[#A1A1AA]" },
         good:    { bd: "border-[#00FF41]/30",  bg: "bg-[#00FF41]/10",  fg: "text-[#00FF41]" },
@@ -142,7 +143,7 @@ function Callout({ kind = "info", children }) {
     };
     const palette = palettes[kind] || palettes.info;
     return (
-        <div className={`px-4 py-3 border ${palette.bd} ${palette.bg} text-sm ${palette.fg} leading-relaxed`}>
+        <div className={`px-4 py-3 border ${palette.bd} ${palette.bg} text-sm ${palette.fg} leading-relaxed`} data-testid={testid}>
             {children}
         </div>
     );
@@ -989,85 +990,28 @@ function VpsSection() {
                 <CTAButton to="/infrastructure" testid="guide-cta-infrastructure">OPEN INFRASTRUCTURE</CTAButton>
             </div>
 
-            <Callout kind="info">
-                <strong>Prefer a fully manual setup?</strong> The classic route below still works — e.g. RoboForex users get
-                a Free VPS when account equity is ≥ $300 <em>and</em> you trade at least 3 standard lots per month.
-                Activate it from your{" "}
-                <a href="https://roboforex.com/clients/services/forex-vps/" target="_blank" rel="noreferrer"
-                    className="text-[#00FF41] hover:underline">RoboForex VPS service page</a>{" "}
-                (log in → Member Area → Services → Your VPS 2.0 server → Submit Application).
-                If you don&apos;t meet the volume requirement, the VPS is available for $5/month from the same page.
+            <Callout kind="info" testid="guide-vps-connect-only">
+                <strong>One supported way to connect:</strong> rent a Windows VPS — we recommend <strong>ForexVPS</strong> (2 vCPU / 4 GB
+                runs up to 4 terminals; London for most brokers), install MT5 from your broker and log in, then on the dashboard open
+                <strong> Accounts → Quick Install</strong>: one code, one PowerShell line, and the installer deploys the EA,
+                server URL, token and installation id into the MT5 you have open and restarts it with the EA on a chart.
+                The only MT5 setting it cannot write for you is <em>Tools → Options → Expert Advisors → Allow WebRequest</em>
+                for your STOIC URL — Install Progress tells you if that is still missing. No MetaEditor, no EA inputs,
+                no token to paste. Prefer a broker-hosted VPS? RoboForex gives one free at ≥ $300 equity and 3 lots/month
+                (<a href="https://roboforex.com/clients/services/forex-vps/" target="_blank" rel="noreferrer"
+                    className="text-[#00FF41] hover:underline">VPS service page</a>); the same Quick Install applies there.
             </Callout>
 
-            <div className="font-display font-bold text-base mt-6 mb-2">Manual step-by-step · RoboForex Free VPS</div>
-            <div className="space-y-3">
-                <Step n="1" title="Eligibility check" testid="guide-vps-step-1">
-                    Log in to your{" "}
-                    <a href="https://my.roboforex.com/en/login/" target="_blank" rel="noreferrer"
-                        className="text-[#00FF41] hover:underline">RoboForex Member Area</a>.
-                    Free VPS requires ≥ $300 equity <em>and</em> ≥ 3 standard lots traded in the current month
-                    (CFDs excluding US-stock CFDs). Check eligibility under <em>Services → Your VPS 2.0 server</em>.
-                    Below threshold? The same panel offers a $5/month paid option, or use any third-party VPS.
-                </Step>
-                <Step n="2" title="Submit the application" testid="guide-vps-step-2">
-                    From <em>Services → Your VPS 2.0 server → Submit Application</em>, RoboForex auto-picks
-                    the data centre closest to the execution server (London / New York / Singapore).
-                    Approval is manual but usually arrives within 15–30 minutes by email — your IP address,
-                    username, and password come in that message.
-                </Step>
-                <Step n="3" title="Connect via RDP" testid="guide-vps-step-3">
-                    On Windows: open <em>Remote Desktop Connection</em> → enter the IP from the email →
-                    sign in with the provided creds.<br />
-                    On Mac: install <a href="https://apps.apple.com/app/microsoft-remote-desktop/id1295203466" target="_blank" rel="noreferrer" className="text-[#00FF41] hover:underline">Microsoft Remote Desktop</a> from the App Store → add the VPS as a new PC.<br />
-                    On mobile: <em>RD Client</em> by Microsoft works the same way.
-                </Step>
-                <Step n="4" title="Install MetaTrader 5 on the VPS" testid="guide-vps-step-4">
-                    Inside the VPS, open Edge → go to{" "}
-                    <a href="https://my.roboforex.com/en/clients/downloads/" target="_blank" rel="noreferrer"
-                        className="text-[#00FF41] hover:underline">RoboForex Downloads → MetaTrader 5</a>{" "}
-                    → install. Log in with your live account number + server (e.g.{" "}
-                    <code className="font-mono text-[10px] text-[#00FF41]">RoboForex-Pro</code> or{" "}
-                    <code className="font-mono text-[10px] text-[#00FF41]">RoboForex-ECN</code>).
-                </Step>
-                <Step n="5" title="Copy the STOIC EA to the VPS" testid="guide-vps-step-5">
-                    Easiest path: in MT5 click <em>File → Open Data Folder → MQL5/Experts</em>. Then{" "}
-                    <strong className="text-[#FFD700]">on the VPS</strong>, open the same MT5 → Data Folder →
-                    paste <code className="font-mono text-[10px] text-[#00FF41]">EmergentTradingBridge.ex5</code>{" "}
-                    into <em>MQL5/Experts</em>. Restart MT5. The EA appears in the Navigator panel.
-                </Step>
-                <Step n="6" title="Attach the EA + paste your bridge token" testid="guide-vps-step-6">
-                    Drag <code className="font-mono text-[10px] text-[#00FF41]">EmergentTradingBridge</code> from
-                    the Navigator onto any chart (XAUUSD M5 is fine — the EA listens for instructions, not the chart timeframe).
-                    In the EA inputs, paste your <strong className="text-[#FFD700]">Bridge Token</strong> from{" "}
-                    <Link to="/accounts" className="text-[#00FF41] hover:underline">MT5 Accounts → COPY</Link>.
-                    Tick <strong>Allow Algo Trading</strong>. Click OK.
-                </Step>
-                <Step n="7" title="Enable Algo Trading + autostart on reboot" testid="guide-vps-step-7">
-                    Top toolbar of MT5: <strong>Algo Trading</strong> button must be GREEN.<br />
-                    Also: <em>Tools → Options → Expert Advisors</em> — tick:
-                    <ul className="mt-2 ml-4 space-y-1 list-disc text-xs text-[#A1A1AA]">
-                        <li>Allow algorithmic trading</li>
-                        <li>Allow WebRequests for: <code className="font-mono text-[10px] text-[#00FF41]">https://stoic.app</code> (and the preview URL if testing)</li>
-                        <li>Disable algorithmic trading when the account has been changed — UNTICK</li>
-                    </ul>
-                    Finally: <em>View → Strategy Tester → Settings</em> → make sure MT5 is set to auto-launch
-                    when the VPS boots (Windows Run dialog → <code className="font-mono text-[10px] text-[#00FF41]">shell:startup</code> → drop an MT5 shortcut).
-                </Step>
-                <Step n="8" title="Verify uptime in STOIC" testid="guide-vps-step-8">
-                    Disconnect from the VPS (close RDP). Wait 60 seconds. Open STOIC{" "}
-                    <Link to="/" className="text-[#00FF41] hover:underline">Dashboard</Link> — the{" "}
-                    <strong>Integrity widget</strong> at the top should stay green (<strong className="text-[#00FF41]">● IN SYNC</strong>)
-                    with last-sync &lt; 10 seconds. That confirms your VPS is keeping the heartbeat alive without your laptop.
-                </Step>
+            <div className="font-display font-bold text-base mt-7 mb-2">Our VPS pick · ForexVPS</div>
+            <div className="border border-[#FFD700]/40 bg-[#FFD700]/5 p-4 flex flex-wrap items-center justify-between gap-3" data-testid="guide-vps-recommended">
+                <div>
+                    <div className="font-display font-bold text-sm">ForexVPS.net — recommended for STOIC</div>
+                    <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">Windows VPS built for MT5 · datacentres next to the brokers (LD4 / NY4 / TY3) · 2 vCPU / 4 GB runs up to 4 terminals · 1-click MT5</div>
+                </div>
+                <VpsOfferButton testid="guide-vps-offer-link" />
             </div>
-
-            <div className="font-display font-bold text-base mt-7 mb-2">Alternative · paid third-party VPS</div>
+            <div className="font-mono text-[10px] text-[#52525B] tracking-widest mt-5 mb-2">OTHER WINDOWS VPS THAT WORK</div>
             <div className="grid sm:grid-cols-2 gap-2 mt-2">
-                <a href="https://forexvps.net" target="_blank" rel="noreferrer"
-                    className="border border-[#1F1F1F] hover:border-[#FFD700]/40 bg-[#0A0A0A] px-3 py-2 transition-colors">
-                    <div className="font-display font-bold text-sm">ForexVPS.net</div>
-                    <div className="font-mono text-[10px] text-[#A1A1AA] mt-0.5">~$10/mo · low-latency to MT5 brokers · 1-click MT5</div>
-                </a>
                 <a href="https://accuwebhosting.com/forex-vps-hosting" target="_blank" rel="noreferrer"
                     className="border border-[#1F1F1F] hover:border-[#FFD700]/40 bg-[#0A0A0A] px-3 py-2 transition-colors">
                     <div className="font-display font-bold text-sm">AccuWeb Forex VPS</div>

@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 907 |
+| unit | pure logic, no external I/O | every CI job | 918 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4166 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4171 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5345 tests across 558 files.**
+**Total: 5361 tests across 560 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -24,6 +24,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_chaos_soak.py` | http-live | 2 |
 | `backend/tests/test_demo_readiness.py` | http-live | 6 |
 | `backend/tests/test_e2e_v56_authority.py` | http-live | 12 |
+| `backend/tests/test_easy_connect_p1_live.py` | http-live | 5 |
 | `backend/tests/test_fixplan_a2_order_lifecycle.py` | http-live | 11 |
 | `backend/tests/test_fixplan_a3_a4_panic_locks.py` | http-live | 34 |
 | `backend/tests/test_fixplan_a6_late_fills.py` | http-live | 18 |
@@ -521,6 +522,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
+| `backend/tests/unit/test_easy_connect_p1.py` | unit | 11 |
 | `backend/tests/unit/test_env_template_sync.py` | unit | 4 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
 | `backend/tests/unit/test_fixplan_a16_part1.py` | unit | 5 |
