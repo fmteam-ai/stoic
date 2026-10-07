@@ -1,4 +1,4 @@
-# STOIC release signer on Fly.io — deploy with deploy/signer/deploy_fly.sh
+# STOIC release signer on Fly.io — deploy with deploy/signer/init_fly_signer.sh (first time) / flyctl deploy (redeploy)
 # (the script rewrites `app` to the name you choose).
 app = "stoic-signer"
 primary_region = "ams"

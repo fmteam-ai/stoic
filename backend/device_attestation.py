@@ -151,6 +151,9 @@ async def ensure_indexes(db):
     await db.attestation_nonces.create_index([("installation_id", 1), ("used", 1)])
     await db.attestation_abuse.create_index("expires_at", expireAfterSeconds=0)
     await db.attestation_abuse.create_index([("ip", 1), ("at", -1)])
+    # N105-6 — the installer-progress panel polls the latest token / installation per account
+    await db.pairing_tokens.create_index([("account_id", 1), ("issued_at", -1)])
+    await db.installations.create_index([("account_id", 1), ("revoked", 1), ("created_at", -1)])
 
 
 _REFUSED = ("challenge_refused",

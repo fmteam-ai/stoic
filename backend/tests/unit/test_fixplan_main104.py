@@ -44,7 +44,7 @@ def test_n104_1_installer_builds_the_download_url_and_picks_the_terminal_before_
     assert body.index("Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId") < body.index("/api/setup/claim-pairing")
     assert "if (-not $terminal) { return }" in body                        # bad path / no terminal / bad choice → token untouched
     assert "pairing token NOT used" in ps
-    assert '$InstallerVersion = "1.3"' in ps
+    assert re.search(r'\$InstallerVersion = "1\.[3-9]"', ps)
     assert ". .\\STOIC-Installer.ps1" in ps and ".\\STOIC-Installer.ps1 -Token" not in ps   # usage line: the file only defines the function
     # the behavioural pwsh test exists, dot-sources the installer and runs on the Windows CI runner
     t = _read("scripts/test_installer.ps1")
@@ -85,9 +85,11 @@ def test_n104_3_installation_id_minted_once_by_lib_sh(tmp_path):
     m = re.search(r"^STOIC_INSTALLATION_ID=(stoic-[0-9a-f]{16})$", env, re.M)
     assert m and m.group(1) in out and env.startswith("APP_ENV=production\n")
     assert run() == "" and (tmp_path / "backend" / ".env").read_text() == env   # idempotent: NEVER regenerated
+    (tmp_path / "secrets" / "installation_id").unlink()                  # N105-4: without the secrets copy the .env value is authoritative
     (tmp_path / "backend" / ".env").write_text("STOIC_INSTALLATION_ID=keep-me\n")
     run()
     assert (tmp_path / "backend" / ".env").read_text() == "STOIC_INSTALLATION_ID=keep-me\n"
+    assert (tmp_path / "secrets" / "installation_id").read_text().strip() == "keep-me"
     upd = _read("deploy/update.sh")
     assert upd.index("ensure_release_secrets || gate_refused") < upd.index("\nensure_installation_id")   # update.sh path
     inst = _read("deploy/install.sh")

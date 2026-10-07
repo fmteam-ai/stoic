@@ -410,7 +410,11 @@ as required reviewer ("Prevent self-review" off when you are the only admin).
 1. GitHub → Actions → **policy-migration → Run workflow**: `installation_id` (Demo Readiness header
    or the Inventory go-live panel show it; `deploy/update.sh` mints `STOIC_INSTALLATION_ID` into
    backend/.env once — N104-3), `previous_policy_version` = `6/3/3-v1` (fresh install),
-   `policy_version` = e.g. `demo-2x2-v1`, `accounts`/`enabled` = 2/2, `account_ids` = the two
+   `policy_version` = e.g. `demo-2x2-v1`, `accounts` = **every** account row in the database
+   (all users; disabled and paper accounts included — the projection counts `db.accounts` without a
+   user scope; e.g. 3 while a disabled "Robo" account still exists, 2 once it is deleted — the
+   Inventory panel shows the live count next to the input), `enabled` = the
+   accounts with trading ON (= bots; any other active bot is a violation), `account_ids` = the two
    platform account ids (Accounts page → account → id), `demo_only` = true, a reason.
    The run waits for the reviewer, signs (`purpose=policy-migration`) and commits
    `release/policy_migrations/demo-2x2-v1.json` to `main`.
@@ -424,7 +428,7 @@ as required reviewer ("Prevent self-review" off when you are the only admin).
    `demo_only=false` (A15-9, before real money).
 
 ### Windows installer — one terminal per run (A15-2, N104-1/N104-4)
-`STOIC-Installer.ps1` v1.3 installs into **one** terminal: pass `-TerminalPath "<data folder>"`
+`STOIC-Installer.ps1` v1.4 installs into **one** terminal: pass `-TerminalPath "<data folder>"`
 (MT5: File → Open Data Folder) or `-TerminalId <32-hex>`; with several terminals and neither
 flag it asks which one. The terminal is chosen **before** the one-time pairing token is claimed,
 so a wrong path, a missing terminal or a mistyped choice never burns the token. Portable-mode
@@ -435,4 +439,9 @@ voids terminal A. The installer no longer writes `WebRequest=` into `terminal.in
 setting elsewhere and a running terminal rewrites the file) — add the printed URL by hand once per
 terminal: Tools → Options → Expert Advisors → *Allow WebRequest for listed URL*. Running the file
 locally: `. .\STOIC-Installer.ps1` then `Install-Stoic …` (it only defines the function).
-CI runs `scripts/test_installer.ps1` on the Windows runner (URL building, terminal choice, ordering).
+A failed MetaEditor compile never leaves a stale `.ex5` behind (removed before compiling; the result
+counts only on a `0 errors` log — N105-5). The file is saved with a UTF-8 BOM so Windows PowerShell
+5.1 reads it correctly when run locally. With two terminals on one VPS add `-TerminalId <32-hex>`
+to the Quick Install one-liner (or answer the prompt).
+CI runs `scripts/test_installer.ps1` on the Windows runner (URL building, terminal choice, compile-log
+verdict, ordering).

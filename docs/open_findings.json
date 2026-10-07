@@ -224,7 +224,7 @@
   {
     "id": "OPS-r24-signer-deferred",
     "severity": "P1",
-    "title": "Production runs with RELEASE_SIGNER deferred (nothing signed; live exposure CLOSE_ONLY via RELEASE_SIGNER_DEFERRED gate). Provision the external signer (deploy/signer/deploy_fly.sh), set RELEASE_SIGNER=external + URL/ALLOWED_HOSTS/TOKEN/KEY_ID/PUBLIC_KEY in Secrets, then set RELEASE_SIGNER_DEFERRED=false.",
+    "title": "Production runs with RELEASE_SIGNER deferred (nothing signed; live exposure CLOSE_ONLY via RELEASE_SIGNER_DEFERRED gate). Provision the external signer (deploy/signer/init_fly_signer.sh (first time) / flyctl deploy (redeploy)), set RELEASE_SIGNER=external + URL/ALLOWED_HOSTS/TOKEN/KEY_ID/PUBLIC_KEY in Secrets, then set RELEASE_SIGNER_DEFERRED=false.",
     "owner": "operator"
   },
   {

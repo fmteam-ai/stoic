@@ -27,15 +27,18 @@ export const STATE_CHIP = {
 export function useInstallProgress(accountId, intervalMs = 5000) {
     const [data, setData] = useState(null);
     const fetchIt = useCallback(async () => {
+        if (document.visibilityState === "hidden") return;          // N105-6 — no polling in hidden tabs
         try {
             const { data } = await api.get(`/setup/install-progress/${accountId}`);
             setData(data);
         } catch { /* keep the last snapshot */ }
     }, [accountId]);
     useEffect(() => {
+        setData(null);                                                // N105-6 — never flash the previous account's data
         fetchIt();
         const t = setInterval(fetchIt, intervalMs);
-        return () => clearInterval(t);
+        document.addEventListener("visibilitychange", fetchIt);
+        return () => { clearInterval(t); document.removeEventListener("visibilitychange", fetchIt); };
     }, [fetchIt, intervalMs]);
     return data;
 }

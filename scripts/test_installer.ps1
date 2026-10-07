@@ -60,6 +60,23 @@ try {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
 
+Write-Host "Compile log verdict (N105-5)"
+$tmpLog = Join-Path ([IO.Path]::GetTempPath()) ("stoic-log-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force $tmpLog | Out-Null
+try {
+    $ok = Join-Path $tmpLog "ok.log"; [IO.File]::WriteAllText($ok, "MetaEditor 5.00 build 4500`r`nResult: 0 errors, 2 warnings`r`n", [Text.Encoding]::Unicode)
+    $bad = Join-Path $tmpLog "bad.log"; [IO.File]::WriteAllText($bad, "Result: 3 errors, 0 warnings`r`n", [Text.Encoding]::Unicode)
+    $alt = Join-Path $tmpLog "alt.log"; [IO.File]::WriteAllText($alt, "0 error(s), 1 warning(s)`r`n", [Text.Encoding]::UTF8)
+    $junk = Join-Path $tmpLog "junk.log"; [IO.File]::WriteAllText($junk, "nothing useful`r`n", [Text.Encoding]::Unicode)
+    Assert-Equal (Test-StoicCompileLog -LogPath $ok) $true "0 errors (UTF-16 log) → compiled"
+    Assert-Equal (Test-StoicCompileLog -LogPath $bad) $false "3 errors → not compiled"
+    Assert-Equal (Test-StoicCompileLog -LogPath $alt) $true "alternate '0 error(s)' format → compiled"
+    Assert-Equal (Test-StoicCompileLog -LogPath $junk) $false "unparseable log → not compiled"
+    Assert-Equal (Test-StoicCompileLog -LogPath (Join-Path $tmpLog "missing.log")) $false "missing log → not compiled"
+} finally {
+    Remove-Item -Recurse -Force $tmpLog -ErrorAction SilentlyContinue
+}
+
 Write-Host "Install-Stoic ordering (source)"
 $src = Get-Content $installer -Raw
 $body = $src.Substring($src.IndexOf("function Install-Stoic"))
@@ -69,6 +86,11 @@ if ($body -notmatch '\$iniPath') { Write-Host "  ok   installer no longer writes
 else { $script:failures++; Write-Host "  FAIL installer still writes terminal.ini (ineffective WebRequest setting)" -ForegroundColor Red }
 if ($body -notmatch '"\$eaScriptUrl\?v=') { Write-Host "  ok   no raw `"`$eaScriptUrl?v=`" interpolation" -ForegroundColor Green }
 else { $script:failures++; Write-Host "  FAIL raw `$eaScriptUrl?v= interpolation present" -ForegroundColor Red }
+$bytes = [IO.File]::ReadAllBytes($installer)
+if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) { Write-Host "  ok   installer saved with a UTF-8 BOM (Windows PowerShell 5.1 reads the unicode glyphs correctly)" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL installer lacks the UTF-8 BOM (N105-5)" -ForegroundColor Red }
+if ($body -match 'Remove-Item -Force \$ex5' -and $body -match 'Test-StoicCompileLog -LogPath \$log') { Write-Host "  ok   stale .ex5 removed before compile; compile trusted only on a 0-error log" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL compile path does not remove the stale .ex5 / check the log" -ForegroundColor Red }
 
 if ($script:failures -gt 0) { throw "installer tests: $($script:failures) failure(s)" }
 Write-Host "installer tests passed" -ForegroundColor Green

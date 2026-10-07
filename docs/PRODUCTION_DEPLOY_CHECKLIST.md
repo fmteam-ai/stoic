@@ -38,12 +38,14 @@ be hosted from the Emergent preview workspace (no Docker, not isolated).
 ```bash
 curl -L https://fly.io/install.sh | sh && flyctl auth login   # once
 pip install cryptography                                      # once
-cd deploy/signer && ./deploy_fly.sh stoic-signer-<yourname> ams
+cd deploy/signer && ./init_fly_signer.sh stoic-signer-<yourname> ams   # FIRST TIME ONLY — later: flyctl deploy -a <app>
 ```
-The script generates the keypair + bearer token locally, stores them ONLY as
+The init script generates the keypair + bearer token locally, stores them ONLY as
 Fly secrets (+ chmod-600 copies in `~/.stoic-signer/`), deploys, verifies
 `/healthz`, `/public-key` and the authenticated `/health`, and prints the
-complete **Secrets-tab block** for Step 2 plus the signer host URL
+**GitHub Actions secrets block** (the release token goes to CI only — never to the API host, N101-5)
+plus the signer host URL. It REFUSES to run against an app that already holds a key (N105-2):
+redeploying the signer code is `cd deploy/signer && flyctl deploy -a <app> --ha=false`
 (`https://<app>.fly.dev`). Re-verify from anywhere with
 `python scripts/signer_probe.py --url https://<app>.fly.dev --token-file ~/.stoic-signer/<app>.token --public-key <PUBLIC>`
 (sign → verify round-trip through the same client code the API uses).

@@ -213,7 +213,9 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                     </div>
 
                     <div className="text-xs text-[#A1A1AA] space-y-1.5">
-                        <div><strong className="text-white">Step 2 —</strong> Open <strong>PowerShell as Administrator</strong> on your MT5 host (your PC or broker VPS) and paste.</div>
+                        <div><strong className="text-white">Step 2 —</strong> Open <strong>PowerShell as Administrator</strong> on your MT5 host (your PC or broker VPS) and paste.
+                            <span className="block text-[#52525B]" data-testid="quick-install-terminalid-hint">Two MT5 terminals on that machine? Append <code className="text-[#FFD700]">-TerminalId &lt;32-hex folder name&gt;</code> (MT5: File → Open Data Folder) — or just answer the prompt.</span>
+                        </div>
                         <div><strong className="text-white">Step 3 —</strong> The installer picks the MT5 terminal, deploys the EA, writes your bridge token, and installs the .ex5. <strong className="text-[#00FF41]">~60 seconds.</strong></div>
                         <div><strong className="text-white">Step 4 —</strong> In MT5: Tools → Options → Expert Advisors → allow WebRequest for the URL the installer prints; drag <strong>EmergentTradingBridge</strong> onto any chart; AutoTrading ON.</div>
                         <div className="text-[#52525B] mt-2">

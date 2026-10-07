@@ -91,10 +91,26 @@ ensure_release_secrets() {
 # Called next to ensure_release_secrets in install.sh (after backend/.env is written) and update.sh.
 ensure_installation_id() {
   [ -f backend/.env ] || return 0
-  grep -qE '^STOIC_INSTALLATION_ID=.' backend/.env && return 0
-  local id; id="stoic-$(openssl rand -hex 8)"
-  set_kv backend/.env STOIC_INSTALLATION_ID "${id}"
-  echo "   generated STOIC_INSTALLATION_ID=${id} in backend/.env (policy-migration runs must name it — Demo Readiness shows it)"
+  local id="" envid
+  envid=$( { grep -E '^STOIC_INSTALLATION_ID=.' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+  # N105-4 — secrets/installation_id is the durable copy (backup.sh encrypts ./secrets; backend/.env is
+  # not backed up): a rebuilt host restores secrets/ and keeps the id every signed policy names.
+  if [ -d secrets ] && [ -s secrets/installation_id ]; then
+    id=$(tr -d '[:space:]' < secrets/installation_id)
+    if [ -n "${envid}" ] && [ "${envid}" != "${id}" ]; then
+      echo "!! STOIC_INSTALLATION_ID differs between backend/.env (${envid}) and secrets/installation_id (${id}) — keep ONE value (the signed policies name it). Refusing to continue."
+      return 1
+    fi
+  elif [ -n "${envid}" ]; then
+    id="${envid}"
+  else
+    id="stoic-$(openssl rand -hex 8)"
+    echo "   generated STOIC_INSTALLATION_ID=${id} (policy-migration runs must name it — Demo Readiness shows it)"
+  fi
+  if [ -d secrets ] && [ ! -s secrets/installation_id ]; then
+    ( umask 077; printf '%s\n' "${id}" > secrets/installation_id ) && echo "   stored the installation id in secrets/installation_id (included in encrypted backups)"
+  fi
+  [ "${envid}" = "${id}" ] || set_kv backend/.env STOIC_INSTALLATION_ID "${id}"
 }
 
 # N101-6 — backups encrypt secrets/ with BACKUP_PASSPHRASE_FILE; nothing ever provisioned it, so a
