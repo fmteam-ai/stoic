@@ -14,7 +14,7 @@ import MultiAccountOverview from "@/components/MultiAccountOverview";
 // of the prior .mq5, which otherwise re-downloads stale source.
 const LATEST_EA_VERSION = "1.60";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning } from "lucide-react";
+import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning, ShieldCheck } from "lucide-react";
 const Warning = AlertTriangle;
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
@@ -370,9 +370,14 @@ export default function Accounts() {
                 action={
                     <div className="flex gap-2">
                         <a href={`${API}/ea-script?v=${LATEST_EA_VERSION}`} target="_blank" rel="noopener noreferrer" download={`EmergentTradingBridge_v${LATEST_EA_VERSION}.mq5`}
-                            data-testid="download-ea-button"
+                            data-testid="download-ea-button" title="MQ5 SOURCE — you compile it in MetaEditor (F7); the result is a demo-only binary until the signed EX5 is installed"
                             className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
-                            <Download className="w-3.5 h-3.5" /> DOWNLOAD EA v{LATEST_EA_VERSION}
+                            <Download className="w-3.5 h-3.5" /> MQ5 SOURCE v{LATEST_EA_VERSION} <span className="text-[#71717A]">· compile yourself</span>
+                        </a>
+                        <a href={`${API}/ea-script.ex5`} target="_blank" rel="noopener noreferrer" download="EmergentTradingBridge.ex5"
+                            data-testid="download-ex5-button" title="SIGNED EX5 — the CI-built, release-signed binary (required for LIVE). 409 'ex5_not_published' until ea-release has run"
+                            className="flex items-center gap-2 px-3 py-2 border border-[#00FF41]/40 text-[#00FF41] hover:border-[#00FF41] text-xs font-mono tracking-widest transition-colors">
+                            <ShieldCheck className="w-3.5 h-3.5" /> SIGNED EX5 <span className="text-[#71717A]">· install this</span>
                         </a>
                         <button onClick={() => setShowForm(!showForm)} data-testid="add-account-button"
                             className="flex items-center gap-2 px-3 py-2 bg-[#00FF41] hover:bg-[#00E53A] text-black font-medium text-xs tracking-widest transition-colors">

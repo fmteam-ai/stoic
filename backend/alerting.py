@@ -23,7 +23,7 @@ SEVERITIES = ("info", "warning", "critical")
 EVALUATOR_KINDS = (
     "ea_heartbeat_stale", "worker_lease_expired", "worker_loop_crashloop",
     "worker_loop_stalled", "outbox_backlog", "outbox_failed",
-    "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired")
+    "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real")
 
 
 def _now():
@@ -224,6 +224,20 @@ async def evaluate_ops_alerts(db) -> int:
                 {"kind": {"$in": ["policy_expiring", "policy_expired"]}, "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
         except Exception as e2:  # noqa: BLE001
             logger.warning("policy expiry keep-open failed: %s", type(e2).__name__)
+
+    # 5d · A16-5 — a DEMO-attested account whose broker reports real/contest money (attestation void) → loud
+    try:
+        import demo_mode_alerts
+        _dm_active, _dm_raised = await demo_mode_alerts.evaluate(db, now, raise_alert=raise_alert)
+        active |= _dm_active
+        raised += _dm_raised
+    except Exception as e:  # noqa: BLE001
+        logger.warning("demo mode alert evaluation failed: %s", type(e).__name__)
+        try:
+            active |= {a["dedup_key"] async for a in db.ops_alerts.find(
+                {"kind": "demo_account_reports_real", "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("demo mode keep-open failed: %s", type(e2).__name__)
 
     # 5b · paired VPS terminal silent since the installer ran (WebRequest / EA attach / AutoTrading) —
     #      ops alert + security Telegram push, recovery announced when the first heartbeat lands
