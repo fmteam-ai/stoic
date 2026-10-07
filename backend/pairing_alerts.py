@@ -107,7 +107,8 @@ async def notify_owner(db, acc: dict, info: dict, url: str) -> None:
         user = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1}) if ObjectId.is_valid(uid) else None
         email = (user or {}).get("email")
         if email:
-            html = "<p>" + "</p><p>".join(lines) + "</p>"
+            from html import escape
+            html = "<p>" + "</p><p>".join(escape(ln) for ln in lines) + "</p>"   # audit #10 — host/label are client-supplied
             await send_email(email, "STOIC — your VPS stopped sending data", html, text="\n".join(lines),
                              idempotency_key=f"pairing_silent:{acc.get('_id')}:{acc.get('installer_paired_at')}")
     except Exception as e:  # noqa: BLE001

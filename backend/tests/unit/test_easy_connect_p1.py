@@ -131,3 +131,15 @@ def test_pairing_silent_alert_also_reaches_the_account_owner():
     async def owner(_db, a, m, url): calls["owner"].append((a["_id"], m["silent_s"], url))
     asyncio.new_event_loop().run_until_complete(pa.evaluate(db, now, raise_alert=raise_alert, notify=notify, owner_notify=owner))
     assert len(calls["ops"]) == 1 and calls["owner"] == [("a1", 900, calls["owner"][0][2])]
+
+
+def test_audit10_owner_email_is_html_escaped_and_ea_requires_https_drop_file():
+    import pairing_alerts as pa
+    acc = {"_id": "a1", "label": "<b>x</b>", "user_id": "u1"}
+    meta = {"host": "<img src=x onerror=alert(1)>", "silent_s": 600, "never_heartbeated": True}
+    lines = pa.owner_lines(acc, meta, "https://s.example")
+    from html import escape
+    assert "<img" in lines[0] and "<img" not in escape(lines[0])
+    assert "escape(ln) for ln in lines" in _read("backend", "pairing_alerts.py")
+    mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
+    assert 'StringFind(url, "https://") != 0' in mq5 and 'StringFind(url, "http") != 0' not in mq5

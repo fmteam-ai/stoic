@@ -495,7 +495,10 @@ string ResolveServerUrl() {
       break;
    }
    FileClose(fh);
-   if (StringLen(url) < 8 || StringFind(url, "http") != 0) return input_trim;
+   if (StringLen(url) < 12 || StringFind(url, "https://") != 0) {   // audit #10 — bridge token never travels in clear
+      Print("STOIC: ignoring STOIC-Server.txt (must start with https://).");
+      return (StringLen(input_trim) > 0 ? input_trim : SERVER_URL_DEFAULT);
+   }
    while (StringLen(url) > 0 && StringGetCharacter(url, StringLen(url) - 1) == '/') url = StringSubstr(url, 0, StringLen(url) - 1);
    Print("STOIC: server URL auto-loaded from MQL5\\Files\\STOIC-Server.txt: ", url);
    return url;
