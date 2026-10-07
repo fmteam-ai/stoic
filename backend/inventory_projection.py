@@ -389,6 +389,7 @@ async def approve_expectation(db, approver_email: str) -> dict:
         await consume_migration_nonce(db, pending["policy_migration"])                  # single use, atomic
     doc = {k: pending.get(k) for k in ("accounts", "enabled", "bots", "account_ids", "scope_user_id", "proposed_by", "proposed_at")}
     doc.update(_id="inventory_expectation", approved_by=approver_email, set_at=_now(), policy_version=v["policy_version"],
+               demo_only=bool(v.get("demo_only")),            # SEC-002 (audit #5) — the signed DEMO-only guard must persist
                approval_mode=approval_mode())
     await db.platform_state.replace_one({"_id": "inventory_expectation"}, doc, upsert=True)
     await db.platform_state.delete_one({"_id": "inventory_expectation_pending"})

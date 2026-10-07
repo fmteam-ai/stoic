@@ -28,6 +28,9 @@ def build(args) -> dict:
         raise SystemExit("counts must satisfy len(account_ids) == enabled == bots <= accounts")
     if len(args.reason.strip()) < 10 or not args.issuer.strip():
         raise SystemExit("reason (>=10 chars) and issuer are required")
+    import re
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", args.version) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,64}", args.previous):
+        raise SystemExit("policy versions must match [A-Za-z0-9._-] (version is used as the file name)")
     return {"schema": "stoic.policy-migration/v3", "installation_id": args.installation_id,
             "environment": args.environment, "previous_policy_version": args.previous,
             "policy_version": args.version, "accounts": args.accounts, "enabled": args.enabled, "bots": args.bots,

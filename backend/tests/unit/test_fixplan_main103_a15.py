@@ -243,3 +243,83 @@ def test_n103_6_previous_ea_record_verifies_on_legacy_payload_but_current_never_
     assert "legacy=True" in body
     cur = src[src.index("def _signed_release_record"):src.index('prev = rec.get("previous")')]
     assert "legacy=True" not in cur                                                                   # current record: strict
+
+
+# ── audit #5 (SEC-001 / SEC-002 / P3) ─────────────────────────────────────────────────────────────
+def test_sec001_policy_workflow_never_interpolates_inputs_into_shell():
+    wf = _read(".github/workflows/policy-migration.yml")
+    run_blocks = re.findall(r"run: \|\n((?:\s{10,}.*\n)+)", wf)
+    assert run_blocks
+    for blk in run_blocks:
+        assert "${{" not in blk, blk          # inputs/actor reach bash only via env vars
+    assert 'IN_REASON: ${{ inputs.reason }}' in wf and '--reason "$IN_REASON"' in wf
+    assert '[[ "$IN_VERSION" =~' in wf and '[[ "$IN_ACCOUNT_IDS" =~' in wf
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    import sign_policy_migration as spm
+    bad = type("A", (), dict(installation_id="i", environment="production", previous="6/3/3-v1", version="../evil",
+                             accounts=2, enabled=2, bots=2, account_ids="a,b", demo_only=True,
+                             reason="4-week MT5 demo on two attested demo accounts", issuer="x", expires_days=1))()
+    with pytest.raises(SystemExit):
+        spm.build(bad)
+
+
+def test_sec002_approval_persists_demo_only_so_the_guard_is_live():
+    import inventory_projection as ip
+
+    class _PS:
+        def __init__(self, pending):
+            self.pending = pending; self.saved = None
+
+        async def find_one(self, q, *a, **k):
+            return self.pending if q.get("_id") == "inventory_expectation_pending" else None
+
+        async def replace_one(self, q, doc, upsert=False):
+            self.saved = doc
+
+        async def delete_one(self, q):
+            return None
+
+        async def update_one(self, *a, **k):
+            return None
+
+        async def find_one_and_update(self, *a, **k):
+            return {"_id": "nonce", "version": 1}
+
+        def __getattr__(self, name):            # any other collection op (insert/delete/update/count…) is a no-op
+            async def _noop(*a, **k):
+                return None
+            return _noop
+
+        def find(self, *a, **k):
+            return _Cursor([])
+
+    class _Db:
+        def __init__(self, pending):
+            self.platform_state = _PS(pending)
+
+        def __getattr__(self, name):
+            return _PS(None)
+
+    ids = ["a1", "a2"]
+    with patch.dict(os.environ, _local_signer_env()), patch("inventory_projection.production_mode", lambda: True), \
+            patch("inventory_projection.environment_label", lambda: "production"):
+        mig = _signed(_demo_policy(ids))
+        pending = {"_id": "inventory_expectation_pending", "accounts": 2, "enabled": 2, "bots": 2, "account_ids": ids,
+                   "demo_only": True, "policy_migration": mig, "proposed_by": "a@x", "proposed_at": "t"}
+        db = _Db(pending)
+
+        async def cpv(_db):
+            return "6/3/3-v1"
+
+        async def noop(*a, **k):
+            return None
+        with patch("inventory_projection.current_policy_version", cpv), patch("inventory_projection.consume_migration_nonce", noop), \
+                patch("audit_chain.append_chained", noop), patch("inventory_projection.approval_mode", lambda: "single_admin"):
+            _run(ip.approve_expectation(db, "b@x"))
+    assert db.platform_state.saved["demo_only"] is True and db.platform_state.saved["policy_version"] == "demo-2x2-v1"
+
+
+def test_p3_adopt_release_lock_validates_every_asset_before_writing():
+    lib = _read("deploy/lib.sh")
+    fn = re.search(r"^adopt_release_lock\(\) \{.*?^\}", lib, re.S | re.M).group(0)
+    assert fn.index('adopt+=("${f}")') < fn.index('cp "${dest}/rc_lock.json" release/rc_lock.json') < fn.index('for f in "${adopt[@]}"')

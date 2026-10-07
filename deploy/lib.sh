@@ -158,14 +158,10 @@ ok = (lock.get("authoritative") is True and lock.get("git_commit") == sha and lo
       and bool((lock.get("images") or {}).get("backend")) and bool((lock.get("images") or {}).get("frontend")))
 sys.exit(0 if ok else 1)
 PY
-  mkdir -p deploy/releases release
-  cp "${dest}/rc_lock.json" "deploy/releases/rc_lock-${GIT_SHA}.json"
-  cp "${dest}/rc_lock.json" release/rc_lock.json
-  printf '%s\n' "${GIT_SHA}" > backend/BUILD_SHA
   # N102-3 — the release build also re-signs MODEL_MANIFEST.json and regenerates RELEASE_SUMMARY.md; the
-  # checkout's copies never match the lock, so the strict check fails. Adopt both from the same signed
-  # SHA256SUMS (model manifest only when the release ships one).
-  local f asset
+  # checkout's copies never match the lock, so the strict check fails. Validate EVERY asset against the
+  # same signed SHA256SUMS first, then write all of them (audit #5 P3: no partially adopted release).
+  local f asset adopt=()
   for f in MODEL_MANIFEST.json RELEASE_SUMMARY.md; do
     want=$(awk -v n="${f}" '$2 == n {print $1}' "${dest}/SHA256SUMS" | head -1)
     if [ -z "${want}" ]; then
@@ -175,6 +171,13 @@ PY
     [ -s "${dest}/${f}" ] || { echo "!! release lock: asset ${f} missing"; return 1; }
     got=$(sha256sum "${dest}/${f}" | cut -d' ' -f1)
     [ "${want}" = "${got}" ] || { echo "!! release lock: ${f} digest ${got} != signed SHA256SUMS ${want}"; return 1; }
+    adopt+=("${f}")
+  done
+  mkdir -p deploy/releases release
+  cp "${dest}/rc_lock.json" "deploy/releases/rc_lock-${GIT_SHA}.json"
+  cp "${dest}/rc_lock.json" release/rc_lock.json
+  printf '%s\n' "${GIT_SHA}" > backend/BUILD_SHA
+  for f in "${adopt[@]}"; do
     case "${f}" in MODEL_MANIFEST.json) asset=backend/models_store/MODEL_MANIFEST.json ;; *) asset=docs/RELEASE_SUMMARY.md ;; esac
     cp "${dest}/${f}" "deploy/releases/${f%.*}-${GIT_SHA}.${f##*.}"
     cp "${dest}/${f}" "${asset}"

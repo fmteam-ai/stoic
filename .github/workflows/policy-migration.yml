@@ -59,6 +59,7 @@ jobs:
           python-version: "3.11"
       - run: pip install -q cryptography requests
       - name: Sign policy migration with the CI release key
+        # SEC-001 (audit #5) — workflow inputs reach the shell ONLY through env vars, never via ${{ }} interpolation
         env:
           APP_ENV: production
           RELEASE_SIGNER: external
@@ -68,21 +69,40 @@ jobs:
           RELEASE_SIGNER_KEY_ID: stoic-release-ed25519-v1
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
           STOIC_INSTALLATION_ID: ${{ inputs.installation_id }}
+          IN_INSTALLATION_ID: ${{ inputs.installation_id }}
+          IN_PREVIOUS: ${{ inputs.previous_policy_version }}
+          IN_VERSION: ${{ inputs.policy_version }}
+          IN_ACCOUNTS: ${{ inputs.accounts }}
+          IN_ENABLED: ${{ inputs.enabled }}
+          IN_ACCOUNT_IDS: ${{ inputs.account_ids }}
+          IN_DEMO_ONLY: ${{ inputs.demo_only }}
+          IN_REASON: ${{ inputs.reason }}
+          IN_EXPIRES_DAYS: ${{ inputs.expires_days }}
+          IN_ACTOR: ${{ github.actor }}
         run: |
           set -euo pipefail
-          DEMO=""; [ "${{ inputs.demo_only }}" = "true" ] && DEMO="--demo-only"
+          # strict shapes before anything touches the signer
+          [[ "$IN_VERSION" =~ ^[A-Za-z0-9._/-]{1,64}$ ]] || { echo "bad policy_version"; exit 1; }
+          [[ "$IN_PREVIOUS" =~ ^[A-Za-z0-9._/-]{1,64}$ ]] || { echo "bad previous_policy_version"; exit 1; }
+          [[ "$IN_ACCOUNTS" =~ ^[0-9]{1,3}$ && "$IN_ENABLED" =~ ^[0-9]{1,3}$ && "$IN_EXPIRES_DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "bad counts"; exit 1; }
+          [[ "$IN_ACCOUNT_IDS" =~ ^[A-Za-z0-9,_-]{1,512}$ ]] || { echo "bad account_ids"; exit 1; }
+          [[ "$IN_INSTALLATION_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo "bad installation_id"; exit 1; }
+          DEMO=(); [ "$IN_DEMO_ONLY" = "true" ] && DEMO=(--demo-only)
           python scripts/sign_policy_migration.py \
-            --installation-id "${{ inputs.installation_id }}" --environment production \
-            --previous "${{ inputs.previous_policy_version }}" --version "${{ inputs.policy_version }}" \
-            --accounts "${{ inputs.accounts }}" --enabled "${{ inputs.enabled }}" --bots "${{ inputs.enabled }}" \
-            --account-ids "${{ inputs.account_ids }}" $DEMO \
-            --reason "${{ inputs.reason }}" --issuer "${{ github.actor }} via policy-approval" \
-            --expires-days "${{ inputs.expires_days }}"
+            --installation-id "$IN_INSTALLATION_ID" --environment production \
+            --previous "$IN_PREVIOUS" --version "$IN_VERSION" \
+            --accounts "$IN_ACCOUNTS" --enabled "$IN_ENABLED" --bots "$IN_ENABLED" \
+            --account-ids "$IN_ACCOUNT_IDS" "${DEMO[@]}" \
+            --reason "$IN_REASON" --issuer "$IN_ACTOR via policy-approval" \
+            --expires-days "$IN_EXPIRES_DAYS"
       - name: Commit the signed policy
+        env:
+          IN_VERSION: ${{ inputs.policy_version }}
+          IN_DEMO_ONLY: ${{ inputs.demo_only }}
         run: |
           set -euo pipefail
           git config user.name "stoic-policy-bot"
           git config user.email "policy-bot@users.noreply.github.com"
           git add release/policy_migrations/
-          git commit -m "policy-migration: ${{ inputs.policy_version }} (demo_only=${{ inputs.demo_only }}) [skip ci]"
+          git commit -m "policy-migration: ${IN_VERSION} (demo_only=${IN_DEMO_ONLY}) [skip ci]"
           git push origin HEAD:main
