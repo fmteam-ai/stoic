@@ -30,8 +30,19 @@ def build(args) -> dict:
     if len(args.reason.strip()) < 10 or not args.issuer.strip():
         raise SystemExit("reason (>=10 chars) and issuer are required")
     import re
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", args.version) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,64}", args.previous):
-        raise SystemExit("policy versions must match [A-Za-z0-9._-] (version is used as the file name)")
+    from inventory_projection import (POLICY_VERSION_RE, PREVIOUS_POLICY_VERSION_RE, DEMO_POLICY_DEFAULT_DAYS,
+                                      DEMO_POLICY_MAX_DAYS)   # A16-3 — one rule per field, shared with workflow + server
+    if not re.fullmatch(POLICY_VERSION_RE, args.version):
+        raise SystemExit(f"policy_version must match {POLICY_VERSION_RE} (it becomes the file name — no '/')")
+    if not re.fullmatch(PREVIOUS_POLICY_VERSION_RE, args.previous):
+        raise SystemExit(f"previous_policy_version must match {PREVIOUS_POLICY_VERSION_RE}")
+    # A16-4 — demo policies are short-lived: default 30 days, at most 45
+    if args.expires_days is None:
+        args.expires_days = DEMO_POLICY_DEFAULT_DAYS if args.demo_only else 45
+    if args.demo_only and not (1 <= args.expires_days <= DEMO_POLICY_MAX_DAYS):
+        raise SystemExit(f"demo_only policies may be valid for 1..{DEMO_POLICY_MAX_DAYS} days (got {args.expires_days})")
+    if args.expires_days < 1:
+        raise SystemExit("expires_days must be >= 1")
     return {"schema": "stoic.policy-migration/v3", "installation_id": args.installation_id,
             "environment": args.environment, "previous_policy_version": args.previous,
             "policy_version": args.version, "accounts": args.accounts, "enabled": args.enabled, "bots": args.bots,
@@ -61,7 +72,7 @@ def main() -> int:
     ap.add_argument("--demo-only", action="store_true", help="every listed account must be an attested DEMO account")
     ap.add_argument("--reason", required=True)
     ap.add_argument("--issuer", required=True)
-    ap.add_argument("--expires-days", type=int, default=45)
+    ap.add_argument("--expires-days", type=int, default=None, help="default 30 for --demo-only (max 45), else 45")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
     mig = sign(build(a))

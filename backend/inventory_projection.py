@@ -118,6 +118,9 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
         violations.append(f"{raw_bots['null_account']} bot configuration(s) with no account id")
     structural = list(violations)
     if exp:
+        expiry = policy_expiry(exp)
+        if expiry["expired"]:
+            violations.append(f"signed policy {exp.get('policy_version')} expired {expiry['expires_at'][:10]} — inventory close-only until a new signed policy is approved")   # A16-4
         ids = set(exp.get("account_ids") or [])
         if ids:
             outside = [r for r in rows if r["bot_enabled"] and r["account_id"] not in ids]
@@ -237,6 +240,14 @@ async def confirm_current(db, approver_email: str) -> dict:
 DEPLOYMENT_POLICY = {"accounts": 6, "enabled": 3, "bots": 3}       # signed installation policy (round 11 P1-02)
 DEPLOYMENT_POLICY_VERSION = "6/3/3-v1"
 MIGRATION_SCHEMA = "stoic.policy-migration/v3"   # v3 (A15-1): signed `demo_only` flag
+# A16-3 — ONE validation rule per field, shared by the workflow (policy-migration.yml), the signer script
+# and the server. `policy_version` becomes a file name → no "/"; the previous version keeps "/" (6/3/3-v1).
+POLICY_VERSION_RE = r"[A-Za-z0-9._-]{1,64}"
+PREVIOUS_POLICY_VERSION_RE = r"[A-Za-z0-9._/-]{1,64}"
+# A16-4 — demo policies are short-lived: 30 days by default, never more than 45
+DEMO_POLICY_DEFAULT_DAYS = 30
+DEMO_POLICY_MAX_DAYS = 45
+POLICY_EXPIRY_REMINDER_DAYS = 3
 
 
 def installation_id() -> str | None:
@@ -259,6 +270,24 @@ def migration_body(mig: dict) -> bytes:
     body["account_ids"] = sorted(body.get("account_ids") or [])
     body["demo_only"] = bool(body.get("demo_only"))     # A15-1 — DEMO-only policies are signed as such
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+
+
+def policy_expiry(exp: dict, now: datetime | None = None) -> dict:
+    """A16-4 — {'expires_at', 'expired', 'days_left', 'reminder_due'} for the approved expectation
+    (all None/False when the policy has no lifetime, i.e. the built-in deployment policy)."""
+    raw = (exp or {}).get("policy_expires_at")
+    if not raw:
+        return {"expires_at": None, "expired": False, "days_left": None, "reminder_due": False}
+    now = now or datetime.now(timezone.utc)
+    try:
+        exp_at = datetime.fromisoformat(str(raw))
+        if exp_at.tzinfo is None:
+            exp_at = exp_at.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return {"expires_at": str(raw), "expired": True, "days_left": 0, "reminder_due": False}
+    left = (exp_at - now).total_seconds() / 86400
+    return {"expires_at": exp_at.isoformat(), "expired": left <= 0, "days_left": max(0, int(left)),
+            "reminder_due": 0 < left <= POLICY_EXPIRY_REMINDER_DAYS}
 
 
 def migration_problems(payload: dict, *, current_policy_version: str, now: datetime | None = None) -> list:
@@ -285,6 +314,11 @@ def migration_problems(payload: dict, *, current_policy_version: str, now: datet
         problems.append(f"migration previous_policy_version must be {current_policy_version}")
     if not mig.get("policy_version") or mig.get("policy_version") == current_policy_version:
         problems.append("migration policy_version must be a new version")
+    import re as _re
+    if not _re.fullmatch(POLICY_VERSION_RE, str(mig.get("policy_version") or "")):
+        problems.append("migration policy_version must match " + POLICY_VERSION_RE)
+    if not _re.fullmatch(PREVIOUS_POLICY_VERSION_RE, str(mig.get("previous_policy_version") or "")):
+        problems.append("migration previous_policy_version must match " + PREVIOUS_POLICY_VERSION_RE)
     try:
         if (int(mig.get("accounts")), int(mig.get("enabled")), int(mig.get("bots"))) != \
                 (int(payload["accounts"]), int(payload["enabled"]), int(payload["bots"])):
@@ -299,6 +333,8 @@ def migration_problems(payload: dict, *, current_policy_version: str, now: datet
             raise ValueError("naive")
         if not (issued <= now < expires):
             problems.append("migration expired or not yet valid")
+        if mig.get("demo_only") and (expires - issued) > timedelta(days=DEMO_POLICY_MAX_DAYS):
+            problems.append(f"demo_only migration may be valid for at most {DEMO_POLICY_MAX_DAYS} days")   # A16-4
     except (TypeError, ValueError):
         problems.append("migration issued_at/expires_at invalid")
     if len(str(mig.get("nonce") or "")) < 16:
@@ -390,13 +426,20 @@ async def approve_expectation(db, approver_email: str) -> dict:
     doc = {k: pending.get(k) for k in ("accounts", "enabled", "bots", "account_ids", "scope_user_id", "proposed_by", "proposed_at")}
     doc.update(_id="inventory_expectation", approved_by=approver_email, set_at=_now(), policy_version=v["policy_version"],
                demo_only=bool(v.get("demo_only")),            # SEC-002 (audit #5) — the signed DEMO-only guard must persist
-               approval_mode=approval_mode())
+               approval_mode=approval_mode(),
+               # A16-4 — the signed policy's lifetime travels with the approval: an expired policy turns the
+               # inventory close-only (projection) and raises an alert (alerting) until a new one is approved.
+               policy_expires_at=((pending.get("policy_migration") or {}).get("expires_at")
+                                  if pending.get("policy_migration") and v["policy_version"] != DEPLOYMENT_POLICY_VERSION else None),
+               # A16-5 — a one-person operator may approve alone; the audit says so explicitly
+               single_admin_approval=(approval_mode() == "single_admin"))
     await db.platform_state.replace_one({"_id": "inventory_expectation"}, doc, upsert=True)
     await db.platform_state.delete_one({"_id": "inventory_expectation_pending"})
     await append_chained(db, {"actor_email": approver_email, "action": "inventory_expectation_approved",
                               "target_kind": "platform", "target_id": "inventory_expectation",
                               "reason": f"proposed by {pending['proposed_by']}", "at": doc["set_at"],
-                              "meta": {k: doc[k] for k in ("accounts", "enabled", "bots", "account_ids", "policy_version", "approval_mode")}})
+                              "meta": {k: doc[k] for k in ("accounts", "enabled", "bots", "account_ids", "policy_version", "approval_mode",
+                                                           "policy_expires_at", "single_admin_approval")}})
     from canonical_decision import bump_authority_version
     await bump_authority_version(db, "inventory_expectation")
     return doc

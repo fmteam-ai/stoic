@@ -18,7 +18,7 @@ export default function Affiliate() {
     const [status, setStatus] = useState(null); // {state, affiliate?, application?}
     const [stats, setStats] = useState(null);
     const [err, setErr] = useState("");
-    const [signupsClosed, setSignupsClosed] = useState(false);   // testing period: no new affiliates
+    const [signupsClosed, setSignupsClosed] = useState(null);    // testing period: null = unknown (A16-1: no form until the server answers)
     const [copied, setCopied] = useState(false);
 
     // Form state
@@ -49,7 +49,7 @@ export default function Affiliate() {
 
     useEffect(() => {
         load();
-        api.get("/auth/signups-status").then((r) => setSignupsClosed(!!r.data.closed)).catch(() => {});   // testing period
+        api.get("/auth/signups-status").then((r) => setSignupsClosed(!!r.data.closed)).catch(() => setSignupsClosed("unavailable"));   // A16-1 fail closed
     }, []);
 
     const submit = async () => {
@@ -154,13 +154,19 @@ export default function Affiliate() {
                     <SubscriptionGate />
                 )}
 
-                {(status?.state === "none" || !status) && signupsClosed && (
-                    <div className="bg-[#0A0A0A] border border-[#FFB020]/40 p-5" data-testid="affiliate-closed">
-                        <div className="font-mono text-[11px] text-[#FFB020] tracking-widest mb-2">// APPLICATIONS CLOSED</div>
-                        <p className="text-sm text-[#A1A1AA]">New affiliate applications are paused during the testing period. Existing affiliates keep their links, stats and payouts.</p>
+                {(status?.state === "none" || !status) && signupsClosed === "unavailable" && (
+                    <div className="bg-[#0A0A0A] border border-[#FFB020]/40 p-5" data-testid="affiliate-status-unavailable">
+                        <div className="font-mono text-[11px] text-[#FFB020] tracking-widest mb-2">// APPLICATION STATUS UNAVAILABLE</div>
+                        <p className="text-sm text-[#A1A1AA]">Registration status unavailable — try again later.</p>
                     </div>
                 )}
-                {(status?.state === "none" || !status) && !signupsClosed && (
+                {(status?.state === "none" || !status) && signupsClosed === true && (
+                    <div className="bg-[#0A0A0A] border border-[#FFB020]/40 p-5" data-testid="affiliate-closed">
+                        <div className="font-mono text-[11px] text-[#FFB020] tracking-widest mb-2">// CLOSED TESTING PERIOD — APPLICATIONS CLOSED</div>
+                        <p className="text-sm text-[#A1A1AA]">New affiliate applications are paused during the closed testing period. Existing affiliates keep their links, stats and payouts.</p>
+                    </div>
+                )}
+                {(status?.state === "none" || !status) && signupsClosed === false && (
                     <ApplicationForm
                         form={form} setForm={setForm} submit={submit}
                         submitting={submitting} userEmail={user?.email} />

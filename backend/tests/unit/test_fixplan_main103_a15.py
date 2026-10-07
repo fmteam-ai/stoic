@@ -197,7 +197,7 @@ def test_a15_3_closed_beta_banner_and_toggle_hardening():
               "frontend/src/pages/WelcomeTrailer.jsx"):
         assert "<ClosedBetaBanner" in _read(f), f
     reg = _read("frontend/src/pages/Register.jsx")
-    assert "Join the discipline" not in reg and "Closed beta" in reg
+    assert "Join the discipline" not in reg and "Closed testing period" in reg   # A16-1 wording
     adm = _read("backend/routes/admin_routes.py")
     body = adm[adm.index('@router.post("/admin/settings/signups")'):adm.index('@router.get("/admin/settings/login-otp")')]
     assert 'require_step_up(db, user, request, "authority_relax")' in body and '"previous_closed": before["closed"]' in body

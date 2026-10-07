@@ -13,9 +13,10 @@ export default function Register() {
     const [name, setName] = useState("");
     const [password, setPassword] = useState("");
     const [termsAgreed, setTermsAgreed] = useState(false);
-    const [signups, setSignups] = useState(null);   // testing period: {closed, message}
+    const [signups, setSignups] = useState(null);   // testing period: {closed, message} | {unavailable: true}
     useEffect(() => {
-        api.get("/auth/signups-status").then((r) => setSignups(r.data)).catch(() => setSignups({ closed: false }));
+        // A16-1 — fail CLOSED: if the status call fails we do not know whether sign-ups are open → no form
+        api.get("/auth/signups-status").then((r) => setSignups(r.data)).catch(() => setSignups({ unavailable: true }));
     }, []);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
@@ -73,6 +74,35 @@ export default function Register() {
         } finally { setResending(false); }
     };
 
+    // ─── A16-1 — status still loading: no form yet ───
+    if (signups === null) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-[#050505] p-6" data-testid="register-status-loading">
+                <div className="font-mono text-xs text-[#52525B] tracking-widest">// CHECKING REGISTRATION STATUS…</div>
+            </div>
+        );
+    }
+
+    // ─── A16-1 — status unknown: fail closed (no form) ───
+    if (signups?.unavailable) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-[#050505] p-6">
+                <div className="w-full max-w-sm" data-testid="register-status-unavailable">
+                    <div className="flex items-center gap-3 mb-10">
+                        <StoicMark size={40} />
+                        <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
+                    </div>
+                    <div className="font-mono text-[11px] text-[#FFB020] tracking-widest mb-3">// REGISTRATION STATUS UNAVAILABLE</div>
+                    <p className="text-sm text-[#A1A1AA] leading-relaxed" data-testid="register-unavailable-message">
+                        Registration status unavailable — try again later. During the closed testing period new sign-ups are only accepted when the server confirms they are open.
+                    </p>
+                    <Link to="/login" data-testid="register-unavailable-login-link"
+                          className="inline-block mt-8 font-mono text-xs tracking-widest text-[#00FF41] hover:underline">SIGN IN →</Link>
+                </div>
+            </div>
+        );
+    }
+
     // ─── Testing period: registrations closed ───
     if (signups?.closed) {
         return (
@@ -82,7 +112,7 @@ export default function Register() {
                         <StoicMark size={40} />
                         <div className="font-display font-bold tracking-[0.18em]">STOIC</div>
                     </div>
-                    <div className="font-mono text-[11px] text-[#FFB020] tracking-widest mb-3">// REGISTRATIONS CLOSED</div>
+                    <div className="font-mono text-[11px] text-[#FFB020] tracking-widest mb-3">// CLOSED TESTING PERIOD — REGISTRATIONS CLOSED</div>
                     <p className="text-sm text-[#A1A1AA] leading-relaxed" data-testid="register-closed-message">{signups.message}</p>
                     <Link to="/login" data-testid="register-closed-login-link"
                           className="inline-block mt-8 font-mono text-xs tracking-widest text-[#00FF41] hover:underline">SIGN IN →</Link>
@@ -171,7 +201,7 @@ export default function Register() {
 
                 <div className="font-mono text-[11px] text-[#00FF41] tracking-widest mb-3">// CREATE ACCOUNT</div>
                 <h2 className="font-display font-bold text-3xl tracking-tight mb-2">Create your workspace</h2>
-                <p className="text-sm text-[#A1A1AA] mb-8">Closed beta — demo accounts only, no live capital during the testing period.</p>
+                <p className="text-sm text-[#A1A1AA] mb-8">Closed testing period — demo accounts only, no live capital.</p>
 
                 <form onSubmit={handleSubmit} className="space-y-4" data-testid="register-form">
                     <div>

@@ -419,7 +419,10 @@ as required reviewer ("Prevent self-review" off when you are the only admin).
 1. GitHub → Actions → **policy-migration → Run workflow**: `installation_id` (Demo Readiness header
    or the Inventory go-live panel show it; `deploy/update.sh` mints `STOIC_INSTALLATION_ID` into
    backend/.env once — N104-3), `previous_policy_version` = `6/3/3-v1` (fresh install),
-   `policy_version` = e.g. `demo-2x2-v1`, `accounts` = **every** account row in the database
+   `policy_version` = e.g. `demo-2x2-v1` (letters, digits, `.`, `_`, `-` only — it becomes the file
+   name; the previous version may contain `/`), `expires_days` (demo policies default to **30** days,
+   45 at most — Demo Readiness shows the expiry, Telegram reminds you 3 days before, and an expired
+   policy makes the inventory close-only until the next one is approved), `accounts` = **every** account row in the database
    (all users; disabled and paper accounts included — the projection counts `db.accounts` without a
    user scope; e.g. 3 while a disabled "Robo" account still exists, 2 once it is deleted — the
    Inventory panel shows the live count next to the input), `enabled` = the

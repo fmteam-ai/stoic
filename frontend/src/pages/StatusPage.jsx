@@ -26,6 +26,8 @@ const STATUS_STYLE = {
     unknown: { cls: "text-[#52525B] border-[#1F1F1F] bg-[#0F0F0F]", label: "UNKNOWN" },
 };
 
+const STATUS_TIMEOUT_MS = 8000;   // A16-2 — after this the page says "unavailable" instead of spinning
+
 const OVERALL = {
     operational: { text: "Platform available · trading ready", cls: "text-[#00FF41] border-[#00FF41]/40" },
     degraded: { text: "Platform available · trading degraded", cls: "text-[#FFB000] border-[#FFB000]/40" },
@@ -35,11 +37,14 @@ const OVERALL = {
 export default function StatusPage() {
     const [data, setData] = useState(null);
     const [err, setErr] = useState(false);
+    const [checkedAt, setCheckedAt] = useState(null);        // A16-2 — time of the last result (success or failure)
+    const [timedOut, setTimedOut] = useState(false);
 
     const load = useCallback(() => {
-        axios.get(`${API}/status`)
+        axios.get(`${API}/status`, { timeout: STATUS_TIMEOUT_MS })
             .then(r => { setData(r.data); setErr(false); })
-            .catch(() => setErr(true));
+            .catch(() => setErr(true))
+            .finally(() => { setCheckedAt(new Date()); setTimedOut(false); });
     }, []);
 
     useEffect(() => {
@@ -47,9 +52,16 @@ export default function StatusPage() {
         const t = setInterval(load, 60000);
         return () => clearInterval(t);
     }, [load]);
+    useEffect(() => {
+        // A16-2 — a spinner is not a status: after STATUS_TIMEOUT_MS without any result say so, with the time
+        if (data || err) return undefined;
+        const t = setTimeout(() => { setTimedOut(true); setCheckedAt(new Date()); }, STATUS_TIMEOUT_MS);
+        return () => clearTimeout(t);
+    }, [data, err]);
 
-    const overall = err
-        ? { text: "Status service unreachable", cls: "text-[#FF3B30] border-[#FF3B30]/40" }
+    const utc = (d) => d ? `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")} UTC` : "";
+    const overall = (err || timedOut)
+        ? { text: `Status unavailable (checked ${utc(checkedAt)})`, cls: "text-[#FF3B30] border-[#FF3B30]/40" }
         : OVERALL[data?.overall] || null;
 
     return (
@@ -64,14 +76,19 @@ export default function StatusPage() {
                     </div>
                 </div>
 
-                {!data && !err ? (
-                    <div className="flex justify-center py-20"><Loader2 className="w-6 h-6 animate-spin text-[#52525B]" /></div>
+                {!data && !err && !timedOut ? (
+                    <div className="flex items-center justify-center gap-3 py-20 font-mono text-xs text-[#71717A] tracking-widest" data-testid="status-checking">
+                        <Loader2 className="w-5 h-5 animate-spin text-[#52525B]" /> CHECKING STATUS…
+                    </div>
                 ) : (
                     <>
                         {overall && (
                             <div className={`border px-5 py-4 mb-3 font-display text-lg ${overall.cls}`}
                                 data-testid="status-overall">
-                                {data?.headline || overall.text}
+                                {(err || timedOut) ? overall.text : (data?.headline || overall.text)}
+                                <div className="font-mono text-[10px] text-[#71717A] tracking-widest mt-1" data-testid="status-last-result">
+                                    LAST RESULT {utc(checkedAt) || "—"}{(err || timedOut) && data ? " · showing the previous snapshot below" : ""}
+                                </div>
                             </div>
                         )}
                         {data?.trading && (
@@ -123,7 +140,7 @@ export default function StatusPage() {
                             })}
                         </div>
                         <div className="flex items-center justify-between mt-6 text-[10px] font-mono text-[#52525B] tracking-widest">
-                            <span>CHECKED {data?.checked_at ? new Date(data.checked_at).toLocaleTimeString() : "—"} · AUTO-REFRESH 60s</span>
+                            <span>CHECKED {utc(checkedAt) || "—"} · AUTO-REFRESH 60s</span>
                             <button onClick={load} data-testid="status-refresh"
                                 className="flex items-center gap-1.5 hover:text-white">
                                 <RefreshCw className="w-3 h-3" /> REFRESH

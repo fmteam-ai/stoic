@@ -90,6 +90,16 @@ def env_checks(env=None) -> list[dict]:
 
 async def db_checks(db) -> list[dict]:
     out = []
+    # A16-4 — lifetime of the approved signed (demo) policy
+    from inventory_projection import policy_expiry
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
+    pe = policy_expiry(exp)
+    if pe["expires_at"]:
+        st = "fail" if pe["expired"] else ("warn" if pe["reminder_due"] else "pass")
+        out.append(_check("policy_expiry", f"Signed {'DEMO-only ' if exp.get('demo_only') else ''}policy {exp.get('policy_version')} in force",
+                          st, ("EXPIRED " if pe["expired"] else f"expires in {pe['days_left']} day(s) · ") + pe["expires_at"][:16] + " UTC"
+                          + (" · approved single-admin" if exp.get("single_admin_approval") else ""),
+                          "" if st == "pass" else "sign the next policy (Actions → policy-migration) and approve it; expired = inventory close-only"))
     plain = await db.accounts.count_documents({"bridge_token": {"$type": "string"}})
     out.append(_check("token_migration", "Bridge tokens stored as hashes only (P1-01 migration complete)",
                       "pass" if plain == 0 else "fail",
