@@ -3422,3 +3422,8 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 - `integrations_settings`: vault key `VPS_REFERRAL_URL` (provider "vps", non-secret, https-only validator; default `DEFAULT_VPS_REFERRAL_URL = https://www.forexvps.net/partner/stoicaibot`), `vps_offer()`; `GET /api/public/vps-offer` (no auth). Admin → Integrations shows a "VPS provider (ForexVPS)" card (SET/UPDATE with re-auth) → change the link without a deploy. test_provider("vps") echoes the URL.
 - Frontend `components/VpsOffer.jsx` (`useVpsOffer`, `VpsOfferButton` with rel="noopener noreferrer sponsored") used in: AddAccountWizard VPS step + done state, Accounts connection guide step 2, Guide "Our VPS pick · ForexVPS" card (others demoted to "other Windows VPS that work"), QuickInstallPanel step 2.
 - Tests: +1 in test_easy_connect_p1.py (10); test_admin_integrations providers set updated. Unit lane green; manifest 5360 + rc_lock regenerated.
+
+## 2026-10-07 — PUBLISH: merged origin/main (signed EA 1.60 record) into the branch locally; CI `ea-structural-check` drift guard fixed
+- PR #32 conflicted only on docs/RELEASE_HASHES.json → merged main here, regenerated RELEASE_HASHES + rc_lock (commit 1b81389d); operator re-saves to GitHub → PR mergeable.
+- CI failure root cause: `scripts/check_release_hash_drift.py` failed on ANY MQ5 change once `release/ea_release.json` (signed 1.60) exists — chicken-and-egg with the ea-release workflow. Now: signed record for an OLDER version + bumped MQ5 → WARN (pending re-release); same version + different source → FAIL (silent drift). Test added (test_easy_connect_p1, 11). Manifest 5361.
+- After merge the operator must run Actions → ea-release (main) to compile+sign 1.61 (1.60 kept as `previous`), then `update.sh`.

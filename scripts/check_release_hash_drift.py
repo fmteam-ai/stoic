@@ -49,8 +49,14 @@ def check(mq5: str = MQ5, hashes: str = HASHES, ea_release: str = EA_RELEASE) ->
     if os.path.exists(ea_release):
         rec = json.load(open(ea_release))
         if rec.get("ex5_sha256") and rec.get("mq5_sha256") and rec["mq5_sha256"] != on_disk:
-            fails.append("release/ea_release.json holds a signed EX5 for a DIFFERENT MQ5 — "
-                         "push the MQ5 change to main so ea-release re-compiles and re-signs it")
+            # A signed record for an OLDER version is a pending re-release (ea-release on main re-compiles and
+            # re-signs, keeping the old one as `previous`). The hazard is a changed MQ5 under the SAME version.
+            if rec.get("version") and v and rec["version"] != v:
+                print(f"WARN: release/ea_release.json is signed for EA {rec['version']}; MQ5 is {v} — "
+                      "run the ea-release workflow on main after merging to re-compile and re-sign")
+            else:
+                fails.append("release/ea_release.json holds a signed EX5 for a DIFFERENT MQ5 with the SAME "
+                             f"#property version {v} — bump the version (and re-capture) so terminals can tell the builds apart")
     return fails
 
 

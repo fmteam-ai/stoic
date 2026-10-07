@@ -199,3 +199,24 @@ def test_forexvps_referral_is_the_recommended_vps_everywhere():
         assert tid in _read(*rel.split("/")), rel
     vo = _read("frontend", "src", "components", "VpsOffer.jsx")
     assert 'api.get("/public/vps-offer")' in vo and 'rel="noopener noreferrer sponsored"' in vo
+
+
+def test_release_hash_drift_guard_allows_version_bump_but_blocks_silent_drift(tmp_path):
+    import hashlib
+    import importlib.util
+    import json
+    spec = importlib.util.spec_from_file_location("drift", os.path.join(ROOT, "scripts", "check_release_hash_drift.py"))
+    drift = importlib.util.module_from_spec(spec); spec.loader.exec_module(drift)
+    mq5 = tmp_path / "EmergentTradingBridge.mq5"
+    mq5.write_text('#property version   "1.61"\nint OnInit(){return 0;}\n', encoding="utf-8")
+    sha = hashlib.sha256(mq5.read_bytes()).hexdigest()
+    hashes = tmp_path / "RELEASE_HASHES.json"
+    hashes.write_text(json.dumps({"ea": {"version": "1.61", "mq5_sha256": sha}}))
+    rel = tmp_path / "ea_release.json"
+    # signed record for the OLDER version → pending re-release, not a failure
+    rel.write_text(json.dumps({"version": "1.60", "mq5_sha256": "0" * 64, "ex5_sha256": "1" * 64}))
+    assert drift.check(str(mq5), str(hashes), str(rel)) == []
+    # signed record for the SAME version but a different source → silent drift → fail
+    rel.write_text(json.dumps({"version": "1.61", "mq5_sha256": "0" * 64, "ex5_sha256": "1" * 64}))
+    fails = drift.check(str(mq5), str(hashes), str(rel))
+    assert len(fails) == 1 and "SAME" in fails[0]
