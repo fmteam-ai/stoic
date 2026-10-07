@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """A15-1 — mint a SIGNED inventory policy migration (purpose `policy-migration`, CI release key).
 
-Run by .github/workflows/policy-migration.yml (GitHub environment `policy-approval` = dual approval)
+Run by .github/workflows/policy-migration.yml (GitHub environment `policy-approval` = ONE reviewer approval
+gates the signing run; the independent second approval is the admin's propose/approve on the server — N104-5)
 or by an operator holding RELEASE_SIGNER_TOKEN. Writes release/policy_migrations/<policy_version>.json;
 the Inventory Go-Live panel loads that file and submits it with the expectation.
 

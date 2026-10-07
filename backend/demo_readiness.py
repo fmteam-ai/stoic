@@ -78,6 +78,13 @@ def env_checks(env=None) -> list[dict]:
     hold = (env.get("UPDATE_HOLD_ON_FAILURE") or "").strip()
     out.append(_check("hold_on_failure", "UPDATE_HOLD_ON_FAILURE=1 for this deploy", "pass" if hold == "1" else "info",
                       "set" if hold == "1" else "not visible to the backend — tick the manual step when you run update.sh"))
+    # N104-3 — the identity a signed policy migration must name; minted once by deploy/lib.sh ensure_installation_id
+    inst = (env.get("STOIC_INSTALLATION_ID") or "").strip()
+    prod = (env.get("APP_ENV") or "").strip().lower() == "production"
+    out.append(_check("installation_id", "STOIC_INSTALLATION_ID set (signed policy migrations name this host)",
+                      "pass" if inst else ("fail" if prod else "info"),
+                      inst if inst else ("unset — production refuses every signed policy" if prod else "unset — preview uses dev-local"),
+                      "" if inst else "run deploy/update.sh (ensure_installation_id writes it to backend/.env), then docker compose up -d"))
     return out
 
 
@@ -277,6 +284,7 @@ async def set_manual(db, cid: str, checked: bool, actor: str) -> dict:
 
 
 async def build(db) -> dict:
+    from inventory_projection import installation_id
     rows = await fleet(db)
     ctx = await tick_context(db)
     checks = env_checks() + await db_checks(db) + fleet_checks(rows)
@@ -290,7 +298,8 @@ async def build(db) -> dict:
     return {"generated_at": _now().isoformat(), "checks": checks, "fleet": rows, "manual": manual,
             "score": {"passed": passed, "total": total, "ready": not blockers},
             "verdict": "READY FOR CONTROLLED DEMO TEST" if not blockers else "NOT READY",
-            "context": {k: v for k, v in ctx.items() if k in ("build_sha", "ea_version", "environment", "fingerprint")},
+            "context": {**{k: v for k, v in ctx.items() if k in ("build_sha", "ea_version", "environment", "fingerprint")},
+                        "installation_id": installation_id()},   # N104-3 — shown so the policy-migration run can name it
             "authority": {"per_account": [{"id": r["id"], "label": r["label"], "trading_authority": r.get("trading_authority")} for r in rows],
                           "summary": authority, "grants_authority": False},
             "blockers": blockers, "warnings": [c["title"] for c in checks if c["status"] == "warn"]}

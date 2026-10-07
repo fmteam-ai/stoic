@@ -290,6 +290,7 @@ if [ ! -f backend/.env ]; then
 else
   echo "-- backend/.env exists — leaving untouched"
 fi
+ensure_installation_id   # N104-3 — host identity for signed policy migrations (minted once, backend/.env)
 
 # 2b · release signing → external sidecar (every mode). The API env must NOT
 # hold the private key. N101-5/N102-5: the sidecar is the RUNTIME (bundle) key with its own id and

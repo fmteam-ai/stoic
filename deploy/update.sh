@@ -140,6 +140,7 @@ fi
 python3 scripts/sync_env_examples.py >/dev/null || { echo "!! env templates could not be materialised from deploy/env/"; gate_refused; }
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
 ensure_release_secrets || gate_refused   # N100-7 — nothing is built yet: refuse, never restore the database
+ensure_installation_id                   # N104-3 — STOIC_INSTALLATION_ID minted once (policy migrations name it)
 ensure_bundle_key_pins                   # N101-5 — runtime key id/pin; CI release token never on the API host
 ensure_backup_passphrase || gate_refused # N101-6 — second stage too (first stage may have run an older script)
 # N-R1 — hosts installed before the trusted-proxy chain existed: default the docker ranges once

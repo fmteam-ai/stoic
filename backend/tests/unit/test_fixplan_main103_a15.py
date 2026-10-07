@@ -187,7 +187,7 @@ def test_a15_2_installer_targets_one_terminal_keeps_device_key_and_finds_branded
     assert 'Get-ChildItem $root -Filter "metaeditor64.exe"' in ps and "origin.txt" in ps  # broker-branded MetaEditor
     keep = ps[ps.index("function Get-StoicDevicePublicKey"):ps.index("function Get-StoicDevicePublicKey") + 600]
     assert "Test-Path (Get-StoicDeviceKeyPath)" in keep and "rotate the key on every pairing" not in keep
-    assert ps.count("foreach ($t in $terminals)") >= 2 and '$terminals = @($found[[int]$pick - 1])' in ps
+    assert ps.count("foreach ($t in $terminals)") >= 1 and 'return $found[[int]$pick - 1]' in ps   # N104-1: selection lives in Resolve-StoicTerminal
 
 
 # ── A15-3 / N103-7 ───────────────────────────────────────────────────────────────────────────────

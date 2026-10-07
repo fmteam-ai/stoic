@@ -75,6 +75,9 @@ def _canonical_payload(ea: dict, key_id: str | None = None) -> bytes:
             ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
              "windows_build", "mt5_build", "source_commit")}
     body["key_id"] = key_id or (ea.get("signature") or {}).get("key_id")   # N102-5 — key id is signed
+    prev = ea.get("previous")
+    if prev:   # N104-6 — the previous release is bound to the current record (mirror of ea_capabilities._canonical_payload)
+        body["previous"] = {"version": prev.get("version"), "ex5_sha256": prev.get("ex5_sha256")}
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
 
 

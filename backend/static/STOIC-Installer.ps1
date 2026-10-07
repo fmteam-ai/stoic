@@ -5,23 +5,26 @@
 #   irm https://your-stoic-host/api/setup/installer.ps1 | iex
 #   Install-Stoic -Token "abc123..." -ServerUrl "https://your-stoic-host"
 #
-# OR download + run locally:
+# OR download + run locally (the file only DEFINES Install-Stoic — dot-source it first):
 #
-#   .\STOIC-Installer.ps1 -Token "abc123..." -ServerUrl "https://your-stoic-host"
+#   . .\STOIC-Installer.ps1
+#   Install-Stoic -Token "abc123..." -ServerUrl "https://your-stoic-host" -TerminalPath "<data folder>"
 #
 # What it does:
-#   1. Calls /api/setup/claim-pairing with your token, gets back the
+#   1. Picks ONE MT5 terminal data folder (-TerminalPath / -TerminalId, or a choice when
+#      several are found) BEFORE the one-time pairing token is spent (N104-1/N104-4).
+#   2. Calls /api/setup/claim-pairing with your token, gets back the
 #      bridge_token + heartbeat URL.
-#   2. Auto-discovers every MT5 terminal data folder (%APPDATA%\MetaQuotes\...).
 #   3. Downloads the latest EmergentTradingBridge.mq5 from the server.
-#   4. Copies it into each terminal's MQL5\Experts\ folder.
-#   5. Writes the bridge token into MQL5\Files\STOIC-Token.txt — the EA
-#      reads it on attach if no token is hard-coded.
-#   6. Whitelists the STOIC URL in terminal.ini (WebRequest allow-list).
-#   7. Invokes metaeditor64.exe to compile (when found) — produces .ex5
-#      next to the .mq5 ready for chart attach.
+#   4. Copies it into the terminal's MQL5\Experts\ folder, writes the bridge token into
+#      MQL5\Files\STOIC-Token.txt (the EA reads it on attach if no token is hard-coded)
+#      and installs / compiles the .ex5.
+#   5. Prints the ONE manual step: allow the STOIC URL for WebRequest in MT5
+#      (Tools → Options → Expert Advisors). Writing it into terminal.ini is ineffective —
+#      MT5 keeps that setting elsewhere and a running terminal overwrites the file (N104-4).
 #
 # After running, the user only needs to:
+#   - Add the WebRequest URL (Tools → Options → Expert Advisors) — once per terminal.
 #   - Open MT5, drag the EmergentTradingBridge EA onto any chart.
 #   - Confirm AutoTrading is ON (green play button).
 #
@@ -129,6 +132,96 @@ function Invoke-StoicAttestation {
         -Body ($proof | ConvertTo-Json -Compress))
 }
 
+# ── N104-1 / N104-4 · pure helpers (exercised by scripts/test_installer.ps1 on the Windows runner) ──
+function Get-StoicEaDownloadUrl {
+    # interpolating `$eaScriptUrl` followed by `?v=` parsed `eaScriptUrl?v` as ONE (empty) variable → URL "=1.60"
+    param([Parameter(Mandatory = $true)][string]$BaseUrl, [string]$Version)
+    if (-not $Version) { return $BaseUrl }
+    $sep = if ($BaseUrl.Contains("?")) { "&" } else { "?" }
+    return "${BaseUrl}${sep}v=${Version}"
+}
+
+function Get-StoicWebRequestHost {
+    param([Parameter(Mandatory = $true)][string]$HeartbeatUrl)
+    $u = [Uri]$HeartbeatUrl
+    return $u.Scheme + "://" + $u.Authority
+}
+
+function Get-StoicTerminals {
+    # every MT5 data folder (32-hex id under %APPDATA%\MetaQuotes\Terminal) + portable-mode installs
+    param([string]$Root = (Join-Path $env:APPDATA "MetaQuotes\Terminal"),
+          [string[]]$PortableRoots = @("C:\Program Files", "C:\Program Files (x86)", "$env:LOCALAPPDATA\Programs"))
+    $found = @()
+    if ($Root -and (Test-Path $Root)) {
+        # Terminal data folders have a 32-char hex GUID name (skip Community/Help/etc).
+        $found += @(Get-ChildItem $Root -Directory | Where-Object {
+            $_.Name -match '^[0-9A-F]{32}$' -and (Test-Path (Join-Path $_.FullName "MQL5\Experts"))
+        })
+    }
+    # portable-mode terminals keep MQL5 next to terminal64.exe
+    foreach ($r in $PortableRoots) {
+        if ($r -and (Test-Path $r)) {
+            $found += @(Get-ChildItem $r -Directory -ErrorAction SilentlyContinue | Where-Object {
+                (Test-Path (Join-Path $_.FullName "terminal64.exe")) -and (Test-Path (Join-Path $_.FullName "MQL5\Experts"))
+            })
+        }
+    }
+    return $found     # callers wrap in @(): 0 → empty, 1 → one DirectoryInfo (a unary-comma return would nest the array)
+}
+
+function Resolve-StoicTerminal {
+    # ONE terminal: explicit path / id, the only one found, or the operator's choice. $null = nothing chosen.
+    param([string]$TerminalPath, [string]$TerminalId,
+          [string]$Root = (Join-Path $env:APPDATA "MetaQuotes\Terminal"),
+          [string[]]$PortableRoots = @("C:\Program Files", "C:\Program Files (x86)", "$env:LOCALAPPDATA\Programs"),
+          [scriptblock]$Prompt = { Read-Host "    terminal number (or re-run with -TerminalPath / -TerminalId)" })
+    if ($TerminalPath) {
+        # explicit data folder (also covers portable-mode terminals: <install dir>\MQL5)
+        if (-not (Test-Path (Join-Path $TerminalPath "MQL5\Experts"))) {
+            Write-Host "    ✗ -TerminalPath $TerminalPath has no MQL5\Experts folder (point at the terminal DATA folder: File → Open Data Folder)" -ForegroundColor Red
+            return $null
+        }
+        return (Get-Item $TerminalPath)
+    }
+    if ($TerminalId) {
+        $cand = Join-Path $Root $TerminalId
+        if (-not (Test-Path (Join-Path $cand "MQL5\Experts"))) {
+            Write-Host "    ✗ -TerminalId $TerminalId not found under $Root" -ForegroundColor Red
+            return $null
+        }
+        return (Get-Item $cand)
+    }
+    $found = @(Get-StoicTerminals -Root $Root -PortableRoots $PortableRoots)
+    if ($found.Count -eq 0) {
+        Write-Host "    ✗ No MetaTrader 5 terminal found (looked under $Root and portable install folders)." -ForegroundColor Red
+        Write-Host "    Install MT5 from your broker first, then re-run (or pass -TerminalPath)." -ForegroundColor DarkGray
+        return $null
+    }
+    if ($found.Count -eq 1) { return $found[0] }
+    # A15-2 — never write one account's token into EVERY terminal: make the operator choose
+    Write-Host "    Several terminals found — a pairing token belongs to ONE account. Choose the terminal for it:" -ForegroundColor Yellow
+    for ($i = 0; $i -lt $found.Count; $i++) {
+        $label = Get-StoicTerminalOrigin $found[$i].FullName
+        Write-Host ("    [{0}] {1}  {2}" -f ($i + 1), $found[$i].FullName, $label) -ForegroundColor White
+    }
+    $pick = & $Prompt
+    if (-not ("$pick" -match '^[0-9]+$') -or [int]$pick -lt 1 -or [int]$pick -gt $found.Count) {
+        Write-Host "    ✗ no valid choice — nothing written, pairing token NOT used" -ForegroundColor Red
+        return $null
+    }
+    return $found[[int]$pick - 1]
+}
+
+function Get-StoicTerminalOrigin {
+    # first non-empty line of <data folder>\origin.txt (install folder of THIS terminal) — "" when absent/empty (N104-4)
+    param([Parameter(Mandatory = $true)][string]$DataFolder)
+    $origin = Join-Path $DataFolder "origin.txt"
+    if (-not (Test-Path $origin)) { return "" }
+    $line = @(Get-Content $origin -ErrorAction SilentlyContinue | Where-Object { "$_".Trim() } | Select-Object -First 1)
+    if ($line.Count -eq 0) { return "" }
+    return "$($line[0])".Trim()
+}
+
 function Install-Stoic {
     [CmdletBinding()]
     param(
@@ -149,7 +242,7 @@ function Install-Stoic {
         [switch]$NoCompile
     )
 
-    $InstallerVersion = "1.2"
+    $InstallerVersion = "1.3"
     $ServerUrl = $ServerUrl.TrimEnd('/')
     $script:RotateDeviceKey = [bool]$RotateDeviceKey
     $devicePublicKey = Get-StoicDevicePublicKey
@@ -160,8 +253,16 @@ function Install-Stoic {
     Write-Host "===========================================" -ForegroundColor Yellow
     Write-Host ""
 
-    # ── 1. Claim pairing token ────────────────────────────────────────
-    Write-Host "[1/5] Claiming pairing token at $ServerUrl ..." -ForegroundColor Cyan
+    # ── 1. Choose the MT5 terminal — BEFORE the one-time token is spent (N104-1/N104-4) ──
+    Write-Host "[1/5] Locating the MetaTrader 5 terminal ..." -ForegroundColor Cyan
+    $terminal = Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId
+    if (-not $terminal) { return }
+    $terminals = @($terminal)
+    Write-Host "    • $($terminal.FullName)" -ForegroundColor White
+    Write-Host ""
+
+    # ── 2. Claim pairing token ────────────────────────────────────────
+    Write-Host "[2/5] Claiming pairing token at $ServerUrl ..." -ForegroundColor Cyan
     try {
         $claimResp = Invoke-RestMethod `
             -Method POST `
@@ -201,73 +302,11 @@ function Install-Stoic {
     else { Write-Host "    ! server did not enrol the device key - live proof will not be attested (update the server)" -ForegroundColor Yellow }
     Write-Host ""
 
-    # ── 2. Discover MT5 terminals ─────────────────────────────────────
-    Write-Host "[2/5] Discovering MetaTrader 5 installations ..." -ForegroundColor Cyan
-    $mtRoot = Join-Path $env:APPDATA "MetaQuotes\Terminal"
-    $terminals = @()
-    if ($TerminalPath) {
-        # explicit data folder (also covers portable-mode terminals: <install dir>\MQL5)
-        if (-not (Test-Path (Join-Path $TerminalPath "MQL5\Experts"))) {
-            Write-Host "    ✗ -TerminalPath $TerminalPath has no MQL5\Experts folder (point at the terminal DATA folder: File → Open Data Folder)" -ForegroundColor Red
-            return
-        }
-        $terminals = @(Get-Item $TerminalPath)
-    } elseif ($TerminalId) {
-        $cand = Join-Path $mtRoot $TerminalId
-        if (-not (Test-Path (Join-Path $cand "MQL5\Experts"))) {
-            Write-Host "    ✗ -TerminalId $TerminalId not found under $mtRoot" -ForegroundColor Red
-            return
-        }
-        $terminals = @(Get-Item $cand)
-    } else {
-        $found = @()
-        if (Test-Path $mtRoot) {
-            # Terminal data folders have a 32-char hex GUID name (skip Community/Help/etc).
-            $found += Get-ChildItem $mtRoot -Directory | Where-Object {
-                $_.Name -match '^[0-9A-F]{32}$' -and (Test-Path (Join-Path $_.FullName "MQL5\Experts"))
-            }
-        }
-        # portable-mode terminals keep MQL5 next to terminal64.exe
-        foreach ($root in @("C:\Program Files", "C:\Program Files (x86)", "$env:LOCALAPPDATA\Programs")) {
-            if (Test-Path $root) {
-                $found += Get-ChildItem $root -Directory -ErrorAction SilentlyContinue | Where-Object {
-                    (Test-Path (Join-Path $_.FullName "terminal64.exe")) -and (Test-Path (Join-Path $_.FullName "MQL5\Experts"))
-                }
-            }
-        }
-        if ($found.Count -eq 0) {
-            Write-Host "    ✗ No MetaTrader 5 terminal found (looked under $mtRoot and portable install folders)." -ForegroundColor Red
-            Write-Host "    Install MT5 from your broker first, then re-run (or pass -TerminalPath)." -ForegroundColor DarkGray
-            return
-        }
-        if ($found.Count -eq 1) {
-            $terminals = @($found[0])
-        } else {
-            # A15-2 — never write one account's token into EVERY terminal: make the operator choose
-            Write-Host "    Several terminals found — this token belongs to ONE account. Choose the terminal for $accountLabel :" -ForegroundColor Yellow
-            for ($i = 0; $i -lt $found.Count; $i++) {
-                $origin = Join-Path $found[$i].FullName "origin.txt"
-                $label = if (Test-Path $origin) { (Get-Content $origin -ErrorAction SilentlyContinue | Select-Object -First 1) } else { "" }
-                Write-Host ("    [{0}] {1}  {2}" -f ($i + 1), $found[$i].FullName, $label) -ForegroundColor White
-            }
-            $pick = Read-Host "    terminal number (or re-run with -TerminalPath / -TerminalId)"
-            if (-not ($pick -match '^[0-9]+$') -or [int]$pick -lt 1 -or [int]$pick -gt $found.Count) {
-                Write-Host "    ✗ no valid choice — nothing written" -ForegroundColor Red
-                return
-            }
-            $terminals = @($found[[int]$pick - 1])
-        }
-    }
-    foreach ($t in $terminals) {
-        Write-Host "    • $($t.FullName)" -ForegroundColor White
-    }
-    Write-Host ""
-
     # ── 3. Download latest EA source ──────────────────────────────────
     Write-Host "[3/5] Downloading EA source from $eaScriptUrl ..." -ForegroundColor Cyan
     $tmpMq5 = Join-Path $env:TEMP "EmergentTradingBridge.mq5"
     try {
-        Invoke-WebRequest -Uri "$eaScriptUrl?v=$eaLatestVer" -OutFile $tmpMq5 -UseBasicParsing
+        Invoke-WebRequest -Uri (Get-StoicEaDownloadUrl -BaseUrl $eaScriptUrl -Version $eaLatestVer) -OutFile $tmpMq5 -UseBasicParsing
     } catch {
         Write-Host "    ✗ Download failed: $($_.Exception.Message)" -ForegroundColor Red
         return
@@ -275,13 +314,15 @@ function Install-Stoic {
     Write-Host "    ✓ Downloaded v$eaLatestVer ($(((Get-Item $tmpMq5).Length / 1KB).ToString('N0')) KB)" -ForegroundColor Green
     Write-Host ""
 
-    # ── 4. Deploy EA + token + URL whitelist into each terminal ───────
-    Write-Host "[4/5] Deploying to terminals ..." -ForegroundColor Cyan
+    # ── 4. Deploy EA + token into the terminal ────────────────────────
+    Write-Host "[4/5] Deploying to the terminal ..." -ForegroundColor Cyan
     $installedTerminals = @()
+    # N104-4 — the WebRequest allow-list is NOT terminal.ini (MT5 keeps it elsewhere and a running
+    # terminal rewrites that file); the operator adds the URL by hand — printed in the summary.
+    $heartbeatHost = Get-StoicWebRequestHost -HeartbeatUrl $heartbeatUrl
     foreach ($t in $terminals) {
         $expertsDir = Join-Path $t.FullName "MQL5\Experts"
         $filesDir   = Join-Path $t.FullName "MQL5\Files"
-        $iniPath    = Join-Path $t.FullName "config\terminal.ini"
 
         # Copy EA source
         $destMq5 = Join-Path $expertsDir "EmergentTradingBridge.mq5"
@@ -306,25 +347,6 @@ $bridgeToken
 # Generated: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
 $installationId
 "@ | Set-Content -Path $instFile -Encoding UTF8 -NoNewline:$false
-        }
-
-        # Whitelist heartbeat URL in terminal.ini (WebRequest allow-list)
-        $heartbeatHost = ([Uri]$heartbeatUrl).Scheme + "://" + ([Uri]$heartbeatUrl).Authority
-        if (Test-Path $iniPath) {
-            $iniText = Get-Content $iniPath -Raw
-            if ($iniText -notmatch [regex]::Escape($heartbeatHost)) {
-                # Append to [Experts] section, or create it.
-                if ($iniText -match '\[Experts\]') {
-                    $iniText = $iniText -replace '\[Experts\]', "[Experts]`r`nWebRequest=$heartbeatHost"
-                } else {
-                    $iniText += "`r`n[Experts]`r`nWebRequest=$heartbeatHost`r`n"
-                }
-                Set-Content -Path $iniPath -Value $iniText -Encoding UTF8
-            }
-        } else {
-            $iniDir = Split-Path $iniPath -Parent
-            if (-not (Test-Path $iniDir)) { New-Item -ItemType Directory -Path $iniDir -Force | Out-Null }
-            "[Experts]`r`nWebRequest=$heartbeatHost`r`n" | Set-Content -Path $iniPath -Encoding UTF8
         }
 
         # Compile via MetaEditor CLI (if found) — produces .ex5
@@ -372,8 +394,10 @@ $installationId
                     $candidates += Get-ChildItem $root -Filter "metaeditor64.exe" -Recurse -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
                 }
             }
-            $origin = Join-Path $t.FullName "origin.txt"     # data folder → install folder of THIS terminal
-            if (Test-Path $origin) { $candidates = @((Join-Path ((Get-Content $origin | Select-Object -First 1).Trim()) "metaeditor64.exe")) + $candidates }
+            # N104-4 — a portable terminal ships metaeditor64.exe in its OWN folder; origin.txt may be empty
+            $candidates = @((Join-Path $t.FullName "metaeditor64.exe")) + $candidates
+            $originDir = Get-StoicTerminalOrigin $t.FullName     # data folder → install folder of THIS terminal
+            if ($originDir) { $candidates = @((Join-Path $originDir "metaeditor64.exe")) + $candidates }
             foreach ($candidate in $candidates) {
                 if ($candidate -and (Test-Path $candidate)) { $editor = $candidate; break }
             }
@@ -426,12 +450,15 @@ $installationId
     Write-Host "[5/5] All set." -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Next steps (do once in MT5):" -ForegroundColor White
-    Write-Host "  1. Open the MT5 terminal." -ForegroundColor White
-    Write-Host "  2. Drag 'EmergentTradingBridge' from Navigator → Experts onto any chart." -ForegroundColor White
-    Write-Host "  3. Confirm 'AutoTrading' is ON (top toolbar, green ▶)." -ForegroundColor White
+    Write-Host "  1. Open the MT5 terminal: $($terminal.FullName)" -ForegroundColor White
+    Write-Host "  2. Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' and ADD:" -ForegroundColor White
+    Write-Host "       $heartbeatHost" -ForegroundColor Yellow
+    Write-Host "     (the installer cannot set this for you — MT5 keeps it outside terminal.ini)" -ForegroundColor DarkGray
+    Write-Host "  3. Drag 'EmergentTradingBridge' from Navigator → Experts onto any chart (ServerUrl = $ServerUrl)." -ForegroundColor White
+    Write-Host "  4. Confirm 'AutoTrading' is ON (top toolbar, green ▶)." -ForegroundColor White
     Write-Host ""
     Write-Host "  Your bridge token has been auto-saved at:" -ForegroundColor DarkGray
-    Write-Host "    %APPDATA%\MetaQuotes\Terminal\<terminal-id>\MQL5\Files\STOIC-Token.txt" -ForegroundColor DarkGray
+    Write-Host "    $(Join-Path $terminal.FullName 'MQL5\Files\STOIC-Token.txt')" -ForegroundColor DarkGray
     Write-Host "  The EA reads this automatically — no manual paste required." -ForegroundColor DarkGray
     Write-Host ""
     Write-Host "Deployed to $($installedTerminals.Count) terminal(s)." -ForegroundColor Green

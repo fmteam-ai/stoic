@@ -398,16 +398,24 @@ Current bootstrap never touches `/usr/bin/python3`: the modern interpreter is li
 
 ### Signed DEMO-only inventory policy (A15-1)
 Production accepts only the signed live policy (6/3/3) **or a signed policy migration**. For the
-demo, mint a DEMO-only policy with the CI release key — dual approval comes from the GitHub
-environment `policy-approval` (Settings → Environments → add 2 required reviewers):
+demo, mint a DEMO-only policy with the CI release key. Approval model (N104-5, stated honestly):
+the GitHub environment `policy-approval` holds the signing run until **one** required reviewer
+approves — GitHub proceeds after the first approval even with several reviewers listed, and a
+solo owner can approve their own run unless "Prevent self-review" is on. The **second, independent
+approval is on the server**: an admin proposes and approves the expectation in the Inventory
+go-live panel (four_eyes, or `INVENTORY_APPROVAL_MODE=single_admin` with a fresh step-up); every
+approval is stamped in the audit chain. Settings → Environments → `policy-approval` → add yourself
+as required reviewer ("Prevent self-review" off when you are the only admin).
 
-1. GitHub → Actions → **policy-migration → Run workflow**: `installation_id` (Admin → System /
-   `STOIC_INSTALLATION_ID` in backend/.env), `previous_policy_version` = `6/3/3-v1` (fresh install),
+1. GitHub → Actions → **policy-migration → Run workflow**: `installation_id` (Demo Readiness header
+   or the Inventory go-live panel show it; `deploy/update.sh` mints `STOIC_INSTALLATION_ID` into
+   backend/.env once — N104-3), `previous_policy_version` = `6/3/3-v1` (fresh install),
    `policy_version` = e.g. `demo-2x2-v1`, `accounts`/`enabled` = 2/2, `account_ids` = the two
    platform account ids (Accounts page → account → id), `demo_only` = true, a reason.
-   The run waits for the reviewers, signs (`purpose=policy-migration`) and commits
+   The run waits for the reviewer, signs (`purpose=policy-migration`) and commits
    `release/policy_migrations/demo-2x2-v1.json` to `main`.
-2. Deploy `main` (demo-only mode), then Admin → Brokers → **Inventory go-live**: pick the policy in
+2. Deploy `main` (demo-only mode) — the backend image ships `release/policy_migrations/` (N104-2),
+   then Admin → Brokers → **Inventory go-live**: pick the policy in
    the dropdown (counts + account ids fill in), **Propose**, step-up, **Approve**; then approve the
    inventory hash.
 3. Rules enforced at every evaluation: every listed account must be an **attested DEMO** account;
@@ -415,9 +423,16 @@ environment `policy-approval` (Settings → Environments → add 2 required revi
    policy (counts, ids) is CLOSE_ONLY. The live 6/3/3 policy is a separate signed migration with
    `demo_only=false` (A15-9, before real money).
 
-### Windows installer — one terminal per run (A15-2)
-`STOIC-Installer.ps1` v1.2 installs into **one** terminal: pass `-TerminalPath "<data folder>"`
+### Windows installer — one terminal per run (A15-2, N104-1/N104-4)
+`STOIC-Installer.ps1` v1.3 installs into **one** terminal: pass `-TerminalPath "<data folder>"`
 (MT5: File → Open Data Folder) or `-TerminalId <32-hex>`; with several terminals and neither
-flag it asks which one. Portable-mode terminals (MQL5 next to `terminal64.exe`) and
-broker-branded MetaEditor folders are found. The device key is **kept** across pairings
-(`-RotateDeviceKey` to mint a new one), so pairing terminal B no longer voids terminal A.
+flag it asks which one. The terminal is chosen **before** the one-time pairing token is claimed,
+so a wrong path, a missing terminal or a mistyped choice never burns the token. Portable-mode
+terminals (MQL5 next to `terminal64.exe`, MetaEditor in the same folder) and
+broker-branded MetaEditor folders are found; an empty `origin.txt` is tolerated. The device key is
+**kept** across pairings (`-RotateDeviceKey` to mint a new one), so pairing terminal B no longer
+voids terminal A. The installer no longer writes `WebRequest=` into `terminal.ini` (MT5 keeps that
+setting elsewhere and a running terminal rewrites the file) — add the printed URL by hand once per
+terminal: Tools → Options → Expert Advisors → *Allow WebRequest for listed URL*. Running the file
+locally: `. .\STOIC-Installer.ps1` then `Install-Stoic …` (it only defines the function).
+CI runs `scripts/test_installer.ps1` on the Windows runner (URL building, terminal choice, ordering).

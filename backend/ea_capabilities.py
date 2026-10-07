@@ -219,10 +219,15 @@ def _signed_release_record() -> dict | None:
 def _canonical_payload(rec: dict, legacy: bool = False) -> bytes:
     """N102-5 — the signing key id is part of the signed statement: a record cannot be re-labelled
     as signed by another key without invalidating the signature. `legacy` = pre-N102-5 payload, accepted
-    ONLY for the `previous` record during a rollout (N103-6) — never for the current release."""
+    ONLY for the `previous` record during a rollout (N103-6) — never for the current release.
+    N104-6 — when the record carries `previous`, its version + EX5 hash are signed INSIDE the current
+    record: an old (self-signed) release cannot be grafted in as `previous` to re-admit a rolled-back EX5."""
     import json
     body = {k: rec.get(k) for k in ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
                                     "windows_build", "mt5_build", "source_commit")}
     if not legacy:
         body["key_id"] = (rec.get("signature") or {}).get("key_id")
+        prev = rec.get("previous")
+        if prev:
+            body["previous"] = {"version": prev.get("version"), "ex5_sha256": prev.get("ex5_sha256")}
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
