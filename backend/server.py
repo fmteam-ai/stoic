@@ -403,6 +403,7 @@ async def public_edge_probe(request: Request):
 
 
 @api_router.get("/ea-script.ex5")
+@api_router.head("/ea-script.ex5")   # N108-3 — the Accounts page probes availability before showing the SIGNED EX5 button
 async def ea_binary():
     """CI-built EX5 delivery (iter-125 correction #3). Installers deploy the
     exact CI-compiled binary and verify its SHA-256 against the signed

@@ -26,8 +26,27 @@ EVALUATOR_KINDS = (
     "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real")
 
 
+ACK_SUPPRESS_S = 6 * 3600   # N108-5 — operator ack silences re-raises of a persisting evaluator alert for 6 h
+
+
 def _now():
     return datetime.now(timezone.utc)
+
+
+def _parse_ts(v):
+    """BSON datetime or ISO string → aware datetime; None on junk (callers guard)."""
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    try:
+        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+# audit #8 P3 — only a HUMAN admin acknowledgement suppresses re-raises: system auto-resolves and the
+# machine METRICS_TOKEN path (deploy scripts / scrapers) never mute a critical condition for 6 h.
+_NON_HUMAN_ACK_RE = "^(system:|metrics-token$)"
 
 
 async def raise_alert(db, kind: str, severity: str, message: str,
@@ -54,6 +73,15 @@ async def raise_alert(db, kind: str, severity: str, message: str,
             {"$set": {"last_seen_at": now, "message": message},
              "$inc": {"occurrences": 1}})
         return None
+    # N108-5 — an operator acknowledgement while the condition persists suppresses re-raises (and the
+    # Telegram push) for ACK_SUPPRESS_S; system auto-resolves do not count, so a real recurrence re-alerts.
+    if dedup_key and kind in EVALUATOR_KINDS:
+        acked = await db.ops_alerts.find_one(
+            {"dedup_key": dedup_key, "acked_at": {"$ne": None}, "acked_by": {"$not": {"$regex": _NON_HUMAN_ACK_RE}}},
+            sort=[("acked_at", -1)], projection={"acked_at": 1})
+        acked_ts = _parse_ts(acked.get("acked_at")) if acked else None
+        if acked_ts and (now - acked_ts).total_seconds() < ACK_SUPPRESS_S:
+            return None
     res = await db.ops_alerts.insert_one({
         "kind": kind,
         "severity": severity if severity in SEVERITIES else "warning",
@@ -75,14 +103,6 @@ async def raise_alert(db, kind: str, severity: str, message: str,
         except Exception:  # noqa: BLE001 — email must never break alerting
             pass
     return str(res.inserted_id)
-
-
-def _parse_ts(v):
-    try:
-        ts = datetime.fromisoformat(str(v))
-        return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
 
 
 async def evaluate_ops_alerts(db) -> int:

@@ -3365,3 +3365,16 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 
 ## 2026-10-07 — SECURITY AUDIT #7 (incremental: alert test button, scalp migration, policy expiry/demo-mode alerts, A16 part 1+2, download labels): PASS, no material findings
 - 2 P3 hardenings applied: scalp-row migration batched (`BATCH=5000` ids per call, `remaining` tracked; script loops until clean) so API boot is never held; `POLICY_MAX_DAYS=180` cap for every policy (server `migration_problems`, signer script, workflow bash). Unit lane 1059 green.
+
+## 2026-10-07 — main108 REVIEW IMPLEMENTED (unit lane 1064 green)
+- N108-1 (blocker): policy-migration.yml installs `pymongo` (inventory_projection import) + a clean-env smoke step (`sign_policy_migration.py --help` + import) before signing.
+- N108-2: paper rows keep `engine` but NO `scope` (scalp safety sweep only reconciles scope=scalp_fast rows that get broker fills).
+- N108-3: Accounts header probes `HEAD /api/ea-script.ex5` (route now answers HEAD); shows "SIGNED EX5 · not published yet" (`download-ex5-unavailable`) until ea-release publishes.
+- N108-4: `validate_expectation` without a signed policy → `policy_version = DEPLOYMENT_POLICY_VERSION` (never inherits an expired/demo label).
+- N108-5: server closed message says "closed testing period"; workflow `expires_days` default empty → 30 demo / 45 live (same as script); `policy_expiry.days_left` uses ceil (2.9 d → 3); `raise_alert` suppresses re-raises for 6 h after an OPERATOR ack (`ACK_SUPPRESS_S`, system auto-resolves excluded); ClosedBetaBanner stays visible when its status call fails.
+- Tests: tests/unit/test_fixplan_main108.py (5). Manifest + rc_lock regenerated.
+
+## 2026-10-07 — SECURITY AUDIT #8 (incremental main108 + full-surface recheck: EA download/HEAD, ack suppression, policy-migration workflow, propose/approve gating, paper rows, fail-closed registration, auth/pairing/deploy/deps): PASS, no material findings
+- 3 of 4 P3 hardenings applied: (1) only a HUMAN admin ack suppresses re-raises — `acked_by` "metrics-token" and "system:*" excluded (`alerting._NON_HUMAN_ACK_RE`), so a leaked METRICS_TOKEN cannot mute a critical condition for 6 h (ack/ack-all endpoints keep their machine path for deploy scripts/legacy HTTP tests); (2) duplicate `_parse_ts` in alerting.py removed — single tolerant version (None on junk), suppression check guards None; (3) policy-migration.yml signing deps pinned (`cryptography==50.0.0 requests==2.34.2 pymongo==4.18.2`, test asserts they match backend/requirements.txt). DEPLOYMENT.md "Acknowledging alerts" paragraph.
+- P3 NOT applied (accepted): pairing tokens stored unhashed in `pairing_tokens.token` — 192-bit, single-use, 15-min TTL, atomic consume; hashing would change legacy live-server tests (test_iter84_pairing_flow queries Mongo by raw token). Revisit if the token TTL grows.
+- Tests: tests/unit/test_security_audit8.py (3). Unit lane 1067 green; manifest 5341 / 557 files + rc_lock regenerated.

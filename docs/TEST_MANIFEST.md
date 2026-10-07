@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 895 |
+| unit | pure logic, no external I/O | every CI job | 903 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4166 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5333 tests across 555 files.**
+**Total: 5341 tests across 557 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -533,6 +533,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_fixplan_main104.py` | unit | 7 |
 | `backend/tests/unit/test_fixplan_main105.py` | unit | 6 |
 | `backend/tests/unit/test_fixplan_main106.py` | unit | 5 |
+| `backend/tests/unit/test_fixplan_main108.py` | unit | 5 |
 | `backend/tests/unit/test_fixplan_main96_a12.py` | unit | 6 |
 | `backend/tests/unit/test_fixplan_main97.py` | unit | 17 |
 | `backend/tests/unit/test_fixplan_main98.py` | unit | 14 |
@@ -561,6 +562,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_security_agent_sa1_sa2.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa3.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa4.py` | unit | 6 |
+| `backend/tests/unit/test_security_audit8.py` | unit | 3 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 24 |
 | `backend/tests/unit/test_signup_lock.py` | unit | 2 |
 | `backend/tests/unit/test_step2_position_sizing.py` | unit | 10 |

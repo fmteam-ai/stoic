@@ -37,8 +37,8 @@ on:
         description: "why (>= 10 chars) — recorded in the signed statement"
         required: true
       expires_days:
-        description: "validity in days (demo_only: default 30, max 45)"
-        default: "30"
+        description: "validity in days — empty = default (demo_only 30, live 45); demo max 45, live max 180"
+        default: ""
 
 permissions:
   contents: write
@@ -60,7 +60,9 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5 (pinned)
         with:
           python-version: "3.11"
-      - run: pip install -q cryptography requests
+      - run: pip install -q cryptography==50.0.0 requests==2.34.2 pymongo==4.18.2   # N108-1 — the signer imports backend/inventory_projection (pymongo); audit #8 — pinned to backend/requirements.txt
+      - name: Signer imports in a clean environment (N108-1)
+        run: python scripts/sign_policy_migration.py --help >/dev/null && python -c "import sys; sys.path.insert(0,'backend'); import inventory_projection"
       - name: Sign policy migration with the CI release key
         # SEC-001 (audit #5) — workflow inputs reach the shell ONLY through env vars, never via ${{ }} interpolation
         env:
@@ -88,6 +90,7 @@ jobs:
           # A16-3 — same rules as backend/inventory_projection.py POLICY_VERSION_RE / PREVIOUS_POLICY_VERSION_RE
           [[ "$IN_VERSION" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo "bad policy_version (no '/': it becomes the file name)"; exit 1; }
           [[ "$IN_PREVIOUS" =~ ^[A-Za-z0-9._/-]{1,64}$ ]] || { echo "bad previous_policy_version"; exit 1; }
+          if [ -z "$IN_EXPIRES_DAYS" ]; then if [ "$IN_DEMO_ONLY" = "true" ]; then IN_EXPIRES_DAYS=30; else IN_EXPIRES_DAYS=45; fi; fi   # N108-5 — same defaults as the script
           [[ "$IN_ACCOUNTS" =~ ^[0-9]{1,3}$ && "$IN_ENABLED" =~ ^[0-9]{1,3}$ && "$IN_EXPIRES_DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "bad counts"; exit 1; }
           # A16-4 — demo policies live at most 45 days (DEMO_POLICY_MAX_DAYS)
           if [ "$IN_DEMO_ONLY" = "true" ] && { [ "$IN_EXPIRES_DAYS" -lt 1 ] || [ "$IN_EXPIRES_DAYS" -gt 45 ]; }; then echo "demo_only: expires_days must be 1..45"; exit 1; fi

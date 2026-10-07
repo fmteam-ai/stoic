@@ -287,7 +287,8 @@ def policy_expiry(exp: dict, now: datetime | None = None) -> dict:
     except ValueError:
         return {"expires_at": str(raw), "expired": True, "days_left": 0, "reminder_due": False}
     left = (exp_at - now).total_seconds() / 86400
-    return {"expires_at": exp_at.isoformat(), "expired": left <= 0, "days_left": max(0, int(left)),
+    import math
+    return {"expires_at": exp_at.isoformat(), "expired": left <= 0, "days_left": max(0, math.ceil(left)),   # N108-5 — 2.9 d → "3 days", never rounded down
             "reminder_due": 0 < left <= POLICY_EXPIRY_REMINDER_DAYS}
 
 
@@ -377,8 +378,10 @@ def validate_expectation(payload: dict, *, require_policy: bool,
         errors.append("account_ids must be unique")
     if ids and len(ids) != en:
         errors.append("len(account_ids) must equal enabled")
-    policy_version = current_policy_version
     mig = payload.get("policy_migration") or {}
+    # N108-4 — without a signed policy the expectation is the built-in deployment policy: never inherit the
+    # previous (possibly expired, demo-only) version label from the current expectation
+    policy_version = current_policy_version if mig.get("signature_hex") else DEPLOYMENT_POLICY_VERSION
     demo_only = bool(mig.get("demo_only"))
     if demo_only and not mig.get("signature_hex"):
         errors.append("demo_only is only accepted inside a SIGNED policy migration")
