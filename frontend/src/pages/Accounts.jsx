@@ -92,6 +92,10 @@ const empty = { label: "", broker: "", server: "", account_number: "", account_t
 
 export default function Accounts() {
     const [accounts, setAccounts] = useState([]);
+    const [ex5Available, setEx5Available] = useState(null);   // N108-3 — null = checking, false = not published yet
+    useEffect(() => {
+        fetch(`${API}/ea-script.ex5`, { method: "HEAD" }).then((r) => setEx5Available(r.ok)).catch(() => setEx5Available(false));
+    }, []);
     const [limits, setLimits] = useState(null);
     const [presets, setPresets] = useState([]);
     const [showForm, setShowForm] = useState(false);
@@ -374,11 +378,18 @@ export default function Accounts() {
                             className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest transition-colors">
                             <Download className="w-3.5 h-3.5" /> MQ5 SOURCE v{LATEST_EA_VERSION} <span className="text-[#71717A]">· compile yourself</span>
                         </a>
-                        <a href={`${API}/ea-script.ex5`} target="_blank" rel="noopener noreferrer" download="EmergentTradingBridge.ex5"
-                            data-testid="download-ex5-button" title="SIGNED EX5 — the CI-built, release-signed binary (required for LIVE). 409 'ex5_not_published' until ea-release has run"
-                            className="flex items-center gap-2 px-3 py-2 border border-[#00FF41]/40 text-[#00FF41] hover:border-[#00FF41] text-xs font-mono tracking-widest transition-colors">
-                            <ShieldCheck className="w-3.5 h-3.5" /> SIGNED EX5 <span className="text-[#71717A]">· install this</span>
-                        </a>
+                        {ex5Available ? (
+                            <a href={`${API}/ea-script.ex5`} target="_blank" rel="noopener noreferrer" download="EmergentTradingBridge.ex5"
+                                data-testid="download-ex5-button" title="SIGNED EX5 — the CI-built, release-signed binary (required for LIVE)"
+                                className="flex items-center gap-2 px-3 py-2 border border-[#00FF41]/40 text-[#00FF41] hover:border-[#00FF41] text-xs font-mono tracking-widest transition-colors">
+                                <ShieldCheck className="w-3.5 h-3.5" /> SIGNED EX5 <span className="text-[#71717A]">· install this</span>
+                            </a>
+                        ) : (
+                            <span data-testid="download-ex5-unavailable" title="The CI-signed binary appears here once the ea-release workflow has published it"
+                                className="flex items-center gap-2 px-3 py-2 border border-[#1F1F1F] text-[#52525B] text-xs font-mono tracking-widest cursor-not-allowed">
+                                <ShieldCheck className="w-3.5 h-3.5" /> SIGNED EX5 <span>· {ex5Available === null ? "checking…" : "not published yet"}</span>
+                            </span>
+                        )}
                         <button onClick={() => setShowForm(!showForm)} data-testid="add-account-button"
                             className="flex items-center gap-2 px-3 py-2 bg-[#00FF41] hover:bg-[#00E53A] text-black font-medium text-xs tracking-widest transition-colors">
                             <Plus className="w-3.5 h-3.5" /> ADD ACCOUNT

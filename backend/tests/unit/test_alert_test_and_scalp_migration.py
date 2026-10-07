@@ -151,5 +151,5 @@ def test_scalp_rows_migration_is_idempotent_and_audited():
     assert "scalp_rows_migration as _srm" in _read("backend/server.py")
     ex = _read("backend/execution.py")
     paper = ex[ex.index("class PaperEngine"):]
-    assert '"engine": signal.get("engine")' in paper and '"scope": signal.get("scope")' in paper
+    assert '"engine": signal.get("engine")' in paper and '"scope": signal.get("scope")' not in paper   # N108-2
     assert os.path.exists(os.path.join(ROOT, "scripts", "migrate_scalp_rows.py"))

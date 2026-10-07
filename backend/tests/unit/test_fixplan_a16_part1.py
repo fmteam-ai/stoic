@@ -63,7 +63,7 @@ def test_a16_3_one_validation_rule_per_policy_field():
     assert r.stdout.strip() == "bad"
     r = subprocess.run(["bash", "-c", f'[[ "6/3/3-v1" =~ ^{ip.PREVIOUS_POLICY_VERSION_RE}$ ]] && echo ok || echo bad'], capture_output=True, text=True)
     assert r.stdout.strip() == "ok"
-    assert wf.index("bad policy_version") < wf.index("sign_policy_migration.py")
+    assert wf.index("bad policy_version") < wf.index("python scripts/sign_policy_migration.py \\")   # validated before signing (the --help smoke step comes earlier)
     # server rejects the same shapes
     probs = ip.migration_problems({"policy_migration": {"signature_hex": "00", "policy_version": "demo/2x2", "previous_policy_version": "6/3/3-v1"}},
                                   current_policy_version="6/3/3-v1", now=NOW)
@@ -104,7 +104,7 @@ def test_a16_4_demo_policy_lifetime_rules():
     script = _read("scripts/sign_policy_migration.py")
     assert "DEMO_POLICY_DEFAULT_DAYS if args.demo_only else 45" in script and 'default=None' in script
     wf = _read(".github/workflows/policy-migration.yml")
-    assert 'default: "30"' in wf and '[ "$IN_EXPIRES_DAYS" -gt 45 ]' in wf
+    assert 'IN_EXPIRES_DAYS=30; else IN_EXPIRES_DAYS=45' in wf and '[ "$IN_EXPIRES_DAYS" -gt 45 ]' in wf   # N108-5 defaults
 
 
 def test_a16_4_expired_policy_is_close_only_and_alerts():

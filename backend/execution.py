@@ -659,7 +659,8 @@ class PaperEngine(ExecutionEngine):
             "error": None,
             "origin": signal.get("origin", "manual"),
             "engine": signal.get("engine"),           # N99-1 / A15-7 — paper rows carry the engine too: scalp vs auto caps stay separate
-            "scope": signal.get("scope"),
+            # N108-2 — NO `scope` on paper rows: the scalp safety sweep (scalp/engine.py) reconciles scope=scalp_fast
+            # rows against broker fills, which paper trades never get → it would block paper accounts (position_mismatch)
             "strategy_class": signal.get("strategy_class"),
             "market_regime": signal.get("market_regime"),
             "risk_pct": (signal.get("risk_pct")

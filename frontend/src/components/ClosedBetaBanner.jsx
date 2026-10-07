@@ -5,7 +5,7 @@ import api from "@/lib/api";
 export function ClosedBetaBanner({ compact = false }) {
     const [s, setS] = useState(null);
     useEffect(() => {
-        api.get("/auth/signups-status").then((r) => setS(r.data)).catch(() => setS(null));
+        api.get("/auth/signups-status").then((r) => setS(r.data)).catch(() => setS({ closed: true, message: "" }));   // N108-5 — a failed status call must not hide the notice
     }, []);
     if (!s?.closed) return null;
     return (

@@ -3365,3 +3365,11 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 
 ## 2026-10-07 — SECURITY AUDIT #7 (incremental: alert test button, scalp migration, policy expiry/demo-mode alerts, A16 part 1+2, download labels): PASS, no material findings
 - 2 P3 hardenings applied: scalp-row migration batched (`BATCH=5000` ids per call, `remaining` tracked; script loops until clean) so API boot is never held; `POLICY_MAX_DAYS=180` cap for every policy (server `migration_problems`, signer script, workflow bash). Unit lane 1059 green.
+
+## 2026-10-07 — main108 REVIEW IMPLEMENTED (unit lane 1064 green)
+- N108-1 (blocker): policy-migration.yml installs `pymongo` (inventory_projection import) + a clean-env smoke step (`sign_policy_migration.py --help` + import) before signing.
+- N108-2: paper rows keep `engine` but NO `scope` (scalp safety sweep only reconciles scope=scalp_fast rows that get broker fills).
+- N108-3: Accounts header probes `HEAD /api/ea-script.ex5` (route now answers HEAD); shows "SIGNED EX5 · not published yet" (`download-ex5-unavailable`) until ea-release publishes.
+- N108-4: `validate_expectation` without a signed policy → `policy_version = DEPLOYMENT_POLICY_VERSION` (never inherits an expired/demo label).
+- N108-5: server closed message says "closed testing period"; workflow `expires_days` default empty → 30 demo / 45 live (same as script); `policy_expiry.days_left` uses ceil (2.9 d → 3); `raise_alert` suppresses re-raises for 6 h after an OPERATOR ack (`ACK_SUPPRESS_S`, system auto-resolves excluded); ClosedBetaBanner stays visible when its status call fails.
+- Tests: tests/unit/test_fixplan_main108.py (5). Manifest + rc_lock regenerated.

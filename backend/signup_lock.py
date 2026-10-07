@@ -5,7 +5,7 @@ import os
 from datetime import datetime, timezone
 
 STATE_ID = "signups"
-CLOSED_MESSAGE = ("New registrations are closed during the testing period. "
+CLOSED_MESSAGE = ("New registrations are closed during the closed testing period. "
                   "Existing members can sign in as usual.")
 
 
