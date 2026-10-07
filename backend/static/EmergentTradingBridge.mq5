@@ -490,8 +490,9 @@ string ResolveServerUrl() {
    while (!FileIsEnding(fh)) {
       string line = FileReadString(fh);
       StringTrimLeft(line); StringTrimRight(line);
-      if (StringLen(line) == 0 || StringGetCharacter(line, 0) == '#') continue;
-      url = line;
+      int p = StringFind(line, "https://");          // BOM/comment tolerant: first line carrying an https URL
+      if (p < 0) continue;
+      url = StringSubstr(line, p);
       break;
    }
    FileClose(fh);

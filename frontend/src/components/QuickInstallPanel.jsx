@@ -27,8 +27,9 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
     const [justTrusted, setJustTrusted] = useState(false);
 
     const backendBase = API.replace(/\/api$/, "");
+    const [pin, setPin] = useState(null);           // { install_command, installer_sha256 } from the server (hash-pinned one-liner)
     const oneLiner = token
-        ? `irm ${backendBase}/api/setup/installer.ps1 | iex; Install-Stoic -Token "${token}" -ServerUrl "${backendBase}"`
+        ? (pin?.install_command || `irm ${backendBase}/api/setup/installer.ps1 | iex; Install-Stoic -Token "${token}" -ServerUrl "${backendBase}"`)
         : "";
 
     // Poll for pairing completion
@@ -67,6 +68,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
             const { data } = await api.post("/setup/pairing-token", { account_id: accountId });
             setToken(data.token);
             setExpiresAt(data.expires_at);
+            setPin({ install_command: data.install_command, installer_sha256: data.installer_sha256 });
             setPairedAt(null);
             setPairedHost(null);
         } catch (e) {
@@ -212,6 +214,15 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                         </div>
                     </div>
 
+                    {pin?.installer_sha256 && (
+                        <div className="flex items-center justify-between gap-2 text-[10px] font-mono tracking-widest text-[#52525B]" data-testid="quick-install-hash-pin">
+                            <span>INSTALLER SHA-256 <span className="text-[#A1A1AA] tracking-normal" data-testid="quick-install-hash-value">{pin.installer_sha256.slice(0, 16)}…{pin.installer_sha256.slice(-8)}</span> — the command verifies it before running</span>
+                            <button onClick={() => copy(pin.installer_sha256, "Installer hash")} data-testid="quick-install-copy-hash"
+                                className="p-1 border border-[#1F1F1F] hover:border-[#FFD700] text-[#A1A1AA] hover:text-[#FFD700]" title="Copy full hash">
+                                <Copy className="w-3 h-3" />
+                            </button>
+                        </div>
+                    )}
                     <div className="text-xs text-[#A1A1AA] space-y-1.5">
                         <div><strong className="text-white">Step 2 —</strong> On the VPS, with MT5 <strong>open and logged in</strong>, open <strong>PowerShell as Administrator</strong> and paste.
                             <span className="block text-[#52525B]" data-testid="quick-install-terminalid-hint">The installer configures the MT5 you have open (several installs → it asks). It deploys the EA, the server URL, your bridge token and the .ex5 — <strong className="text-[#00FF41]">~60 seconds</strong>. Advanced: <code className="text-[#FFD700]">-TerminalId &lt;32-hex folder&gt;</code>, <code className="text-[#FFD700]">-ChartSymbol EURUSD</code>.</span>

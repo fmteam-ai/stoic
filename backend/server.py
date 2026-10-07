@@ -447,6 +447,17 @@ async def installer_script():
                         })
 
 
+@api_router.get("/setup/installer.sha256")
+async def installer_hash():
+    """Hash pin for the one-liner: SHA-256 of the exact bytes /setup/installer.ps1 serves."""
+    from connect_service import installer_sha256
+    import re as _re
+    ps = (Path(__file__).parent / "static" / "STOIC-Installer.ps1").read_text(encoding="utf-8-sig")
+    m = _re.search(r'\$InstallerVersion = "([0-9.]+)"', ps)
+    return {"sha256": installer_sha256(), "version": m.group(1) if m else None, "algorithm": "SHA-256",
+            "verify": "Get-FileHash -InputStream (iwr <url>/api/setup/installer.ps1 -UseBasicParsing).RawContentStream"}
+
+
 # Mount routers
 api_router.include_router(admin_router)
 api_router.include_router(migration_router)

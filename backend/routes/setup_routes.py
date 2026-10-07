@@ -81,7 +81,7 @@ class ClaimPairingRequest(BaseModel):
 # ─────────────── Issue a pairing token (auth'd) ───────────────
 @router.post("/setup/pairing-token")
 async def issue_pairing_token(
-    payload: PairingTokenRequest, user=Depends(get_current_user)
+    payload: PairingTokenRequest, request: Request, user=Depends(get_current_user)
 ):
     """Issue a single-use 15-min pairing token for a specific account.
 
@@ -119,12 +119,17 @@ async def issue_pairing_token(
         "expires_at": expires_at,
     })
 
+    from connect_service import _base_url, install_command, installer_sha256
+    base = _base_url(request)
+    sha = installer_sha256()
     return {
         "token": token,
         "expires_at": expires_at,
         "ttl_minutes": PAIRING_TTL_MINUTES,
         "account_label": account.get("label"),
         "broker": account.get("broker"),
+        "installer_sha256": sha,
+        "install_command": install_command(base, token, sha) if base else None,
     }
 
 

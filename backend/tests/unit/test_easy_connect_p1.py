@@ -143,3 +143,22 @@ def test_audit10_owner_email_is_html_escaped_and_ea_requires_https_drop_file():
     assert "escape(ln) for ln in lines" in _read("backend", "pairing_alerts.py")
     mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
     assert 'StringFind(url, "https://") != 0' in mq5 and 'StringFind(url, "http") != 0' not in mq5
+
+
+def test_installer_hash_pin_in_one_liner_and_endpoint():
+    import hashlib
+    import connect_service as cs
+    raw = open(os.path.join(ROOT, "backend", "static", "STOIC-Installer.ps1"), "rb").read()
+    sha = hashlib.sha256(raw).hexdigest().upper()
+    assert cs.installer_sha256() == sha and len(sha) == 64
+    cmd = cs.install_command("https://s.example", "tok123")
+    assert cmd.startswith('$r=iwr "https://s.example/api/setup/installer.ps1" -UseBasicParsing; ')
+    assert f'if($h -ne "{sha}")' in cmd and "throw" in cmd and "Get-FileHash -InputStream $r.RawContentStream" in cmd
+    assert cmd.index("throw") < cmd.index("iex (")                      # verify BEFORE execute
+    assert cmd.endswith('Install-Stoic -Token "tok123" -ServerUrl "https://s.example"')
+    assert "TrimStart([char]0xFEFF)" in cmd                             # served file carries a UTF-8 BOM
+    assert '@api_router.get("/setup/installer.sha256")' in _read("backend", "server.py")
+    sr = _read("backend", "routes", "setup_routes.py")
+    assert '"installer_sha256": sha' in sr and '"install_command": install_command(base, token, sha)' in sr
+    panel = _read("frontend", "src", "components", "QuickInstallPanel.jsx")
+    assert "pin?.install_command" in panel and "quick-install-hash-pin" in panel
