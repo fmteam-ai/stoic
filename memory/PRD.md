@@ -3342,3 +3342,5 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 
 ## 2026-10-07 — SECURITY AUDIT #6 (incremental main104–106 + progress panel + pairing alerts): PASS, no material findings
 - 3 P3 hardenings applied: per-user rate limit on `GET /api/setup/install-progress` (240/min), `SCAN_LIMIT=2000` on the pairing-alert account scan, broker login number masked (`…345`) in Telegram alert text. Host-header fallback for URLs stays (self-scoped; production sets PUBLIC_BACKEND_URL — Demo Readiness checks it). Unit lane 1046 green.
+
+## 2026-10-07 — main107 REVIEW: GO for the MT5 demo, no corrections required. Note 1 (P3) applied: pairing-alert scan sorted newest-first; a truncated scan keeps the open alerts of unscanned accounts active (no silent close/reopen). Unit lane 1047 green. Everything else in main107 is the operator runbook (PUBLIC_BACKEND_URL in backend/.env, update.sh, flyctl deploy, ea-release, VPS installs, attest, policy-migration, approve, make repo private).
