@@ -72,6 +72,24 @@ docs/PRODUCTION_DEPLOY_CHECKLIST.md.
 - `GET https://<signer-host>:9443/healthz` → `{"status":"ok"}`.
 - Signature round-trip is verified automatically on first signing call.
 
+## `external signer signature failed local verification against the pinned public key`
+Seen in the `ea-release` job (`compile-record-sign`) right after a clean compile. The signer answered
+with a well-formed signature for the right key id, but it does not verify against
+`RELEASE_PUBLIC_KEY_B64`. Since this fix the error message names the cause; the two real-world ones:
+
+| Diagnosis in the message | Cause | Fix |
+|---|---|---|
+| *signed the RAW payload without the domain prefix: it runs pre-N100-11 code* | The hosted signer still runs the old `app.py` (`POST /sign {}` → 422 lists only `key_id`, `data_hex` — no `purpose`). | `cd deploy/signer && flyctl deploy -a stoic-signer` — code only. **Never** `init_fly_signer.sh` on a live signer (re-keys). |
+| *the signer serves public key X but the pinned key is Y* | GitHub secret / server pin is not the key the signer holds (`GET <signer>/public-key`). | Set `RELEASE_PUBLIC_KEY_B64` (GitHub secret **and** production `backend/.env`) to X. |
+
+The `ea-release` job now runs **Signer identity preflight** (`scripts/signer_probe.py`) before the
+multi-minute MT5 install, so both causes fail in seconds with the probe JSON. Run the same probe from
+the operator host:
+```bash
+python scripts/signer_probe.py --url https://stoic-signer.fly.dev \
+  --token-file ~/.stoic-signer/stoic-signer.token --public-key "$(curl -s https://stoic-signer.fly.dev/public-key | python -c 'import json,sys;print(json.load(sys.stdin)["public_key_b64"])')"
+```
+
 ## N100-11 / N101-5 — signer separation (per-purpose tokens, domain prefixes, two keys)
 Every signature is Ed25519 over `<domain>\0<data>` with a fixed domain per purpose
 (`backend/release_signing.PURPOSES`, mirrored byte-for-byte in `deploy/signer/app.py`):

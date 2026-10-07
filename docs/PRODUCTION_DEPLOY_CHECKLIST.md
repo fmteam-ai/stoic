@@ -188,8 +188,11 @@ Public facts (no secrets) — `release/ea_release.json` is the source of truth:
 - MQ5 sha256 `897d6bf8768862b55e1432f897fc523dd0938431e8e8661f77cc16f7e20edc12` (matches shipped source)
 - Compile: 0 errors / 0 warnings, Windows 10.0.26100, `compiled_by: github-actions`
 - Signer: `https://stoic-signer.fly.dev` (Fly app `stoic-signer`, region ams), key id
-  `stoic-release-ed25519-v1`, public key `/lYiSnGAY8/nWkdSKoGSXUJtDm0Syd+ioKTFa+s7cCo=`
-  (`RELEASE_PUBLIC_KEY_B64`). Signature re-verified out-of-band against this key.
+  `stoic-release-ed25519-v1`, public key `1NgD7Rq2/8Fa31kwU2N18krBt3d5zPkwmg60MUW0Gkc=`
+  (`RELEASE_PUBLIC_KEY_B64` — the value `GET https://stoic-signer.fly.dev/public-key` serves; an
+  earlier revision of this file listed a wrong key). The 1.60 signature re-verifies against this key
+  only in the pre-N100-11 raw format — the record must be re-signed by `ea-release` after the signer
+  code is redeployed.
 - `previous` is null (first signed release) — terminals still on ≤1.59 are CLOSE_ONLY on LIVE
   accounts until updated; add their hash to `EA_RELEASE_SHA256_PREVIOUS` only if a rollout window is needed.
 - Token hygiene: the signer token was rotated right after the first signed run; GitHub secret

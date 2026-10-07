@@ -269,16 +269,19 @@
 //|         it is neither the chart symbol nor in TrackedSymbols      |
 //|         (fixes permanent 'insufficient M15 history' when scalping |
 //|         EURUSD from a GOLD/other-symbol chart).                   |
+//| v1.62 — N110-2/N110-8: the https-only rule covers the ServerUrl   |
+//|         INPUT as well as STOIC-Server.txt; an unreadable drop     |
+//|         file falls back to the default URL (never an empty one).  |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.61"
+#property version   "1.62"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.61"
+#define EA_CLIENT_VERSION "1.62"
 
 input string ServerUrl              = "https://www.stoicaibot.com";  // auto-loaded from MQL5\Files\STOIC-Server.txt (installer) when left at default
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -479,13 +482,20 @@ bool   g_webrequest_ok = true;   // false after a 4014 until a request succeeds 
 string ResolveServerUrl() {
    string input_trim = ServerUrl;
    StringTrimLeft(input_trim); StringTrimRight(input_trim);
+   // N110-2 — the https rule applies to BOTH paths: an inputs-dialog override that is not https is ignored
    if (StringLen(input_trim) > 0 && input_trim != SERVER_URL_DEFAULT) {
-      Print("STOIC: using ServerUrl from EA inputs dialog.");
-      return input_trim;
+      if (StringFind(input_trim, "https://") == 0) {
+         Print("STOIC: using ServerUrl from EA inputs dialog.");
+         return input_trim;
+      }
+      Print("STOIC: ignoring ServerUrl input (must start with https://) — falling back to STOIC-Server.txt / default.");
    }
-   if (!FileIsExist("STOIC-Server.txt")) return (StringLen(input_trim) > 0 ? input_trim : SERVER_URL_DEFAULT);
+   if (!FileIsExist("STOIC-Server.txt")) return SERVER_URL_DEFAULT;
    int fh = FileOpen("STOIC-Server.txt", FILE_READ | FILE_TXT | FILE_ANSI);
-   if (fh == INVALID_HANDLE) return input_trim;
+   if (fh == INVALID_HANDLE) {
+      Print("STOIC: cannot open STOIC-Server.txt — using the default server URL.");   // N110-8 — never an empty URL
+      return SERVER_URL_DEFAULT;
+   }
    string url = "";
    while (!FileIsEnding(fh)) {
       string line = FileReadString(fh);
@@ -498,7 +508,7 @@ string ResolveServerUrl() {
    FileClose(fh);
    if (StringLen(url) < 12 || StringFind(url, "https://") != 0) {   // audit #10 — bridge token never travels in clear
       Print("STOIC: ignoring STOIC-Server.txt (must start with https://).");
-      return (StringLen(input_trim) > 0 ? input_trim : SERVER_URL_DEFAULT);
+      return SERVER_URL_DEFAULT;
    }
    while (StringLen(url) > 0 && StringGetCharacter(url, StringLen(url) - 1) == '/') url = StringSubstr(url, 0, StringLen(url) - 1);
    Print("STOIC: server URL auto-loaded from MQL5\\Files\\STOIC-Server.txt: ", url);

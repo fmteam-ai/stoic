@@ -17,17 +17,26 @@ per-account terminal that the Agent itself created) is the only candidate and is
 it is exactly the Phase-2 model (Agent clones a golden portable folder per account), so it is worth the
 empirical run.
 
-## Empirical run (on the VPS, ~5 minutes)
+## Empirical run (on the VPS, ~8 minutes) — THROWAWAY PORTABLE COPY ONLY (N110-6)
+
+Never run the spike on your demo/live terminal: it restarts the terminal, turns Algo Trading on terminal-wide
+and (attempt B) overwrites `config\common.ini` / `terminal.ini`. The script refuses installed terminals
+(`%APPDATA%`, `Program Files`) and only accepts a portable copy.
 
 ```powershell
-cd C:\STOIC   # anywhere
-irm https://www.stoicaibot.com/api/setup/installer.ps1 | Out-Null   # (installer already run — EA + stoic.set + stoic-start.ini present)
-.\spike_webrequest_startup.ps1 -DataFolder "<MT5 data folder>" -ServerUrl "https://www.stoicaibot.com" `
+Copy-Item "C:\Program Files\<Broker> MT5" C:\stoic-spike\MT5 -Recurse       # 1. throwaway copy
+& C:\stoic-spike\MT5\terminal64.exe /portable                                # 2. start once, log in to a DEMO account, close it
+irm https://www.stoicaibot.com/api/setup/installer.ps1 | iex
+Install-Stoic -Token "<code>" -ServerUrl "https://www.stoicaibot.com" -TerminalPath C:\stoic-spike\MT5 -NoRestart
+.\spike_webrequest_startup.ps1 -PortableCopy C:\stoic-spike\MT5 -ServerUrl "https://www.stoicaibot.com" `
     -GoldenConfig "<data folder of the terminal where you allowed the URL by hand>\config"
 ```
 
-`scripts/spike_webrequest_startup.ps1` restarts the terminal twice with alternative configs and reads the
-Experts log: **PASS** = EA started and no `WebRequest error 4014` within 75 s.
+`scripts/spike_webrequest_startup.ps1` first runs a **baseline** (plain `stoic-start.ini` must produce
+`WebRequest error 4014` — otherwise the URL is already allowed in the copy and the spike aborts), then
+restarts the copy with the alternative configs. Each verdict counts ONLY Experts-log lines stamped after
+that start (`$Since`), never older 4014 errors. **PASS** = EA started and no 4014 within 75 s. The copy's
+`config\` folder is backed up before A/B and restored automatically at the end, also on error.
 
 | Attempt | PASS means | If FAIL |
 |---|---|---|

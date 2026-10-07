@@ -938,13 +938,22 @@ async def list_alerts(request: Request, include_acked: bool = False,
     from synthetic_data import alert_scope_filter
     sf = alert_scope_filter(scope)
     q = {**sf} if include_acked else {"acked_at": None, **sf}
+    now = datetime.now(timezone.utc)
+    mutes = {m["kind"]: m async for m in db.ops_alert_mutes.find({"muted_until": {"$gt": now}})}
     out = []
     async for a in db.ops_alerts.find(q).sort("created_at", -1).limit(
             max(1, min(limit, 500))):
         a["id"] = str(a.pop("_id"))
+        # N109-2 — "snoozed until": notifications muted (per-kind mute or ack window); the row itself is never hidden
+        until = a.get("notify_muted_until")
+        m = mutes.get(a.get("kind"))
+        if m and (until is None or m["muted_until"] > until):
+            until = m["muted_until"]
+        a["snoozed_until"] = until.isoformat() if until and until > now else None
         out.append(a)
     return {"alerts": out, "scope": (scope or "real").lower(),
-            "as_of": datetime.now(timezone.utc).isoformat(),
+            "as_of": now.isoformat(),
+            "mutes": [{"kind": k, "muted_until": m["muted_until"].isoformat(), "muted_by": m.get("muted_by")} for k, m in mutes.items()],
             "unacked": await db.ops_alerts.count_documents(
                 {"acked_at": None, **sf}),
             "unacked_critical": await db.ops_alerts.count_documents(
@@ -973,6 +982,40 @@ async def ack_alert(alert_id: str, request: Request):
         return JSONResponse(status_code=404,
                             content={"detail": "not found or already acked"})
     return {"ok": True, "acked_by": actor}
+
+
+@router.post("/ops/alerts/mute")
+async def mute_alert_kind(request: Request):
+    """N109-2 — mute the NOTIFICATIONS of one alert kind for ≤24 h. The alert rows stay open and
+    keep gating; only email/Telegram pushes pause. Human admin only (no METRICS_TOKEN)."""
+    allowed, actor = await _ops_actor(request)
+    if not allowed or actor == "metrics-token":
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from alerting import EVALUATOR_KINDS, MUTE_MAX_H
+    body = await request.json()
+    kind = str(body.get("kind") or "").strip()
+    if kind not in EVALUATOR_KINDS:
+        return JSONResponse(status_code=400, content={"detail": f"kind must be one of {sorted(EVALUATOR_KINDS)}"})
+    try:
+        hours = float(body.get("hours", MUTE_MAX_H))
+    except (TypeError, ValueError):
+        return JSONResponse(status_code=400, content={"detail": "hours must be a number"})
+    if not 0 < hours <= MUTE_MAX_H:
+        return JSONResponse(status_code=400, content={"detail": f"hours must be within (0, {MUTE_MAX_H}]"})
+    now = datetime.now(timezone.utc)
+    until = now + timedelta(hours=hours)
+    await get_db().ops_alert_mutes.update_one(
+        {"kind": kind}, {"$set": {"kind": kind, "muted_until": until, "muted_by": actor, "muted_at": now}}, upsert=True)
+    return {"ok": True, "kind": kind, "muted_until": until.isoformat(), "muted_by": actor}
+
+
+@router.delete("/ops/alerts/mute/{kind}")
+async def unmute_alert_kind(kind: str, request: Request):
+    allowed, actor = await _ops_actor(request)
+    if not allowed or actor == "metrics-token":
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    res = await get_db().ops_alert_mutes.delete_one({"kind": kind})
+    return {"ok": True, "removed": res.deleted_count}
 
 
 @router.post("/ops/alerts/ack-all")

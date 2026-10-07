@@ -26,7 +26,8 @@ EVALUATOR_KINDS = (
     "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real")
 
 
-ACK_SUPPRESS_S = 6 * 3600   # N108-5 — operator ack silences re-raises of a persisting evaluator alert for 6 h
+ACK_SUPPRESS_S = 6 * 3600   # N109-1 — a HUMAN ack mutes the NOTIFICATIONS (email/Telegram) of re-raises for 6 h; the alert ROW always re-opens
+MUTE_MAX_H = 24             # N109-2 — explicit per-kind notification mute ceiling (Ops Alerts → MUTE 24H)
 
 
 def _now():
@@ -73,16 +74,11 @@ async def raise_alert(db, kind: str, severity: str, message: str,
             {"$set": {"last_seen_at": now, "message": message},
              "$inc": {"occurrences": 1}})
         return None
-    # N108-5 — an operator acknowledgement while the condition persists suppresses re-raises (and the
-    # Telegram push) for ACK_SUPPRESS_S; system auto-resolves do not count, so a real recurrence re-alerts.
-    if dedup_key and kind in EVALUATOR_KINDS:
-        acked = await db.ops_alerts.find_one(
-            {"dedup_key": dedup_key, "acked_at": {"$ne": None}, "acked_by": {"$not": {"$regex": _NON_HUMAN_ACK_RE}}},
-            sort=[("acked_at", -1)], projection={"acked_at": 1})
-        acked_ts = _parse_ts(acked.get("acked_at")) if acked else None
-        if acked_ts and (now - acked_ts).total_seconds() < ACK_SUPPRESS_S:
-            return None
+    # N109-1 — a persisting condition ALWAYS re-opens its row (gates and Bot Health keep seeing it); an
+    # operator ack / explicit mute only silences the pushes (email, Telegram) for the mute window.
+    muted_until = await notification_mute_until(db, kind, dedup_key, now) if (dedup_key and kind in EVALUATOR_KINDS) else None
     res = await db.ops_alerts.insert_one({
+        "notify_muted_until": muted_until,
         "kind": kind,
         "severity": severity if severity in SEVERITIES else "warning",
         "message": message,
@@ -95,14 +91,41 @@ async def raise_alert(db, kind: str, severity: str, message: str,
         "acked_at": None,
         "acked_by": None,
     })
-    logger.warning("OPS ALERT [%s] %s: %s", severity, kind, message)
-    if severity == "critical" and not synthetic:
+    logger.warning("OPS ALERT [%s] %s: %s%s", severity, kind, message,
+                   f" (notifications muted until {muted_until.isoformat()})" if muted_until else "")
+    if severity == "critical" and not synthetic and not muted_until:
         try:  # iter-152 — critical alerts (stale telemetry, dead workers)
             from guard_alerts import queue_ops_alert_email
             queue_ops_alert_email(db, kind, severity, message, dedup_key)
         except Exception:  # noqa: BLE001 — email must never break alerting
             pass
     return str(res.inserted_id)
+
+
+async def notification_mute_until(db, kind: str, dedup_key: str | None, now=None):
+    """N109-1/N109-2 — end of the NOTIFICATION mute for this condition, or None: an explicit per-kind
+    mute (ops_alert_mutes, ≤ MUTE_MAX_H) or the implicit ACK_SUPPRESS_S window after a HUMAN ack.
+    Only humans mute (system auto-resolves and the METRICS_TOKEN path never do). Never hides a row."""
+    now = now or _now()
+    best = None
+    mutes = getattr(db, "ops_alert_mutes", None)
+    if mutes is not None:
+        try:
+            m = await mutes.find_one({"kind": kind})
+        except Exception:  # noqa: BLE001
+            m = None
+        until = _parse_ts((m or {}).get("muted_until"))
+        if until and until > now:
+            best = until
+    if dedup_key:
+        acked = await db.ops_alerts.find_one(
+            {"dedup_key": dedup_key, "acked_at": {"$ne": None}, "acked_by": {"$not": {"$regex": _NON_HUMAN_ACK_RE}}},
+            sort=[("acked_at", -1)], projection={"acked_at": 1})
+        acked_ts = _parse_ts(acked.get("acked_at")) if acked else None
+        if acked_ts and (now - acked_ts).total_seconds() < ACK_SUPPRESS_S:
+            until = acked_ts + timedelta(seconds=ACK_SUPPRESS_S)
+            best = until if best is None or until > best else best
+    return best
 
 
 async def evaluate_ops_alerts(db) -> int:

@@ -61,7 +61,7 @@ def test_n108_5_wording_defaults_rounding_ack_suppression_banner():
     assert ip.policy_expiry({"policy_expires_at": (NOW + timedelta(days=3, hours=1)).isoformat()}, NOW)["reminder_due"] is False
     banner = _read("frontend/src/components/ClosedBetaBanner.jsx")
     assert "setS({ closed: true, message: \"\" })" in banner and ".catch(() => setS(null))" not in banner
-    # ack suppression: an operator ack within 6 h stops the re-raise; a system auto-resolve does not
+    # N109-1 — an operator ack within 6 h mutes the NOTIFICATION of the re-raise; the row always re-opens
     import alerting
     assert alerting.ACK_SUPPRESS_S == 6 * 3600
 
@@ -78,6 +78,7 @@ def test_n108_5_wording_defaults_rounding_ack_suppression_banner():
 
         async def insert_one(self, doc):
             self.inserted += 1
+            self.last = doc
             return type("R", (), {"inserted_id": "x"})()
 
         async def update_one(self, *a, **k):
@@ -87,11 +88,9 @@ def test_n108_5_wording_defaults_rounding_ack_suppression_banner():
         db = type("DB", (), {})()
         db.ops_alerts = _Alerts(acked_by, acked_at)
         rid = await alerting.raise_alert(db, "policy_expired", "critical", "msg", dedup_key="policy_expiry:expired", meta={})
-        return rid, db.ops_alerts.inserted
+        return rid is not None, db.ops_alerts.inserted, bool(db.ops_alerts.last.get("notify_muted_until"))
 
     loop = asyncio.new_event_loop()
-    assert loop.run_until_complete(run("admin@x", datetime.now(timezone.utc) - timedelta(hours=1))) == (None, 0)      # suppressed
-    rid, n = loop.run_until_complete(run("admin@x", datetime.now(timezone.utc) - timedelta(hours=7)))
-    assert rid is not None and n == 1                                                                               # window over → re-raised
-    rid, n = loop.run_until_complete(run("system:auto-resolved", datetime.now(timezone.utc) - timedelta(minutes=1)))
-    assert rid is not None and n == 1                                                                               # auto-resolve never suppresses
+    assert loop.run_until_complete(run("admin@x", datetime.now(timezone.utc) - timedelta(hours=1))) == (True, 1, True)     # row re-opened, push muted
+    assert loop.run_until_complete(run("admin@x", datetime.now(timezone.utc) - timedelta(hours=7))) == (True, 1, False)    # window over → notified again
+    assert loop.run_until_complete(run("system:auto-resolved", datetime.now(timezone.utc) - timedelta(minutes=1))) == (True, 1, False)   # auto-resolve never mutes

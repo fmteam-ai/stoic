@@ -424,7 +424,28 @@ async def ea_binary():
                             "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
                             "Pragma": "no-cache",
                             "X-STOIC-SHA256": digest,
+                            # N110-7 — the EA version this binary IS (from the release record), so an installer
+                            # never deploys a leftover older EX5 believing it is ea_latest_version
+                            "X-STOIC-EA-Version": _ex5_version_for(digest),
                         })
+
+
+def _ex5_version_for(digest: str) -> str:
+    import json as _json
+    from ea_capabilities import _EA_RELEASE_FILES
+    for name in _EA_RELEASE_FILES:
+        p = Path(name) if name.startswith("/") else Path(__file__).parent.parent / name
+        if not p.exists():
+            continue
+        try:
+            rec = _json.loads(p.read_text())
+        except (OSError, ValueError):
+            continue
+        for entry in (rec, rec.get("previous") or {}):
+            if str(entry.get("ex5_sha256") or "").lower() == digest.lower() and entry.get("version"):
+                return str(entry["version"])
+        break
+    return "unknown"
 
 
 @api_router.get("/setup/installer.ps1")

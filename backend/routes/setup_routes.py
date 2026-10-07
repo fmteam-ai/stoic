@@ -39,7 +39,6 @@ Security model:
 """
 from __future__ import annotations
 
-import os
 import secrets
 from datetime import datetime, timezone, timedelta
 
@@ -261,14 +260,10 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
                       "expires_at": now + timedelta(seconds=LEASE_SECONDS)}},
             upsert=True)
 
-    backend_base = os.environ.get(
-        "PUBLIC_BACKEND_URL"
-    ) or os.environ.get("REACT_APP_BACKEND_URL")
-    if not backend_base:
-        # Best effort — derive from request URL. The installer needs an
-        # absolute URL since it isn't running behind our ingress.
-        backend_base = str(request.base_url).rstrip("/")
-    backend_base = backend_base.rstrip("/")
+    # N110-2 — ONE source for the server URL: the same resolver that builds the install one-liner, so
+    # STOIC-Server.txt (written from server_url) always equals the WebRequest host the user allow-lists.
+    from connect_service import _base_url
+    backend_base = (_base_url(request) or str(request.base_url)).rstrip("/")
 
     # P1-01 — the account's token is not readable any more (hash only): pairing ISSUES a fresh
     # token and hands it to the installer exactly once (one account → one installation).
@@ -293,7 +288,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "server_url": backend_base,
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
-        "ea_latest_version": "1.61",
+        "ea_latest_version": "1.62",
         # r26 P1-02 — device key enrolled with THIS pairing (None when the installer sent none)
         "device_key_id": (device_key or {}).get("key_id"),
         "attestation_challenge_url": f"{backend_base}/api/infra/attestation/challenge",

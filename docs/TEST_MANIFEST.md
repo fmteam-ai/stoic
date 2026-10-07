@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 918 |
+| unit | pure logic, no external I/O | every CI job | 936 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4171 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5361 tests across 560 files.**
+**Total: 5379 tests across 562 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -536,6 +536,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_fixplan_main105.py` | unit | 6 |
 | `backend/tests/unit/test_fixplan_main106.py` | unit | 5 |
 | `backend/tests/unit/test_fixplan_main108.py` | unit | 5 |
+| `backend/tests/unit/test_fixplan_main110.py` | unit | 12 |
 | `backend/tests/unit/test_fixplan_main96_a12.py` | unit | 6 |
 | `backend/tests/unit/test_fixplan_main97.py` | unit | 17 |
 | `backend/tests/unit/test_fixplan_main98.py` | unit | 14 |
@@ -567,6 +568,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_security_audit8.py` | unit | 3 |
 | `backend/tests/unit/test_security_telegram_vault.py` | unit | 4 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 24 |
+| `backend/tests/unit/test_signer_verification_diagnosis.py` | unit | 6 |
 | `backend/tests/unit/test_signup_lock.py` | unit | 2 |
 | `backend/tests/unit/test_step2_position_sizing.py` | unit | 10 |
 | `backend/tests/unit/test_step4_fail_closed_risk.py` | unit | 5 |
