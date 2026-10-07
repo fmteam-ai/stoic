@@ -91,6 +91,7 @@ jobs:
           [[ "$IN_ACCOUNTS" =~ ^[0-9]{1,3}$ && "$IN_ENABLED" =~ ^[0-9]{1,3}$ && "$IN_EXPIRES_DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "bad counts"; exit 1; }
           # A16-4 — demo policies live at most 45 days (DEMO_POLICY_MAX_DAYS)
           if [ "$IN_DEMO_ONLY" = "true" ] && { [ "$IN_EXPIRES_DAYS" -lt 1 ] || [ "$IN_EXPIRES_DAYS" -gt 45 ]; }; then echo "demo_only: expires_days must be 1..45"; exit 1; fi
+          if [ "$IN_EXPIRES_DAYS" -lt 1 ] || [ "$IN_EXPIRES_DAYS" -gt 180 ]; then echo "expires_days must be 1..180 (POLICY_MAX_DAYS)"; exit 1; fi
           [[ "$IN_ACCOUNT_IDS" =~ ^[A-Za-z0-9,_-]{1,512}$ ]] || { echo "bad account_ids"; exit 1; }
           [[ "$IN_INSTALLATION_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo "bad installation_id"; exit 1; }
           DEMO=(); [ "$IN_DEMO_ONLY" = "true" ] && DEMO=(--demo-only)

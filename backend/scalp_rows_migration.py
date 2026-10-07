@@ -11,6 +11,7 @@ logger = logging.getLogger("scalp_rows_migration")
 
 STATE_ID = "migration_scalp_rows_v1"
 LEGACY_FILTER = {"origin": "scalp"}
+BATCH = 5000
 
 
 def rewrite_update() -> dict:
@@ -36,10 +37,15 @@ async def migrate(db, *, dry_run: bool = False) -> dict:
         if legacy == 0 and not dry_run:
             await db.platform_state.update_one({"_id": STATE_ID}, {"$setOnInsert": {"done_at": datetime.now(timezone.utc).isoformat(), "modified": 0}}, upsert=True)
         return {"legacy": legacy, "modified": 0, "dry_run": dry_run}
-    res = await db.trades.update_many(LEGACY_FILTER, rewrite_update())
+    # SA7-P3 — bounded per call: at most BATCH rows so API boot is never held by a huge legacy set;
+    # the remainder is picked up by the next start / the script, which loops until clean.
+    ids = [d["_id"] async for d in db.trades.find(LEGACY_FILTER, {"_id": 1}).limit(BATCH)]
+    res = await db.trades.update_many({"_id": {"$in": ids}, **LEGACY_FILTER}, rewrite_update())
     await db.platform_state.update_one(
         {"_id": STATE_ID},
-        {"$set": {"done_at": datetime.now(timezone.utc).isoformat()}, "$inc": {"modified": res.modified_count}},
+        {"$set": {"done_at": datetime.now(timezone.utc).isoformat(), "remaining": max(0, legacy - res.modified_count)},
+         "$inc": {"modified": res.modified_count}},
         upsert=True)
-    logger.info("scalp rows migration: %d legacy origin:scalp rows → origin:auto engine:scalp", res.modified_count)
-    return {"legacy": legacy, "modified": res.modified_count, "dry_run": False}
+    logger.info("scalp rows migration: %d legacy origin:scalp rows → origin:auto engine:scalp (%d remaining)",
+                res.modified_count, max(0, legacy - res.modified_count))
+    return {"legacy": legacy, "modified": res.modified_count, "dry_run": False, "remaining": max(0, legacy - res.modified_count)}

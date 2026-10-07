@@ -104,17 +104,30 @@ def test_scalp_rows_migration_is_idempotent_and_audited():
     class _Res:
         modified_count = 3
 
+    class _Cur:
+        def __init__(self, rows): self.rows = rows
+        def limit(self, n): self.rows = self.rows[:n]; return self
+        def __aiter__(self):
+            async def g():
+                for r in self.rows:
+                    yield r
+            return g()
+
     class _Trades:
         def __init__(self):
-            self.rows = [{"origin": "scalp"}] * 3
+            self.rows = [{"_id": i, "origin": "scalp"} for i in range(3)]
             self.updates = 0
+
+        def find(self, flt, _proj=None):
+            return _Cur([r for r in self.rows if r.get("origin") == flt["origin"]])
 
         async def count_documents(self, flt):
             return sum(1 for r in self.rows if r.get("origin") == flt["origin"])
 
         async def update_many(self, flt, upd):
             self.updates += 1
-            self.rows = [{**r, **upd["$set"]} for r in self.rows]
+            ids = set(flt["_id"]["$in"])                                  # SA7-P3 — bounded by id batch
+            self.rows = [({**r, **upd["$set"]} if r["_id"] in ids and r.get("origin") == "scalp" else r) for r in self.rows]
             return _Res()
 
     class _PS:
@@ -130,7 +143,7 @@ def test_scalp_rows_migration_is_idempotent_and_audited():
     dry = loop.run_until_complete(srm.migrate(db, dry_run=True))
     assert dry == {"legacy": 3, "modified": 0, "dry_run": True} and db.trades.updates == 0
     res = loop.run_until_complete(srm.migrate(db))
-    assert res["legacy"] == 3 and res["modified"] == 3 and db.trades.updates == 1
+    assert res["legacy"] == 3 and res["modified"] == 3 and res["remaining"] == 0 and db.trades.updates == 1
     assert db.platform_state.calls[-1][0] == {"_id": srm.STATE_ID} and db.platform_state.calls[-1][1]["$inc"] == {"modified": 3}
     again = loop.run_until_complete(srm.migrate(db))
     assert again["legacy"] == 0 and again["modified"] == 0 and db.trades.updates == 1                   # nothing left, no second rewrite

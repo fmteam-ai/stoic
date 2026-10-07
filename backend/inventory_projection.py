@@ -247,6 +247,7 @@ PREVIOUS_POLICY_VERSION_RE = r"[A-Za-z0-9._/-]{1,64}"
 # A16-4 — demo policies are short-lived: 30 days by default, never more than 45
 DEMO_POLICY_DEFAULT_DAYS = 30
 DEMO_POLICY_MAX_DAYS = 45
+POLICY_MAX_DAYS = 180              # SA7-P3 — no policy, demo or live, is valid for more than half a year
 POLICY_EXPIRY_REMINDER_DAYS = 3
 
 
@@ -335,6 +336,8 @@ def migration_problems(payload: dict, *, current_policy_version: str, now: datet
             problems.append("migration expired or not yet valid")
         if mig.get("demo_only") and (expires - issued) > timedelta(days=DEMO_POLICY_MAX_DAYS):
             problems.append(f"demo_only migration may be valid for at most {DEMO_POLICY_MAX_DAYS} days")   # A16-4
+        if (expires - issued) > timedelta(days=POLICY_MAX_DAYS):
+            problems.append(f"migration may be valid for at most {POLICY_MAX_DAYS} days")                   # SA7-P3
     except (TypeError, ValueError):
         problems.append("migration issued_at/expires_at invalid")
     if len(str(mig.get("nonce") or "")) < 16:

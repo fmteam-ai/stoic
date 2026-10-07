@@ -31,7 +31,7 @@ def build(args) -> dict:
         raise SystemExit("reason (>=10 chars) and issuer are required")
     import re
     from inventory_projection import (POLICY_VERSION_RE, PREVIOUS_POLICY_VERSION_RE, DEMO_POLICY_DEFAULT_DAYS,
-                                      DEMO_POLICY_MAX_DAYS)   # A16-3 — one rule per field, shared with workflow + server
+                                      DEMO_POLICY_MAX_DAYS, POLICY_MAX_DAYS)   # A16-3 — one rule per field, shared with workflow + server
     if not re.fullmatch(POLICY_VERSION_RE, args.version):
         raise SystemExit(f"policy_version must match {POLICY_VERSION_RE} (it becomes the file name — no '/')")
     if not re.fullmatch(PREVIOUS_POLICY_VERSION_RE, args.previous):
@@ -41,8 +41,8 @@ def build(args) -> dict:
         args.expires_days = DEMO_POLICY_DEFAULT_DAYS if args.demo_only else 45
     if args.demo_only and not (1 <= args.expires_days <= DEMO_POLICY_MAX_DAYS):
         raise SystemExit(f"demo_only policies may be valid for 1..{DEMO_POLICY_MAX_DAYS} days (got {args.expires_days})")
-    if args.expires_days < 1:
-        raise SystemExit("expires_days must be >= 1")
+    if not (1 <= args.expires_days <= POLICY_MAX_DAYS):
+        raise SystemExit(f"expires_days must be 1..{POLICY_MAX_DAYS}")
     return {"schema": "stoic.policy-migration/v3", "installation_id": args.installation_id,
             "environment": args.environment, "previous_policy_version": args.previous,
             "policy_version": args.version, "accounts": args.accounts, "enabled": args.enabled, "bots": args.bots,

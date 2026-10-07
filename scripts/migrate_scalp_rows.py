@@ -21,6 +21,9 @@ async def main(dry_run: bool) -> int:
     db = AsyncIOMotorClient(os.environ["MONGO_URL"])[os.environ["DB_NAME"]]
     res = await srm.migrate(db, dry_run=dry_run)
     print(f"legacy origin:scalp rows: {res['legacy']} · rewritten: {res['modified']}{' (dry run)' if dry_run else ''}")
+    while not dry_run and res.get("remaining"):          # batches of srm.BATCH until clean
+        res = await srm.migrate(db)
+        print(f"  … rewritten {res['modified']} more, {res['remaining']} remaining")
     return 0
 
 
