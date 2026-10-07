@@ -29,6 +29,7 @@ class _State:
 class _DB:
     def __init__(self):
         self.platform_state = _State()
+        self.secrets_vault = _State()
         self.audit = []
 
 
@@ -69,7 +70,7 @@ def test_security_alert_routes_and_card_wired():
     assert "require_admin(user)" in body[:600] and 'rate_limit(db, "security_alert_test", f"user:{user[\'id\']}", 3, 600' in body
     assert '@router.get("/admin/security-alerts/status")' in src
     page = _read("frontend/src/pages/AdminIntegrations.jsx")
-    assert "<SecurityAlertsCard />" in page
+    assert "<SecurityAlertsCard " in page
     card = _read("frontend/src/components/admin/SecurityAlertsCard.jsx")
     for tid in ("security-alert-test-btn", "security-alert-status", "security-alert-test-result", "integration-card-security-telegram"):
         assert tid in card, tid

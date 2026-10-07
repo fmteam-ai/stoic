@@ -40,11 +40,14 @@ def _check(cid, title, status, detail="", hint=""):
     return {"id": cid, "title": title, "status": status, "detail": detail, "hint": hint}
 
 
-def env_checks(env=None) -> list[dict]:
+def env_checks(env=None, *, vault_token: bool = False) -> list[dict]:
     env = env if env is not None else os.environ
     out = []
     tok = (env.get("SECURITY_AGENT_TELEGRAM_BOT_TOKEN") or "").strip()
-    if env.get("SECURITY_AGENT_TELEGRAM_BOT_TOKEN_FILE") and tok:
+    if vault_token and tok:
+        out.append(_check("telegram_secret", "Security-bot token from secrets/security_telegram_token", "pass",
+                          "token sealed in the vault (Admin → Integrations)"))
+    elif env.get("SECURITY_AGENT_TELEGRAM_BOT_TOKEN_FILE") and tok:
         out.append(_check("telegram_secret", "Security-bot token from secrets/security_telegram_token", "pass",
                           "token loaded from the secret file"))
     elif tok:
@@ -53,7 +56,7 @@ def env_checks(env=None) -> list[dict]:
                           "put the NEW token in secrets/security_telegram_token and remove SECURITY_AGENT_TELEGRAM_* from backend/.env"))
     else:
         out.append(_check("telegram_secret", "Security-bot token from secrets/security_telegram_token", "fail",
-                          "no token configured — SA3 alerts are off"))
+                          "no token configured — SA3 alerts are off", "set it on Admin → Integrations → Security alerts (Telegram)"))
     chat = (env.get("SECURITY_AGENT_TELEGRAM_CHAT_ID") or "").strip()
     out.append(_check("telegram_chat", "Security-bot chat ID set", "pass" if chat else "fail",
                       "configured" if chat else "SECURITY_AGENT_TELEGRAM_CHAT_ID missing"))
@@ -327,7 +330,8 @@ async def build(db) -> dict:
     from inventory_projection import installation_id
     rows = await fleet(db)
     ctx = await tick_context(db)
-    checks = env_checks() + await db_checks(db) + fleet_checks(rows)
+    from security_alert_test import vault_has_token
+    checks = env_checks(vault_token=await vault_has_token(db)) + await db_checks(db) + fleet_checks(rows)
     manual = await manual_state(db, ctx)
     gating = [c for c in checks if c["status"] != "info"]
     passed = sum(1 for c in gating if c["status"] == "pass") + sum(1 for m in manual if m["checked"])

@@ -460,10 +460,18 @@ verdict, ordering).
 
 **Pairing alerts.** A terminal the installer paired that sends no heartbeat for
 `PAIRING_HEARTBEAT_ALERT_SEC` (default 600 s) raises the critical ops alert `pairing_no_heartbeat`
-(Bot Health) and pushes it to the security Telegram chat (`SECURITY_AGENT_TELEGRAM_*`) with the
+(Bot Health) and pushes it to the security Telegram chat with the
 WebRequest URL to add; the recovery is announced when the first heartbeat lands and the alert
 auto-resolves. Pairings silent for more than `PAIRING_ALERT_MAX_AGE_SEC` (default 7 days) are treated
 as abandoned, not incidents.
+
+**Security Telegram chat — configure on Admin → Integrations → "Security alerts (Telegram)".** Set
+`SECURITY_AGENT_TELEGRAM_BOT_TOKEN` (BotFather token) and `SECURITY_AGENT_TELEGRAM_CHAT_ID` with SET
+(password + authenticator, sealed AES-256-GCM in the vault, audit-chained). The API applies them at
+once; the workers re-read them every evaluator cycle (≤ 60 s) — no restart. Then SEND TEST ALERT.
+The Docker secret `secrets/security_telegram_token` (+ chat id in backend/.env) still works but is
+visible to worker-security only, so with that path the status card and the pairing / policy / demo
+pushes from the reconciliation worker stay unconfigured — prefer the vault.
 
 **Acknowledging alerts.** An acknowledgement by a signed-in admin while the condition persists
 silences re-raises and the Telegram push of that alert for 6 h (`ACK_SUPPRESS_S`). Acks made with the

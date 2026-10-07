@@ -29,9 +29,19 @@ REGISTRY = {
     "SENDER_EMAIL": ("email", False, "From address on a verified Resend domain"),
     "SENDER_NAME": ("email", False, "Display name on outgoing e-mail"),
     "EMERGENT_LLM_KEY": ("ai", True, "Emergent Universal Key (Co-Pilot, Risk Commander, AI agents)"),
+    "SECURITY_AGENT_TELEGRAM_BOT_TOKEN": ("security_telegram", True, "BotFather token of the security-alerts bot (123456789:AA…)"),
+    "SECURITY_AGENT_TELEGRAM_CHAT_ID": ("security_telegram", False, "Chat id the bot posts to (your private chat, or -100… for a group)"),
 }
 PROVIDERS = {
-    "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Emergent)"}
+    "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Emergent)",
+    "security_telegram": "Security alerts (Telegram)"}
+# keys workers re-read from the vault between restarts (alert channels must follow an admin change at once)
+SECURITY_TELEGRAM_KEYS = ("SECURITY_AGENT_TELEGRAM_BOT_TOKEN", "SECURITY_AGENT_TELEGRAM_CHAT_ID")
+VALIDATORS = {
+    "SECURITY_AGENT_TELEGRAM_BOT_TOKEN": (r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", "expected a BotFather token like 123456789:AAH… (no 'bot' prefix)"),
+    "SECURITY_AGENT_TELEGRAM_CHAT_ID": (r"^-?\d{5,20}$", "expected a numeric chat id (groups start with -100)"),
+}
+_VAULT_LOADED: dict[str, str] = {}   # key → value this process last took from the vault (refresh_keys bookkeeping)
 _AAD = b"stoic-secrets-vault-v1"
 DECRYPT_FAILURES: list[str] = []   # keys whose sealed value could not be unsealed at boot (master-key mismatch)
 
@@ -205,6 +215,7 @@ def load_vault_sync(mongo_url: str, db_name: str) -> int:
         for doc in col.find({"_id": {"$in": list(REGISTRY)}}):
             try:
                 os.environ[doc["_id"]] = unseal(doc)
+                _VAULT_LOADED[doc["_id"]] = os.environ[doc["_id"]]
                 n += 1
             except Exception:  # noqa: BLE001 — wrong master key: keep env value, never crash boot
                 plain = _migrate_legacy_record(col, doc)
@@ -216,6 +227,49 @@ def load_vault_sync(mongo_url: str, db_name: str) -> int:
     except Exception:  # noqa: BLE001
         return 0
     return n
+
+
+def _dotenv_value(key: str) -> str | None:
+    from dotenv import dotenv_values
+    v = (dotenv_values(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")) or {}).get(key)
+    if v:
+        return v
+    path = os.environ.get(f"{key}_FILE")
+    if path:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return f.read().strip() or None
+        except OSError:
+            return None
+    return None
+
+
+async def refresh_keys(db, keys=SECURITY_TELEGRAM_KEYS) -> int:
+    """Workers call this each evaluator cycle: overlay the CURRENT sealed values of `keys` onto os.environ
+    (set → applied; cleared → back to the .env / secret-file value) so an Admin → Integrations change reaches
+    the reconciliation worker (pairing / policy / demo alerts) and worker-security without a restart."""
+    changed = 0
+    docs = {d["_id"]: d async for d in db.secrets_vault.find({"_id": {"$in": list(keys)}})}
+    for k in keys:
+        d = docs.get(k)
+        if d is not None:
+            try:
+                v = unseal(d)
+            except Exception:  # noqa: BLE001 — wrong master key: keep whatever the process has
+                continue
+            if os.environ.get(k) != v:
+                os.environ[k] = v
+                changed += 1
+            _VAULT_LOADED[k] = v
+        elif k in _VAULT_LOADED:
+            _VAULT_LOADED.pop(k, None)
+            env_val = _dotenv_value(k)
+            if env_val:
+                os.environ[k] = env_val
+            else:
+                os.environ.pop(k, None)
+            changed += 1
+    return changed
 
 
 def readiness_check() -> dict:
@@ -244,14 +298,17 @@ async def status(db) -> dict:
     last_webhook = await db.stripe_webhook_events.find_one({}, sort=[("at", -1)])
     last_email = await db.email_log.find_one({}, sort=[("at", -1)])
     ts_state = await db.platform_state.find_one({"_id": "turnstile"})
+    tg_test = await db.platform_state.find_one({"_id": "security_telegram_test"}) or {}
     return {"keys": keys, "providers": PROVIDERS, "master_key_source": master_key_source(),
             "vault_readiness": readiness_check(),
             "signals": {"stripe_last_webhook": (last_webhook or {}).get("at"),
                         "stripe_last_webhook_type": (last_webhook or {}).get("type"),
                         "email_last_sent": (last_email or {}).get("at"),
-                        "turnstile_policy_enabled": bool(ts_state and ts_state.get("enabled"))},
+                        "turnstile_policy_enabled": bool(ts_state and ts_state.get("enabled")),
+                        "security_telegram_last_test": {k: tg_test.get(k) for k in ("at", "ok", "by", "detail")} if tg_test else None},
             "restart_hint": "Workers (6 containers) load vault values at start — run deploy/restart.sh after "
-                            "changing keys used by background jobs; the API applies them immediately."}
+                            "changing keys used by background jobs; the API applies them immediately "
+                            "(Security Telegram keys are re-read by the workers every minute, no restart needed)."}
 
 
 async def update_secret(db, key: str, value: str, actor: dict) -> dict:
@@ -260,15 +317,21 @@ async def update_secret(db, key: str, value: str, actor: dict) -> dict:
     value = (value or "").strip()
     if len(value) > 4000 or "\n" in value:
         raise ValueError("invalid value")
+    if value and key in VALIDATORS:
+        import re
+        pattern, why = VALIDATORS[key]
+        if not re.match(pattern, value):
+            raise ValueError(why)
     now = datetime.now(timezone.utc).isoformat()
     if value:
         doc = {**seal(value), "updated_at": now, "updated_by": actor.get("email"), "tail": tail(value)}
         await db.secrets_vault.update_one({"_id": key}, {"$set": doc}, upsert=True)
         os.environ[key] = value
-    else:   # clearing removes the overlay → the .env value (if any) is authoritative again
+        _VAULT_LOADED[key] = value
+    else:   # clearing removes the overlay → the .env / secret-file value (if any) is authoritative again
         await db.secrets_vault.delete_one({"_id": key})
-        from dotenv import dotenv_values
-        env_val = (dotenv_values(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")) or {}).get(key)
+        _VAULT_LOADED.pop(key, None)
+        env_val = _dotenv_value(key)
         if env_val:
             os.environ[key] = env_val
         else:
@@ -324,4 +387,9 @@ async def test_provider(db, provider: str, actor: dict) -> dict:
         if not os.environ.get("EMERGENT_LLM_KEY"):
             return {"ok": False, "detail": "EMERGENT_LLM_KEY not configured"}
         return {"ok": True, "detail": "key present — ask the Co-Pilot a question to exercise it"}
+    if provider == "security_telegram":
+        from security import rate_limit
+        import security_alert_test as sat
+        await rate_limit(db, "security_alert_test", f"user:{actor['id']}", 3, 600, "Too many test alerts — try again in 10 minutes")
+        return await sat.send_test(db, actor)
     raise ValueError("unknown provider")
