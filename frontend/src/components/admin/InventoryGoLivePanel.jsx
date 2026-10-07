@@ -19,6 +19,7 @@ export const InventoryGoLivePanel = () => {
     const [exp, setExp] = useState({ accounts: "", enabled: "", bots: "" });
     const [accountIds, setAccountIds] = useState("");          // A15-1 — production requires the approved account ids
     const [policies, setPolicies] = useState([]);              // A15-1 — signed policy migrations from release/policy_migrations/
+    const [hostId, setHostId] = useState("");                  // N104-3 — STOIC_INSTALLATION_ID the policy-migration run must name
     const [policyFile, setPolicyFile] = useState("");
     const policy = policies.find((p) => p.file === policyFile) || null;
     const choosePolicy = (file) => {
@@ -31,7 +32,7 @@ export const InventoryGoLivePanel = () => {
         try {
             const [a, b, c] = await Promise.all([api.get("/authority/inventory"), api.get("/authority/inventory/pending"),
                                                  api.get("/authority/inventory/policies").catch(() => ({ data: { policies: [] } }))]);
-            setInv(a.data); setPend(b.data); setPolicies(c.data?.policies || []);
+            setInv(a.data); setPend(b.data); setPolicies(c.data?.policies || []); setHostId(c.data?.installation_id || "");
             const cur = b.data?.expectation || {};
             setExp((e) => ({
                 accounts: e.accounts === "" && cur.accounts != null ? String(cur.accounts) : e.accounts,
@@ -111,6 +112,10 @@ export const InventoryGoLivePanel = () => {
                     </div>
                     <Input data-testid="expectation-account-ids" placeholder="approved account ids, comma-separated (required in production)"
                         value={accountIds} onChange={(e) => setAccountIds(e.target.value)} className="font-mono text-xs" />
+                    <div data-testid="expectation-host-id" className="text-[11px] font-mono text-[#71717A] select-all">
+                        installation id (policy-migration input): <span className="text-white">{hostId || "unset — run deploy/update.sh"}</span>
+                        {policies.length === 0 && <span className="block text-[#52525B]">no signed policy on this host yet — the policy-migration workflow commits one to release/policy_migrations/ (ships in the image since main104)</span>}
+                    </div>
                     {policies.length > 0 && (
                         <select data-testid="expectation-policy" value={policyFile} onChange={(e) => choosePolicy(e.target.value)}
                             className="w-full bg-[#0A0A0A] border border-[#1F1F1F] text-xs font-mono text-white p-2">

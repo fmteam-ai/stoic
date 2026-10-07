@@ -1,7 +1,10 @@
-# A15-1 — signed inventory policy migration (dual approval via the `policy-approval` GitHub environment:
-# configure it with 2 required reviewers in Settings → Environments). The policy is signed with the CI
-# release key (purpose policy-migration) and committed to release/policy_migrations/<version>.json; the
-# Inventory Go-Live panel (Admin → Brokers) loads it and submits it with the expectation.
+# A15-1 — signed inventory policy migration. Approval model (N104-5, honest wording): the `policy-approval`
+# GitHub environment holds the run until ONE required reviewer approves (GitHub proceeds after the first
+# approval even with several reviewers listed; a solo owner can self-approve unless "Prevent self-review" is
+# on) — this is the FIRST approval. The SECOND, independent approval happens on the server: an admin must
+# propose + approve the expectation in the Inventory Go-Live panel (four_eyes, or single_admin with a fresh
+# step-up). The policy is signed with the CI release key (purpose policy-migration) and committed to
+# release/policy_migrations/<version>.json; the panel loads it and submits it with the expectation.
 name: policy-migration
 
 on:

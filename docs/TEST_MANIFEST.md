@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 851 |
-| integration | real MongoDB service container | CI `backend-integration` | 250 |
+| unit | pure logic, no external I/O | every CI job | 867 |
+| integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4166 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 11 |
 
-**Total: 5278 tests across 545 files.**
+**Total: 5299 tests across 548 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -463,6 +463,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_main101_review.py` | integration | 7 |
 | `backend/tests/integration/test_main102_review.py` | integration | 12 |
 | `backend/tests/integration/test_main103_review.py` | integration | 10 |
+| `backend/tests/integration/test_main104_review.py` | integration | 5 |
 | `backend/tests/integration/test_main99_review.py` | integration | 12 |
 | `backend/tests/integration/test_p1_alert_test_button.py` | integration | 8 |
 | `backend/tests/integration/test_p1_risk_commander_confirm.py` | integration | 5 |
@@ -525,6 +526,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_fixplan_main101.py` | unit | 14 |
 | `backend/tests/unit/test_fixplan_main102.py` | unit | 8 |
 | `backend/tests/unit/test_fixplan_main103_a15.py` | unit | 11 |
+| `backend/tests/unit/test_fixplan_main104.py` | unit | 7 |
 | `backend/tests/unit/test_fixplan_main96_a12.py` | unit | 6 |
 | `backend/tests/unit/test_fixplan_main97.py` | unit | 17 |
 | `backend/tests/unit/test_fixplan_main98.py` | unit | 14 |
@@ -535,6 +537,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_fixplan_main99_phase4.py` | unit | 3 |
 | `backend/tests/unit/test_forecast_status.py` | unit | 3 |
 | `backend/tests/unit/test_host_migrator.py` | unit | 17 |
+| `backend/tests/unit/test_install_progress.py` | unit | 9 |
 | `backend/tests/unit/test_install_report_healthwatch.py` | unit | 3 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
 | `backend/tests/unit/test_llm_models_single_source.py` | unit | 6 |

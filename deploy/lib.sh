@@ -84,6 +84,19 @@ ensure_release_secrets() {
   chmod 600 secrets/order_auth_secret secrets/ledger_anchor_key secrets/bridge_token_hash_key secrets/secrets_master_key secrets/security_telegram_token
 }
 
+# N104-3 — STOIC_INSTALLATION_ID: the host identity every signed policy migration must name
+# (inventory_projection.installation_id; production refuses a policy for another id). Nothing ever
+# generated it. Minted ONCE into backend/.env — never regenerated (a new id orphans every signed
+# policy) — and shown on Demo Readiness + the Inventory go-live panel. No-op until backend/.env exists.
+# Called next to ensure_release_secrets in install.sh (after backend/.env is written) and update.sh.
+ensure_installation_id() {
+  [ -f backend/.env ] || return 0
+  grep -qE '^STOIC_INSTALLATION_ID=.' backend/.env && return 0
+  local id; id="stoic-$(openssl rand -hex 8)"
+  set_kv backend/.env STOIC_INSTALLATION_ID "${id}"
+  echo "   generated STOIC_INSTALLATION_ID=${id} in backend/.env (policy-migration runs must name it — Demo Readiness shows it)"
+}
+
 # N101-6 — backups encrypt secrets/ with BACKUP_PASSPHRASE_FILE; nothing ever provisioned it, so a
 # fresh install hard-failed its first backup (and update.sh/rollback.sh with it). Generate ONE
 # passphrase OUTSIDE ./secrets and ./backups (it decrypts them), record it in ./.env.

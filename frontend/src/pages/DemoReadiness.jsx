@@ -103,6 +103,9 @@ export default function DemoReadiness() {
                                 <div className="font-mono text-[10px] text-[#71717A] mt-1" data-testid="demo-readiness-authority">
                                     canonical trading authority: {d.authority?.summary?.length ? d.authority.summary.join(" · ") : "no demo accounts"} · build {String(d.context?.build_sha || "dev").slice(0, 12)} · {d.context?.environment} · EA {d.context?.ea_version}
                                 </div>
+                                <div className="font-mono text-[10px] text-[#A1A1AA] mt-1 select-all" data-testid="demo-readiness-installation-id" title="STOIC_INSTALLATION_ID — the policy-migration workflow must name this id">
+                                    installation id: <span className="text-white">{d.context?.installation_id || "unset — run deploy/update.sh"}</span>
+                                </div>
                             </div>
                             <div className="flex flex-col items-end gap-2">
                                 <CryptoLiveBadge />

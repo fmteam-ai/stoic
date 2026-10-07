@@ -37,6 +37,9 @@ COPY release/rc_lock.json /app/release/rc_lock.json
 COPY docs/RELEASE_HASHES.json /app/docs/RELEASE_HASHES.json
 # signed EX5 release record (glob keeps the build valid before the first sanctioned compile)
 COPY release/ea_release.jso[n] /app/release/
+# N104-2 — signed policy migrations (policy-migration workflow commits them); the folder is tracked
+# via .gitkeep so the COPY succeeds before the first policy is minted.
+COPY release/policy_migrations/ /app/release/policy_migrations/
 
 # OPT-IN forecast plane (docker-compose.forecast.yml sets ML_FORECAST=1):
 # torch CPU + Chronos-Bolt, constrained by the master lockfile. Default 0
