@@ -326,6 +326,8 @@ async def install_progress(account_id: str, request: Request, user=Depends(get_c
     """Five derived steps (token → installer → .ex5 → heartbeat/WebRequest → identity) so a
     stuck VPS pairing is visible on the Accounts page. Read-only; grants nothing."""
     db = get_db()
+    # polled every 5 s by the panel (15 s by the chip) — 240/min per user is ~10x headroom, still bounded
+    await rate_limit(db, "install_progress", f"user:{user['id']}", 240, 60, "Too many install-progress polls", request=request)
     oid = parse_object_id(account_id, "Account")
     account = await db.accounts.find_one({"_id": oid})
     if not account or (account.get("user_id") != user["id"] and user.get("role") != "admin"):

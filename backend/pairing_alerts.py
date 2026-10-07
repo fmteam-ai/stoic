@@ -14,6 +14,7 @@ logger = logging.getLogger("pairing_alerts")
 KIND = "pairing_no_heartbeat"
 DEFAULT_ALERT_SEC = 600            # 10 minutes after pairing without a heartbeat
 DEFAULT_MAX_AGE_SEC = 7 * 86400    # a pairing silent for a week is abandoned, not an incident
+SCAN_LIMIT = 2000                  # SA6-P3 — bounded scan per cycle (a fleet is tens of terminals, not thousands)
 
 
 def _parse(v) -> datetime | None:
@@ -58,7 +59,9 @@ def silent_pairing(acc: dict, now: datetime, *, alert_after: int, ceiling: int) 
 
 def alert_text(acc: dict, info: dict, url: str) -> str:
     label = acc.get("label") or str(acc.get("_id"))
-    ident = " · ".join(str(x) for x in (acc.get("broker"), acc.get("account_number")) if x)
+    num = str(acc.get("account_number") or "")
+    masked = ("…" + num[-3:]) if len(num) > 3 else num           # SA6-P3 — never the full login number in a chat
+    ident = " · ".join(str(x) for x in (acc.get("broker"), masked) if x)
     mins = info["silent_s"] // 60
     return (
         "STOIC · VPS PAIRING SILENT\n"
@@ -77,12 +80,21 @@ def recovery_text(acc: dict) -> str:
     return f"STOIC · VPS PAIRING RECOVERED\nAccount: {label} — EA heartbeat received, terminal is talking again."
 
 
+def heartbeat_after_pairing(acc: dict) -> bool:
+    """N106-4 — a RECOVERY is a heartbeat that really arrived after the pairing — not an abandoned,
+    deleted or re-paired terminal that merely stopped matching the alert condition."""
+    paired, hb = _parse(acc.get("installer_paired_at")), _parse(acc.get("last_heartbeat"))
+    return bool(paired and hb and hb >= paired)
+
+
 def plan(accounts: list[dict], open_keys: set[str], now: datetime | None = None, *, url: str = "",
-         alert_after: int | None = None, ceiling: int | None = None) -> dict:
-    """{'active': keys that hold now, 'raise': [(key, text, meta, acc)], 'recovered': [(key, text)]}."""
+         alert_after: int | None = None, ceiling: int | None = None, is_test=None) -> dict:
+    """{'active': keys that hold now, 'raise': [(key, text, meta, acc)], 'recovered': [(key, text)]}.
+    `is_test(acc)` marks synthetic accounts: alerted (dedup'd in ops_alerts) but never pushed to Telegram."""
     now = now or datetime.now(timezone.utc)
     alert_after = alert_sec() if alert_after is None else alert_after
     ceiling = max_age_sec() if ceiling is None else ceiling
+    is_test = is_test or (lambda a: bool(a.get("synthetic")))
     active, to_raise = set(), []
     by_key = {}
     for acc in accounts:
@@ -94,31 +106,32 @@ def plan(accounts: list[dict], open_keys: set[str], now: datetime | None = None,
             to_raise.append((key, alert_text(acc, info, url),
                              {"account_id": str(acc.get("_id")), "host": info["host"], "silent_s": info["silent_s"],
                               "never_heartbeated": info["never"], "webrequest_url": url}, acc))
-    recovered = [(k, recovery_text(by_key.get(k, {"_id": k.split(":", 1)[-1]}))) for k in sorted(open_keys) if k not in active]
+    recovered = [(k, recovery_text(by_key[k])) for k in sorted(open_keys)
+                 if k not in active and k in by_key and heartbeat_after_pairing(by_key[k]) and not is_test(by_key[k])]
     return {"active": active, "raise": to_raise, "recovered": recovered}
 
 
 async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None) -> tuple[set, int]:
     """Runs inside alerting.evaluate_ops_alerts: returns (active dedup keys, alerts raised).
-    New alerts and recoveries are pushed to the security Telegram chat (best effort)."""
+    New alerts and real recoveries are pushed to the security Telegram chat (best effort)."""
     now = now or datetime.now(timezone.utc)
     if notify is None:
         from security_agent.alerts import send_telegram as notify
     from install_progress import webrequest_url
+    try:
+        from synthetic_data import is_synthetic_account as is_test
+    except Exception:  # noqa: BLE001
+        def is_test(a):
+            return bool(a.get("synthetic"))
     accounts = [a async for a in db.accounts.find(
         {"installer_paired_at": {"$exists": True, "$ne": None}, "status": {"$ne": "deleted"}},
         {"label": 1, "broker": 1, "account_number": 1, "installer_paired_at": 1, "installer_paired_hostname": 1,
-         "installer_version": 1, "last_heartbeat": 1, "synthetic": 1, "status": 1})]
+         "installer_version": 1, "last_heartbeat": 1, "synthetic": 1, "status": 1, "user_id": 1}).limit(SCAN_LIMIT)]
     open_keys = {a["dedup_key"] async for a in db.ops_alerts.find({"kind": KIND, "acked_at": None}, {"dedup_key": 1})}
-    p = plan(accounts, open_keys, now, url=webrequest_url())
+    p = plan(accounts, open_keys, now, url=webrequest_url(), is_test=is_test)
     raised = 0
     for key, text, meta, acc in p["raise"]:
-        synthetic = False
-        try:
-            from synthetic_data import is_synthetic_account
-            synthetic = is_synthetic_account(acc)
-        except Exception:  # noqa: BLE001
-            pass
+        synthetic = bool(is_test(acc))
         new_id = await raise_alert(db, KIND, "critical", text.splitlines()[0] + f" — {acc.get('label') or acc.get('_id')}: "
                                    f"no heartbeat {meta['silent_s'] // 60} min after pairing on {meta['host']}",
                                    dedup_key=key, meta=meta, synthetic=synthetic)

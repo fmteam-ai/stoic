@@ -3332,3 +3332,13 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 
 ## 2026-10-07 — PAIRING ALERTS (unit lane 1041 green · evaluate() dry-run against the preview DB OK)
 - `backend/pairing_alerts.py`: a terminal paired by the installer (`installer_paired_at`) with no heartbeat since pairing for `PAIRING_HEARTBEAT_ALERT_SEC` (600) → critical ops alert `pairing_no_heartbeat` (dedup `pairing_heartbeat:<account_id>`, in `EVALUATOR_KINDS` → auto-resolves) + security Telegram push (`security_agent.alerts.send_telegram`, text carries host, minutes silent, WebRequest URL from PUBLIC_BACKEND_URL, fix steps; no secrets); recovery message when the first heartbeat lands; pairings silent > `PAIRING_ALERT_MAX_AGE_SEC` (7 d) ignored as abandoned; synthetic accounts never reach Telegram. Wired as step 5b of `alerting.evaluate_ops_alerts` (60 s loop). Tests tests/unit/test_pairing_alerts.py (4). Docs: DEPLOYMENT.md "Pairing alerts".
+
+## 2026-10-07 — main106 REVIEW IMPLEMENTED (unit lane 1046 green)
+- N106-1: `init_fly_signer.sh` guard fails CLOSED — refuses (exit 3) on a local `~/.stoic-signer/<app>.private.b64`, on any `flyctl apps list` / `flyctl secrets list` error, and on an existing key; behavioural test with a fake flyctl.
+- N106-2: `enabled` follows the policy everywhere — panel "use current" fills `c.enabled` for a DEMO-only policy (`c.live_enabled` for real-money) with an `expectation-enabled-semantics` line; `acceptance_bundle.inventory_failures` compares `enabled` (demo_only) vs `live_enabled` (live) and the one-bot-per-account rule follows the same key.
+- N106-3: `.env` installation id stripped of spaces/CRLF (padded line rewritten clean); DEPLOYMENT.md "Full server rebuild — restore order" (restore before install.sh / delete the fresh secrets/installation_id).
+- N106-4: RECOVERED only when `last_heartbeat >= installer_paired_at` for a still-existing, non-test account (abandoned / re-paired / deleted → silent auto-resolve); `user_id` projected so `is_synthetic_account` can match; N106-5: a failing pairing check keeps its open `pairing_no_heartbeat` keys in `active` so auto-resolve does not close + re-raise them.
+- Tests: tests/unit/test_fixplan_main106.py (5), pairing test updated. Manifest + rc_lock regenerated.
+
+## 2026-10-07 — SECURITY AUDIT #6 (incremental main104–106 + progress panel + pairing alerts): PASS, no material findings
+- 3 P3 hardenings applied: per-user rate limit on `GET /api/setup/install-progress` (240/min), `SCAN_LIMIT=2000` on the pairing-alert account scan, broker login number masked (`…345`) in Telegram alert text. Host-header fallback for URLs stays (self-scoped; production sets PUBLIC_BACKEND_URL — Demo Readiness checks it). Unit lane 1046 green.

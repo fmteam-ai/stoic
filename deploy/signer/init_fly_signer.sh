@@ -29,13 +29,30 @@ python3 -c "import cryptography" 2>/dev/null || { echo "missing python module: p
 
 flyctl auth whoami >/dev/null 2>&1 || { echo "run: flyctl auth login"; exit 1; }
 
-# N105-2 — init only: an existing signing key means this app is LIVE (GitHub secrets, server pin,
-# EA record and signed policies all depend on it). Never rotate it from here.
-if flyctl apps list --json 2>/dev/null | grep -q "\"Name\": *\"$APP\"" \
-   && flyctl secrets list -a "$APP" 2>/dev/null | grep -q 'ED25519_SIGNING_KEY_B64'; then
-  echo "!! $APP already holds ED25519_SIGNING_KEY_B64 — refusing to mint a new key under key id $KEY_ID."
+# N105-2 / N106-1 — init only: an existing signing key means this app is LIVE (GitHub secrets, server pin,
+# EA record and signed policies all depend on it). Never rotate it from here. The guard FAILS CLOSED:
+# any flyctl error while checking counts as "refuse", and a local key file for this app refuses too.
+if [ -s "$OUT_DIR/$APP.private.b64" ]; then
+  echo "!! $OUT_DIR/$APP.private.b64 already exists — this signer was initialised from this machine. Refusing to mint a new key."
   echo "   Redeploy the signer code with the existing key:   cd deploy/signer && flyctl deploy -a $APP --ha=false"
-  echo "   Rotating the key is a deliberate ceremony: new key id, new GitHub secrets, new server pin, re-run ea-release and re-sign every policy."
+  exit 3
+fi
+if apps_json=$(flyctl apps list --json 2>&1); then
+  if printf '%s' "$apps_json" | grep -q "\"Name\": *\"$APP\""; then
+    if ! secrets_out=$(flyctl secrets list -a "$APP" 2>&1); then
+      echo "!! could not list secrets of existing app $APP (flyctl said: ${secrets_out}) — refusing rather than risk overwriting a live key."
+      echo "   Fix the flyctl login / network and, if you only need new code:   cd deploy/signer && flyctl deploy -a $APP --ha=false"
+      exit 3
+    fi
+    if printf '%s' "$secrets_out" | grep -q 'ED25519_SIGNING_KEY_B64'; then
+      echo "!! $APP already holds ED25519_SIGNING_KEY_B64 — refusing to mint a new key under key id $KEY_ID."
+      echo "   Redeploy the signer code with the existing key:   cd deploy/signer && flyctl deploy -a $APP --ha=false"
+      echo "   Rotating the key is a deliberate ceremony: new key id, new GitHub secrets, new server pin, re-run ea-release and re-sign every policy."
+      exit 3
+    fi
+  fi
+else
+  echo "!! flyctl apps list failed (${apps_json}) — cannot prove $APP has no key yet; refusing."
   exit 3
 fi
 
@@ -61,7 +78,7 @@ printf '%s\n' "$PUBLIC_B64" > "$OUT_DIR/$APP.public.b64"
 
 sed -i.bak "s/^app = .*/app = \"$APP\"/; s/^primary_region = .*/primary_region = \"$REGION\"/" fly.toml && rm -f fly.toml.bak
 
-if ! flyctl apps list --json 2>/dev/null | grep -q "\"Name\": *\"$APP\""; then
+if ! printf '%s' "$apps_json" | grep -q "\"Name\": *\"$APP\""; then
   flyctl apps create "$APP" --machines >/dev/null
 fi
 flyctl secrets set -a "$APP" --stage \

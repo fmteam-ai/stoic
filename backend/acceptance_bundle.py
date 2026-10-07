@@ -112,18 +112,21 @@ async def config_fingerprint(db, account_ids: list, rel: dict) -> str:
 
 
 def inventory_failures(proj: dict, exp: dict) -> list[str]:
-    """A14-9 — exact counts against the APPROVED expectation; any structural defect blocks."""
+    """A14-9 — exact counts against the APPROVED expectation; any structural defect blocks.
+    N106-2 — `enabled` follows the policy: a DEMO-only expectation counts every account with trading on
+    (same as inventory_projection), a real-money one counts LIVE accounts only."""
     if not exp or not exp.get("approved_by"):
         return ["no approved inventory expectation — a bundle cannot be produced without one"]
     out = list(proj.get("structural_defects") or [])
     c = proj.get("counts") or {}
+    enabled_key, enabled_label = ("enabled", "enabled accounts (demo-only policy)") if exp.get("demo_only") else ("live_enabled", "enabled accounts")
     if c.get("configured") != exp.get("accounts"):
         out.append(f"unique identity-bound accounts {c.get('configured')} != approved {exp.get('accounts')}")
-    if c.get("live_enabled") != exp.get("enabled"):
-        out.append(f"enabled accounts {c.get('live_enabled')} != approved {exp.get('enabled')}")
+    if c.get(enabled_key) != exp.get("enabled"):
+        out.append(f"{enabled_label} {c.get(enabled_key)} != approved {exp.get('enabled')}")
     if c.get("bots_enabled") != exp.get("bots"):
         out.append(f"enabled bots {c.get('bots_enabled')} != approved {exp.get('bots')}")
-    if c.get("bots_enabled") != c.get("live_enabled"):
+    if c.get("bots_enabled") != c.get(enabled_key):
         out.append("exactly one enabled bot per enabled account required")
     out += [v for v in (proj.get("violations") or []) if v not in out and ("orphan" in v or "outside" in v or "disabled" in v)]
     return out

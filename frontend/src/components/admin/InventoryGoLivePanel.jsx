@@ -62,7 +62,11 @@ export const InventoryGoLivePanel = () => {
     const secondAdminMissing = !singleAdmin && (pend.admin_count || 0) < 2;
     const selfBlocked = (proposedBy) => !singleAdmin && proposedBy === pend.me;
     const approverLabel = singleAdmin ? "same admin · fresh step-up" : "2nd admin";
-    const fill = () => setExp({ accounts: String(c.configured ?? 0), enabled: String(c.live_enabled ?? 0), bots: String(c.bots_enabled ?? 0) });
+    // N106-2 — "enabled" follows the selected policy: DEMO-only policies count EVERY account with trading on
+    // (inventory_projection demo_only branch); real-money policies count LIVE accounts only.
+    const demoOnly = !!policy?.demo_only;
+    const enabledNow = demoOnly ? c.enabled : c.live_enabled;
+    const fill = () => setExp({ accounts: String(c.configured ?? 0), enabled: String(enabledNow ?? 0), bots: String(c.bots_enabled ?? 0) });
 
     return (
         <section data-testid="inventory-golive-panel" className="rounded-xl border border-white/10 bg-[#0B0F14] p-5 space-y-5">
@@ -112,6 +116,7 @@ export const InventoryGoLivePanel = () => {
                     </div>
                     <div data-testid="expectation-live-counts" className="text-[11px] font-mono text-[#71717A]">
                         live now: <span className="text-white">{c.configured ?? "—"}</span> account rows in the database (all users, disabled + paper included) · <span className="text-white">{c.enabled ?? "—"}</span> with trading on ({c.live_enabled ?? "—"} LIVE) · <span className="text-white">{c.bots_enabled ?? "—"}</span> active bots — the signed policy must match these exactly
+                        <span className="block" data-testid="expectation-enabled-semantics">"use current" fills enabled = <span className="text-white">{enabledNow ?? "—"}</span> ({demoOnly ? "DEMO-only policy: every account with trading on" : "real-money policy: LIVE accounts with trading on — pick a DEMO-only policy above for the demo"})</span>
                     </div>
                     <Input data-testid="expectation-account-ids" placeholder="approved account ids, comma-separated (required in production)"
                         value={accountIds} onChange={(e) => setAccountIds(e.target.value)} className="font-mono text-xs" />
