@@ -464,3 +464,8 @@ verdict, ordering).
 WebRequest URL to add; the recovery is announced when the first heartbeat lands and the alert
 auto-resolves. Pairings silent for more than `PAIRING_ALERT_MAX_AGE_SEC` (default 7 days) are treated
 as abandoned, not incidents.
+
+**Acknowledging alerts.** An acknowledgement by a signed-in admin while the condition persists
+silences re-raises and the Telegram push of that alert for 6 h (`ACK_SUPPRESS_S`). Acks made with the
+machine `METRICS_TOKEN` (deploy scripts, scrapers) and system auto-resolves never suppress — a leaked
+scraper token cannot mute a critical condition.

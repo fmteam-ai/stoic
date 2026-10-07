@@ -3,6 +3,7 @@ N108-3 SIGNED EX5 button shows 'not published yet' when absent; N108-4 no signed
 N108-5 wording / defaults / ceil rounding / ack suppression / banner fail-closed."""
 import asyncio
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -20,7 +21,7 @@ def _read(rel):
 
 def test_n108_1_workflow_installs_the_signer_dependencies():
     wf = _read(".github/workflows/policy-migration.yml")
-    assert "pip install -q cryptography requests pymongo" in wf
+    assert "pip install -q cryptography==50.0.0 requests==2.34.2 pymongo==4.18.2" in wf
     assert "Signer imports in a clean environment (N108-1)" in wf and "sign_policy_migration.py --help" in wf
     assert wf.index("Signer imports in a clean environment") < wf.index("python scripts/sign_policy_migration.py \\")
     # the import chain the script needs really is just these
@@ -71,7 +72,7 @@ def test_n108_5_wording_defaults_rounding_ack_suppression_banner():
         async def find_one(self, flt, sort=None, projection=None):
             if flt.get("acked_at") is None:
                 return None
-            if "$not" in flt.get("acked_by", {}) and self.acked_by.startswith("system:"):
+            if "$not" in flt.get("acked_by", {}) and re.match(flt["acked_by"]["$not"]["$regex"], self.acked_by):
                 return None
             return {"acked_at": self.acked_at}
 
