@@ -50,6 +50,15 @@ def main() -> int:
     try:
         r = requests.get(f"{url}/healthz", timeout=10)
         rec["checks"]["healthz"] = {"ok": r.ok and r.json().get("status") == "ok"}
+        # which CODE GENERATION answers at THIS url (unauthenticated schema probe): pre-N100-11 signers list only
+        # key_id/data_hex and sign the raw bytes → every prefixed verification fails. Printed with the host so a
+        # RELEASE_SIGNER_URL secret pointing at an old self-hosted signer is visible in the CI log.
+        schema = requests.post(f"{url}/sign", json={}, timeout=10)
+        fields = sorted({e.get("loc", [None, None])[1] for e in (schema.json().get("detail") or []) if isinstance(e, dict)} - {None})
+        rec["checks"]["code_generation"] = {"ok": "purpose" in fields, "host": host, "schema_fields": fields,
+                                            "server_header": schema.headers.get("Server"),
+                                            "hint": None if "purpose" in fields else
+                                            "this host runs PRE-N100-11 signer code: point RELEASE_SIGNER_URL at the redeployed signer or redeploy this one"}
         r = requests.get(f"{url}/public-key", timeout=10)
         body = r.json()
         rec["checks"]["public_key"] = {"ok": r.ok and body.get("public_key_b64") == a.public_key

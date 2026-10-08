@@ -50,3 +50,10 @@ def test_audit14_agent_owner_checks_compare_well_known_sids_not_localized_names(
     lock = ps.split("function Test-StoicLockedDown")[1].split("function Initialize-StoicDataDir")[0]
     assert lock.count("Test-StoicTrustedIdentity") == 2 and "$script:TrustedOwners -notcontains" not in lock
     assert open(os.path.join(ROOT, "backend", "static", "STOIC-Agent.ps1"), "rb").read()[:3] == b"\xef\xbb\xbf"
+
+
+def test_signer_probe_reports_code_generation_of_the_configured_url():
+    probe = _read("scripts", "signer_probe.py")
+    assert 'rec["checks"]["code_generation"]' in probe and '"purpose" in fields' in probe and '"host": host' in probe
+    rs = _read("backend", "release_signing.py")
+    assert "carries no `purpose` field" in rs
