@@ -225,7 +225,9 @@ function Get-StoicTerminalLogin {
     param([Parameter(Mandatory = $true)][string]$DataFolder)
     $logDir = Join-Path $DataFolder "logs"
     if (-not (Test-Path $logDir)) { return "" }
-    $logs = @(Get-ChildItem $logDir -Filter "*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 7)
+    # N111-3/CI — newest JOURNAL DAY first by file NAME (YYYYMMDD.log), not by mtime: a rotated or re-touched
+    # older file must never outrank today's
+    $logs = @(Get-ChildItem $logDir -Filter "*.log" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 7)
     foreach ($log in $logs) {
         $text = ""
         try { $text = Get-Content $log.FullName -Encoding Unicode -Raw -ErrorAction Stop } catch { continue }
