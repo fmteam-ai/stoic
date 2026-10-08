@@ -12,6 +12,13 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.a
 
 import install_progress as ip  # noqa: E402
 
+
+@pytest.fixture(autouse=True)
+def _no_public_url_env(monkeypatch):
+    """webrequest_url() resolves through connect_service._base_url (N111-4): keep the preview's env out of the fixtures."""
+    for k in ("PUBLIC_BASE_URL", "PUBLIC_BACKEND_URL", "REACT_APP_BACKEND_URL", "CORS_ORIGINS"):
+        monkeypatch.delenv(k, raising=False)
+
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=timezone.utc)
 H = "a" * 64
 
@@ -109,12 +116,17 @@ def test_trusted_terminal_without_installer_is_not_an_outdated_installer():
 
 
 def test_webrequest_url_prefers_env_then_forwarded_origin_then_request_base(monkeypatch):
-    monkeypatch.delenv("PUBLIC_BACKEND_URL", raising=False)
+    for k in ("PUBLIC_BACKEND_URL", "PUBLIC_BASE_URL", "CORS_ORIGINS", "REACT_APP_BACKEND_URL"):
+        monkeypatch.delenv(k, raising=False)
     assert ip.webrequest_url("http://10.0.0.1:8001/", "https", "stoic.example") == "https://stoic.example"
     assert ip.webrequest_url("http://10.0.0.1:8001/", None, "stoic.example, proxy") == "https://stoic.example"
     assert ip.webrequest_url("http://10.0.0.1:8001/", None, None) == "http://10.0.0.1:8001"
     monkeypatch.setenv("PUBLIC_BACKEND_URL", "https://prod.example/")
     assert ip.webrequest_url("http://10.0.0.1:8001/", "https", "other") == "https://prod.example"
+    # N111-4 — same resolver as the one-liner / claim: PUBLIC_BASE_URL wins over PUBLIC_BACKEND_URL
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://www.example")
+    from connect_service import _base_url
+    assert ip.webrequest_url("http://10.0.0.1:8001/", "https", "other") == _base_url(None) == "https://www.example"
 
 
 def test_stale_heartbeat_warns_and_route_is_owner_or_admin_only():

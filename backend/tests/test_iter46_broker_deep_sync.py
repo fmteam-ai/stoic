@@ -57,8 +57,8 @@ class TestEaV139:
         v = current_ea_version()
         ea = _src("static/EmergentTradingBridge.mq5")
         assert f'#property version   "{v}"' in ea
-        assert f'LATEST_EA = "{v}"' in _src("routes/bot_routes.py")
-        assert f'LATEST_EA = "{v}"' in _src("routes/diagnostic_routes.py")
+        assert "LATEST_EA = latest_ea_version()" in _src("routes/bot_routes.py")
+        assert "LATEST_EA = latest_ea_version()" in _src("routes/diagnostic_routes.py")
 
     def test_ea_handles_sync_request(self):
         ea = _src("static/EmergentTradingBridge.mq5")

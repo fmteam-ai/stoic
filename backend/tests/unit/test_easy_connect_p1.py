@@ -34,8 +34,10 @@ def test_ea_1_61_server_url_autoload_and_self_check():
     init = mq5[mq5.index("int OnInit()"):]
     assert init.index("g_server_url = ResolveServerUrl();") < init.index("SendHeartbeat();")
     # version surfaces
-    assert '"ea_latest_version": "1.62"' in _read("backend", "routes", "setup_routes.py")
-    assert 'LATEST_EA = "1.62"' in _read("backend", "routes", "bot_routes.py")
+    import ea_capabilities as ec
+    assert ec.latest_ea_version() == "1.62"                                     # N111-6 — derived from the MQ5
+    assert '"ea_latest_version": latest_ea_version()' in _read("backend", "routes", "setup_routes.py")
+    assert 'LATEST_EA = latest_ea_version()' in _read("backend", "routes", "bot_routes.py")
     assert 'LATEST_EA_VERSION = "1.62"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
     import demo_readiness as dr
     assert "1.60" in dr.DEMO_ACCEPTED_EA                   # a 1.60 terminal stays accepted during the demo
@@ -76,7 +78,7 @@ def test_install_progress_turns_flags_into_the_exact_fix():
 
 def test_installer_v1_5_zero_touch_files_and_restart():
     ps = _read("backend", "static", "STOIC-Installer.ps1")
-    assert '$InstallerVersion = "1.6"' in ps
+    assert '$InstallerVersion = "1.7"' in ps
     assert "SecurityProtocolType]::Tls12" in ps
     assert "function Get-StoicRunningTerminal" in ps and "Get-Process terminal64" in ps
     assert "STOIC-Server.txt" in ps and "ServerUrl=$" not in ps and "stoic.set" in ps     # N110-2 — preset carries no ServerUrl

@@ -48,6 +48,7 @@ from pydantic import BaseModel, Field
 
 from auth import get_current_user
 from database import get_db
+from ea_capabilities import latest_ea_version
 from route_utils import parse_object_id
 from security import client_ip, rate_limit
 
@@ -72,6 +73,9 @@ class ClaimPairingRequest(BaseModel):
     token: str = Field(min_length=10, max_length=120)
     hostname: str | None = Field(default=None, max_length=200)
     installer_version: str | None = Field(default=None, max_length=40)
+    # N111-2 — the login the terminal's journal reports; compared with the account BEFORE the code is
+    # consumed / the bridge token rotated, so a wrong-terminal run costs nothing (409, same code reusable).
+    terminal_login: str | None = Field(default=None, max_length=32)
     # r26 P1-02 — the installer enrols its device PUBLIC key while redeeming the
     # operator-issued one-time pairing token; only that key can later attest the EX5.
     device_key: DeviceKey | None = None
@@ -175,6 +179,17 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
     account = await db.accounts.find_one({"_id": ObjectId(pairing["account_id"])})
     if not account:
         raise HTTPException(status_code=410, detail="Linked account no longer exists")
+
+    # N111-2 — wrong terminal? Say so BEFORE anything is consumed, rotated or re-leased.
+    reported = (payload.terminal_login or "").strip()
+    expected = str(account.get("account_number") or "").strip()
+    if reported and expected and reported != expected:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "account_mismatch",
+                    "message": f"This pairing code belongs to MT5 account #{expected}, but the terminal is logged in as "
+                               f"#{reported}. Nothing was changed — log the right account into MT5 and run the same line again."},
+        )
 
     # Consume — single-use, ATOMIC. The conditional update on consumed_at=None
     # closes the check-then-act TOCTOU window so two concurrent installers can
@@ -288,7 +303,7 @@ async def claim_pairing_token(payload: ClaimPairingRequest, request: Request):
         "server_url": backend_base,
         "heartbeat_url": f"{backend_base}/api/bridge/heartbeat",
         "ea_script_url": f"{backend_base}/api/ea-script",
-        "ea_latest_version": "1.62",
+        "ea_latest_version": latest_ea_version(),   # N111-6 — derived from the EA source, never hard-coded
         # r26 P1-02 — device key enrolled with THIS pairing (None when the installer sent none)
         "device_key_id": (device_key or {}).get("key_id"),
         "attestation_challenge_url": f"{backend_base}/api/infra/attestation/challenge",

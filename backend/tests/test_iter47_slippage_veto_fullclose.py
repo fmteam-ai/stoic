@@ -89,9 +89,9 @@ class TestEaV140:
         ea = _src("static/EmergentTradingBridge.mq5")
         assert f'#property version   "{v}"' in ea
         assert f'#define EA_CLIENT_VERSION "{v}"' in ea
-        assert f'LATEST_EA = "{v}"' in _src("routes/bot_routes.py")
-        assert f'LATEST_EA = "{v}"' in _src("routes/diagnostic_routes.py")
-        assert f'"ea_latest_version": "{v}"' in _src("routes/setup_routes.py")
+        assert "LATEST_EA = latest_ea_version()" in _src("routes/bot_routes.py")
+        assert "LATEST_EA = latest_ea_version()" in _src("routes/diagnostic_routes.py")
+        assert '"ea_latest_version": latest_ea_version()' in _src("routes/setup_routes.py")
         fe = open(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx")).read()
         assert f'LATEST_EA_VERSION = "{v}"' in fe
 

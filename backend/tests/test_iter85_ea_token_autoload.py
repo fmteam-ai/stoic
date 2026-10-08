@@ -160,7 +160,7 @@ def test_claim_pairing_advertises_v136():
     # Quick smoke: just check the constant in the route source.
     with open(_os.path.join(_BACKEND_DIR, "routes/setup_routes.py")) as f:
         src = f.read()
-    assert f'"ea_latest_version": "{EXPECTED_VERSION}"' in src
+    assert '"ea_latest_version": latest_ea_version()' in src
 
 
 import pytest as _pytest  # noqa: E402

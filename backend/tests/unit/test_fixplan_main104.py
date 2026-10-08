@@ -119,7 +119,11 @@ def test_n104_3_demo_readiness_shows_the_installation_id():
 def test_n104_4_installer_no_terminal_ini_write_origin_guard_portable_editor():
     ps = _read("backend/static/STOIC-Installer.ps1")
     body = ps[ps.index("function Install-Stoic"):]
-    assert 'config\\terminal.ini' not in ps and "Set-Content -Path $iniPath" not in ps and "$iniPath" not in body   # ineffective + overwritten by MT5
+    # ineffective + overwritten by MT5: terminal.ini is never WRITTEN (N111-6 reads [Charts] ProfileLast from it — read-only)
+    assert "Set-Content -Path $iniPath" not in ps and "$iniPath" not in body
+    for ln in ps.splitlines():
+        if "terminal.ini" in ln:
+            assert "Set-Content" not in ln and "Add-Content" not in ln and "Out-File" not in ln, ln
     assert "Allow WebRequest for listed URL" in body and "$heartbeatHost" in body  # manual step printed with the URL
     assert "function Get-StoicTerminalOrigin" in ps and 'Where-Object { "$_".Trim() }' in ps   # empty origin.txt tolerated
     assert "(Get-Content $origin | Select-Object -First 1).Trim()" not in ps

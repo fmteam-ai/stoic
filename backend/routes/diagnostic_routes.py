@@ -17,6 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from auth import get_current_user
 from database import get_db
+from ea_capabilities import latest_ea_version
 from trade_reconciler import reconcile_user
 
 import logging
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/diagnostic", tags=["diagnostic"])
 
-LATEST_EA = "1.62"
+LATEST_EA = latest_ea_version()   # N111-6 — derived from the EA source, never hard-coded
 from state_contract import HEARTBEAT_FRESH_S as HEARTBEAT_FRESH_SEC  # P0-2: single connection threshold
 
 # Retcode → human explanation

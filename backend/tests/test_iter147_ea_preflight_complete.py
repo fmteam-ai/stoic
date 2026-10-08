@@ -80,7 +80,7 @@ def test_min_fencing_version_unchanged():
     br = _src(os.path.join(BACKEND, "routes", "bot_routes.py"))
     assert 'FENCING_MIN_EA = "1.50"' in br
     from ea_version import current_ea_version
-    assert f'LATEST_EA = "{current_ea_version()}"' in br
+    assert 'LATEST_EA = latest_ea_version()' in br
 
 
 def test_execution_health_endpoint_exists():

@@ -98,15 +98,15 @@ class TestEaVersionConsistency:
 
     def test_bot_routes_latest_ea(self):
         text = Path(_os.path.join(_BACKEND_DIR, "routes/bot_routes.py")).read_text()
-        assert f'LATEST_EA = "{self.EXPECTED}"' in text
+        assert 'LATEST_EA = latest_ea_version()' in text
 
     def test_diagnostic_routes_latest_ea(self):
         text = Path(_os.path.join(_BACKEND_DIR, "routes/diagnostic_routes.py")).read_text()
-        assert f'LATEST_EA = "{self.EXPECTED}"' in text
+        assert 'LATEST_EA = latest_ea_version()' in text
 
     def test_setup_routes_ea_latest_version(self):
         text = Path(_os.path.join(_BACKEND_DIR, "routes/setup_routes.py")).read_text()
-        assert f'"ea_latest_version": "{self.EXPECTED}"' in text
+        assert '"ea_latest_version": latest_ea_version()' in text
 
     def test_frontend_accounts_latest(self):
         text = Path(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx")).read_text()

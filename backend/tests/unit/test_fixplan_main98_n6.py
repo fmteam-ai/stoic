@@ -56,9 +56,11 @@ def test_ea_1_60_reports_account_trade_mode_on_every_heartbeat():
     assert f'#property version   "{ver}"' in mq5
     assert "AccountInfoInteger(ACCOUNT_TRADE_MODE)" in mq5 and "ACCOUNT_TRADE_MODE_DEMO" in mq5
     assert '\\"trade_mode\\":\\"%s\\"' in mq5 and "TradeModeString()" in mq5
-    # version surfaces agree
+    # version surfaces agree (N111-6 — the backend derives it from the MQ5, the frontend still pins it)
+    import ea_capabilities as _ec
+    assert _ec.latest_ea_version() == ver
     for rel in ("backend/routes/diagnostic_routes.py", "backend/routes/bot_routes.py"):
-        assert f'LATEST_EA = "{ver}"' in _src(*rel.split("/"))
+        assert "latest_ea_version()" in _src(*rel.split("/")) and 'LATEST_EA = "1.' not in _src(*rel.split("/"))
     for rel in ("frontend/src/components/EaVersionStrip.jsx", "frontend/src/pages/Accounts.jsx"):
         assert f'LATEST_EA_VERSION = "{ver}"' in _src(*rel.split("/"))
     import ea_capabilities as ec

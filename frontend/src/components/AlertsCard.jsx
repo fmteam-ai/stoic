@@ -17,6 +17,7 @@ export const AlertsCard = () => {
     const [alerts, setAlerts] = useState(null);
     const [meta, setMeta] = useState({});
     const [mutes, setMutes] = useState({});
+    const [mutableKinds, setMutableKinds] = useState(null);
     const [hidden, setHidden] = useState(false);
     const [busy, setBusy] = useState(false);
 
@@ -25,6 +26,7 @@ export const AlertsCard = () => {
             const { data } = await api.get("/ops/alerts");
             setAlerts(data.alerts || []);
             setMutes(Object.fromEntries((data.mutes || []).map(m => [m.kind, m.muted_until])));
+            setMutableKinds(data.mutable_kinds || null);
             setMeta({ unacked: data.unacked, unacked_critical: data.unacked_critical, as_of: data.as_of });
         } catch {
             setHidden(true);
@@ -78,6 +80,8 @@ export const AlertsCard = () => {
                     {alerts.map(a => {
                         const snoozed = a.snoozed_until && new Date(a.snoozed_until) > new Date();
                         const kindMuted = !!mutes[a.kind];
+                        // N111-6 — only kinds the server accepts for a mute get the button (else a 400)
+                        const canMute = !mutableKinds || mutableKinds.includes(a.kind);
                         return (
                             <div key={a.id} className={`border ${SEV_STYLE[a.severity] || SEV_STYLE.warning} px-3 py-2 flex items-center justify-between gap-3`}
                                 data-testid={`ops-alert-${a.kind}`}>
@@ -100,13 +104,13 @@ export const AlertsCard = () => {
                                             className="flex items-center gap-1 font-mono text-[10px] tracking-widest border border-[#1F1F1F] text-[#A1A1AA] px-2 py-1 hover:bg-white/5 disabled:opacity-50">
                                             <Bell className="w-3 h-3" /> UNMUTE
                                         </button>
-                                    ) : (
+                                    ) : canMute ? (
                                         <button onClick={() => mute(a.kind)} disabled={busy} data-testid={`ops-alert-mute-${a.kind}`}
                                             title="Mute Telegram / e-mail pushes for this alert kind for 24 h. The row stays open."
                                             className="flex items-center gap-1 font-mono text-[10px] tracking-widest border border-[#1F1F1F] text-[#A1A1AA] px-2 py-1 hover:bg-white/5 disabled:opacity-50">
                                             <BellOff className="w-3 h-3" /> MUTE 24H
                                         </button>
-                                    )}
+                                    ) : null}
                                     <button onClick={() => ack(a.id)} disabled={busy}
                                         data-testid={`ops-alert-ack-${a.kind}`}
                                         title="Acknowledge. If the condition persists the row re-opens within a minute; only its notifications pause for 6 h."

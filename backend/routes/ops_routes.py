@@ -939,13 +939,21 @@ async def list_alerts(request: Request, include_acked: bool = False,
     sf = alert_scope_filter(scope)
     q = {**sf} if include_acked else {"acked_at": None, **sf}
     now = datetime.now(timezone.utc)
-    mutes = {m["kind"]: m async for m in db.ops_alert_mutes.find({"muted_until": {"$gt": now}})}
+    from alerting import EVALUATOR_KINDS, _parse_ts
+    # N111-1 — Motor is not tz_aware: BSON datetimes come back NAIVE; normalise before any comparison
+    mutes = {}
+    async for m in db.ops_alert_mutes.find({"muted_until": {"$gt": now}}):
+        mu = _parse_ts(m.get("muted_until"))
+        if mu and mu > now:
+            mutes[m["kind"]] = {**m, "muted_until": mu}
     out = []
     async for a in db.ops_alerts.find(q).sort("created_at", -1).limit(
             max(1, min(limit, 500))):
         a["id"] = str(a.pop("_id"))
         # N109-2 — "snoozed until": notifications muted (per-kind mute or ack window); the row itself is never hidden
-        until = a.get("notify_muted_until")
+        until = _parse_ts(a.get("notify_muted_until")) if a.get("notify_muted_until") is not None else None
+        if until is not None:
+            a["notify_muted_until"] = until.isoformat()
         m = mutes.get(a.get("kind"))
         if m and (until is None or m["muted_until"] > until):
             until = m["muted_until"]
@@ -953,6 +961,7 @@ async def list_alerts(request: Request, include_acked: bool = False,
         out.append(a)
     return {"alerts": out, "scope": (scope or "real").lower(),
             "as_of": now.isoformat(),
+            "mutable_kinds": sorted(EVALUATOR_KINDS),   # N111-6 — the UI offers MUTE only for kinds the server accepts
             "mutes": [{"kind": k, "muted_until": m["muted_until"].isoformat(), "muted_by": m.get("muted_by")} for k, m in mutes.items()],
             "unacked": await db.ops_alerts.count_documents(
                 {"acked_at": None, **sf}),
@@ -1004,8 +1013,12 @@ async def mute_alert_kind(request: Request):
         return JSONResponse(status_code=400, content={"detail": f"hours must be within (0, {MUTE_MAX_H}]"})
     now = datetime.now(timezone.utc)
     until = now + timedelta(hours=hours)
-    await get_db().ops_alert_mutes.update_one(
+    db = get_db()
+    await db.ops_alert_mutes.update_one(
         {"kind": kind}, {"$set": {"kind": kind, "muted_until": until, "muted_by": actor, "muted_at": now}}, upsert=True)
+    # N111-6 — like brake pause/resume, a notification mute is an operator decision → audit trail
+    from step_up import audit_event
+    await audit_event(db, actor, "ops_alert_mute", {"kind": kind, "hours": hours, "muted_until": until.isoformat()}, request=request)
     return {"ok": True, "kind": kind, "muted_until": until.isoformat(), "muted_by": actor}
 
 
@@ -1014,7 +1027,10 @@ async def unmute_alert_kind(kind: str, request: Request):
     allowed, actor = await _ops_actor(request)
     if not allowed or actor == "metrics-token":
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
-    res = await get_db().ops_alert_mutes.delete_one({"kind": kind})
+    db = get_db()
+    res = await db.ops_alert_mutes.delete_one({"kind": kind})
+    from step_up import audit_event
+    await audit_event(db, actor, "ops_alert_unmute", {"kind": kind, "removed": res.deleted_count}, request=request)
     return {"ok": True, "removed": res.deleted_count}
 
 
