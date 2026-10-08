@@ -79,7 +79,7 @@ def test_connect_existing_returns_hash_pinned_agent_command(admin_session):
     code = data.get("enrollment_code")
     sha = data.get("vps_agent_sha256") or ""
     cmd = data.get("vps_agent_command") or ""
-    assert code and re.match(r"^[A-Z]{3}-\d{3}$", code), f"bad enrollment code: {code!r}"
+    assert code and re.match(r"^[A-Z]{4}-\d{4}$", code), f"bad enrollment code: {code!r}"
     assert re.fullmatch(r"[0-9a-f]{64}", sha), f"sha256 should be 64 hex: {sha!r}"
     assert "/api/setup/agent.ps1" in cmd
     assert "Install-StoicAgent -ServerUrl" in cmd

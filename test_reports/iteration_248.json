@@ -1,0 +1,37 @@
+{
+  "summary": "iter248 — main112 review + A17 audit fix list (VPS Agent hardening N112-1..10 / A17-1..9, A17-13). Verified the new unit lane file /app/backend/tests/unit/test_fixplan_main112_a17.py (5 tests) PLUS the companion /app/backend/tests/unit/test_vps_agent_service.py (9 tests) — 14/14 PASS. The suite covers: Pydantic boundary validation of AccountCreate (digits-only account_number, charset-restricted server/broker/label); vps_terminal_routes uses _oid_or_404 + pattern r\"^[A-Za-z0-9._-]{1,24}$\" for agent_id; queue_install_terminal (a) rejects when a live foreign terminal already runs on the account (PermissionError with offending agent_id), (b) supports replace=True to supersede, (c) pins installer_sha256 (64-hex) into the signed command params, (d) rejects non 4–12-digit account_number, (e) refuses foreign user; terminals_status honours the 180s start-grace, sets restart_wanted after it, and is tenant-scoped (foreign user_id sees no heartbeat); report_terminal validates integer restarts_last_hour, valid ObjectId account_id, belongs-to-user, and 4–12-digit login; alerting.EVALUATOR_KINDS exposes 'vps_agent_offline' (threshold 300s) with raise_alert on only accounts that have an mt5_instances row; agent_commands poll is one-at-a-time (.limit(1)); routes have per-user rate_limit calls for both vps_install_terminal and vps_restart_terminal and canned static_error codes 422 terminal_report_invalid / 409 terminal_exists; vps_pathb embeds -ExpectedSha256 \"<sha>\" in the one-liner. STOIC-Agent.ps1 contract: [string]$ExpectedSha256 param, hash-mismatch throw, atomic Move-Item to pinned persistent copy, Assert-StoicLogin + Assert-StoicUnderTerminals, installer_sha256 pulled from signed params (no X-STOIC-SHA256 header), ini-value gate blocks server-drift (Server=$($stored.server)), DPAPI first-start.ini removed in finally{}, token sweep + robocopy /XF STOIC-*.txt, 180s start grace with persisted restart ledger (Save/Read-StoicRestartLedger) and local log freshness check, netplwiz/AutoAdminLogon guidance, fail-closed on signature mismatch with 'refusing ALL commands (re-enrol)', replay-protection and constant-time Test-StoicFixedTimeEqual, no Stop-Process. Front-end wording: InstallProgressPanel.jsx contains 'unmanaged', VpsAgentInstall.jsx surfaces 'terminal_exists', AddAccountWizard.jsx drops 'REAL MT5 TERMINAL' in favour of 'MT5 TERMINAL'. Docs/VPS_AGENT.md covers auto-logon + ExpectedSha256 + irm|iex.\n\nLIVE HTTP (/app/test_reports/iter247_vps_live_test.py, now updated for the new 4+4 enrollment-code format): 5/5 PASS against https://stoic-trading-bot.preview.emergentagent.com — connect-existing returns a hash-pinned install one-liner with code matching r'^[A-Z]{4}-\\d{4}$' and vps_agent_sha256 == body-sha256 of GET /api/setup/agent.ps1; restart-terminal 401/404/409/200 paths all green; queued cmd_* is retrievable by the agent poll with login == admin account_number.\n\nFRONTEND SMOKE: login via /login lands the admin on the Infrastructure page which renders 'ADD TRADING VPS · STEP 1/5 · PATH' with option B 'Connect Existing VPS — Install the STOIC Agent on your VPS with one command' as expected; deployment job cards show the iter247 agents waiting for enrolment. No console JS errors beyond the known ingress-level 429s on polling endpoints (see below).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/unit/test_fixplan_main112_a17.py",
+    "/app/backend/tests/unit/test_vps_agent_service.py",
+    "/app/test_reports/iter247_vps_live_test.py",
+    "/app/test_reports/pytest/iter248_main112_a17.xml",
+    "/app/test_reports/pytest/iter248_vps_live.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Enrollment-code entropy widened from AAA-123 (~17.5M) to AAAA-1234 (~4.6B) — correct audit#12-P3 fix in vps_pathb._enrollment_code; previous testing-agent iter247 live test regex was stale (fixed in this iter — see updated_files).",
+    "N112-3 is honoured end-to-end: queue_install_terminal signs installer_sha256 into params and STOIC-Agent.ps1 reads it from the signed command (`$params.installer_sha256`) rather than the previously-vulnerable X-STOIC-SHA256 response header. Grep confirms no X-STOIC-SHA256 inside Invoke-StoicInstallTerminal. Good.",
+    "N112-5 ini value gate correctly refuses to re-use a stored password when Server=... differs from the signed command, preventing a silent server swap. The DPAPI first-start.ini is scrubbed in finally{} and ACLs tighten with icacls /inheritance:r — matches threat model.",
+    "A17-6 refusal on a live foreign terminal (`already has a live installation`) is a GOOD defensive default; the replace=True escape hatch is only reachable via explicit UI gesture — no silent clobber possible.",
+    "Rate-limit calls appear exactly twice in vps_terminal_routes (one for install, one for restart) with distinct keys — unit test asserts rate_limit.count == 2; aligned.",
+    "N112-10 'refusing ALL commands (re-enrol)' + replay-ignore + constant-time compare are present in the agent, and there is NO Stop-Process anywhere — graceful CloseMainWindow only. Good.",
+    "Non-blocking: the frontend reports a burst of 429s on authenticated polling endpoints shortly after login (visible as console errors on /infrastructure). Backend logs do not show 429 responses on /api/* so the throttling is happening at the ingress/edge layer. Consider lowering client polling cadence or coalescing /api/infra/* status polls — purely a UX nit, functionality unaffected."
+  ],
+  "updated_files": [
+    "/app/test_reports/iter247_vps_live_test.py",
+    "/app/test_reports/iteration_248.json"
+  ],
+  "success_rate": {"backend": "100% (14/14 unit + 5/5 live HTTP)", "frontend": "100% (login + Infrastructure wizard rendered — core data-testids previously verified in iter247; agent-enrol testids require completing wizard step B, out of scope for this review)"},
+  "test_credentials": "admin@trading.bot via backend/.env TEST_ADMIN_PASSWORD; /app/memory/test_credentials.md fallback. No credentials embedded in any test file.",
+  "seed_data_creation": "iter247_vps_live_test.py fixture seeds vps_agents + mt5_instances rows for an 'agt_iter247_' agent and removes them in teardown. No lingering docs after this run (verified by test harness).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "To re-run: `cd /app/backend && DB_NAME=ai_trading_bot_test python -m pytest tests/unit/test_fixplan_main112_a17.py tests/unit/test_vps_agent_service.py -v` for unit lane, and `cd /app && DB_NAME=ai_trading_bot STOIC_TESTS_ALLOW_DB_NAME=1 python -m pytest test_reports/iter247_vps_live_test.py -v` for live HTTP. The enrollment-code format is now r'^[A-Z]{4}-\\d{4}$' (audit#12 P3). The ingress-side 429s on /infrastructure polling are the only new signal — not a product bug and not emitted by the backend; investigate ingress CRS limits if it starts blocking real user flows.",
+  "rca of the issue": "n/a — main112 review + A17 audit fix list fully covered by the new unit lane; the single live-HTTP failure found was a stale regex in a prior testing-agent live suite (iter247) that still expected the old AAA-123 enrollment code. Updated the regex to [A-Z]{4}-\\d{4} to match the current product. Root cause: enrollment-code entropy widening in audit#12 P3 was not reflected in the previously-written live regression."
+}
