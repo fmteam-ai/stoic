@@ -262,6 +262,23 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - name: Windows PowerShell 5.1 parse gate (N113-2 — the scheduled task runs powershell.exe, not pwsh)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          Write-Host "Windows PowerShell $($PSVersionTable.PSVersion)"
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw "expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)" }
+          foreach ($f in @("backend\static\STOIC-Agent.ps1", "backend\static\STOIC-Installer.ps1")) {
+            $bytes = [IO.File]::ReadAllBytes($f)
+            if (-not ($bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF)) { throw "$f has no UTF-8 BOM (5.1 would read it as ANSI)" }
+            $tokens = $null; $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f).Path, [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors) { $errors | ForEach-Object { Write-Host "$f($($_.Extent.StartLineNumber)): $($_.Message)" }; throw "$f does not parse under Windows PowerShell 5.1" }
+            Write-Host "OK  $f parses (BOM present)"
+          }
+          # the exact invocation the scheduled task uses, minus -Run: must load (parse + param binding) and exit 0
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File backend\static\STOIC-Agent.ps1 -ConfigPath "$env:RUNNER_TEMP\no-such-agent.json"
+          if ($LASTEXITCODE -ne 0) { throw "STOIC-Agent.ps1 failed to load in Windows PowerShell 5.1 (exit $LASTEXITCODE)" }
       - name: Installer behavioural tests (N104-1 — URL building, terminal choice before the token)
         shell: pwsh
         run: ./scripts/test_installer.ps1

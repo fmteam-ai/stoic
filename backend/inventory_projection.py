@@ -292,6 +292,13 @@ def policy_expiry(exp: dict, now: datetime | None = None) -> dict:
             "reminder_due": 0 < left <= POLICY_EXPIRY_REMINDER_DAYS}
 
 
+
+
+async def demo_only_policy_active(db) -> bool:
+    """A17-13 — True while the approved inventory expectation is a signed DEMO-only policy that has not expired."""
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"}, projection={"demo_only": 1, "policy_expires_at": 1})
+    return bool(exp and exp.get("demo_only") and not policy_expiry(exp)["expired"])
+
 def migration_problems(payload: dict, *, current_policy_version: str, now: datetime | None = None) -> list:
     """Every reason a supplied policy migration is NOT acceptable (empty ⇒ valid)."""
     mig = payload.get("policy_migration") or {}

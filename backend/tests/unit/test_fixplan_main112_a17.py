@@ -90,7 +90,7 @@ def test_a17_8_agent_offline_alert_kind_and_a17_9_poll_one_at_a_time():
 def test_agent_script_hardening_contract():
     ps = _read("backend", "static", "STOIC-Agent.ps1")
     # N112-1 pinned persistent copy
-    assert "[string]$ExpectedSha256" in ps and "agent script hash mismatch" in ps and "Move-Item $tmp $target -Force" in ps
+    assert "[string]$ExpectedSha256" in ps and "agent script hash mismatch" in ps and "Move-Item -LiteralPath $tmp -Destination $target -Force" in ps
     # N112-2 derived + contained paths, validated login
     assert "function Assert-StoicLogin" in ps and "function Assert-StoicUnderTerminals" in ps
     assert "$dir = Get-StoicTerminalDir $login          # N112-2" in ps and "$t.directory" not in ps.split("function Invoke-StoicWatchdog")[1].split("function Test-StoicFixedTimeEqual")[0]
@@ -100,7 +100,7 @@ def test_agent_script_hardening_contract():
     # N112-4 stored server only + ini value gate
     assert "function Assert-StoicIniValue" in ps and "differs from the server stored with the password" in ps and "Server=$($stored.server)" in ps
     # N112-5 finally + sweep + ACL
-    assert "finally {\n        Remove-Item $firstIni" in ps and "function Remove-StoicPasswordLeftovers" in ps and "icacls $script:Root /inheritance:r" in ps
+    assert "finally {\n        Remove-Item $firstIni" in ps and "function Remove-StoicPasswordLeftovers" in ps and "Invoke-StoicLockdown $script:Root" in ps and "icacls $Path /inheritance:r" in ps
     # N112-6 token sweep + robocopy exclude + fresh-token check
     assert '"STOIC-*.txt"' in ps and 'STOIC-*.txt") -Force' in ps and "$tokenFile.LastWriteTime -lt $installStart" in ps
     # N112-7 grace, local liveness, persisted ledger

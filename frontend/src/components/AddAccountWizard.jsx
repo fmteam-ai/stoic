@@ -27,20 +27,23 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState("");
     const [created, setCreated] = useState(null);
-    const [f, setF] = useState({ mode: "live", broker: "", server: "", account_number: "", label: "", account_type: "microcent", base_currency: "USD", vps: pairedHosts[0] ? pairedHosts[0] : "new" });
+    const [f, setF] = useState({ mode: "live", environment: "demo", consent: false, broker: "", server: "", account_number: "", label: "", account_type: "microcent", base_currency: "USD", vps: pairedHosts[0] ? pairedHosts[0] : "new" });
+    const [demoPolicy, setDemoPolicy] = useState(false);
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
     const vpsOffer = useVpsOffer();
     useEffect(() => {
         if (!open) return;
         setStep(0); setCreated(null); setErr("");
-        api.get("/accounts/broker-presets").then(r => setPresets(r.data.presets || [])).catch(() => setPresets([]));
+        api.get("/accounts/broker-presets").then(r => { setPresets(r.data.presets || []); setDemoPolicy(!!r.data.demo_only_policy); }).catch(() => setPresets([]));
     }, [open]);
     const preset = useMemo(() => presets.find(p => p.broker === f.broker), [presets, f.broker]);
     const servers = preset?.servers || [];
     const brokerName = f.broker === "__other" ? (f.broker_other || "") : f.broker;
+    const realBlocked = f.mode === "live" && f.environment === "real" && demoPolicy;
     const canNext = step === 0
-        ? (f.mode === "paper" ? !!f.account_number : !!(brokerName && f.server && f.account_number))
+        ? (f.mode === "paper" ? !!f.account_number : !!(brokerName && f.server && f.account_number) && !realBlocked)
         : true;
+    const canCreate = f.mode === "paper" || f.consent;   // A17-13 — explicit Algo-Trading consent for MT5 terminals
 
     const create = async () => {
         setBusy(true); setErr("");
@@ -48,7 +51,8 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
             const label = f.label || (f.mode === "paper" ? `Paper ${f.account_number}` : `${brokerName} …${String(f.account_number).slice(-3)}`);
             const payload = { label, broker: f.mode === "paper" ? "" : brokerName, server: f.mode === "paper" ? "" : f.server,
                 account_number: f.account_number, account_type: f.account_type, account_role: "STANDARD", base_currency: f.base_currency,
-                mode: f.mode, initial_balance: 10000, pamm_provider: null, pamm_program_id: null, pamm_broker_program_id: null };
+                mode: f.mode, initial_balance: 10000, pamm_provider: null, pamm_program_id: null, pamm_broker_program_id: null,
+                declared_environment: f.mode === "paper" ? null : f.environment, algo_trading_consent: f.mode !== "paper" && f.consent };
             const { data } = await api.post("/accounts", payload);
             setCreated(data); onCreated?.(data);
         } catch (e) { setErr(formatApiError(e)); }
@@ -96,6 +100,20 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                 </button>
                             ))}
                         </div>
+                        {f.mode === "live" && (
+                            <Field id="wz-env" label="DEMO OR REAL MONEY?">
+                                <div className="flex gap-2" data-testid="wizard-environment">
+                                    {[["demo", "DEMO ACCOUNT"], ["real", "REAL MONEY"]].map(([id, lbl]) => (
+                                        <button key={id} type="button" onClick={() => set("environment", id)} data-testid={`wizard-env-${id}`}
+                                            className={`flex-1 py-1.5 text-xs font-mono tracking-widest border ${f.environment === id ? (id === "real" ? "border-[#FF3B30] bg-[#FF3B30]/10 text-[#FF3B30]" : "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]") : "border-[#1F1F1F] text-[#A1A1AA]"}`}>
+                                            {lbl}
+                                        </button>
+                                    ))}
+                                </div>
+                                {realBlocked && <p className="text-[11px] text-[#FF3B30] mt-1" data-testid="wizard-real-blocked">A signed DEMO-only policy is in force — real-money accounts cannot be added until the admin replaces it.</p>}
+                                {!realBlocked && f.environment === "real" && <p className="text-[11px] text-[#FFD700] mt-1">Real money: the EA must attest the account as live; trading stays OFF until you enable it per bot.</p>}
+                            </Field>
+                        )}
                         {f.mode === "live" && (
                             <div className="grid sm:grid-cols-2 gap-3">
                                 <Field id="wz-broker" label="BROKER">
@@ -161,8 +179,14 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                     </div>
                 ) : (
                     <div className="space-y-2 text-sm" data-testid="wizard-step-review">
-                        {[["Mode", f.mode === "paper" ? "Paper sandbox" : "MT5 terminal (demo or real — trading stays OFF until you enable it)"], ...(f.mode === "live" ? [["Broker", brokerName], ["Server", f.server], ["Account type", ACCOUNT_TYPES.find(t => t.id === f.account_type)?.label || f.account_type], ["VPS", f.vps === "new" ? "new Windows VPS" : `${f.vps} (you'll run the install line there)`]] : []), ["Login", f.account_number], ["Label", f.label || "(auto)"]]
+                        {[["Mode", f.mode === "paper" ? "Paper sandbox" : `MT5 terminal · ${f.environment === "real" ? "REAL MONEY" : "DEMO"} (trading stays OFF until you enable it)`], ...(f.mode === "live" ? [["Broker", brokerName], ["Server", f.server], ["Account type", ACCOUNT_TYPES.find(t => t.id === f.account_type)?.label || f.account_type], ["VPS", f.vps === "new" ? "new Windows VPS" : `${f.vps} (you'll run the install line there)`]] : []), ["Login", f.account_number], ["Label", f.label || "(auto)"]]
                             .map(([k, v]) => <div key={k} className="flex justify-between border-b border-[#1F1F1F] py-1.5"><span className="text-[#52525B] font-mono text-xs">{k.toUpperCase()}</span><span className="font-mono text-xs text-white">{v}</span></div>)}
+                        {f.mode !== "paper" && (
+                            <label className="flex items-start gap-2 border border-[#FFD700]/40 bg-[#FFD700]/5 px-3 py-2 cursor-pointer" data-testid="wizard-consent">
+                                <input type="checkbox" checked={f.consent} onChange={e => set("consent", e.target.checked)} className="mt-0.5 accent-[#00FF41]" data-testid="wizard-consent-checkbox" />
+                                <span className="text-[11px] text-[#E4E4E7]">I understand that the installer turns <strong>Algo Trading</strong> on in this MT5 terminal and that, once I enable a bot, STOIC will open and close positions on account <span className="font-mono">{f.account_number}</span>{f.environment === "real" ? " with real money" : ""}. Trading stays OFF until I enable it.</span>
+                            </label>
+                        )}
                         <p className="text-[11px] text-[#52525B] pt-1">Next: the account is created and you get a 60-minute code with the PowerShell line to run on the VPS.</p>
                     </div>
                 )}
@@ -175,7 +199,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                             {step > 0 && <button type="button" onClick={() => setStep(step - 1)} data-testid="wizard-back-btn" className="px-3 py-2 text-xs font-mono tracking-widest border border-[#1F1F1F] text-[#A1A1AA] flex items-center gap-1"><ChevronLeft className="w-3 h-3" /> BACK</button>}
                             {step < 2
                                 ? <button type="button" disabled={!canNext} onClick={() => setStep(step + 1)} data-testid="wizard-next-btn" className="px-3 py-2 text-xs font-mono tracking-widest bg-[#00FF41] text-black disabled:opacity-40 flex items-center gap-1">NEXT <ChevronRight className="w-3 h-3" /></button>
-                                : <button type="button" disabled={busy} onClick={create} data-testid="wizard-create-btn" className="px-3 py-2 text-xs font-mono tracking-widest bg-[#00FF41] text-black disabled:opacity-40 flex items-center gap-1">{busy ? <Loader2 className="w-3 h-3 animate-spin" /> : null} CREATE & CONNECT</button>}
+                                : <button type="button" disabled={busy || !canCreate} onClick={create} data-testid="wizard-create-btn" className="px-3 py-2 text-xs font-mono tracking-widest bg-[#00FF41] text-black disabled:opacity-40 flex items-center gap-1">{busy ? <Loader2 className="w-3 h-3 animate-spin" /> : null} CREATE & CONNECT</button>}
                         </div>
                     </div>
                 )}
