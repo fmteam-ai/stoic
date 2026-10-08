@@ -1,0 +1,34 @@
+{
+  "summary": "iter249 — STOIC main113 Review: N113-1 (paper account creation under the AccountCreate paper branch) and A17-13 (DEMO/REAL selector + algo_trading_consent gating + real_refused_demo_policy + broker-presets.demo_only_policy) + /api/infra/agent/commands/ack 401-not-500 + /api/setup/agent.ps1 UTF-8 BOM/ASCII/X-STOIC-SHA256 all verified end-to-end on the preview backend (REACT_APP_BACKEND_URL). N113-2..7 are PowerShell-agent / Windows-only and were NOT tested here (as flagged in the request). BACKEND live suite /app/test_reports/iter249_main113_live_test.py: 10 PASSED, 1 SKIPPED (the demo-only-policy flip test is skipped per instructions because platform_state{_id:'inventory_expectation'} does not exist in the preview DB — must not be upserted). FRONTEND Playwright smoke on /accounts (admin TOTP was NOT prompted on this run): wizard opens, live-mode shows wizard-env-demo/real, filling broker/server/login advances through VPS to REVIEW; wizard-create-btn is DISABLED until wizard-consent-checkbox is ticked, then ENABLED (confirmed via is_disabled/is_enabled). Live account was NOT actually created (per instructions). Paper flow: wizard-mode-paper removes the env toggle AND the consent checkbox from the review step, wizard-create-btn is immediately enabled, 'SANDBOX-UI' created, wizard-done shows the exact copy 'paper account, no terminal needed.' — paper account cleaned up via DELETE /api/accounts/{id} afterwards (verified 200). No orphan test data left behind.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iter249_main113_live_test.py",
+    "/app/test_reports/pytest/iter249_main113.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "N113-1 is correctly scoped: AccountCreate._a17_1_safe_identity splits into the paper branch (free-form sandbox id, server optional, charset still refuses line breaks / NUL / '[' / ']' / '=') and the live branch (login must be 4–12 digits, server must match [A-Za-z0-9 ._-]{1,64}). Verified by the 6 paper/live permutations in the live suite.",
+    "A17-13 server side: create_account refuses declared_environment='real' with HTTP 403 detail.code='real_refused_demo_policy' only when demo_only_policy_active(db) returns True AND the request is not paper — matches wizard logic (wizard-real-blocked banner suppresses the NEXT button, and realBlocked is also recomputed from broker-presets.demo_only_policy on wizard open).",
+    "A17-13 UI gating: canCreate = (mode==='paper') || consent — paper never surfaces the consent checkbox (confirmed via query count==0) and live correctly disables the CREATE & CONNECT button until the gold-bordered consent box is ticked. Both branches cover the recorded algo_trading_consent_at field on the created doc.",
+    "GET /api/accounts/broker-presets exposes 'demo_only_policy' as a plain boolean next to the presets list — the wizard reads it as `demoPolicy` and immediately paints wizard-real-blocked; good.",
+    "/api/infra/agent/commands/ack unknown token path: _mtls_gate raises ValueError('agent not found' or similar), caught by `static_error(401 if 'agent' in str(e) else 404, 'command_ack_refused', e)` — never 500. Live-tested with a bogus token + last_seq=5 + detail='seq_replay: ...' → 401 as expected.",
+    "/api/setup/agent.ps1 served from /app/backend/static/STOIC-Agent.ps1 (37 675 bytes, first 3 bytes EF BB BF, zero bytes ≥0x80 after the BOM) with X-STOIC-SHA256 computed via `hashlib.sha256(path.read_bytes()).hexdigest()` — equal to sha256(response body) because FileResponse streams the raw bytes verbatim. Verified live.",
+    "Non-blocking: the X-STOIC-SHA256 header computation re-reads the file (`path.read_bytes()`) on every GET — fine for a 37 KB file but should be cached once at import time if this endpoint ever becomes hot."
+  ],
+  "updated_files": [
+    "/app/test_reports/iter249_main113_live_test.py",
+    "/app/test_reports/iteration_249.json"
+  ],
+  "success_rate": {"backend": "100% (10/10 ran, 1 skipped by design)", "frontend": "100% (wizard live+paper flows + consent gating + success copy)"},
+  "test_credentials": "admin@trading.bot via TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD in backend/.env (fallback /app/memory/test_credentials.md). Not embedded in any committed file.",
+  "seed_data_creation": "Live suite created and deleted paper accounts (SANDBOX-QA, 1001) and a live/demo-declared account (52019876) within each test. Playwright smoke created and deleted a paper account 'SANDBOX-UI'. No seed data persists after this iteration (grep of /accounts returns 0 SANDBOX-UI docs post-cleanup).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Re-run with: `cd /app && DB_NAME=ai_trading_bot STOIC_TESTS_ALLOW_DB_NAME=1 python -m pytest test_reports/iter249_main113_live_test.py -v`. The demo_only_policy test is designed to SKIP when platform_state{_id:'inventory_expectation'} is absent in the preview DB — the instructions explicitly said do NOT upsert that doc. To exercise that branch, run against a DB where the migration/policy flow has already materialised the expectation doc (CI DB_NAME=stoic_ci or a seeded local). N113-2..N113-7 cover STOIC-Agent.ps1 behaviours (atomic install / token sweep / replay-protect / fail-closed) that can only be executed on a real Windows VPS — covered by unit-lane assertions and the Phase-2 agent test file from iter248 (/app/backend/tests/unit/test_vps_agent_service.py).",
+  "rca of the issue": "n/a — all main113 review items that are testable in this environment are green; no bugs detected."
+}
