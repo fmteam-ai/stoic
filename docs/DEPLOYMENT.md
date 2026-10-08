@@ -240,8 +240,10 @@ command; `--yes` suppresses prompts (dockerd restart, release-key confirmation).
 `install.sh`/`update.sh`/`restart.sh --env-changed` fetch `GET /public-key` from the public signer
 (`RELEASE_SIGNER_PUBLIC_URL`, default `https://stoic-signer.fly.dev`) when `RELEASE_PUBLIC_KEY_B64`
 is empty, require `key_id == RELEASE_SIGNER_KEY_ID` (`stoic-release-ed25519-v1`), print key +
-fingerprint, ask for confirmation (or `--yes`) and write the pin. The local runtime sidecar key is
-never pinned (N102-5). Until the pin exists, readiness reports *release key not pinned* with the
+fingerprint, ask for confirmation (or `--yes`) and write the pin. The fetched key must match the
+fingerprint committed in `release/release_key.fingerprint` (M114-3 — the repo, not the network, is
+trusted); an existing pin that differs from the committed fingerprint or from the live signer is
+warned about, never rewritten. The local runtime sidecar key is never pinned (N102-5). Until the pin exists, readiness reports *release key not pinned* with the
 fix command instead of a misleading "signature does NOT verify" — release purposes (`ea-release`,
 `model-manifest`) never fall back to the runtime/bundle key.
 
@@ -403,7 +405,12 @@ reboot
 docker ps -aq | xargs -r docker rm -f
 docker compose up -d           # then re-run deploy/update.sh <ref>
 ```
-Volumes and data are never touched by any of this.
+Volumes and data are never touched by any of this. On the jam exit the preflight also stops
+`worker-trading` and records **TRADING PAUSED** (`platform_state.deploy_jam`, shown on the Release
+Readiness card) so no new exposure runs while protection/reconciliation may be down; a clean
+`deploy/update.sh <ref>` or `deploy/restart.sh --env-changed` lifts it (M114-2). A real disk or
+partition mounted at `/var/lib/docker` is never unmounted by `docker-root-slave.sh` — it is bound
+over itself and demoted in place (M114-1); check with `findmnt -no SOURCE,TARGET,PROPAGATION /var/lib/docker`.
 
 **Host suitability** — the installer, `update.sh` and `doctor.sh` detect a shared web host
 (cPanel/WHM, Plesk, DirectAdmin, running httpd/exim/dovecot) and record `STOIC_HOST_PROFILE` in

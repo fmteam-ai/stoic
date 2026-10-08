@@ -41,8 +41,11 @@ preflight_host() {
     return 1
   fi
   [ "$(id -u)" = 0 ] || { echo "!! host prerequisites missing and not running as root — run: sudo bash deploy/host-prereqs.sh --yes"; return 1; }
-  echo "-- preflight: applying host prerequisites (deploy/host-prereqs.sh --yes) — this is logged below"
-  bash deploy/host-prereqs.sh --yes || { echo "!! host prerequisites could not be applied — see FAIL lines above"; return 1; }
+  # M114-4 — the dockerd restart (~20 s, every container) happens without a prompt ONLY under --yes;
+  # otherwise host-prereqs.sh asks on a terminal, or refuses with the exact command
+  local yes=(); [ "${PREFLIGHT_YES}" = 1 ] && yes=(--yes)
+  echo "-- preflight: applying host prerequisites (deploy/host-prereqs.sh ${yes[*]:-}) — this is logged below"
+  bash deploy/host-prereqs.sh "${yes[@]}" || { echo "!! host prerequisites could not be applied — see FAIL lines above (non-interactive: deploy/update.sh --yes)"; return 1; }
   repair_journal host_prereqs "applied by preflight: ${report//$'\n'/; }" 2>/dev/null || true
   return 0
 }
@@ -84,6 +87,7 @@ reboot_recipe() {
   echo '   reboot'
   echo '   docker ps -aq | xargs -r docker rm -f'
   echo '   docker compose up -d'
+  echo "   then a clean deploy/update.sh <ref> (or deploy/restart.sh --env-changed) lifts TRADING PAUSED"
   echo "   (volumes and data are untouched; deploy/doctor.sh → 'docker mount propagation' shows which host processes hold the mounts)"
 }
 
@@ -101,20 +105,67 @@ compose_up_guarded() {   # compose_up_guarded [extra compose-up args…]
   fi
   echo "!! recreate hit overlay EBUSY — cleaning leftovers once more and retrying compose up ONCE"
   clean_leftovers || true
+  log=$(mktemp)
   # shellcheck disable=SC2086
-  if docker compose up ${flags} "$@"; then return 0; fi
+  if docker compose up ${flags} "$@" 2>&1 | tee "${log}"; test "${PIPESTATUS[0]}" = 0; then rm -f "${log}"; return 0; fi
+  out=$(cat "${log}"); rm -f "${log}"
+  # M114-6 — only a SECOND overlay EBUSY is a jam; anything else (bad image, boot failure) is an
+  # ordinary failure and takes the caller's normal rollback path
+  if ! printf '%s' "${out}" | grep -qiE "${EBUSY_RE}"; then
+    app_boot_failure "$(date -u -d '-10 minutes' +%s 2>/dev/null || echo 0)" || true
+    echo "ERROR: docker compose up failed on the retry for a reason other than overlay EBUSY (see the log above)"
+    return 1
+  fi
   reboot_recipe
   return 2
 }
 
+# M114-2 — a jammed recreate must never leave worker-trading running without protection/reconciliation:
+# stop it, record TRADING PAUSED (platform_state.deploy_jam → readiness), journal it.
+pause_trading_after_jam() {   # pause_trading_after_jam <ref>
+  echo "-- jam: stopping worker-trading so no new exposure runs without the protection/reconciliation workers"
+  docker compose stop -t 30 worker-trading 2>&1 | sed 's/^/   /' || true
+  repair_journal trading_paused "overlay EBUSY jam during $1 — worker-trading stopped" 2>/dev/null || true
+  if docker compose exec -T backend python ops/deploy_jam.py set --reason "deploy ${1} jammed on overlay EBUSY — worker-trading stopped pending reboot" >/dev/null 2>&1; then
+    echo "   readiness now shows TRADING PAUSED (platform_state.deploy_jam) until a clean deploy/update.sh or deploy/restart.sh --env-changed"
+  else
+    echo "!! could not record the TRADING PAUSED marker (backend not reachable) — readiness will show the missing worker-trading lease instead"
+  fi
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD 2>/dev/null || echo '?') trading-paused jam=$1" >> deploy/releases.log
+}
+clear_deploy_jam_marker() {   # after a CLEAN recreate
+  docker compose exec -T backend python ops/deploy_jam.py clear 2>/dev/null | grep -q '"cleared": 1' \
+    && { echo "   deploy-jam marker cleared (TRADING PAUSED lifted — worker-trading is managed by compose again)"; repair_journal trading_resumed "clean recreate" 2>/dev/null || true; }
+  return 0
+}
+
 # ---------------------------------------------------------------- CI release public key pin
+key_fingerprint() {   # key_fingerprint <b64>  → SHA256:<64 hex>  (fails on anything but a 32-byte key)
+  printf '%s' "$1" | python3 -c 'import base64,hashlib,sys; k=base64.b64decode(sys.stdin.read().strip()); assert len(k)==32; print("SHA256:"+hashlib.sha256(k).hexdigest())' 2>/dev/null
+}
+RELEASE_KEY_FINGERPRINT_FILE="${RELEASE_KEY_FINGERPRINT_FILE:-release/release_key.fingerprint}"
+expected_release_fingerprint() {   # expected_release_fingerprint <key_id> → committed SHA256:… for that key id (empty = none committed)
+  awk -v k="$1" '$1 == k {print $2}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
+}
+
 ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFLIGHT_YES)
-  local cur url kid want sidecar body key fp
+  local cur url kid want sidecar body key fp exp
   cur=$( { grep -E '^RELEASE_PUBLIC_KEY_B64=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   want=$( { grep -E '^RELEASE_SIGNER_KEY_ID=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'"); want="${want:-stoic-release-ed25519-v1}"
-  [ -n "${cur}" ] && { echo "   release key: RELEASE_PUBLIC_KEY_B64 pinned (${want})"; return 0; }
   url=$( { grep -E '^RELEASE_SIGNER_PUBLIC_URL=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   url="${RELEASE_SIGNER_PUBLIC_URL:-${url:-https://stoic-signer.fly.dev}}"
+  exp=$(expected_release_fingerprint "${want}")
+  if [ -n "${cur}" ]; then
+    # M114-3 — an existing pin is checked against the committed fingerprint and the live signer; drift WARNS (never silently rewritten)
+    fp=$(key_fingerprint "${cur}" || echo "invalid")
+    if [ -n "${exp}" ] && [ "${fp}" != "${exp}" ]; then echo "!! release key: pinned RELEASE_PUBLIC_KEY_B64 (${fp}) differs from the committed CI key fingerprint ${exp} (${RELEASE_KEY_FINGERPRINT_FILE}) — stale or wrong pin; re-pin: remove the line from backend/.env and re-run with --yes"
+    else echo "   release key: RELEASE_PUBLIC_KEY_B64 pinned (${want}, ${fp})$( [ -n "${exp}" ] && echo ' — matches the committed fingerprint')"; fi
+    if body=$(curl -fsS --max-time 8 "${url%/}/public-key" 2>/dev/null); then
+      key=$(printf '%s' "${body}" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("public_key_b64") or "").strip())' 2>/dev/null || true)
+      [ -n "${key}" ] && [ "${key}" != "${cur}" ] && echo "!! release key: the signer at ${url} serves a DIFFERENT key ($(key_fingerprint "${key}" || echo invalid)) than the pinned one — verify before the next release (docs/RELEASE_SIGNER.md)"
+    fi
+    return 0
+  fi
   echo "-- release key: RELEASE_PUBLIC_KEY_B64 is empty — fetching the CI signer's public key from ${url}/public-key"
   if ! body=$(curl -fsS --max-time 8 "${url%/}/public-key" 2>/dev/null); then
     echo "!! release key: ${url} unreachable — CI-signed EA records / model manifests cannot be verified on this host until RELEASE_PUBLIC_KEY_B64 is pinned (docs/RELEASE_SIGNER.md)"; return 0
@@ -122,8 +173,12 @@ ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFL
   kid=$(printf '%s' "${body}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("key_id",""))' 2>/dev/null || true)
   key=$(printf '%s' "${body}" | python3 -c 'import json,sys; print((json.load(sys.stdin).get("public_key_b64") or "").strip())' 2>/dev/null || true)
   [ "${kid}" = "${want}" ] || { echo "!! release key: signer at ${url} reports key_id '${kid}' but RELEASE_SIGNER_KEY_ID is '${want}' — not pinning"; return 0; }
-  fp=$(printf '%s' "${key}" | python3 -c 'import base64,hashlib,sys; k=base64.b64decode(sys.stdin.read().strip()); assert len(k)==32; print("SHA256:"+hashlib.sha256(k).hexdigest()[:32])' 2>/dev/null) \
-    || { echo "!! release key: public_key_b64 from ${url} is not a 32-byte Ed25519 key — not pinning"; return 0; }
+  fp=$(key_fingerprint "${key}") || { echo "!! release key: public_key_b64 from ${url} is not a 32-byte Ed25519 key — not pinning"; return 0; }
+  # M114-3 — first fetch trusts the REPO, not the network: the fetched key must match the committed fingerprint
+  if [ -n "${exp}" ] && [ "${fp}" != "${exp}" ]; then
+    echo "!! release key: ${url} returned ${fp} but the committed CI key fingerprint is ${exp} (${RELEASE_KEY_FINGERPRINT_FILE}) — NOT pinning (possible MITM or key rotation without a repo update)"; return 0
+  fi
+  [ -z "${exp}" ] && echo "!! release key: no committed fingerprint for ${want} in ${RELEASE_KEY_FINGERPRINT_FILE} — trusting the signer on first use"
   sidecar=$(cat secrets/signer_public_key 2>/dev/null || true)
   [ -n "${sidecar}" ] && [ "${key}" = "${sidecar}" ] && { echo "!! release key: ${url} returned the LOCAL runtime sidecar key — refusing to pin it as the CI release key (N102-5)"; return 0; }
   echo "   key_id      ${kid}"
@@ -135,7 +190,7 @@ ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFL
   fi
   set_kv backend/.env RELEASE_PUBLIC_KEY_B64 "${key}"
   grep -q '^RELEASE_SIGNER_PUBLIC_URL=.' backend/.env 2>/dev/null || set_kv backend/.env RELEASE_SIGNER_PUBLIC_URL "${url}"
-  echo "   pinned RELEASE_PUBLIC_KEY_B64 (${kid}, ${fp}) in backend/.env"
+  echo "   pinned RELEASE_PUBLIC_KEY_B64 (${kid}, ${fp}$( [ -n "${exp}" ] && echo ', matches the committed fingerprint')) in backend/.env"
   repair_journal release_key_pinned "${kid} ${fp} from ${url}" 2>/dev/null || true
 }
 
@@ -151,13 +206,24 @@ shared_web_host_markers() {   # prints the markers found (empty = dedicated host
   printf '%s' "${m# }"
 }
 
-record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedicated (+ markers)
-  local markers profile
+record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedicated + markers + detected_at + HMAC (M114-7)
+  local markers profile at key sig
   markers=$(shared_web_host_markers)
   profile=dedicated; [ -n "${markers}" ] && profile=shared-web-host
   [ -f backend/.env ] || return 0
+  at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   set_kv backend/.env STOIC_HOST_PROFILE "${profile}"
   set_kv backend/.env STOIC_HOST_MARKERS "\"${markers}\""
+  set_kv backend/.env STOIC_HOST_DETECTED_AT "${at}"
+  # signed with the dedicated evidence key (secrets/ledger_anchor_key → LEDGER_ANCHOR_KEY in the backend): a
+  # hand-edited `dedicated` without the matching signature is reported UNVERIFIED (blocks in production)
+  key=$(cat secrets/ledger_anchor_key 2>/dev/null || { grep -E '^LEDGER_ANCHOR_KEY=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+  if [ -n "${key}" ]; then
+    sig=$(KEY="${key}" P="${profile}" M="${markers}" T="${at}" python3 -c 'import hmac,hashlib,os; print(hmac.new(os.environ["KEY"].encode(), f"{os.environ[\"P\"]}|{os.environ[\"M\"]}|{os.environ[\"T\"]}".encode(), hashlib.sha256).hexdigest())')
+    set_kv backend/.env STOIC_HOST_PROFILE_SIG "${sig}"
+  else
+    echo "!! host: no ledger anchor key available — host profile recorded UNSIGNED (readiness reports it unverified)"
+  fi
   if [ -n "${markers}" ]; then
     echo "!! host: STOIC shares this host with a public web/mail stack (${markers}) — fine for demo-only; migrate to a dedicated host before live trading (docs/HOST_MIGRATION.md)"
   else

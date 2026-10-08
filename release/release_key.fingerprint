@@ -1,0 +1,3 @@
+# CI release signer public-key fingerprints (M114-3) — <key_id> SHA256:<hex of the raw 32-byte Ed25519 key>
+# deploy/preflight.sh refuses to pin a fetched key whose fingerprint differs; update this file only with a signed key rotation.
+stoic-release-ed25519-v1 SHA256:4c214d393287aac3983178b671e76a35a29d6f0b5e6c815729cc84afaa404d3d

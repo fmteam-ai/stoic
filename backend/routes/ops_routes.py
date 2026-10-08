@@ -261,25 +261,38 @@ async def release_readiness(request: Request):
             "MQL5 externally unverified — mandatory before Demo Production "
             "Proof: compile the exact RC MQ5 in Windows MetaEditor (0 errors), "
             "then scripts/verify_ea_release.py --sign")}
-    # host suitability — the installer/update preflight records STOIC_HOST_PROFILE (deploy/preflight.sh):
-    # a shared web/mail host (cPanel/WHM, Plesk, DirectAdmin, httpd/exim/dovecot) blocks LIVE trading,
-    # warns in demo-only mode, and is silent on a dedicated host
+    # host suitability (M114-7) — the installer/update preflight records a SIGNED host profile
+    # (deploy/preflight.sh record_host_profile → host_profile.py verifies it at read time): a shared
+    # web/mail host (cPanel/WHM, Plesk, DirectAdmin, httpd/exim/dovecot) blocks LIVE trading, warns in
+    # demo-only, is silent on a dedicated host; an unverified/missing profile fails closed in production
     try:
         from inventory_projection import demo_only_policy_active
-        _profile = (_os.environ.get("STOIC_HOST_PROFILE") or "").strip().lower()
-        _shared = _profile == "shared-web-host"
+        from host_profile import host_profile
+        _hp = host_profile()
         _demo_only = await demo_only_policy_active(db)
-        _blocking = _shared and is_production() and not _demo_only
+        _live = is_production() and not _demo_only
+        _blocking = _live and (_hp["shared_web_host"] or not _hp["verified"])
         checks["host_suitability"] = {
-            "ok": not _blocking, "profile": _profile or "unknown", "shared_web_host": _shared,
-            "markers": (_os.environ.get("STOIC_HOST_MARKERS") or "").strip('"') or None,
-            "demo_only": _demo_only, "enforced": is_production() and not _demo_only,
-            "severity": "block" if _blocking else ("warn" if _shared else "ok"),
-            "detail": None if not _shared else
-            "STOIC shares a host with a public web/mail stack — migrate to a dedicated host (docs/HOST_MIGRATION.md) before live trading"}
+            **_hp, "ok": not _blocking, "demo_only": _demo_only, "enforced": _live,
+            "severity": "block" if _blocking else ("warn" if (_hp["shared_web_host"] or not _hp["verified"]) else "ok"),
+            "detail": ("STOIC shares a host with a public web/mail stack — migrate to a dedicated host (docs/HOST_MIGRATION.md) before live trading"
+                       if _hp["shared_web_host"] else
+                       ("host profile not recorded/verified — run deploy/update.sh (or deploy/restart.sh --env-changed) so the preflight records a signed profile"
+                        if not _hp["verified"] else None))}
     except Exception as e:  # noqa: BLE001
-        checks["host_suitability"] = {"ok": True, "profile": "unknown", "detail": f"host profile unavailable: {e}"}
-
+        checks["host_suitability"] = {"ok": not is_production(), "profile": "unknown", "verified": False,
+                                      "detail": f"host profile unavailable: {e}"}
+    # M114-2 — deploy jam: update.sh stopped worker-trading after an overlay EBUSY jam → TRADING PAUSED
+    try:
+        _jam = await db.platform_state.find_one({"_id": "deploy_jam"})
+        checks["deploy_jam"] = {"ok": not (_jam and _jam.get("trading_paused")),
+                                "trading_paused": bool(_jam and _jam.get("trading_paused")),
+                                "since": (_jam or {}).get("at"), "reason": (_jam or {}).get("reason"),
+                                "detail": None if not _jam else
+                                "TRADING PAUSED — worker-trading was stopped by deploy/update.sh after an overlay EBUSY jam; "
+                                "finish the reboot recipe, then a clean deploy/update.sh <ref> (or deploy/restart.sh --env-changed) clears this"}
+    except Exception as e:  # noqa: BLE001
+        checks["deploy_jam"] = {"ok": True, "detail": f"deploy jam state unavailable: {e}"}
     # audit P1-5 — runtime release truth: the signed CI attestation that
     # deploy/lib.sh verified for THIS checkout (release/attestation.current.json)
     # is exposed here and compared with the running build SHA / image digest.
