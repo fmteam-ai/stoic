@@ -10,6 +10,7 @@ the first CI job when:
   • a signed EX5 record exists but was made for a DIFFERENT MQ5 (release/ea_release.json)
 Exit 0 = consistent.
 """
+from __future__ import annotations   # operator hosts may run Python < 3.10 (str | None in signatures)
 import hashlib
 import json
 import os

@@ -18,6 +18,7 @@ The gate REFUSES when: the compile log reports errors, the MQ5 on disk does
 not hash-match the recorded RC source, the EX5 hash is missing, or the
 Ed25519 signature does not verify against the published release key.
 """
+from __future__ import annotations   # operator hosts may run Python < 3.10 (str | None in signatures)
 import argparse
 import hashlib
 import json
