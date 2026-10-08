@@ -99,10 +99,27 @@ class SymbolOut(BaseModel):
 
 # ---------- MT5 Accounts ----------
 class AccountCreate(BaseModel):
-    label: str
-    broker: str
-    server: str
-    account_number: str
+    label: str = Field(max_length=120)
+    broker: str = Field(max_length=120)
+    server: str = Field(max_length=64)
+    account_number: str = Field(max_length=12)
+
+    # A17-1 — these values end up in file names (account-<login>), ini lines (Server=) and shell output
+    # on the VPS: constrain them at the boundary, 422 on anything else.
+    @model_validator(mode="after")
+    def _a17_1_safe_identity(self):
+        import re as _re
+        self.account_number = (self.account_number or "").strip()
+        self.server = (self.server or "").strip()
+        if not _re.fullmatch(r"[0-9]{4,12}", self.account_number):
+            raise ValueError("account_number must be the 4–12 digit MT5 login")
+        if not _re.fullmatch(r"[A-Za-z0-9 ._-]{1,64}", self.server):
+            raise ValueError("server may only contain letters, digits, space, '.', '_' and '-' (max 64)")
+        for name in ("broker", "label"):
+            v = getattr(self, name) or ""
+            if any(ch in v for ch in "\r\n\x00[]="):
+                raise ValueError(f"{name} must not contain line breaks, NUL, '[', ']' or '='")
+        return self
     # What kind of MT5 account is it? (technical/trading type)
     account_type: Literal["microcent", "cent", "standard", "demo"] = "microcent"
     # What role does the account play inside PAMM? Separate question —

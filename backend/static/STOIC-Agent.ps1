@@ -27,7 +27,7 @@ param(
     [string]$ConfigPath = "$env:ProgramData\Stoic\vps-agent.json"
 )
 
-$script:AgentVersion = "1.0"
+$script:AgentVersion = "1.1"
 $script:TaskName = "StoicVpsAgent"
 $script:Root = "C:\STOIC"
 $script:GoldenDir = "C:\STOIC\golden\MT5"
@@ -36,7 +36,10 @@ $script:LoginsDir = "$env:ProgramData\Stoic\logins"
 $script:LogFile = "$env:ProgramData\Stoic\vps-agent.log"
 $script:StaleS = 180
 $script:MaxRestartsPerHour = 3
-$script:Restarts = @{}          # login → [datetime[]] restart stamps (last hour)
+$script:Restarts = @{}          # login → [datetime[]] restart stamps (last hour) — mirrored to disk (A17-7)
+$script:StartedAt = @{}         # login → last start time (A17-7 post-start grace)
+$script:RestartLedger = "$env:ProgramData\Stoic\restarts.json"
+$script:StartGraceS = 180
 
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
@@ -77,7 +80,9 @@ function Install-StoicAgent {
         [Parameter(Mandatory = $true)][string]$ServerUrl,
         [string]$EnrollmentCode = "",
         [string]$BootstrapToken = "",
-        [string]$GoldenPath = "C:\STOIC\golden\MT5"
+        [string]$GoldenPath = "C:\STOIC\golden\MT5",
+        # N112-1 — the enrol one-liner passes the SHA-256 it already verified; the persistent copy is checked against it
+        [string]$ExpectedSha256 = ""
     )
     $ServerUrl = $ServerUrl.TrimEnd('/')
     if ($ServerUrl -cnotmatch '^https://') { throw "-ServerUrl must start with https://" }
@@ -102,12 +107,29 @@ function Install-StoicAgent {
     }
     Save-StoicAgentConfig $cfg
     New-Item -ItemType Directory -Force -Path $script:TerminalsDir, $script:LoginsDir | Out-Null
+    # A17-4 — C:\STOIC: Administrators, SYSTEM and the agent user only (inheritance off); other local users
+    # must not read a first-start ini or swap a terminal64.exe the elevated agent launches
+    try {
+        & icacls $script:Root /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "$($env:USERDOMAIN)\$($env:USERNAME):(OI)(CI)F" | Out-Null
+        if ($LASTEXITCODE -ne 0) { Write-Host "  ! icacls on $script:Root returned $LASTEXITCODE — set the ACL by hand (docs/VPS_AGENT.md)" -ForegroundColor Yellow }
+    } catch { Write-Host "  ! could not set the ACL on $script:Root ($($_.Exception.Message))" -ForegroundColor Yellow }
 
-    # scheduled task at THIS user's logon (interactive session: terminals stay visible over RDP; auto-logon recommended)
+    # scheduled task at THIS user's logon (interactive session: terminals stay visible over RDP)
+    # N112-1 — the file the task runs is either this very script or a copy verified against -ExpectedSha256
     $self = $PSCommandPath
     if (-not $self) {
-        $self = Join-Path $env:ProgramData "Stoic\STOIC-Agent.ps1"
-        Invoke-WebRequest -Uri "$ServerUrl/api/setup/agent.ps1" -OutFile $self -UseBasicParsing
+        if (-not $ExpectedSha256) { throw "when run via iex, pass -ExpectedSha256 <sha of agent.ps1> (the dashboard one-liner does) so the persistent copy can be verified" }
+        $target = Join-Path $env:ProgramData "Stoic\STOIC-Agent.ps1"
+        $tmp = "$target.tmp"
+        $dl = Invoke-WebRequest -Uri "$ServerUrl/api/setup/agent.ps1" -UseBasicParsing
+        [IO.File]::WriteAllBytes($tmp, $dl.RawContentStream.ToArray())
+        $got = (Get-FileHash $tmp -Algorithm SHA256).Hash.ToLower()
+        if ($got -ne $ExpectedSha256.ToLower()) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue; throw "agent script hash mismatch ($got ≠ $ExpectedSha256) — not installing" }
+        Move-Item $tmp $target -Force
+        $self = $target
+    } elseif ($ExpectedSha256) {
+        $got = (Get-FileHash $self -Algorithm SHA256).Hash.ToLower()
+        if ($got -ne $ExpectedSha256.ToLower()) { throw "agent script hash mismatch ($got ≠ $ExpectedSha256) — not installing" }
     }
     $action  = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$self`" -Run"
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
@@ -117,6 +139,14 @@ function Install-StoicAgent {
     Start-ScheduledTask -TaskName $script:TaskName
     Write-Host "  ✓ STOIC VPS Agent $($reg.agent_id) enrolled; task '$script:TaskName' running (log: $script:LogFile)" -ForegroundColor Green
     Write-Host "  Next: Set-StoicTerminalLogin -Login <mt5 login> -Server <broker server>  for each account, then 'Install on my VPS' in the dashboard." -ForegroundColor White
+    # A17-8 — the task runs at LOGON: without auto-logon a reboot leaves no agent and no terminals
+    $autoLogon = (Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon" -ErrorAction SilentlyContinue).AutoAdminLogon
+    if ("$autoLogon" -ne "1") {
+        Write-Host ""
+        Write-Host "  ⚠ REQUIRED: Windows auto-logon is OFF. After a reboot nothing would start until someone logs in via RDP." -ForegroundColor Yellow
+        Write-Host "    Enable it:  netplwiz  → untick 'Users must enter a user name and password' → OK → enter THIS user's password." -ForegroundColor Yellow
+        Write-Host "    (or: Sysinternals Autologon.exe $env:USERNAME $env:USERDOMAIN <password>). The dashboard raises 'vps_agent_offline' when the agent is silent 5 min." -ForegroundColor Yellow
+    }
 }
 
 # ── MT5 passwords: typed once here, DPAPI, never transmitted ───────────────────────────────────────────────
@@ -137,7 +167,47 @@ function Get-StoicStoredLogin([string]$Login) {
 }
 
 # ── terminals ──────────────────────────────────────────────────────────────────────────────────────────────
-function Get-StoicTerminalDir([string]$Login) { Join-Path $script:TerminalsDir "account-$Login" }
+function Assert-StoicLogin([string]$Login) {
+    # A17-1 / N112-2 — the login becomes a folder name: digits only, always
+    if ($Login -cnotmatch '^\d{4,12}$') { throw "refusing login '$Login' (must be 4–12 digits)" }
+    return $Login
+}
+function Get-StoicTerminalDir([string]$Login) {
+    # N112-2 — ALWAYS derived from the validated login; any server-sent directory is ignored
+    $dir = [IO.Path]::GetFullPath((Join-Path $script:TerminalsDir "account-$(Assert-StoicLogin $Login)"))
+    Assert-StoicUnderTerminals $dir
+    return $dir
+}
+function Assert-StoicUnderTerminals([string]$Path) {
+    $full = [IO.Path]::GetFullPath($Path)
+    $root = [IO.Path]::GetFullPath($script:TerminalsDir).TrimEnd('\') + '\'
+    if ($full -like '\\*' -or $full -match '[*?]' -or ($full.Substring(2) -match ':')) { throw "refusing path '$Path' (UNC / wildcard / alternate stream)" }
+    if (-not $full.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)) { throw "refusing path '$Path' (outside $root)" }
+    return $full
+}
+function Assert-StoicIniValue([string]$Name, [string]$Value) {
+    # A17-1 / N112-4 — one gate for every ini value: no line breaks, NUL, section/key syntax
+    if ($Value -match '[\r\n\x00\[\]=]') { throw "refusing ini value for $Name (contains a line break, NUL, '[', ']' or '=')" }
+    return $Value
+}
+function Read-StoicRestartLedger {
+    if (-not (Test-Path $script:RestartLedger)) { return }
+    try {
+        $d = Get-Content $script:RestartLedger -Raw | ConvertFrom-Json
+        foreach ($p in $d.PSObject.Properties) { $script:Restarts[$p.Name] = @($p.Value | ForEach-Object { [datetime]$_ }) }
+    } catch { Write-StoicLog "restart ledger unreadable — starting fresh" "WARN" }
+}
+function Save-StoicRestartLedger {
+    $out = @{}; $hour = (Get-Date).AddHours(-1)
+    foreach ($k in $script:Restarts.Keys) { $out[$k] = @($script:Restarts[$k] | Where-Object { $_ -gt $hour } | ForEach-Object { $_.ToString("o") }) }
+    try { $out | ConvertTo-Json -Depth 3 | Set-Content -Path $script:RestartLedger -Encoding UTF8 } catch { }
+}
+function Remove-StoicPasswordLeftovers {
+    # A17-4 — a crash/reboot inside the 90 s window must never leave Password= on disk
+    foreach ($f in @(Get-ChildItem $script:TerminalsDir -Recurse -Filter "stoic-first-start.ini" -ErrorAction SilentlyContinue)) {
+        Remove-Item $f.FullName -Force -ErrorAction SilentlyContinue; Write-StoicLog "removed leftover $($f.FullName)" "WARN"
+    }
+}
 function Get-StoicTerminalProcess([string]$Dir) {
     $d = $Dir.TrimEnd('\')
     @(Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object { try { (Split-Path $_.Path -Parent).TrimEnd('\') -ieq $d } catch { $false } })
@@ -158,8 +228,12 @@ function Send-StoicTerminalReport($cfg, [hashtable]$Report) {
 }
 
 function Invoke-StoicInstallTerminal($cfg, $params) {
-    $login = "$($params.login)"; $dir = Get-StoicTerminalDir $login
+    $login = Assert-StoicLogin "$($params.login)"; $dir = Get-StoicTerminalDir $login
     $base = @{ account_id = "$($params.account_id)"; login = $login; directory = $dir }
+    if (-not $params.installer_sha256 -or "$($params.installer_sha256)" -notmatch '^[0-9a-fA-F]{64}$') {
+        Send-StoicTerminalReport $cfg ($base + @{ status = "failed"; detail = "command carries no installer_sha256 — refusing to run an unpinned installer (update the server)" })
+        return $false
+    }
     if (-not (Test-Path (Join-Path $cfg.golden_path "terminal64.exe"))) {
         Send-StoicTerminalReport $cfg ($base + @{ status = "failed"; detail = "golden portable MT5 missing at $($cfg.golden_path) — prepare it on the VPS (see agent script header)" })
         return $false
@@ -168,46 +242,66 @@ function Invoke-StoicInstallTerminal($cfg, $params) {
     if (-not (Stop-StoicTerminal $dir)) { Send-StoicTerminalReport $cfg ($base + @{ status = "failed"; detail = "an existing terminal in $dir would not close" }); return $false }
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     # clone: everything but logs/, the golden account's saved logins and its open charts (fresh profile → our startup ini decides)
-    & robocopy $cfg.golden_path $dir /E /NFL /NDL /NJH /NJS /XD "$($cfg.golden_path)\logs" "$($cfg.golden_path)\MQL5\Logs" /XF "accounts.dat" | Out-Null
+    & robocopy $cfg.golden_path $dir /E /NFL /NDL /NJH /NJS /XD "$($cfg.golden_path)\logs" "$($cfg.golden_path)\MQL5\Logs" /XF "accounts.dat" "STOIC-*.txt" | Out-Null
     if ($LASTEXITCODE -ge 8) { Send-StoicTerminalReport $cfg ($base + @{ status = "failed"; detail = "robocopy exit $LASTEXITCODE while cloning" }); return $false }
     Remove-Item (Join-Path $dir "config\accounts.dat") -Force -ErrorAction SilentlyContinue
+    # A17-5 — an old token (re-install, or a golden folder that was ever paired) must never count as success
+    Remove-Item (Join-Path $dir "MQL5\Files\STOIC-*.txt") -Force -ErrorAction SilentlyContinue
+    $installStart = Get-Date
 
     # the public installer does the EA / token / server file / startup ini — exactly as a manual install would
     try {
         $src = Invoke-WebRequest -Uri "$($cfg.server_url)/api/setup/installer.ps1" -UseBasicParsing
-        $expected = "$($src.Headers['X-STOIC-SHA256'])".ToLower()
+        # A17-3 — the pin comes from the SIGNED command parameters, not from the same response
+        $expected = "$($params.installer_sha256)".ToLower()
         $sha = (Get-FileHash -InputStream $src.RawContentStream -Algorithm SHA256).Hash.ToLower()
-        if ($expected -and $sha -ne $expected) { throw "installer hash mismatch ($sha ≠ $expected)" }
+        if ($sha -ne $expected) { throw "installer hash mismatch ($sha ≠ signed $expected)" }
+        if ("$($params.server_url)" -cnotmatch '^https://') { throw "server_url must be https" }
+        $symbol = "$($params.chart_symbol)"; if ($symbol -cnotmatch '^[A-Za-z0-9._-]{1,24}$') { throw "chart_symbol rejected" }
         Invoke-Expression $src.Content
-        Install-Stoic -Token "$($params.pairing_token)" -ServerUrl "$($params.server_url)" -TerminalPath $dir -NoRestart -ChartSymbol "$($params.chart_symbol)" -TerminalLogin $login
+        Install-Stoic -Token "$($params.pairing_token)" -ServerUrl "$($params.server_url)" -TerminalPath $dir -NoRestart -ChartSymbol $symbol -TerminalLogin $login
     } catch {
         Send-StoicTerminalReport $cfg ($base + @{ status = "failed"; detail = "installer: $($_.Exception.Message)" }); return $false
     }
-    if (-not (Test-Path (Join-Path $dir "MQL5\Files\STOIC-Token.txt"))) {
-        Send-StoicTerminalReport $cfg ($base + @{ status = "failed"; detail = "installer did not write the bridge token (see its output in $script:LogFile)" }); return $false
+    $tokenFile = Get-Item (Join-Path $dir "MQL5\Files\STOIC-Token.txt") -ErrorAction SilentlyContinue
+    if (-not $tokenFile -or $tokenFile.LastWriteTime -lt $installStart) {
+        Send-StoicTerminalReport $cfg ($base + @{ status = "failed"; detail = "installer did not write a NEW bridge token (claim failed? see $script:LogFile)" }); return $false
     }
 
-    # first start: [Login] from the DPAPI store if the operator typed it; the ini with the password is removed afterwards
+    # first start: [Login] from the DPAPI store if the operator typed it; the ini with the password is removed in finally
     $ini = Join-Path $dir "stoic-start.ini"
-    $stored = Get-StoicStoredLogin $login
-    $firstIni = $ini
-    if ($stored) {
-        $firstIni = Join-Path $dir "stoic-first-start.ini"
-        $server = $(if ($params.server) { "$($params.server)" } else { $stored.server })
-        (Get-Content $ini -Raw) + "`r`n[Login]`r`nLogin=$login`r`nPassword=$($stored.password)`r`nServer=$server`r`n" | Set-Content -Path $firstIni -Encoding ASCII
+    $firstIni = Join-Path $dir "stoic-first-start.ini"
+    $stored = $null
+    try {
+        $stored = Get-StoicStoredLogin $login
+        if ($stored) {
+            # N112-4 — ONLY the server stored with the password; a differing signed parameter is a hard stop
+            if ($params.server -and ("$($params.server)" -ne "$($stored.server)")) { throw "command server '$($params.server)' differs from the server stored with the password ('$($stored.server)') — refusing" }
+            $null = Assert-StoicIniValue "Login" $login; $null = Assert-StoicIniValue "Server" $stored.server; $null = Assert-StoicIniValue "Password" $stored.password
+            (Get-Content $ini -Raw) + "`r`n[Login]`r`nLogin=$login`r`nPassword=$($stored.password)`r`nServer=$($stored.server)`r`n" | Set-Content -Path $firstIni -Encoding ASCII
+            Start-StoicTerminal $dir $firstIni
+            Start-Sleep -Seconds 90
+        } else {
+            Start-StoicTerminal $dir $ini
+        }
+    } catch {
+        Send-StoicTerminalReport $cfg ($base + @{ status = "failed"; detail = "first start: $($_.Exception.Message)" }); return $false
+    } finally {
+        Remove-Item $firstIni -Force -ErrorAction SilentlyContinue
     }
-    Start-StoicTerminal $dir $firstIni
-    if ($stored) { Start-Sleep -Seconds 90; Remove-Item $firstIni -Force -ErrorAction SilentlyContinue }
+    $script:StartedAt[$login] = Get-Date
     $status = $(if ($stored) { "running" } else { "awaiting_login" })
     $detail = $(if ($stored) { "started with the stored login; waiting for the first EA heartbeat" } else { "started — no stored password: log #$login in once on the VPS (or run Set-StoicTerminalLogin and re-install)" })
-    Send-StoicTerminalReport $cfg ($base + @{ status = $status; detail = $detail; pid = (Get-StoicTerminalProcess $dir | Select-Object -First 1).Id })
+    Send-StoicTerminalReport $cfg ($base + @{ status = $status; detail = $detail; pid = (Get-StoicTerminalProcess $dir | Select-Object -First 1).Id; started_at = (Get-Date).ToUniversalTime().ToString("o") })
     return $true
 }
 
 function Invoke-StoicWatchdog($cfg) {
     $st = Invoke-StoicApi $cfg "POST" "/api/vps/agent/terminals/status" @{}
     foreach ($t in @($st.terminals)) {
-        $login = "$($t.login)"; $dir = $(if ($t.directory) { "$($t.directory)" } else { Get-StoicTerminalDir $login })
+        $login = "$($t.login)"
+        if ($login -cnotmatch '^\d{4,12}$') { Write-StoicLog "status entry with invalid login '$login' ignored" "WARN"; continue }
+        $dir = Get-StoicTerminalDir $login          # N112-2 — never the server-sent directory
         if (-not (Test-Path (Join-Path $dir "terminal64.exe"))) { continue }
         if ($t.status -in @("failed", "stopped", "restart_loop")) { continue }
         $procs = Get-StoicTerminalProcess $dir
@@ -215,19 +309,25 @@ function Invoke-StoicWatchdog($cfg) {
         $base = @{ account_id = "$($t.account_id)"; login = $login; directory = $dir }
         $hour = (Get-Date).AddHours(-1)
         $script:Restarts[$login] = @($script:Restarts[$login] | Where-Object { $_ -gt $hour })
+        # A17-7 — post-start grace (local clock, survives a server that forgot started_at)
+        if ($script:StartedAt[$login] -and ((Get-Date) - $script:StartedAt[$login]).TotalSeconds -lt $script:StartGraceS) { continue }
+        # A17-7 — local liveness: a running process whose Experts log advanced in the last 3 min is NOT stale, whatever
+        # the server's heartbeat time says (heartbeat-ingest outage must not restart every terminal)
+        $todayLog = Join-Path $dir ("MQL5\Logs\" + (Get-Date).ToString("yyyyMMdd") + ".log")
+        $logFresh = (Test-Path $todayLog) -and (((Get-Date) - (Get-Item $todayLog).LastWriteTime).TotalSeconds -lt $script:StaleS)
         if ($procs.Count -eq 0) {
             if ($script:Restarts[$login].Count -ge $script:MaxRestartsPerHour) { Send-StoicTerminalReport $cfg ($base + @{ status = "restart_loop"; detail = "process keeps dying"; restarts_last_hour = $script:Restarts[$login].Count }); continue }
             Write-StoicLog "terminal #$login not running — starting"
-            Start-StoicTerminal $dir $ini; $script:Restarts[$login] += Get-Date
-            Send-StoicTerminalReport $cfg ($base + @{ status = "restarted"; detail = "process was not running — started"; restarts_last_hour = $script:Restarts[$login].Count })
-        } elseif ($t.restart_wanted) {
+            Start-StoicTerminal $dir $ini; $script:Restarts[$login] += Get-Date; $script:StartedAt[$login] = Get-Date; Save-StoicRestartLedger
+            Send-StoicTerminalReport $cfg ($base + @{ status = "restarted"; detail = "process was not running — started"; restarts_last_hour = $script:Restarts[$login].Count; started_at = (Get-Date).ToUniversalTime().ToString("o") })
+        } elseif ($t.restart_wanted -and -not $logFresh) {
             if ($script:Restarts[$login].Count -ge $script:MaxRestartsPerHour) {
                 Send-StoicTerminalReport $cfg ($base + @{ status = "restart_loop"; detail = "EA heartbeat still stale after $($script:Restarts[$login].Count) restarts this hour"; restarts_last_hour = $script:Restarts[$login].Count }); continue
             }
             Write-StoicLog "terminal #$login heartbeat stale ($($t.heartbeat_age_s) s) — graceful restart"
             if (Stop-StoicTerminal $dir) {
-                Start-Sleep -Seconds 3; Start-StoicTerminal $dir $ini; $script:Restarts[$login] += Get-Date
-                Send-StoicTerminalReport $cfg ($base + @{ status = "restarted"; detail = "EA heartbeat stale — terminal restarted"; restarts_last_hour = $script:Restarts[$login].Count })
+                Start-Sleep -Seconds 3; Start-StoicTerminal $dir $ini; $script:Restarts[$login] += Get-Date; $script:StartedAt[$login] = Get-Date; Save-StoicRestartLedger
+                Send-StoicTerminalReport $cfg ($base + @{ status = "restarted"; detail = "EA heartbeat stale — terminal restarted"; restarts_last_hour = $script:Restarts[$login].Count; started_at = (Get-Date).ToUniversalTime().ToString("o") })
             }
         }
     }
@@ -257,29 +357,39 @@ function ConvertTo-StoicCanonicalParams($Value) {
     return $sb.ToString()
 }
 
+function Test-StoicFixedTimeEqual([string]$A, [string]$B) {
+    if ($A.Length -ne $B.Length) { return $false }
+    $diff = 0; for ($i = 0; $i -lt $A.Length; $i++) { $diff = $diff -bor ([int][char]$A[$i] -bxor [int][char]$B[$i]) }
+    return ($diff -eq 0)
+}
+
 function Invoke-StoicCommands($cfg) {
     $resp = Invoke-StoicApi $cfg "POST" "/api/infra/agent/commands/poll" @{}
     foreach ($c in @($resp.commands)) {
         # signed command sequence (iter-122 P3 + audit #12 P3): HMAC(agent_id|command_id|seq|command|sha256(params))
         # with the enrolment command_key — the PARAMS (pairing token, server URL, directory) are bound too
-        if ($cfg.command_key_enc) {
+        if (-not $cfg.command_key_enc) { Write-StoicLog "no command key in the agent config — refusing ALL commands (re-enrol)" "WARN"; break }   # A17-9 fail closed
+        $lastSeq = $(if ($cfg.last_seq) { [int64]$cfg.last_seq } else { 0 })
+        if ($null -eq $c.seq -or [int64]$c.seq -le $lastSeq) { Write-StoicLog "command $($c.command_id) seq $($c.seq) not greater than last seen — replay ignored" "WARN"; continue }
+        if ($true) {
             if (-not $c.sig_v2) { Write-StoicLog "command $($c.command_id) has no sig_v2 (server too old?) — ignored" "WARN"; continue }
             $key = [Text.Encoding]::UTF8.GetBytes((Unprotect-StoicSecret $cfg.command_key_enc))
             $h = New-Object System.Security.Cryptography.HMACSHA256 (,$key)
             $paramsCanon = ConvertTo-StoicCanonicalParams $c.params
             $paramsHash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($paramsCanon))) -replace '-', '').ToLower()
             $calc = ([BitConverter]::ToString($h.ComputeHash([Text.Encoding]::UTF8.GetBytes("$($cfg.agent_id)|$($c.command_id)|$($c.seq)|$($c.command)|$paramsHash"))) -replace '-', '').ToLower()
-            if ($calc -ne "$($c.sig_v2)".ToLower()) { Write-StoicLog "command $($c.command_id) signature mismatch — ignored" "WARN"; continue }
+            if (-not (Test-StoicFixedTimeEqual $calc "$($c.sig_v2)".ToLower())) { Write-StoicLog "command $($c.command_id) signature mismatch — ignored" "WARN"; continue }
         }
+        $cfg | Add-Member -NotePropertyName last_seq -NotePropertyValue ([int64]$c.seq) -Force; Save-StoicAgentConfig $cfg
         $ok = $false; $detail = ""
         try {
             switch ($c.command) {
                 "install_terminal" { $ok = Invoke-StoicInstallTerminal $cfg $c.params; $detail = $(if ($ok) { "installed" } else { "see terminal report" }) }
                 "restart_terminal" {
-                    $login = "$($c.params.login)"; $dir = $(if ($c.params.directory) { "$($c.params.directory)" } else { Get-StoicTerminalDir $login })
+                    $login = Assert-StoicLogin "$($c.params.login)"; $dir = Get-StoicTerminalDir $login   # N112-2 — server directory ignored
                     $base = @{ account_id = "$($c.params.account_id)"; login = $login; directory = $dir }
                     $ok = (Stop-StoicTerminal $dir)
-                    if ($ok) { Start-Sleep -Seconds 3; Start-StoicTerminal $dir (Join-Path $dir "stoic-start.ini"); $detail = "restarted" }
+                    if ($ok) { Start-Sleep -Seconds 3; Start-StoicTerminal $dir (Join-Path $dir "stoic-start.ini"); $script:StartedAt[$login] = Get-Date; $detail = "restarted" }
                     else { $detail = "terminal would not close within 60 s — not force-killed" }
                     if ($login) { Send-StoicTerminalReport $cfg ($base + @{ status = $(if ($ok) { "restarted" } else { "running" }); detail = "dashboard restart: $detail"; pid = (Get-StoicTerminalProcess $dir | Select-Object -First 1).Id }) }
                 }
@@ -308,6 +418,8 @@ function Send-StoicHeartbeat($cfg, [int]$Managed) {
 function Start-StoicAgentLoop {
     $cfg = Get-StoicAgentConfig
     Write-StoicLog "STOIC VPS Agent $script:AgentVersion started ($($cfg.agent_id))"
+    Remove-StoicPasswordLeftovers      # A17-4
+    Read-StoicRestartLedger            # A17-7 — the restart budget survives an agent restart
     while ($true) {
         $managed = 0
         try { Invoke-StoicCommands $cfg } catch { Write-StoicLog "commands: $($_.Exception.Message)" "WARN" }

@@ -28,13 +28,19 @@ export function VpsAgentInstall({ accountId }) {
     if (!agents || agents.length === 0) return null;
     const chosen = agents.find(a => a.agent_id === agentId);
 
-    const install = async () => {
+    const install = async (replace = false) => {
         setBusy(true);
         try {
-            const { data } = await api.post(`/vps/agents/${agentId}/install-terminal`, { account_id: accountId });
+            const { data } = await api.post(`/vps/agents/${agentId}/install-terminal`, { account_id: accountId, replace });
             setQueued(data);
             toast.success(`Install queued on ${chosen?.hostname || agentId} — the agent picks it up within 30 s`);
         } catch (e) {
+            // A17-6 — a live terminal exists: the server refuses (409 terminal_exists) until the user confirms the replacement
+            if (!replace && e?.response?.status === 409 && e?.response?.data?.detail?.code === "terminal_exists") {
+                setBusy(false);
+                if (window.confirm(`${errMsg(e)}\n\nReplace it? The old terminal's token is revoked and it stops trading.`)) return install(true);
+                return;
+            }
             toast.error(errMsg(e));
         } finally {
             setBusy(false);
@@ -56,7 +62,7 @@ export function VpsAgentInstall({ accountId }) {
                         </option>
                     ))}
                 </select>
-                <button onClick={install} disabled={busy || !chosen?.online} data-testid={`vps-agent-install-btn-${accountId}`}
+                <button onClick={() => install(false)} disabled={busy || !chosen?.online} data-testid={`vps-agent-install-btn-${accountId}`}
                     title={!chosen?.online ? "This agent is offline — start the STOIC VPS Agent task on that VPS" : "Clone the golden portable MT5, install the EA and start the terminal for this account"}
                     className="flex items-center gap-1.5 px-3 py-1.5 border border-[#00FF41]/50 text-[#00FF41] font-mono text-[10px] tracking-widest hover:bg-[#00FF41]/10 disabled:opacity-40">
                     {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Server className="w-3 h-3" />} INSTALL ON MY VPS

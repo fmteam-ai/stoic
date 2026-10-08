@@ -10,12 +10,14 @@ token and queues an `install_terminal` command the agent polls. The MT5 password
 """
 from __future__ import annotations
 
+import re
 import secrets
 from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 
 STALE_S = 180                   # EA heartbeat older than this → the agent restarts the terminal
+START_GRACE_S = 180             # A17-7 — no staleness restart within this long after a (re)start
 MAX_RESTARTS_PER_HOUR = 3       # beyond this the agent stops restarting and we alert
 AGENT_ONLINE_S = 180            # agent heartbeat age for "online" in the dashboard
 TERMINAL_STATUSES = ("queued", "installing", "awaiting_login", "running", "restarted", "restart_loop", "failed", "stopped")
@@ -60,21 +62,38 @@ async def list_agents(db, user_id: str) -> list[dict]:
     return out
 
 
+LIVE_INSTALL_S = 600            # A17-6 — a heartbeat younger than this = a working terminal somewhere; replacing needs consent
+LOGIN_RE = re.compile(r"^[0-9]{4,12}$")
+
+
 async def queue_install_terminal(db, user: dict, account_id: str, agent_id: str, server_url: str,
-                                 chart_symbol: str = "EURUSD") -> dict:
+                                 chart_symbol: str = "EURUSD", replace: bool = False) -> dict:
     """Issue a fresh single-use pairing token for the account and queue `install_terminal` for the agent.
-    One account ↔ one terminal: a second install for the same account replaces the pending command."""
+    One account ↔ one terminal. Raises LookupError (404), PermissionError (409 terminal_exists — a live
+    terminal would be replaced; needs `replace=True`), ValueError (409 other refusals)."""
     from vps_pathb import queue_command
     account = await db.accounts.find_one({"_id": ObjectId(account_id)})
     if not account or account.get("user_id") != user["id"]:
-        raise ValueError("account not found")
+        raise LookupError("account not found")
     if account.get("mode") == "paper":
         raise ValueError("paper accounts have no MT5 terminal")
+    login = str(account.get("account_number") or "").strip()
+    if not LOGIN_RE.match(login):   # A17-1 — becomes a folder name on the VPS
+        raise ValueError("account_number must be the 4–12 digit MT5 login — fix the account first")
     agent = await db.vps_agents.find_one({"agent_id": agent_id, "user_id": user["id"], "revoked": {"$ne": True}})
     if not agent:
-        raise ValueError("agent not found")
+        raise LookupError("agent not found")
     if _age_s(_now(), agent.get("last_heartbeat")) is None or _age_s(_now(), agent.get("last_heartbeat")) > AGENT_ONLINE_S:
         raise ValueError("agent offline — start the STOIC VPS Agent on that VPS first")
+    if not replace:
+        hb_age = _age_s(_now(), account.get("last_heartbeat"))
+        other = await db.mt5_instances.find_one({"account_id": account_id, "agent_id": {"$ne": agent_id}})
+        live_here = await db.mt5_instances.find_one({"account_id": account_id, "agent_id": agent_id, "status": {"$in": ["running", "restarted"]}})
+        if (hb_age is not None and hb_age <= LIVE_INSTALL_S) or other or live_here:
+            where = (other or {}).get("agent_id") or ((live_here or {}).get("agent_id")) or "another terminal"
+            raise PermissionError(f"account #{login} already has a live installation ({where}, heartbeat "
+                                  f"{'%ds ago' % hb_age if hb_age is not None else 'n/a'}) — replacing it revokes that terminal's token")
+    from connect_service import installer_sha256
     from routes.setup_routes import PAIRING_TTL_MINUTES
     token = secrets.token_urlsafe(24)
     now = _now()
@@ -87,11 +106,11 @@ async def queue_install_terminal(db, user: dict, account_id: str, agent_id: str,
     await db.agent_commands.update_many(
         {"agent_id": agent_id, "command": "install_terminal", "params.account_id": account_id, "status": "queued"},
         {"$set": {"status": "superseded"}})
-    login = str(account.get("account_number") or "")
     res = await queue_command(db, user["id"], agent_id, "install_terminal", {
         "account_id": account_id, "login": login, "server": account.get("server") or "",
         "broker": account.get("broker") or "", "pairing_token": token, "server_url": server_url,
         "chart_symbol": chart_symbol or "EURUSD",
+        "installer_sha256": installer_sha256(),   # A17-3 — the pin travels INSIDE the signed parameters
     }, f"user:{user['id']}")
     state = {"status": "queued", "agent_id": agent_id, "command_id": res["command_id"],
              "detail": "waiting for the VPS agent to pick the install up", "updated_at": now.isoformat()}
@@ -105,10 +124,10 @@ async def queue_restart_terminal(db, user: dict, account_id: str, agent_id: str)
     from vps_pathb import queue_command
     account = await db.accounts.find_one({"_id": ObjectId(account_id)})
     if not account or account.get("user_id") != user["id"]:
-        raise ValueError("account not found")
+        raise LookupError("account not found")
     agent = await db.vps_agents.find_one({"agent_id": agent_id, "user_id": user["id"], "revoked": {"$ne": True}})
     if not agent:
-        raise ValueError("agent not found")
+        raise LookupError("agent not found")
     age = _age_s(_now(), agent.get("last_heartbeat"))
     if age is None or age > AGENT_ONLINE_S:
         raise ValueError("agent offline — start the STOIC VPS Agent on that VPS first")
@@ -131,21 +150,24 @@ async def terminals_status(db, agent: dict) -> dict:
     out = []
     async for inst in db.mt5_instances.find({"agent_id": agent["agent_id"]}):
         acc = None
-        if inst.get("account_id"):
-            try:
-                acc = await db.accounts.find_one({"_id": ObjectId(inst["account_id"])},
-                                                 projection={"last_heartbeat": 1, "installer_paired_at": 1, "enabled": 1})
-            except Exception:  # noqa: BLE001
-                acc = None
+        if inst.get("account_id") and ObjectId.is_valid(str(inst["account_id"])):
+            # A17-9 — scoped to the agent's user: never read another tenant's heartbeat
+            acc = await db.accounts.find_one({"_id": ObjectId(inst["account_id"]), "user_id": agent["user_id"]},
+                                             projection={"last_heartbeat": 1, "installer_paired_at": 1, "enabled": 1})
         hb_age = _age_s(now, (acc or {}).get("last_heartbeat"))
+        started_age = _age_s(now, inst.get("started_at"))
+        in_grace = started_age is not None and started_age < START_GRACE_S   # A17-7 — no staleness restart right after a start
         out.append({
             "account_id": inst.get("account_id"), "login": inst.get("account_ref"), "directory": inst.get("directory"),
             "status": inst.get("status"), "heartbeat_age_s": None if hb_age is None else round(hb_age),
             "stale": hb_age is None or hb_age > STALE_S,
             "paired": bool((acc or {}).get("installer_paired_at")),
-            "restart_wanted": inst.get("status") in ("running", "restarted") and (hb_age is None or hb_age > STALE_S),
+            "started_age_s": None if started_age is None else round(started_age),
+            "restart_wanted": (inst.get("status") in ("running", "restarted") and not in_grace
+                               and (hb_age is None or hb_age > STALE_S)),
         })
-    return {"terminals": out, "stale_after_s": STALE_S, "max_restarts_per_hour": MAX_RESTARTS_PER_HOUR, "as_of": now.isoformat()}
+    return {"terminals": out, "stale_after_s": STALE_S, "start_grace_s": START_GRACE_S,
+            "max_restarts_per_hour": MAX_RESTARTS_PER_HOUR, "as_of": now.isoformat()}
 
 
 async def report_terminal(db, agent: dict, payload: dict) -> dict:
@@ -154,29 +176,47 @@ async def report_terminal(db, agent: dict, payload: dict) -> dict:
     login = str(payload.get("login") or payload.get("account_ref") or "").strip()
     account_id = str(payload.get("account_id") or "").strip()
     status = str(payload.get("status") or "").strip()
-    if not login or status not in TERMINAL_STATUSES:
-        raise ValueError("login and a known status are required")
+    if not LOGIN_RE.match(login) or status not in TERMINAL_STATUSES:
+        raise ValueError("login (4–12 digits) and a known status are required")
+    # A17-9 — types are validated here (422), and the account must belong to the agent's user
+    def _int(v, name):
+        if v is None or v == "":
+            return 0 if name == "restarts_last_hour" else None
+        if isinstance(v, bool) or not isinstance(v, (int, float, str)) or (isinstance(v, str) and not v.strip().lstrip("-").isdigit()):
+            raise ValueError(f"{name} must be an integer")
+        return int(v)
+    restarts = _int(payload.get("restarts_last_hour"), "restarts_last_hour")
+    pid = _int(payload.get("pid"), "pid")
+    for name in ("ea_version", "mt5_build", "detail"):
+        if payload.get(name) is not None and not isinstance(payload.get(name), (str, int, float)):
+            raise ValueError(f"{name} must be a string")
+    if account_id:
+        if not ObjectId.is_valid(account_id):
+            raise ValueError("account_id is not a valid id")
+        owned = await db.accounts.find_one({"_id": ObjectId(account_id), "user_id": agent["user_id"]}, projection={"_id": 1})
+        if not owned:
+            raise ValueError("account_id does not belong to this agent's user")
     now = _now()
+    started_at = _aware(payload.get("started_at")) if payload.get("started_at") else None
     doc = {
         "user_id": agent["user_id"], "agent_id": agent["agent_id"], "deployment_id": agent.get("deployment_id"),
         "account_ref": login, "account_id": account_id or None,
         "directory": str(payload.get("directory") or f"C:\\STOIC\\MT5\\account-{login}\\")[:300],
         "status": status, "detail": str(payload.get("detail") or "")[:500],
-        "restarts_last_hour": int(payload.get("restarts_last_hour") or 0),
+        "restarts_last_hour": restarts,
         "ea_version": payload.get("ea_version"), "mt5_build": payload.get("mt5_build"),
-        "pid": payload.get("pid"), "updated_at": now,
+        "pid": pid, "updated_at": now,
     }
+    if started_at:
+        doc["started_at"] = started_at
     await db.mt5_instances.update_one({"agent_id": agent["agent_id"], "account_ref": login},
                                       {"$set": doc, "$setOnInsert": {"created_at": now}}, upsert=True)
     if account_id:
-        try:
-            await db.accounts.update_one(
-                {"_id": ObjectId(account_id), "user_id": agent["user_id"]},
-                {"$set": {"vps_terminal": {"status": status, "agent_id": agent["agent_id"], "detail": doc["detail"],
-                                           "directory": doc["directory"], "restarts_last_hour": doc["restarts_last_hour"],
-                                           "updated_at": now.isoformat()}}})
-        except Exception:  # noqa: BLE001
-            pass
+        await db.accounts.update_one(
+            {"_id": ObjectId(account_id), "user_id": agent["user_id"]},
+            {"$set": {"vps_terminal": {"status": status, "agent_id": agent["agent_id"], "detail": doc["detail"],
+                                       "directory": doc["directory"], "restarts_last_hour": doc["restarts_last_hour"],
+                                       "updated_at": now.isoformat()}}})
     if status == "restart_loop":
         from alerting import raise_alert
         await raise_alert(db, ALERT_KIND, "critical",
