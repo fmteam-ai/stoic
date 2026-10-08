@@ -49,6 +49,18 @@ with the EX5 committed, so the ea-release bot commit MUST be the tagged commit (
    reproducibility against the signed record, signed attestation, image build/push) and then `deploy-production`.
 5. On the server: `deploy/backup.sh && UPDATE_HOLD_ON_FAILURE=1 STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh v1.60.3`.
 
+**Release #6 (first v1.60.3 attempt) post-mortem — fixed in the tree, but two things are yours:**
+- `hermetic-verify` → `REQUIRE_SIGNED_RESULTS=1 but LEDGER_ANCHOR_KEY is absent`: the repository secret
+  **`RELEASE_EVIDENCE_KEY`** was never created. Generate one (`python3 -c "import secrets;print(secrets.token_hex(32))"`)
+  and add it under Settings → Secrets → Actions (it may equal the production `LEDGER_ANCHOR_KEY` from `secrets/`).
+- `install-from-archive` → `install-backend-1 is unhealthy`, no log: the installer now prints the container log and the
+  healthcheck output whenever an app container is unhealthy/exited. Re-run and read the `!! install-backend-1:` block.
+- Fixed in code: the pytest lanes inside `verify_release.sh` no longer inherit the CI release pin (they sign with the
+  local test key — `perf_attestation` verified against the Fly key); `test_r18_audit` excludes a committed signed EX5
+  record; `release_consistency_check` treats a model manifest re-signed at release staging as a note, not a mismatch.
+- A fixed tree needs a NEW tag (`v1.60.4`): Save to GitHub → merge → ea-release on main → tag → publish release.
+
+
 ## 3. What the run does, in order (each step is a hard gate)
 1. `hermetic-verify` — exports the exact tag tree, writes `BUILD_SHA`, re-signs the model manifest for that commit, runs
    `model_manifest verify --build <commit>` and the full `verify_release.sh` (declared test lanes, frontend build/E2E,

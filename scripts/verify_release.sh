@@ -40,9 +40,10 @@ step sbom bash -c "python -m pip freeze > $OUT/sbom-python-$GIT_SHA.txt && (cd f
 step python_compile bash -c 'python -m compileall -q backend ops scripts >/dev/null'
 step shell_syntax bash -c 'for f in deploy/*.sh scripts/*.sh deploy/drills/*.sh; do bash -n "$f" || exit 1; done'
 # backend tests (CI-equivalent jobs, DB-free unit + Mongo integration)
-step backend_unit bash -c 'cd backend && env -u MONGO_URL python -m pytest tests/unit -q -p no:cacheprovider'
-step backend_integration bash -c 'cd backend && python -m pytest tests/integration -m integration -q -p no:cacheprovider'
-step critical_controls bash -c 'cd backend && python -m pytest tests/integration -m critical_controls -q -p no:cacheprovider'
+# v1.60.3 — the pytest lanes sign with the LOCAL test key: the CI release pin / external signer env must not leak in
+step backend_unit bash -c 'cd backend && env -u MONGO_URL env -u RELEASE_PUBLIC_KEY_B64 -u RELEASE_SIGNER_URL -u RELEASE_SIGNER_TOKEN -u RELEASE_SIGNER_ALLOWED_HOSTS -u RELEASE_SIGNER_KEY_ID python -m pytest tests/unit -q -p no:cacheprovider'
+step backend_integration bash -c 'cd backend && env -u RELEASE_PUBLIC_KEY_B64 -u RELEASE_SIGNER_URL -u RELEASE_SIGNER_TOKEN -u RELEASE_SIGNER_ALLOWED_HOSTS -u RELEASE_SIGNER_KEY_ID python -m pytest tests/integration -m integration -q -p no:cacheprovider'
+step critical_controls bash -c 'cd backend && env -u RELEASE_PUBLIC_KEY_B64 -u RELEASE_SIGNER_URL -u RELEASE_SIGNER_TOKEN -u RELEASE_SIGNER_ALLOWED_HOSTS -u RELEASE_SIGNER_KEY_ID python -m pytest tests/integration -m critical_controls -q -p no:cacheprovider'
 # frontend lint + build
 step frontend_lint bash -c 'cd frontend && npx eslint src >/dev/null'
 step frontend_build bash -c 'cd frontend && CI=true yarn --silent build >/dev/null'

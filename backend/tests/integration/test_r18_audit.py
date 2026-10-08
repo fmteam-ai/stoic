@@ -139,6 +139,7 @@ def test_ea_capability_gate_numeric_versions_and_hash(monkeypatch):
     assert live_gate({**demo, "broker": "moved", "environment_attestation": att})["code"] == "EA_DEMO_ATTESTATION_INVALIDATED"
     monkeypatch.delenv("EA_RELEASE_SHA256")
     monkeypatch.setattr("ea_capabilities._EA_RELEASE_FILES", ())
+    monkeypatch.setattr("ea_capabilities._signed_release_record", lambda: None)   # v1.60.3: a tree with a signed EX5 record is pinned
     assert live_gate({"ea_version": "1.57", "ea_binary_sha256": "c" * 64, "ea_binary_sha256_method": "installer_attested"})["code"] == "EA_RELEASE_HASH_UNPINNED"
 
 

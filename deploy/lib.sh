@@ -245,11 +245,14 @@ app_boot_failure() {
   for c in $(docker compose ps -a --format '{{.Name}} {{.State}} {{.Health}}' 2>/dev/null \
              | awk '$1 ~ /-(backend|worker-[a-z]+|frontend)-[0-9]+$/ && ($2 == "exited" || $3 == "unhealthy") {print $1}'); do
     created=$(date -u -d "$(docker inspect -f '{{.Created}}' "$c" 2>/dev/null)" +%s 2>/dev/null || echo 0)
-    [ "${created}" -ge "${since}" ] || continue
-    found=0
     state=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' "$c" 2>/dev/null || true)
+    # v1.60.3 — ALWAYS show why an app container is unhealthy/exited (the CI install-from-archive run died with no
+    # log because the container predated this pass); only the verdict keeps the "created in this pass" rule
     echo "!! ${c}: ${state} — last log lines:"
     docker logs --tail 60 "$c" 2>&1 | sed 's/^/   | /'
+    docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}   | healthcheck: exit={{.ExitCode}} {{.Output}}{{end}}{{end}}' "$c" 2>/dev/null | tail -3
+    [ "${created}" -ge "${since}" ] || continue
+    found=0
   done
   return ${found}
 }

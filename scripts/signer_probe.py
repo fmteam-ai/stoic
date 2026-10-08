@@ -67,7 +67,7 @@ def main() -> int:
         missing = [h for h in ("Strict-Transport-Security", "X-Content-Type-Options") if not r.headers.get(h)]
         if r.headers.get("Server"):
             missing.append("Server banner present")
-        rec["warnings"] = ([f"signer security headers drift ({', '.join(missing)}) — redeploy: cd deploy/signer && flyctl deploy -a <app>"]
+        rec["warnings"] = ([f"signer security headers drift ({', '.join(missing)}) - redeploy: cd deploy/signer && flyctl deploy -a <app> --ha=false"]
                            if missing else [])
     except Exception as e:  # noqa: BLE001
         rec["checks"]["reachability"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
