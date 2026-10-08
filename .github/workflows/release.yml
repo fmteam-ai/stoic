@@ -258,6 +258,14 @@ jobs:
           curl -sS -H "X-Metrics-Token: ${TOKEN}" http://127.0.0.1:8001/api/ops/release-readiness || true
           docker compose logs --tail 30
           exit 1
+      - name: Container logs on failure (why did the stack not come up?)
+        if: failure()
+        run: |
+          cd /tmp/install
+          docker compose ps -a || true
+          for s in backend worker-trading worker-protection worker-reconciliation worker-analytics worker-security worker-model worker-tuning; do
+            echo "::group::${s} (last 80 lines)"; docker compose logs --tail 80 "$s" 2>&1 || true; echo "::endgroup::"
+          done
       - name: Teardown
         if: always()
         run: cd /tmp/install && docker compose down -v || true

@@ -241,14 +241,20 @@ restore_tracked_release_files() {
 # log and stop retrying so the cause is visible instead of buried under 6 identical
 # attempts. Containers older than the pass (previous build, mid-recreate) are ignored.
 app_boot_failure() {
-  local since="$1" c created state found=1
-  for c in $(docker compose ps -a --format '{{.Name}} {{.State}} {{.Health}}' 2>/dev/null \
-             | awk '$1 ~ /-(backend|worker-[a-z]+|frontend)-[0-9]+$/ && ($2 == "exited" || $3 == "unhealthy") {print $1}'); do
+  local since="$1" c name created state status health found=1
+  # v1.60.5 — enumerate with `docker inspect` (the `compose ps --format` Go template printed nothing on the
+  # CI runner, so an unhealthy backend died without a single log line being shown)
+  for c in $(docker compose ps -aq 2>/dev/null); do
+    name=$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | sed 's#^/##')
+    echo "${name}" | grep -qE -- '-(backend|worker-[a-z]+|frontend)-[0-9]+$' || continue
+    status=$(docker inspect -f '{{.State.Status}}' "$c" 2>/dev/null || true)
+    health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' "$c" 2>/dev/null || true)
+    [ "${status}" = "exited" ] || [ "${status}" = "dead" ] || [ "${health}" = "unhealthy" ] || continue
     created=$(date -u -d "$(docker inspect -f '{{.Created}}' "$c" 2>/dev/null)" +%s 2>/dev/null || echo 0)
-    state=$(docker inspect -f '{{.State.Status}} exit={{.State.ExitCode}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}' "$c" 2>/dev/null || true)
+    state="${status} exit=$(docker inspect -f '{{.State.ExitCode}}' "$c" 2>/dev/null) health=${health}"
     # v1.60.3 — ALWAYS show why an app container is unhealthy/exited (the CI install-from-archive run died with no
     # log because the container predated this pass); only the verdict keeps the "created in this pass" rule
-    echo "!! ${c}: ${state} — last log lines:"
+    echo "!! ${name}: ${state} — last log lines:"
     docker logs --tail 60 "$c" 2>&1 | sed 's/^/   | /'
     docker inspect -f '{{if .State.Health}}{{range .State.Health.Log}}   | healthcheck: exit={{.ExitCode}} {{.Output}}{{end}}{{end}}' "$c" 2>/dev/null | tail -3
     [ "${created}" -ge "${since}" ] || continue
@@ -860,6 +866,9 @@ compose_up() {
     echo "-- compose up failed (attempt ${attempt}/6) — reaping containers that died during recreate and retrying"
     reap_zombies || return 1
   done
+  echo "-- final state of the stack (last 40 backend log lines follow):"
+  docker compose ps -a 2>/dev/null || true
+  docker compose logs --tail 40 backend 2>/dev/null | sed 's/^/   | /' || true
   echo "ERROR: compose up did not converge after 6 attempts — run deploy/doctor.sh (section 'docker mount propagation') to see which host processes hold the overlay mounts$(repair_enabled || echo '; docker mount recovery is diagnosis-only — re-run with --repair-docker-mounts to let the installer repair')"
   return 1
 }
