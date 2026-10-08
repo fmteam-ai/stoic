@@ -14,7 +14,15 @@ _FP_HEADER = Header(default="", alias="X-Client-Cert-Fingerprint")
 
 class InstallTerminalRequest(BaseModel):
     account_id: str = Field(min_length=12, max_length=40)
-    chart_symbol: str = Field(default="EURUSD", max_length=24)
+    chart_symbol: str = Field(default="EURUSD", pattern=r"^[A-Za-z0-9._-]{1,24}$")   # A17-1 — written to Symbol=
+    replace: bool = False                                                              # A17-6 — explicit consent to replace a live terminal
+
+
+def _oid_or_404(value: str):
+    from bson import ObjectId
+    if not ObjectId.is_valid(value):
+        raise static_error(404, "account_not_found", ValueError("invalid account id"))
+    return value
 
 
 @router.get("/agents")
@@ -28,15 +36,29 @@ async def install_terminal(agent_id: str, payload: InstallTerminalRequest, reque
                            user=Depends(get_current_user)):
     from connect_service import _base_url
     from entitlements import enforce_feature
+    from security import rate_limit
+    from step_up import audit_event
     from vps_terminals import queue_install_terminal
     await enforce_feature(user, "vps_quick_connect")   # same entitlement as the other agent commands
+    await rate_limit(get_db(), "vps_install_terminal", user["id"], 10, 600,
+                     "Too many terminal installs — try again in 10 minutes.", request=request)   # A17-9
+    _oid_or_404(payload.account_id)
     base = _base_url(request)
     if not base.startswith("https://"):
         raise static_error(503, "server_url_not_https", RuntimeError("PUBLIC_BASE_URL must be https for a VPS install"))
     try:
-        return await queue_install_terminal(get_db(), user, payload.account_id, agent_id, base, payload.chart_symbol)
+        res = await queue_install_terminal(get_db(), user, payload.account_id, agent_id, base, payload.chart_symbol,
+                                           replace=payload.replace)
+    except LookupError as e:
+        raise static_error(404, "vps_install_refused", e)
+    except PermissionError as e:   # A17-6 — a live terminal exists: the UI must ask before replacing
+        raise static_error(409, "terminal_exists", e)
     except ValueError as e:
-        raise static_error(404 if "not found" in str(e) else 409, "vps_install_refused", e)
+        raise static_error(409, "vps_install_refused", e)
+    await audit_event(get_db(), user["id"], "vps_install_terminal",
+                      {"agent_id": agent_id, "account_id": payload.account_id, "command_id": res["command_id"], "replace": payload.replace},
+                      request=request)
+    return res
 
 
 class RestartTerminalRequest(BaseModel):
@@ -44,14 +66,24 @@ class RestartTerminalRequest(BaseModel):
 
 
 @router.post("/agents/{agent_id}/restart-terminal")
-async def restart_terminal(agent_id: str, payload: RestartTerminalRequest, user=Depends(get_current_user)):
+async def restart_terminal(agent_id: str, payload: RestartTerminalRequest, request: Request, user=Depends(get_current_user)):
     from entitlements import enforce_feature
+    from security import rate_limit
+    from step_up import audit_event
     from vps_terminals import queue_restart_terminal
     await enforce_feature(user, "vps_quick_connect")
+    await rate_limit(get_db(), "vps_restart_terminal", user["id"], 10, 600,
+                     "Too many terminal restarts — try again in 10 minutes.", request=request)   # A17-9
+    _oid_or_404(payload.account_id)
     try:
-        return await queue_restart_terminal(get_db(), user, payload.account_id, agent_id)
+        res = await queue_restart_terminal(get_db(), user, payload.account_id, agent_id)
+    except LookupError as e:
+        raise static_error(404, "vps_restart_refused", e)
     except ValueError as e:
-        raise static_error(404 if "not found" in str(e) else 409, "vps_restart_refused", e)
+        raise static_error(409, "vps_restart_refused", e)
+    await audit_event(get_db(), user["id"], "vps_restart_terminal",
+                      {"agent_id": agent_id, "account_id": payload.account_id, "command_id": res["command_id"]}, request=request)
+    return res
 
 
 async def _agent(db, payload: dict, cert_fp: str) -> dict:
@@ -78,6 +110,7 @@ async def agent_terminal_report(payload: dict, cert_fp: str = _FP_HEADER):
     db = get_db()
     agent = await _agent(db, payload, cert_fp)
     try:
-        return await report_terminal(db, agent, payload)
+        res = await report_terminal(db, agent, payload)
     except ValueError as e:
-        raise static_error(400, "terminal_report_invalid", e)
+        raise static_error(422, "terminal_report_invalid", e)   # A17-9 — bad types are the caller's problem, never a 500
+    return res

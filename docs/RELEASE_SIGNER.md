@@ -83,7 +83,11 @@ with a well-formed signature for the right key id, but it does not verify agains
 | *the signer serves public key X but the pinned key is Y* | GitHub secret / server pin is not the key the signer holds (`GET <signer>/public-key`). | Set `RELEASE_PUBLIC_KEY_B64` (GitHub secret **and** production `backend/.env`) to X. |
 
 The `ea-release` job now runs **Signer identity preflight** (`scripts/signer_probe.py`) before the
-multi-minute MT5 install, so both causes fail in seconds with the probe JSON. Run the same probe from
+multi-minute MT5 install, so both causes fail in seconds with the probe JSON. The probe also reports
+`warnings` when the live signer lacks the audit-#12 response headers (HSTS, `X-Content-Type-Options`,
+no `Server` banner) — audit #13 found them missing on `stoic-signer.fly.dev`: the fix is the same
+code-only redeploy (`cd deploy/signer && flyctl deploy -a stoic-signer`); the warning never blocks a release.
+Run the same probe from
 the operator host:
 ```bash
 python scripts/signer_probe.py --url https://stoic-signer.fly.dev \

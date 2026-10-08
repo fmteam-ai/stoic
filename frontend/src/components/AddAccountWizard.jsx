@@ -92,7 +92,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                             {["live", "paper"].map(m => (
                                 <button key={m} type="button" onClick={() => set("mode", m)} data-testid={`wizard-mode-${m}`}
                                     className={`flex-1 py-2 text-xs font-mono tracking-widest border ${f.mode === m ? "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]" : "border-[#1F1F1F] text-[#A1A1AA]"}`}>
-                                    {m === "live" ? "REAL MT5 TERMINAL" : "PAPER SANDBOX"}
+                                    {m === "live" ? "MT5 TERMINAL" : "PAPER SANDBOX"}
                                 </button>
                             ))}
                         </div>
@@ -161,7 +161,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                     </div>
                 ) : (
                     <div className="space-y-2 text-sm" data-testid="wizard-step-review">
-                        {[["Mode", f.mode === "paper" ? "Paper sandbox" : "Real MT5 terminal"], ...(f.mode === "live" ? [["Broker", brokerName], ["Server", f.server], ["Account type", ACCOUNT_TYPES.find(t => t.id === f.account_type)?.label || f.account_type], ["VPS", f.vps === "new" ? "new Windows VPS" : `${f.vps} (you'll run the install line there)`]] : []), ["Login", f.account_number], ["Label", f.label || "(auto)"]]
+                        {[["Mode", f.mode === "paper" ? "Paper sandbox" : "MT5 terminal (demo or real — trading stays OFF until you enable it)"], ...(f.mode === "live" ? [["Broker", brokerName], ["Server", f.server], ["Account type", ACCOUNT_TYPES.find(t => t.id === f.account_type)?.label || f.account_type], ["VPS", f.vps === "new" ? "new Windows VPS" : `${f.vps} (you'll run the install line there)`]] : []), ["Login", f.account_number], ["Label", f.label || "(auto)"]]
                             .map(([k, v]) => <div key={k} className="flex justify-between border-b border-[#1F1F1F] py-1.5"><span className="text-[#52525B] font-mono text-xs">{k.toUpperCase()}</span><span className="font-mono text-xs text-white">{v}</span></div>)}
                         <p className="text-[11px] text-[#52525B] pt-1">Next: the account is created and you get a 60-minute code with the PowerShell line to run on the VPS.</p>
                     </div>

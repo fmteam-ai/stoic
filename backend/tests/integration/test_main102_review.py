@@ -86,9 +86,8 @@ class TestSignupLock:
         assert r.status_code == 200, r.text
         body = r.json()
         assert body["closed"] is True, body
-        assert body["message"] == (
-            "New registrations are closed during the testing period. "
-            "Existing members can sign in as usual."), body
+        from signup_lock import CLOSED_MESSAGE
+        assert body["message"] == CLOSED_MESSAGE, body
 
     def test_04_register_refused(self):
         fresh_email = f"TEST_signups_{secrets.token_hex(6)}@example.com"

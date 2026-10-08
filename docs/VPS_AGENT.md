@@ -11,11 +11,13 @@ dashboard; the agent keeps every terminal alive.
    Expert Advisors → tick *Allow WebRequest for listed URL* → add `https://<your-stoic-host>` → OK → close MT5.
    The allow-list is part of the golden folder and is cloned into every account terminal (the spike's attempt B
    model; if a broker build does not honour the copied config, Install Progress shows the one click to make).
-3. Dashboard → VPS → *Connect existing VPS* → copy the enrollment code. In an **Administrator PowerShell**:
-   ```powershell
-   irm https://<your-stoic-host>/api/setup/agent.ps1 | iex
-   Install-StoicAgent -ServerUrl "https://<your-stoic-host>" -EnrollmentCode "<code>"
-   ```
+3. Dashboard → VPS → *Connect existing VPS* → **copy the one-line enrol command shown there** (it pins the agent
+   script's SHA-256 and passes it on as `-ExpectedSha256`, so the copy the logon task runs is verified too) and paste it
+   into an **Administrator PowerShell**. Never use a plain `irm | iex` without the pin.
+   `Install-StoicAgent` also sets an explicit ACL on `C:\STOIC` (Administrators, SYSTEM, the agent user; inheritance off).
+3b. **Required: Windows auto-logon** for the agent user (`netplwiz` → untick "Users must enter a user name and password",
+   or Sysinternals `Autologon.exe`). The task runs at logon; after a reboot without auto-logon nothing runs — the
+   dashboard raises the critical `vps_agent_offline` alert after 5 minutes of silence.
 4. For every account you will install, type its MT5 password **once, on the VPS** (DPAPI-encrypted under
    `%ProgramData%\Stoic\logins\`, never transmitted):
    ```powershell
@@ -40,9 +42,13 @@ The server issues a fresh single-use pairing code and queues a signed `install_t
 
 `POST /api/vps/agent/terminals/status` tells the agent, per terminal, whether the EA heartbeat is fresh.
 Process dead → start. Heartbeat older than **180 s** (and the terminal is `running`/`restarted`) → `CloseMainWindow`
-+ 60 s wait, then start again. At most **3 restarts per hour** per terminal; then status `restart_loop` and the
-server raises the critical ops alert `vps_terminal_restart_loop` (mutable like every evaluator kind). MT5 is
-never force-killed; a terminal `awaiting_login` is never restarted.
++ 60 s wait, then start again — but never within **180 s after a start** (grace), and never while the terminal's own
+Experts log advanced in the last 3 min (a heartbeat-ingest outage on the server must not restart every terminal).
+At most **3 restarts per hour** per terminal (ledger persisted in `%ProgramData%\Stoic\restarts.json`, survives agent
+restarts); then status `restart_loop` and the server raises the critical ops alert `vps_terminal_restart_loop`.
+MT5 is never force-killed; `awaiting_login`, `stopped`, `failed` terminals are never restarted. The dashboard's
+RESTART TERMINAL asks for confirmation (positions unmanaged during the restart). Installing over an account that
+already has a live terminal is refused (`409 terminal_exists`) until you confirm the replacement.
 
 ## Files on the VPS
 

@@ -89,7 +89,7 @@ def vps_agent_enrol_command(code: str) -> str:
     return ('[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; '
             f'$r=iwr "{base}/api/setup/agent.ps1" -UseBasicParsing; '
             f'if ((Get-FileHash -InputStream $r.RawContentStream -Algorithm SHA256).Hash -ne "{sha.upper()}") {{ throw "STOIC agent script hash mismatch" }}; '
-            f'iex $r.Content; Install-StoicAgent -ServerUrl "{base}" -EnrollmentCode "{code}"')
+            f'iex $r.Content; Install-StoicAgent -ServerUrl "{base}" -EnrollmentCode "{code}" -ExpectedSha256 "{sha}"')
 
 
 async def connect_existing(db, user_id: str, payload: dict) -> dict:
@@ -353,7 +353,7 @@ async def poll_commands(db, agent_token: str) -> list:
     out = []
     async for c in db.agent_commands.find(
             {"agent_id": agent["agent_id"], "status": "queued"}
-    ).sort("created_at", 1).limit(10):
+    ).sort("created_at", 1).limit(1):   # A17-9 — one command per poll: "delivered" means the agent runs it now
         await db.agent_commands.update_one(
             {"_id": c["_id"]},
             {"$set": {"status": "delivered", "delivered_at": now}})

@@ -24,11 +24,13 @@ EVALUATOR_KINDS = (
     "ea_heartbeat_stale", "worker_lease_expired", "worker_loop_crashloop",
     "worker_loop_stalled", "outbox_backlog", "outbox_failed",
     "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real",
-    "vps_terminal_restart_loop")   # Phase 2 VPS Agent: restart budget exhausted without a fresh EA heartbeat
+    "vps_terminal_restart_loop",   # Phase 2 VPS Agent: restart budget exhausted without a fresh EA heartbeat
+    "vps_agent_offline")           # A17-8: an agent that manages terminals has not polled for 5 min (reboot without auto-logon)
 
 
 ACK_SUPPRESS_S = 6 * 3600   # N109-1 — a HUMAN ack mutes the NOTIFICATIONS (email/Telegram) of re-raises for 6 h; the alert ROW always re-opens
 MUTE_MAX_H = 24             # N109-2 — explicit per-kind notification mute ceiling (Ops Alerts → MUTE 24H)
+AGENT_OFFLINE_S = 300       # A17-8 — VPS agent silent this long while managing terminals → critical
 
 
 def _now():
@@ -304,6 +306,32 @@ async def evaluate_ops_alerts(db) -> int:
                 {"kind": "pairing_no_heartbeat", "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
         except Exception as e2:  # noqa: BLE001
             logger.warning("pairing alert keep-open failed: %s", type(e2).__name__)
+
+    # 5b · A17-8 — a VPS agent that MANAGES terminals and has not polled for 5 min (reboot without auto-logon,
+    # task disabled): nothing restarts those terminals any more → critical. Agents without terminals: no alert.
+    try:
+        async for ag in db.vps_agents.find({"revoked": {"$ne": True}}, {"agent_id": 1, "last_heartbeat": 1, "user_id": 1, "facts": 1}):
+            managed = await db.mt5_instances.count_documents({"agent_id": ag["agent_id"], "status": {"$nin": ["failed", "stopped"]}})
+            if not managed:
+                continue
+            hb = _parse_ts(ag.get("last_heartbeat"))
+            if hb is None or (now - hb).total_seconds() > AGENT_OFFLINE_S:
+                key = f"vps_agent:{ag['agent_id']}"
+                active.add(key)
+                host = (ag.get("facts") or {}).get("hostname") or ag["agent_id"]
+                if await raise_alert(db, "vps_agent_offline", "critical",
+                                     f"VPS agent {host} has not reported for over {AGENT_OFFLINE_S // 60} min while managing "
+                                     f"{managed} MT5 terminal(s) — nothing restarts them. Log the VPS user in (auto-logon!) "
+                                     "or start the StoicVpsAgent task.",
+                                     dedup_key=key, meta={"agent_id": ag["agent_id"], "terminals": managed}):
+                    raised += 1
+    except Exception as e:  # noqa: BLE001
+        logger.warning("vps agent offline evaluation failed: %s", type(e).__name__)
+        try:
+            active |= {a["dedup_key"] async for a in db.ops_alerts.find(
+                {"kind": "vps_agent_offline", "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("vps agent keep-open failed: %s", type(e2).__name__)
 
     # 6 · AUTO-RESOLVE — evaluator-managed alerts whose condition no longer
     # holds are closed automatically (acked_by system:auto-resolved) so a

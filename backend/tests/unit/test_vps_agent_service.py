@@ -159,7 +159,7 @@ def test_queue_install_refuses_offline_agent_paper_and_foreign_account():
     db = _db(); db.accounts.docs[0]["mode"] = "paper"
     with pytest.raises(ValueError, match="paper"):
         _run(vt.queue_install_terminal(db, {"id": "u1"}, OID, "agt_1", "https://x"))
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(LookupError, match="not found"):
         _run(vt.queue_install_terminal(_db(), {"id": "someone-else"}, OID, "agt_1", "https://x"))
 
 
@@ -167,14 +167,14 @@ def test_terminals_status_marks_stale_heartbeat_for_restart():
     import vps_terminals as vt
     db = _db()
     db.mt5_instances.docs.append({"agent_id": "agt_1", "account_ref": "12345678", "account_id": OID, "directory": "C:\\STOIC\\MT5\\account-12345678\\", "status": "running"})
-    st = _run(vt.terminals_status(db, {"agent_id": "agt_1"}))
+    st = _run(vt.terminals_status(db, {"agent_id": "agt_1", "user_id": "u1"}))
     t = st["terminals"][0]
     assert t["stale"] is True and t["restart_wanted"] is True and t["heartbeat_age_s"] >= 590
     assert st["stale_after_s"] == 180 and st["max_restarts_per_hour"] == 3
     db.accounts.docs[0]["last_heartbeat"] = NOW.isoformat()
-    assert _run(vt.terminals_status(db, {"agent_id": "agt_1"}))["terminals"][0]["restart_wanted"] is False
+    assert _run(vt.terminals_status(db, {"agent_id": "agt_1", "user_id": "u1"}))["terminals"][0]["restart_wanted"] is False
     db.mt5_instances.docs[0]["status"] = "awaiting_login"; db.accounts.docs[0]["last_heartbeat"] = None
-    assert _run(vt.terminals_status(db, {"agent_id": "agt_1"}))["terminals"][0]["restart_wanted"] is False   # never restart a terminal waiting for its login
+    assert _run(vt.terminals_status(db, {"agent_id": "agt_1", "user_id": "u1"}))["terminals"][0]["restart_wanted"] is False   # never restart a terminal waiting for its login
 
 
 def test_report_terminal_mirrors_account_and_alerts_on_restart_loop(monkeypatch):
@@ -211,7 +211,7 @@ def test_queue_restart_terminal_requires_managed_terminal_and_online_agent():
     assert db.accounts.updates[-1][1]["$set"]["vps_terminal.restart_command_id"] == res["command_id"]
     with pytest.raises(ValueError, match="offline"):
         _run(vt.queue_restart_terminal(_db(agent_hb=NOW - timedelta(minutes=10)), {"id": "u1"}, OID, "agt_1"))
-    with pytest.raises(ValueError, match="not found"):
+    with pytest.raises(LookupError, match="not found"):
         _run(vt.queue_restart_terminal(_db(), {"id": "other"}, OID, "agt_1"))
 
 

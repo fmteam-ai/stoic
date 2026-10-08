@@ -60,6 +60,8 @@ export function InstallProgressPanel({ accountId }) {
     const p = useInstallProgress(accountId, 5000);
     const [restarting, setRestarting] = useState(false);
     const restartTerminal = async () => {
+        // A17-7 — open positions stay open at the broker but are UNMANAGED while MT5 restarts
+        if (!window.confirm("Restart this MT5 terminal on the VPS?\n\nWhile it restarts, open positions stay open at the broker but are unmanaged (no stops moved, no closes) for up to a minute. Continue?")) return;
         setRestarting(true);
         try {
             const { data } = await api.post(`/vps/agents/${p.vps_terminal.agent_id}/restart-terminal`, { account_id: accountId });

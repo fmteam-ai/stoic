@@ -54,6 +54,12 @@ def main() -> int:
         body = r.json()
         rec["checks"]["public_key"] = {"ok": r.ok and body.get("public_key_b64") == a.public_key
                                        and body.get("key_id") == a.key_id, "remote": body}
+        # audit #13 — the deployed signer must carry the audit-#12 header hardening (advisory: never blocks a release)
+        missing = [h for h in ("Strict-Transport-Security", "X-Content-Type-Options") if not r.headers.get(h)]
+        if r.headers.get("Server"):
+            missing.append("Server banner present")
+        rec["warnings"] = ([f"signer security headers drift ({', '.join(missing)}) — redeploy: cd deploy/signer && flyctl deploy -a <app>"]
+                           if missing else [])
     except Exception as e:  # noqa: BLE001
         rec["checks"]["reachability"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     rec["checks"]["health_identity"] = rs.signer_health(env)

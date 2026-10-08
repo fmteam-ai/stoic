@@ -63,13 +63,19 @@ jobs:
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
+          set -o pipefail
           pip install -q cryptography requests
           printf '%s' "$RELEASE_SIGNER_TOKEN" > "$RUNNER_TEMP/signer.token"
           if ! python scripts/signer_probe.py --url "$RELEASE_SIGNER_URL" --token-file "$RUNNER_TEMP/signer.token" \
-               --public-key "$RELEASE_PUBLIC_KEY_B64" --key-id "$RELEASE_SIGNER_KEY_ID"; then
+               --public-key "$RELEASE_PUBLIC_KEY_B64" --key-id "$RELEASE_SIGNER_KEY_ID" | tee "$RUNNER_TEMP/signer_probe.json"; then
             echo "::error::Signer identity preflight FAILED — see the probe JSON above. Either the signer runs old code (redeploy: cd deploy/signer && flyctl deploy -a <app>) or the RELEASE_PUBLIC_KEY_B64 secret is not the key GET <signer>/public-key serves (docs/RELEASE_SIGNER.md, 'Signature failed local verification')."
             exit 1
           fi
+          python - "$RUNNER_TEMP/signer_probe.json" <<'PY'
+          import json, sys
+          for w in json.load(open(sys.argv[1])).get("warnings", []):
+              print(f"::warning::{w}")   # audit #13 — signer header drift is advisory, never blocks the release
+          PY
       - name: Install MetaTrader 5 (silent)
         shell: pwsh
         run: |
