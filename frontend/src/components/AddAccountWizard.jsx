@@ -6,6 +6,13 @@ import { Loader2, Server, ChevronRight, ChevronLeft, CheckCircle2 } from "lucide
 import { VpsOfferButton, useVpsOffer } from "@/components/VpsOffer";
 
 const STEPS = ["Broker & login", "VPS", "Review"];
+// N110-9 — the account type feeds lot sizing; cent / micro-cent accounts must be selectable
+const ACCOUNT_TYPES = [
+    { id: "standard", label: "STANDARD", hint: "Regular lots (1 lot = 100 000 units)." },
+    { id: "cent", label: "CENT", hint: "Balance shown in cents; lots sized 100× smaller." },
+    { id: "microcent", label: "MICRO-CENT", hint: "Micro-cent account; smallest position sizes." },
+    { id: "demo", label: "DEMO", hint: "Practice account — detected from the server name too (…-Demo)." },
+];
 const INPUT = "w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono text-white outline-none";
 const LABEL = "font-mono text-[10px] text-[#52525B] tracking-widest block mb-1";
 
@@ -117,6 +124,19 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                 <input id="wz-label" value={f.label} onChange={e => set("label", e.target.value)} placeholder={f.mode === "paper" ? "Paper Sandbox" : "My demo account"} className={INPUT} data-testid="wizard-label-input" />
                             </Field>
                         </div>
+                        {f.mode === "live" && (
+                            <Field id="wz-type" label="ACCOUNT TYPE (DRIVES LOT SIZING)">
+                                <div className="flex flex-wrap gap-2" data-testid="wizard-account-type">
+                                    {ACCOUNT_TYPES.filter(t => !preset?.account_types || preset.account_types.includes(t.id)).map(t => (
+                                        <button key={t.id} type="button" onClick={() => set("account_type", t.id)} data-testid={`wizard-account-type-${t.id}`}
+                                            className={`px-3 py-1.5 text-xs font-mono tracking-widest border ${f.account_type === t.id ? "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]" : "border-[#1F1F1F] text-[#A1A1AA]"}`}>
+                                            {t.label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <p className="text-[11px] text-[#52525B] mt-1">{ACCOUNT_TYPES.find(t => t.id === f.account_type)?.hint}</p>
+                            </Field>
+                        )}
                         <p className="text-[11px] text-[#52525B]">The trading password stays in MT5 on your VPS — STOIC never asks for it.</p>
                     </div>
                 ) : step === 1 ? (
@@ -127,7 +147,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                     <button key={h} type="button" onClick={() => set("vps", h)} data-testid={`wizard-vps-${h}`}
                                         className={`w-full flex items-center gap-3 px-3 py-2 border text-left ${f.vps === h ? "border-[#00FF41] bg-[#00FF41]/5" : "border-[#1F1F1F]"}`}>
                                         <Server className="w-4 h-4 text-[#00FF41]" />
-                                        <div><div className="text-sm text-white font-mono">{h}</div><div className="text-[11px] text-[#52525B]">VPS you already connected — log this account into MT5 there (a second terminal is fine)</div></div>
+                                        <div><div className="text-sm text-white font-mono">{h}</div><div className="text-[11px] text-[#52525B]">VPS you already connected — you'll run the install line on this VPS, with this account logged into MT5 there (a second terminal is fine)</div></div>
                                     </button>
                                 ))}
                                 <button type="button" onClick={() => set("vps", "new")} data-testid="wizard-vps-new"
@@ -141,7 +161,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                     </div>
                 ) : (
                     <div className="space-y-2 text-sm" data-testid="wizard-step-review">
-                        {[["Mode", f.mode === "paper" ? "Paper sandbox" : "Real MT5 terminal"], ...(f.mode === "live" ? [["Broker", brokerName], ["Server", f.server], ["VPS", f.vps === "new" ? "new Windows VPS" : f.vps]] : []), ["Login", f.account_number], ["Label", f.label || "(auto)"]]
+                        {[["Mode", f.mode === "paper" ? "Paper sandbox" : "Real MT5 terminal"], ...(f.mode === "live" ? [["Broker", brokerName], ["Server", f.server], ["Account type", ACCOUNT_TYPES.find(t => t.id === f.account_type)?.label || f.account_type], ["VPS", f.vps === "new" ? "new Windows VPS" : `${f.vps} (you'll run the install line there)`]] : []), ["Login", f.account_number], ["Label", f.label || "(auto)"]]
                             .map(([k, v]) => <div key={k} className="flex justify-between border-b border-[#1F1F1F] py-1.5"><span className="text-[#52525B] font-mono text-xs">{k.toUpperCase()}</span><span className="font-mono text-xs text-white">{v}</span></div>)}
                         <p className="text-[11px] text-[#52525B] pt-1">Next: the account is created and you get a 60-minute code with the PowerShell line to run on the VPS.</p>
                     </div>

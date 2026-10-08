@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 HEARTBEAT_FRESH_S = 120          # EA heartbeats every few seconds; 2 min without = not talking
 FIRST_HEARTBEAT_GRACE_S = 120    # after pairing, the operator still has to attach the EA
+SELF_CHECK_MAX_AGE_S = 15 * 60   # N110-8 — EA self-check flags older than this are ignored (stale hint)
 MIN_INSTALLER_VERSION = "1.3"    # N104-1 — older installers failed the EA download
 
 
@@ -144,6 +145,10 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
     tail = f" · EA {ea_ver}" if ea_ver else ""
     tail += f" · broker says {trade_mode}" if trade_mode else ""
     sc = account.get("ea_self_check") or {}
+    # N110-8 — a self-check hint is only as good as its age: an old autotrading:false must not stick
+    sc_age = _age_s(now, sc.get("at"))
+    if sc_age is None or sc_age > SELF_CHECK_MAX_AGE_S:
+        sc = {}
     if hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing and sc.get("autotrading") is False:
         steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "warn",
                            f"heartbeating, last {_fmt_age(hb_age)}{tail} — but AutoTrading is OFF",

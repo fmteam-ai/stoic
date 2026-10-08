@@ -67,3 +67,4 @@ f2931989adba0a5d0177ccbbd9e943138a9ca76f:test_reports/iteration_231.json:generic
 # False positive (2026-10-06, main102 review): env-var NAME ED25519_SIGNING_KEY_B64 next to a test token in a
 # unit-test fixture dict (no real key; the tracked file now builds the key name at runtime).
 333722e835ff6c9f6897de660009cf55f975c399:backend/tests/unit/test_fixplan_main101.py:generic-api-key:203
+24e7a5f75484447b4259f093600c2c4b48a43b3a:memory/PRD.md:generic-api-key:3432

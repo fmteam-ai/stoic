@@ -26,6 +26,7 @@ class _Alerts:
 
     async def insert_one(self, doc):
         self.inserted += 1
+        self.last = doc
         return type("R", (), {"inserted_id": "x"})()
 
     async def update_one(self, *a, **k):
@@ -33,21 +34,24 @@ class _Alerts:
 
 
 def _run(acked_by, acked_at):
+    """→ (muted?, rows inserted). N109-1: the row is ALWAYS re-inserted; only the notification is muted."""
     import alerting
     db = type("DB", (), {})()
     db.ops_alerts = _Alerts(acked_by, acked_at)
 
     async def go():
         return await alerting.raise_alert(db, "demo_account_reports_real", "critical", "m", dedup_key="demo_mode:a")
-    return asyncio.new_event_loop().run_until_complete(go()), db.ops_alerts.inserted
+    rid = asyncio.new_event_loop().run_until_complete(go())
+    assert rid is not None
+    return bool(db.ops_alerts.last.get("notify_muted_until")), db.ops_alerts.inserted
 
 
-def test_only_human_admin_acks_suppress_reraise():
+def test_only_human_admin_acks_mute_notifications_never_the_row():
     recent = datetime.now(timezone.utc) - timedelta(minutes=5)
-    assert _run("admin@x", recent) == (None, 0)
-    assert _run("metrics-token", recent)[1] == 1          # leaked scraper token cannot mute for 6 h
-    assert _run("system:auto-resolved", recent)[1] == 1
-    assert _run("admin@x", "not-a-date")[1] == 1          # junk acked_at → no crash, no suppression
+    assert _run("admin@x", recent) == (True, 1)            # human ack → row re-opens, push muted
+    assert _run("metrics-token", recent) == (False, 1)     # leaked scraper token cannot mute for 6 h
+    assert _run("system:auto-resolved", recent) == (False, 1)
+    assert _run("admin@x", "not-a-date") == (False, 1)     # junk acked_at → no crash, no mute
 
 
 def test_single_parse_ts_definition_tolerant():

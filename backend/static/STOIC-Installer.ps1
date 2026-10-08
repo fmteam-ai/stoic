@@ -198,6 +198,7 @@ function Get-StoicTerminalExe {
 
 function Restart-StoicTerminal {
     # v1.5 — close the running terminal of THIS install gracefully, relaunch with the startup config.
+    # N110-3 — graceful close only (60 s); never force-kill a terminal that may be managing positions.
     param([Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string]$DataFolder,
           [Parameter(Mandatory = $true)][string]$StartupIni)
     $exeDir = (Split-Path $Exe -Parent).TrimEnd('\')
@@ -205,7 +206,10 @@ function Restart-StoicTerminal {
     foreach ($p in $running) {
         Write-Host "    closing MT5 (pid $($p.Id)) ..." -ForegroundColor DarkGray
         $null = $p.CloseMainWindow()
-        if (-not $p.WaitForExit(20000)) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        if (-not $p.WaitForExit(60000)) {
+            Write-Host "    ✗ MT5 did not close within 60 s — NOT force-killing it. Close it yourself, then start: `"$Exe`" /config:`"$StartupIni`"" -ForegroundColor Red
+            return
+        }
     }
     Start-Sleep -Seconds 2
     $args = @("/config:`"$StartupIni`"")
@@ -214,12 +218,51 @@ function Restart-StoicTerminal {
     Write-Host "    MT5 restarted with the STOIC EA attached (Experts tab: 'STOIC Bridge EA v… started')." -ForegroundColor Green
 }
 
+function Get-StoicTerminalLogin {
+    # N110-4 — the account the terminal is logged into right now, from its own log: today's
+    # <data>\logs\YYYYMMDD.log carries "'12345678': login on Broker-Server ..." (UTF-16). "" when unknown.
+    param([Parameter(Mandatory = $true)][string]$DataFolder)
+    $logDir = Join-Path $DataFolder "logs"
+    if (-not (Test-Path $logDir)) { return "" }
+    $logs = @(Get-ChildItem $logDir -Filter "*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 2)
+    foreach ($log in $logs) {
+        $text = ""
+        try { $text = Get-Content $log.FullName -Encoding Unicode -Raw -ErrorAction Stop } catch { continue }
+        $hits = [regex]::Matches($text, "'(\d{4,12})':\s*login on\s+(\S+)")
+        if ($hits.Count -gt 0) { return $hits[$hits.Count - 1].Groups[1].Value }
+    }
+    return ""
+}
+
+function Get-StoicChartSymbol {
+    # N110-3 — brokers suffix symbols (EURUSD.m, EURUSD.r): a startup ini with Symbol=EURUSD opens no chart and
+    # the EA never attaches. Prefer the first OPEN chart whose symbol starts with $Preferred (profiles\charts\*\*.chr),
+    # then any open chart's symbol, then $Preferred itself.
+    param([Parameter(Mandatory = $true)][string]$DataFolder, [string]$Preferred = "EURUSD")
+    $chartsDir = Join-Path $DataFolder "profiles\charts"
+    $symbols = @()
+    if (Test-Path $chartsDir) {
+        foreach ($chr in @(Get-ChildItem $chartsDir -Recurse -Filter "*.chr" -ErrorAction SilentlyContinue | Sort-Object FullName)) {
+            $text = ""
+            try { $text = Get-Content $chr.FullName -Encoding Unicode -Raw -ErrorAction Stop } catch { $text = "" }
+            if (-not $text -or $text -notmatch 'symbol=') { try { $text = Get-Content $chr.FullName -Raw -ErrorAction Stop } catch { $text = "" } }
+            $m = [regex]::Match($text, '(?m)^\s*symbol=([^\s]+)')
+            if ($m.Success) { $symbols += $m.Groups[1].Value.Trim() }
+        }
+    }
+    $pref = @($symbols | Where-Object { $_ -like "$Preferred*" } | Select-Object -First 1)
+    if ($pref.Count -gt 0) { return $pref[0] }
+    if ($symbols.Count -gt 0) { return $symbols[0] }
+    return $Preferred
+}
+
 function Resolve-StoicTerminal {
     # ONE terminal: explicit path / id, the only one found, or the operator's choice. $null = nothing chosen.
     param([string]$TerminalPath, [string]$TerminalId,
           [string]$Root = (Join-Path $env:APPDATA "MetaQuotes\Terminal"),
           [string[]]$PortableRoots = @("C:\Program Files", "C:\Program Files (x86)", "$env:LOCALAPPDATA\Programs"),
-          [scriptblock]$Prompt = { Read-Host "    terminal number (or re-run with -TerminalPath / -TerminalId)" })
+          [scriptblock]$Prompt = { Read-Host "    terminal number (or re-run with -TerminalPath / -TerminalId)" },
+          [scriptblock]$Confirm = { param($q) Read-Host $q })
     if ($TerminalPath) {
         # explicit data folder (also covers portable-mode terminals: <install dir>\MQL5)
         if (-not (Test-Path (Join-Path $TerminalPath "MQL5\Experts"))) {
@@ -243,11 +286,16 @@ function Resolve-StoicTerminal {
         return $null
     }
     if ($found.Count -eq 1) { return $found[0] }
-    # v1.5 — several terminals: the one that is RUNNING is the one the operator is looking at
+    # v1.5 — several terminals: the one that is RUNNING is the one the operator is looking at.
+    # N110-4 — but it may be logged into ANOTHER account than the pairing code's: show path + login, ask.
     $running = Get-StoicRunningTerminal -Candidates $found
     if ($running) {
-        Write-Host "    Using the MT5 terminal that is open right now: $($running.FullName)" -ForegroundColor Green
-        return $running
+        $login = Get-StoicTerminalLogin $running.FullName
+        Write-Host "    MT5 terminal open right now: $($running.FullName)" -ForegroundColor Green
+        Write-Host ("    logged in as: {0}" -f $(if ($login) { "#$login" } else { "(unknown — no login line in its log)" })) -ForegroundColor White
+        $ok = & $Confirm "    Is this the terminal logged into the account this pairing code belongs to? [y/N]"
+        if ("$ok" -match '^[Yy]') { return $running }
+        Write-Host "    Not confirmed — choose the terminal below (or re-run with -TerminalPath / -TerminalId)." -ForegroundColor Yellow
     }
     # A15-2 — never write one account's token into EVERY terminal: make the operator choose
     Write-Host "    Several terminals found — a pairing token belongs to ONE account. Choose the terminal for it:" -ForegroundColor Yellow
@@ -308,14 +356,17 @@ function Install-Stoic {
         [switch]$NoCompile,
 
         # v1.5 — zero-touch attach: the startup config opens this chart with the EA on it
+        # (N110-3: when not given, the first open chart starting with EURUSD — broker suffixes included)
         [string]$ChartSymbol = "EURUSD",
         [string]$ChartPeriod = "M15",
         [switch]$NoRestart
     )
 
-    $InstallerVersion = "1.5"
+    $InstallerVersion = "1.6"
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $ServerUrl = $ServerUrl.TrimEnd('/')
+    # N110-2 — the bridge token travels to this host: https only, no exceptions
+    if ($ServerUrl -notmatch '^https://') { throw "STOIC: -ServerUrl must start with https:// (got '$ServerUrl') — the bridge token never travels in clear" }
     $script:RotateDeviceKey = [bool]$RotateDeviceKey
     $devicePublicKey = Get-StoicDevicePublicKey
 
@@ -330,7 +381,9 @@ function Install-Stoic {
     $terminal = Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId
     if (-not $terminal) { return }
     $terminals = @($terminal)
+    $terminalLogin = Get-StoicTerminalLogin $terminal.FullName
     Write-Host "    • $($terminal.FullName)" -ForegroundColor White
+    if ($terminalLogin) { Write-Host "    • logged in as #$terminalLogin" -ForegroundColor White }
     Write-Host ""
 
     # ── 2. Claim pairing token ────────────────────────────────────────
@@ -368,8 +421,19 @@ function Install-Stoic {
     $heartbeatUrl   = $claimResp.heartbeat_url
     $eaScriptUrl    = $claimResp.ea_script_url
     $eaLatestVer    = $claimResp.ea_latest_version
+    # N110-2 — the server URL the EA talks to is the one the server itself announced (same source as the
+    # WebRequest host the user is told to allow-list); the -ServerUrl argument is only the bootstrap.
+    $eaServerUrl    = if ($claimResp.server_url) { "$($claimResp.server_url)".TrimEnd('/') } else { $ServerUrl }
+    if ($eaServerUrl -notmatch '^https://') { Write-Host "    ✗ server announced a non-https server_url ($eaServerUrl) — refusing to write it" -ForegroundColor Red; return }
 
     Write-Host "    ✓ Paired with: $broker #$accountNumber  ($accountLabel)" -ForegroundColor Green
+    # N110-4 — the pairing code belongs to ONE account: refuse to configure a terminal logged into another one
+    if ($terminalLogin -and $accountNumber -and ("$accountNumber" -ne "$terminalLogin")) {
+        Write-Host "    ✗ This terminal is logged in as #$terminalLogin but the pairing code belongs to #$accountNumber." -ForegroundColor Red
+        Write-Host "      Nothing was written. Log the right account into MT5 (or re-run with -TerminalPath pointing at its data folder)," -ForegroundColor Yellow
+        Write-Host "      then get a NEW CODE from the dashboard (this one is spent)." -ForegroundColor Yellow
+        return
+    }
     if ($claimResp.device_key_id) { Write-Host "    ✓ Installer device key enrolled (key id $($claimResp.device_key_id))" -ForegroundColor Green }
     else { Write-Host "    ! server did not enrol the device key - live proof will not be attested (update the server)" -ForegroundColor Yellow }
     Write-Host ""
@@ -414,27 +478,31 @@ $bridgeToken
         @"
 # STOIC server URL — the EA reads this when its ServerUrl input is left at default.
 # Generated: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
-$ServerUrl
+$eaServerUrl
 "@ | Set-Content -Path (Join-Path $filesDir "STOIC-Server.txt") -Encoding UTF8 -NoNewline:$false
 
         # v1.5 — EA preset + MT5 startup config: terminal64.exe /config:<ini> opens a chart with the EA
         # attached and Algo Trading allowed, so nobody drags the EA or edits inputs.
+        # N110-2 — the preset carries NO ServerUrl: the drop file is the single source (a later domain change
+        # in STOIC-Server.txt must reach charts that loaded the preset, and the EA's https check must apply).
         $presetsDir = Join-Path $t.FullName "MQL5\Presets"
         if (-not (Test-Path $presetsDir)) { New-Item -ItemType Directory -Path $presetsDir -Force | Out-Null }
-        "ServerUrl=$ServerUrl`r`n" | Set-Content -Path (Join-Path $presetsDir "stoic.set") -Encoding Unicode -NoNewline
+        "; STOIC preset (installer v$InstallerVersion) — no input overrides: server URL, token and installation id are read from MQL5\Files\STOIC-*.txt`r`n" | Set-Content -Path (Join-Path $presetsDir "stoic.set") -Encoding Unicode -NoNewline
+        # N110-3 — EA-only startup: no terminal-wide DLL-import change (third-party EAs keep their DLLs);
+        # the chart symbol follows the broker's suffix (EURUSD.m / EURUSD.r) when one is already open.
+        $chartSymbol = if ($PSBoundParameters.ContainsKey('ChartSymbol')) { $ChartSymbol } else { Get-StoicChartSymbol -DataFolder $t.FullName -Preferred $ChartSymbol }
         $startupIni = Join-Path $t.FullName "stoic-start.ini"
         @"
 ; STOIC startup config (installer v$InstallerVersion) — launch: terminal64.exe /config:"$startupIni"
 [Experts]
 AllowLiveTrading=1
-AllowDllImport=0
 Enabled=1
 Account=0
 Profile=0
 [StartUp]
 Expert=EmergentTradingBridge
 ExpertParameters=stoic.set
-Symbol=$ChartSymbol
+Symbol=$chartSymbol
 Period=$ChartPeriod
 "@ | Set-Content -Path $startupIni -Encoding ASCII
 
@@ -460,8 +528,13 @@ $installationId
             try {
                 $ex5Resp = Invoke-WebRequest -Uri "$ServerUrl/api/ea-script.ex5" -OutFile "$ex5Dest.tmp" -UseBasicParsing -PassThru
                 $expectedHash = $ex5Resp.Headers["X-STOIC-SHA256"]
+                $ex5Version   = "$($ex5Resp.Headers['X-STOIC-EA-Version'])".Trim()
                 $actualHash = (Get-FileHash "$ex5Dest.tmp" -Algorithm SHA256).Hash.ToLower()
-                if ($expectedHash -and $actualHash -eq $expectedHash.ToLower()) {
+                if ($ex5Version -and $eaLatestVer -and $ex5Version -ne "$eaLatestVer") {
+                    # N110-7 — a leftover older EX5 on the server must not be deployed as the latest version
+                    Remove-Item -Force "$ex5Dest.tmp" -ErrorAction SilentlyContinue
+                    Write-Host "    ✗ server's CI .ex5 is EA $ex5Version but the latest source is $eaLatestVer — not deploying it; compiling locally" -ForegroundColor Yellow
+                } elseif ($expectedHash -and $actualHash -eq $expectedHash.ToLower()) {
                     Move-Item -Force "$ex5Dest.tmp" $ex5Dest
                     $ciEx5Deployed = $true
                     Write-Host "    ✓ $($t.Name)  →  CI-built .ex5 deployed (SHA-256 verified)" -ForegroundColor Green
@@ -556,8 +629,14 @@ $installationId
     if (-not $NoRestart -and $installedTerminals.Count -gt 0) {
         $exe = Get-StoicTerminalExe $terminal.FullName
         if ($exe) {
-            $answer = Read-Host "    Restart MetaTrader 5 now so the EA attaches itself to a $ChartSymbol chart? [Y/n]"
-            if (-not $answer -or $answer -match '^[Yy]') { Restart-StoicTerminal -Exe $exe -DataFolder $terminal.FullName -StartupIni (Join-Path $terminal.FullName "stoic-start.ini") }
+            # N110-3 — opt-in restart (default N) with the consequences spelled out first
+            Write-Host "    MT5 can be restarted now so the EA attaches itself to a $chartSymbol chart." -ForegroundColor White
+            Write-Host "    ⚠ While MT5 restarts, open positions stay open at the broker but are UNMANAGED (no stops moved, no closes)." -ForegroundColor Yellow
+            Write-Host "    ⚠ The startup config turns Algo Trading ON for this terminal — every other EA on its charts becomes active too." -ForegroundColor Yellow
+            Write-Host "    Say N if another EA is running or positions are open; attach EmergentTradingBridge by hand later instead." -ForegroundColor DarkGray
+            $answer = Read-Host "    Restart MetaTrader 5 now? [y/N]"
+            if ($answer -match '^[Yy]') { Restart-StoicTerminal -Exe $exe -DataFolder $terminal.FullName -StartupIni (Join-Path $terminal.FullName "stoic-start.ini") }
+            else { Write-Host "    Not restarting. Later: `"$exe`" /config:`"$(Join-Path $terminal.FullName 'stoic-start.ini')`"  — or drag the EA onto a chart." -ForegroundColor DarkGray }
         } else {
             Write-Host "    (terminal64.exe not found for this data folder — attach the EA by hand, see below)" -ForegroundColor DarkGray
         }

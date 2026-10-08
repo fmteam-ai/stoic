@@ -50,14 +50,25 @@ def check(mq5: str = MQ5, hashes: str = HASHES, ea_release: str = EA_RELEASE) ->
         rec = json.load(open(ea_release))
         if rec.get("ex5_sha256") and rec.get("mq5_sha256") and rec["mq5_sha256"] != on_disk:
             # A signed record for an OLDER version is a pending re-release (ea-release on main re-compiles and
-            # re-signs, keeping the old one as `previous`). The hazard is a changed MQ5 under the SAME version.
-            if rec.get("version") and v and rec["version"] != v:
+            # re-signs, keeping the old one as `previous`). The hazards: a changed MQ5 under the SAME version,
+            # or (N110-10) a record NEWER than the source — a rollback that would ship an EA the record postdates.
+            if rec.get("version") and v and _version_tuple(rec["version"]) < _version_tuple(v):
                 print(f"WARN: release/ea_release.json is signed for EA {rec['version']}; MQ5 is {v} — "
                       "run the ea-release workflow on main after merging to re-compile and re-sign")
+            elif rec.get("version") and v and _version_tuple(rec["version"]) > _version_tuple(v):
+                fails.append(f"release/ea_release.json is signed for EA {rec['version']} but the MQ5 is OLDER ({v}) — "
+                             "a rollback must restore the matching record (or bump the version forward)")
             else:
                 fails.append("release/ea_release.json holds a signed EX5 for a DIFFERENT MQ5 with the SAME "
                              f"#property version {v} — bump the version (and re-capture) so terminals can tell the builds apart")
     return fails
+
+
+def _version_tuple(v: str) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except ValueError:
+        return (-1,)
 
 
 def main() -> int:

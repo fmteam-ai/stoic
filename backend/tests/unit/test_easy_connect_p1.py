@@ -21,7 +21,7 @@ def _read(*rel):
 
 def test_ea_1_61_server_url_autoload_and_self_check():
     mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
-    assert '#define EA_CLIENT_VERSION "1.61"' in mq5 and '#property version   "1.61"' in mq5
+    assert '#define EA_CLIENT_VERSION "1.62"' in mq5 and '#property version   "1.62"' in mq5
     assert "preview.emergentagent.com" not in mq5.split("string ResolveServerUrl")[0].split("input string ServerUrl")[1].split("\n")[0]
     assert 'input string ServerUrl              = "https://www.stoicaibot.com"' in mq5
     assert 'FileIsExist("STOIC-Server.txt")' in mq5 and "g_server_url = ResolveServerUrl();" in mq5
@@ -34,9 +34,9 @@ def test_ea_1_61_server_url_autoload_and_self_check():
     init = mq5[mq5.index("int OnInit()"):]
     assert init.index("g_server_url = ResolveServerUrl();") < init.index("SendHeartbeat();")
     # version surfaces
-    assert '"ea_latest_version": "1.61"' in _read("backend", "routes", "setup_routes.py")
-    assert 'LATEST_EA = "1.61"' in _read("backend", "routes", "bot_routes.py")
-    assert 'LATEST_EA_VERSION = "1.61"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
+    assert '"ea_latest_version": "1.62"' in _read("backend", "routes", "setup_routes.py")
+    assert 'LATEST_EA = "1.62"' in _read("backend", "routes", "bot_routes.py")
+    assert 'LATEST_EA_VERSION = "1.62"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
     import demo_readiness as dr
     assert "1.60" in dr.DEMO_ACCEPTED_EA                   # a 1.60 terminal stays accepted during the demo
 
@@ -58,11 +58,17 @@ def test_install_progress_turns_flags_into_the_exact_fix():
     def hb(acc):
         res = ip.derive(acc, None, None, attested=("unmeasured", None), accepted_hashes=[], now=now, request_base="https://s.example/")
         return next(s for s in res["steps"] if s["id"] == "heartbeat")
-    s = hb({**base, "ea_self_check": {"autotrading": False, "ea_trade_allowed": True, "webrequest_ok": True}})
+    fresh = now.isoformat()
+    s = hb({**base, "ea_self_check": {"autotrading": False, "ea_trade_allowed": True, "webrequest_ok": True, "at": fresh}})
     assert s["status"] == "warn" and "AutoTrading" in s["hint"]
-    s = hb({**base, "ea_self_check": {"autotrading": True, "ea_trade_allowed": False, "webrequest_ok": True}})
+    s = hb({**base, "ea_self_check": {"autotrading": True, "ea_trade_allowed": False, "webrequest_ok": True, "at": fresh}})
     assert s["status"] == "warn" and "Allow Algo Trading" in s["hint"]
-    s = hb({**base, "ea_self_check": {"autotrading": True, "ea_trade_allowed": True, "webrequest_ok": True}})
+    s = hb({**base, "ea_self_check": {"autotrading": True, "ea_trade_allowed": True, "webrequest_ok": True, "at": fresh}})
+    assert s["status"] == "done"
+    # N110-8 — a stale (or undated) autotrading:false hint no longer sticks
+    s = hb({**base, "ea_self_check": {"autotrading": False, "ea_trade_allowed": True, "at": (now - timedelta(minutes=16)).isoformat()}})
+    assert s["status"] == "done"
+    s = hb({**base, "ea_self_check": {"autotrading": False, "ea_trade_allowed": True}})
     assert s["status"] == "done"
     s = hb({**base, "last_heartbeat": None, "installer_paired_at": (now - timedelta(minutes=12)).isoformat()})
     assert s["status"] == "blocked" and "inputs at default" in s["hint"]
@@ -70,10 +76,10 @@ def test_install_progress_turns_flags_into_the_exact_fix():
 
 def test_installer_v1_5_zero_touch_files_and_restart():
     ps = _read("backend", "static", "STOIC-Installer.ps1")
-    assert '$InstallerVersion = "1.5"' in ps
+    assert '$InstallerVersion = "1.6"' in ps
     assert "SecurityProtocolType]::Tls12" in ps
     assert "function Get-StoicRunningTerminal" in ps and "Get-Process terminal64" in ps
-    assert "STOIC-Server.txt" in ps and '"ServerUrl=$ServerUrl`r`n"' in ps and "stoic.set" in ps
+    assert "STOIC-Server.txt" in ps and "ServerUrl=$" not in ps and "stoic.set" in ps     # N110-2 — preset carries no ServerUrl
     ini = ps[ps.index("[Experts]"):ps.index("Period=$ChartPeriod")]
     assert "AllowLiveTrading=1" in ini and "Expert=EmergentTradingBridge" in ini and "ExpertParameters=stoic.set" in ini
     assert "function Restart-StoicTerminal" in ps and "/config:" in ps and "CloseMainWindow()" in ps
@@ -152,7 +158,8 @@ def test_installer_hash_pin_in_one_liner_and_endpoint():
     sha = hashlib.sha256(raw).hexdigest().upper()
     assert cs.installer_sha256() == sha and len(sha) == 64
     cmd = cs.install_command("https://s.example", "tok123")
-    assert cmd.startswith('$r=iwr "https://s.example/api/setup/installer.ps1" -UseBasicParsing; ')
+    assert cmd.startswith('[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; '
+                          '$r=iwr "https://s.example/api/setup/installer.ps1" -UseBasicParsing; ')    # N110-5 — TLS 1.2 before the first download
     assert f'if($h -ne "{sha}")' in cmd and "throw" in cmd and "Get-FileHash -InputStream $r.RawContentStream" in cmd
     assert cmd.index("throw") < cmd.index("iex (")                      # verify BEFORE execute
     assert cmd.endswith('Install-Stoic -Token "tok123" -ServerUrl "https://s.example"')
@@ -208,7 +215,7 @@ def test_release_hash_drift_guard_allows_version_bump_but_blocks_silent_drift(tm
     spec = importlib.util.spec_from_file_location("drift", os.path.join(ROOT, "scripts", "check_release_hash_drift.py"))
     drift = importlib.util.module_from_spec(spec); spec.loader.exec_module(drift)
     mq5 = tmp_path / "EmergentTradingBridge.mq5"
-    mq5.write_text('#property version   "1.61"\nint OnInit(){return 0;}\n', encoding="utf-8")
+    mq5.write_text('#property version   "1.61"\nint OnInit(){return 0;}\n', encoding="utf-8")   # fixture versions, not the shipped EA
     sha = hashlib.sha256(mq5.read_bytes()).hexdigest()
     hashes = tmp_path / "RELEASE_HASHES.json"
     hashes.write_text(json.dumps({"ea": {"version": "1.61", "mq5_sha256": sha}}))

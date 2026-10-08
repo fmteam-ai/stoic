@@ -185,7 +185,13 @@ async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None,
                                    dedup_key=key, meta=meta, synthetic=synthetic)
         if new_id:
             raised += 1
-            if not synthetic:
+            muted = None
+            try:   # N109-1 — the row is open; only the pushes honour an ack / mute window
+                from alerting import notification_mute_until
+                muted = await notification_mute_until(db, KIND, key, now)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("mute lookup failed: %s", type(e).__name__)
+            if not synthetic and not muted:
                 try:
                     await notify(text)
                 except Exception as e:  # noqa: BLE001 — Telegram must never break the evaluator

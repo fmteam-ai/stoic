@@ -22,9 +22,10 @@ def _age_s(iso) -> float | None:
 
 
 def _base_url(request) -> str:
-    """SEC-002 — never trust the raw Host header: PUBLIC_BASE_URL wins;
-    otherwise the request host must match a configured CORS origin, else
-    fall back to the first https origin."""
+    """SEC-002 — never trust the raw Host header: PUBLIC_BASE_URL wins; otherwise the request host
+    must match a configured CORS origin; then PUBLIC_BACKEND_URL / REACT_APP_BACKEND_URL; else the
+    first https origin. N110-2 — the ONE source for the install one-liner, the claim response's
+    server_url (→ STOIC-Server.txt) and the WebRequest host the user is told to allow-list."""
     env = os.environ.get("PUBLIC_BASE_URL", "").rstrip("/")
     if env:
         return env
@@ -36,6 +37,9 @@ def _base_url(request) -> str:
         for o in allowed:
             if o.split("://", 1)[-1] == req_host:
                 return o
+    backend = (os.environ.get("PUBLIC_BACKEND_URL") or os.environ.get("REACT_APP_BACKEND_URL") or "").rstrip("/")
+    if backend:
+        return backend
     https = [o for o in allowed if o.startswith("https://")]
     if https:
         return https[0]
@@ -60,7 +64,9 @@ def install_command(base_url: str, token: str, sha256: str | None = None) -> str
     """Easy-Connect hash pin: the one-liner downloads the installer, verifies its SHA-256 against the value
     pinned at issue time and refuses to run on a mismatch (PowerShell 5.1 and 7)."""
     sha256 = sha256 or installer_sha256()
-    return (f'$r=iwr "{base_url}/api/setup/installer.ps1" -UseBasicParsing; '
+    # N110-5 — TLS 1.2 BEFORE the first download (Server 2012 R2/2016 default .NET would fail the iwr)
+    return (f'[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; '
+            f'$r=iwr "{base_url}/api/setup/installer.ps1" -UseBasicParsing; '
             f'$h=(Get-FileHash -InputStream $r.RawContentStream -Algorithm SHA256).Hash; '
             f'if($h -ne "{sha256}"){{throw "STOIC installer hash mismatch ($h) - do not run"}}; '
             f'iex ([Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()).TrimStart([char]0xFEFF)); '

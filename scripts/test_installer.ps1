@@ -57,13 +57,32 @@ try {
     $t = Resolve-StoicTerminal -Root (Join-Path $tmp "nothing-here") -PortableRoots @((Join-Path $tmp "portable"))
     Assert-Equal $t.FullName $portable "single portable terminal auto-selected"
 
-    # v1.5 — several terminals: the RUNNING one (terminal64.exe folder == origin.txt) is picked without a prompt
+    # v1.5 — several terminals: the RUNNING one (terminal64.exe folder == origin.txt) is offered first;
+    # N110-4 — the operator must CONFIRM it (path + login shown); declining falls back to the numbered choice
     function Get-Process { param($Name, $ErrorAction) [pscustomobject]@{ Path = "C:\Program Files\Broker MT5\terminal64.exe" } }
-    $t = Resolve-StoicTerminal -Root $tmp -PortableRoots @() -Prompt { throw "prompt must not be shown when one terminal is running" }
+    $t = Resolve-StoicTerminal -Root $tmp -PortableRoots @() -Confirm { "y" } -Prompt { throw "prompt must not be shown when the running terminal is confirmed" }
     Assert-Equal $t.Name $idB "running terminal (origin.txt match) auto-selected among several"
+    $t = Resolve-StoicTerminal -Root $tmp -PortableRoots @() -Confirm { "" } -Prompt { "1" }
+    Assert-Equal $t.Name $idA "running terminal NOT confirmed (Enter = No) → numbered choice is used"
     function Get-Process { param($Name, $ErrorAction) @() }
     Assert-Null (Get-StoicRunningTerminal -Candidates (@(Get-StoicTerminals -Root $tmp -PortableRoots @()))) "no MT5 running → no auto-pick (prompt path)"
     Remove-Item Function:\Get-Process
+
+    # N110-4 — login detection from the terminal's own log (UTF-16)
+    New-Item -ItemType Directory -Force (Join-Path $tmp "$idB\logs") | Out-Null
+    Set-Content -Path (Join-Path $tmp "$idB\logs\20261007.log") -Encoding Unicode -Value @(
+        "0`t10:00:01.000`tNetwork`t'11111111': login on Broker-Demo through Access Point EU 1",
+        "0`t10:05:01.000`tNetwork`t'22222222': login on Broker-Demo through Access Point EU 1")
+    Assert-Equal (Get-StoicTerminalLogin (Join-Path $tmp $idB)) "22222222" "last login line wins"
+    Assert-Equal (Get-StoicTerminalLogin (Join-Path $tmp $idA)) "" "no logs folder → unknown login"
+
+    # N110-3 — chart symbol follows the broker suffix of an OPEN chart
+    New-Item -ItemType Directory -Force (Join-Path $tmp "$idB\profiles\charts\Default") | Out-Null
+    Set-Content -Path (Join-Path $tmp "$idB\profiles\charts\Default\chart01.chr") -Encoding Unicode -Value @("<chart>", "symbol=XAUUSD.m", "period_type=1", "</chart>")
+    Set-Content -Path (Join-Path $tmp "$idB\profiles\charts\Default\chart02.chr") -Encoding Unicode -Value @("<chart>", "symbol=EURUSD.m", "period_type=1", "</chart>")
+    Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idB)) "EURUSD.m" "open EURUSD.m chart preferred over XAUUSD.m"
+    Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idB) -Preferred "GBPUSD") "XAUUSD.m" "no match → first open chart symbol"
+    Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idA)) "EURUSD" "no charts → preferred symbol as-is"
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
@@ -99,6 +118,17 @@ if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $by
 else { $script:failures++; Write-Host "  FAIL installer lacks the UTF-8 BOM (N105-5)" -ForegroundColor Red }
 if ($body -match 'Remove-Item -Force \$ex5' -and $body -match 'Test-StoicCompileLog -LogPath \$log') { Write-Host "  ok   stale .ex5 removed before compile; compile trusted only on a 0-error log" -ForegroundColor Green }
 else { $script:failures++; Write-Host "  FAIL compile path does not remove the stale .ex5 / check the log" -ForegroundColor Red }
+# main110 review (N110-2/3/7)
+if ($body -notmatch 'ServerUrl=\$' -and $body -match 'STOIC-Server.txt' -and $body -match '\$eaServerUrl') { Write-Host "  ok   preset carries no ServerUrl; STOIC-Server.txt written from the claim response" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL preset still overrides ServerUrl or the drop file is not written from server_url (N110-2)" -ForegroundColor Red }
+if ($body -match "notmatch '\^https://'" ) { Write-Host "  ok   non-https -ServerUrl is refused" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL installer accepts a non-https -ServerUrl (N110-2)" -ForegroundColor Red }
+if ($body -notmatch 'AllowDllImport' -and $body -match '\[y/N\]' -and $body -match 'UNMANAGED') { Write-Host "  ok   restart is opt-in with a warning; no terminal-wide AllowDllImport" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL restart prompt/ini not hardened (N110-3)" -ForegroundColor Red }
+if ($src -notmatch 'Stop-Process') { Write-Host "  ok   MT5 is never force-killed" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL installer still force-kills MT5 (N110-3)" -ForegroundColor Red }
+if ($body -match 'X-STOIC-EA-Version') { Write-Host "  ok   CI .ex5 version header compared with ea_latest_version" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL EX5 download not tied to a version (N110-7)" -ForegroundColor Red }
 
 if ($script:failures -gt 0) { throw "installer tests: $($script:failures) failure(s)" }
 Write-Host "installer tests passed" -ForegroundColor Green

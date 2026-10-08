@@ -296,8 +296,27 @@ def _external_sign(data: bytes, purpose: str) -> str:
     if not isinstance(sig, str) or len(sig) != 128:
         raise RuntimeError("external signer returned no/invalid signature_hex")
     if not verify_hex(data, sig, _pinned_pub(env, purpose), purpose=purpose):
-        raise RuntimeError("external signer signature failed local verification against the pinned public key")
+        raise RuntimeError("external signer signature failed local verification against the pinned public key"
+                           + _verification_failure_diagnosis(url, data, sig, _pinned_pub(env, purpose), env))
     return sig
+
+
+def _verification_failure_diagnosis(url: str, data: bytes, sig: str, pinned: str, env) -> str:
+    """Tell the operator WHICH of the two real-world causes it is: a signer still running pre-N100-11
+    code (signs the raw bytes, ignores `purpose`) or a pin that is not the key the signer serves."""
+    import requests
+    if verify_hex(data, sig, pinned, purpose=None):
+        return (" — the signer signed the RAW payload without the domain prefix: it runs pre-N100-11 code. "
+                "Redeploy the signer CODE (cd deploy/signer && flyctl deploy -a <app>; never init_fly_signer.sh).")
+    try:
+        body = requests.get(f"{url}/public-key", timeout=_timeout(env), verify=_tls_verify(env)).json()
+        served = (body.get("public_key_b64") or "").strip()
+    except Exception:  # noqa: BLE001
+        return " — signer /public-key unreachable; compare it with the pinned RELEASE_PUBLIC_KEY_B64 manually."
+    if served and served != pinned:
+        return (f" — the signer serves public key {served} but the pinned key is {pinned}: "
+                "set RELEASE_PUBLIC_KEY_B64 (GitHub secret + server backend/.env) to the served key.")
+    return " — key pin matches the served key; the signer did not sign the submitted bytes (check its logs)."
 
 
 def signer_health(env=None) -> dict:
