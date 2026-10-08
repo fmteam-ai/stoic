@@ -1,4 +1,4 @@
-﻿# STOIC VPS Agent v1.2 - per-account PORTABLE MetaTrader 5 terminals, installed from the dashboard,
+﻿# STOIC VPS Agent v1.3 - per-account PORTABLE MetaTrader 5 terminals, installed from the dashboard,
 # kept alive by a watchdog (Easy-Connect Phase 2).
 # ASCII-only on purpose (N113-2): Windows PowerShell 5.1 runs the scheduled task and reads a .ps1 as ANSI
 # unless it carries a UTF-8 BOM; this file is served WITH a BOM and never contains a non-ASCII character.
@@ -33,7 +33,7 @@ param(
     [string]$ConfigPath = "$env:ProgramData\Stoic\vps-agent.json"
 )
 
-$script:AgentVersion = "1.2"
+$script:AgentVersion = "1.3"
 $script:TaskName = "StoicVpsAgent"
 $script:Root = "C:\STOIC"
 $script:DataDir = "$env:ProgramData\Stoic"
@@ -49,6 +49,9 @@ $script:RestartLedger = "$env:ProgramData\Stoic\restarts.json"
 $script:StartGraceS = 180
 $script:LoginRe = '\A\d{4,12}\z'                       # N113-7 - \A \z: "$" would also match before a trailing newline
 $script:TrustedOwners = @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM", "$($env:USERDOMAIN)\$($env:USERNAME)")
+# audit #14 - compare on well-known SIDs, not on (localized) account names: Administrators, SYSTEM, the agent user
+$script:TrustedSids = @("S-1-5-32-544", "S-1-5-18")
+try { $script:TrustedSids += [Security.Principal.WindowsIdentity]::GetCurrent().User.Value } catch { }
 
 try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
 
@@ -60,9 +63,24 @@ function Write-StoicLog([string]$Message, [string]$Level = "INFO") {
 
 # -- protected data folder (N113-3): %ProgramData% lets ANY local user pre-create folders/files they own; the elevated
 #    task would then run a script or read a config that user can edit. Lock the folder down BEFORE the first write.
+function ConvertTo-StoicSid($Identity) {
+    # NTAccount / string -> SID string; $null when it cannot be translated (then the caller falls back to the name)
+    try {
+        if ($Identity -is [Security.Principal.SecurityIdentifier]) { return $Identity.Value }
+        return ([Security.Principal.NTAccount]"$Identity").Translate([Security.Principal.SecurityIdentifier]).Value
+    } catch { return $null }
+}
+function Test-StoicTrustedIdentity($Identity) {
+    $sid = ConvertTo-StoicSid $Identity
+    if ($sid) { return ($script:TrustedSids -contains $sid) }
+    return ($script:TrustedOwners -contains "$Identity")
+}
 function Assert-StoicTrustedOwner([string]$Path) {
-    $owner = (Get-Acl -LiteralPath $Path).Owner
-    if ($script:TrustedOwners -notcontains $owner) { throw "refusing to use '$Path': owned by '$owner' (expected Administrators, SYSTEM or $($env:USERDOMAIN)\$($env:USERNAME)) - delete it as Administrator and retry" }
+    $acl = Get-Acl -LiteralPath $Path
+    $owner = $acl.Owner
+    $sid = $null; try { $sid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value } catch { }
+    $trusted = $(if ($sid) { $script:TrustedSids -contains $sid } else { Test-StoicTrustedIdentity $owner })
+    if (-not $trusted) { throw "refusing to use '$Path': owned by '$owner' (expected Administrators, SYSTEM or $($env:USERDOMAIN)\$($env:USERNAME)) - delete it as Administrator and retry" }
 }
 function Invoke-StoicLockdown([string]$Path) {
     & icacls $Path /inheritance:r /grant:r "*S-1-5-32-544:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "$($env:USERDOMAIN)\$($env:USERNAME):(OI)(CI)F" /T /Q | Out-Null
@@ -72,8 +90,8 @@ function Test-StoicLockedDown([string]$Path) {
     # true when nothing outside Administrators / SYSTEM / the agent user has an access rule on the folder
     try {
         $acl = Get-Acl -LiteralPath $Path
-        if ($script:TrustedOwners -notcontains $acl.Owner) { return $false }
-        foreach ($r in $acl.Access) { if ($script:TrustedOwners -notcontains "$($r.IdentityReference)") { return $false } }
+        if (-not (Test-StoicTrustedIdentity $acl.Owner)) { return $false }
+        foreach ($r in $acl.Access) { if (-not (Test-StoicTrustedIdentity $r.IdentityReference)) { return $false } }
         return $true
     } catch { return $false }
 }

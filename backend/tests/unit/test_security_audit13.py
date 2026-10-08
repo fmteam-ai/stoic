@@ -39,3 +39,14 @@ def test_signer_probe_warns_on_header_drift_without_blocking_release():
     assert 'rec["result"] = "PASS" if all(c.get("ok") for c in rec["checks"].values())' in probe   # warnings are not checks
     wf = _read(".github", "workflows", "ea-release.yml")
     assert "set -o pipefail" in wf and 'signer_probe.json' in wf and '::warning::{w}' in wf
+
+
+def test_audit14_agent_owner_checks_compare_well_known_sids_not_localized_names():
+    ps = _read("backend", "static", "STOIC-Agent.ps1")
+    assert '$script:TrustedSids = @("S-1-5-32-544", "S-1-5-18")' in ps and "[Security.Principal.WindowsIdentity]::GetCurrent().User.Value" in ps
+    assert "function ConvertTo-StoicSid" in ps and "function Test-StoicTrustedIdentity" in ps
+    owner = ps.split("function Assert-StoicTrustedOwner")[1].split("function Invoke-StoicLockdown")[0]
+    assert "GetOwner([Security.Principal.SecurityIdentifier])" in owner and "$script:TrustedOwners -notcontains" not in owner
+    lock = ps.split("function Test-StoicLockedDown")[1].split("function Initialize-StoicDataDir")[0]
+    assert lock.count("Test-StoicTrustedIdentity") == 2 and "$script:TrustedOwners -notcontains" not in lock
+    assert open(os.path.join(ROOT, "backend", "static", "STOIC-Agent.ps1"), "rb").read()[:3] == b"\xef\xbb\xbf"
