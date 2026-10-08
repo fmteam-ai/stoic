@@ -27,6 +27,28 @@ git tag -a v1.0.0-rc.1 -m "release candidate 1 — staged-tree pipeline"
 git push origin v1.0.0-rc.1
 ```
 
+### 2a. Cutting **v1.60.3** (demo phase, EA 1.62) — exact order
+The Release job `Reproducibility` refuses a tag whose tree has no SIGNED `release/ea_release.json` for the shipped MQ5
+with the EX5 committed, so the ea-release bot commit MUST be the tagged commit (or an ancestor of it).
+1. **Save to GitHub** → merge the PR into `main` (CI push run green; `release_preflight.sh` is 6/6 OK on this tree).
+2. Actions → **ea-release** → Run workflow (branch `main`). It must pass *Signer identity preflight*, compile 1.62 with
+   0 errors, sign through the Fly signer and push `ea-release: signed EX5 record for <sha> [skip ci]` to `main`
+   (`release/ea_release.json`, `docs/RELEASE_HASHES.json`, `release/rc_lock.json`, `backend/static/EmergentTradingBridge.ex5`).
+   A `::warning::` about signer security headers is advisory (redeploy the signer when convenient).
+3. From a local clone:
+   ```bash
+   git pull --ff-only origin main
+   python scripts/verify_ea_release.py --check          # must print OK (signed 1.62, EX5 hash recorded)
+   python scripts/check_release_hash_drift.py           # OK, no WARN
+   git tag -a v1.60.3 -m "v1.60.3 — demo phase: EA 1.62 signed, VPS Agent v1.3, main110-113 reviews, audits #11-14"
+   git push origin v1.60.3
+   ```
+   The bot commit carries `[skip ci]`, so the tag push alone does NOT start `Release`.
+4. GitHub → Releases → **Draft a new release** → choose tag `v1.60.3` → Publish. The `published` event runs
+   `release.yml` (unit+truth+integration from the archive, hermetic `verify_release.sh`, full-topology readiness, MetaEditor
+   reproducibility against the signed record, signed attestation, image build/push) and then `deploy-production`.
+5. On the server: `deploy/backup.sh && UPDATE_HOLD_ON_FAILURE=1 STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh v1.60.3`.
+
 ## 3. What the run does, in order (each step is a hard gate)
 1. `hermetic-verify` — exports the exact tag tree, writes `BUILD_SHA`, re-signs the model manifest for that commit, runs
    `model_manifest verify --build <commit>` and the full `verify_release.sh` (declared test lanes, frontend build/E2E,

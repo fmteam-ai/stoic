@@ -3519,3 +3519,7 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 - Verified safe: paper free-form id never reaches VPS/shell/ini/Mongo operators (PATCH cannot flip mode); `declared_environment` never authoritative; consent recorded-not-enforced (accepted); command-seq resync bounded/scoped/no-rewind; Password `= [ ]` cannot inject ini (CR/LF/NUL refused); CI 5.1 parse gate side-effect free; updated integration tests weakened nothing.
 - P3 fixed (agent **v1.3**): owner/ACL checks compare well-known SIDs (`S-1-5-32-544`, `S-1-5-18`, current user SID) instead of English-only account names (localized Windows would have failed closed). Test +1 in test_security_audit13.py. BOM + ASCII preserved; pwsh parse OK.
 - Carry-overs: signer header redeploy (operator); prod behind audited HEAD (`/api/setup/agent.ps1` 404 on prod) → run `update.sh` before relying on the VPS flow.
+
+## 2026-10-08 — RELEASE v1.60.3 PREPARED (cannot be cut from the preview: no GitHub Actions / git push here)
+- `scripts/release_preflight.sh` now **6/6 OK** on this tree (regenerated docs/RELEASE_SUMMARY.md: test_count 5418, manifest/model-manifest hashes current).
+- Blocker still outside this environment: `release/ea_release.json` is the signed **1.60** record and no EX5 is committed → `verify_ea_release.py --check` FAILs until the operator runs **ea-release** on main (bot commit). docs/RELEASE_RUNBOOK.md §2a holds the exact 5-step order (merge → ea-release → pull + verify → tag v1.60.3 → publish GitHub Release → update.sh v1.60.3).
