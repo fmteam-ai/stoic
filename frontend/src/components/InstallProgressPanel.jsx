@@ -88,6 +88,13 @@ export function InstallProgressPanel({ accountId }) {
                     );
                 })}
             </ol>
+            {p.vps_terminal && (
+                <div className="mt-2 font-mono text-[11px] text-[#71717A]" data-testid={`install-vps-terminal-${accountId}`} data-status={p.vps_terminal.status}>
+                    VPS agent terminal: <span className={p.vps_terminal.status === "running" ? "text-[#00FF41]" : (p.vps_terminal.status === "failed" || p.vps_terminal.status === "restart_loop") ? "text-[#FF3B30]" : "text-[#FFD700]"}>{String(p.vps_terminal.status || "").toUpperCase()}</span>
+                    {p.vps_terminal.detail && <span> — {p.vps_terminal.detail}</span>}
+                    {p.vps_terminal.restarts_last_hour > 0 && <span> · {p.vps_terminal.restarts_last_hour} restart{p.vps_terminal.restarts_last_hour === 1 ? "" : "s"} this hour</span>}
+                </div>
+            )}
             {p.webrequest_url && (
                 <div className="mt-2 flex items-center gap-2 font-mono text-[11px] text-[#71717A]">
                     WebRequest URL: <code className="text-[#FFD700] select-all" data-testid={`install-webrequest-url-${accountId}`}>{p.webrequest_url}</code>

@@ -23,7 +23,8 @@ SEVERITIES = ("info", "warning", "critical")
 EVALUATOR_KINDS = (
     "ea_heartbeat_stale", "worker_lease_expired", "worker_loop_crashloop",
     "worker_loop_stalled", "outbox_backlog", "outbox_failed",
-    "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real")
+    "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real",
+    "vps_terminal_restart_loop")   # Phase 2 VPS Agent: restart budget exhausted without a fresh EA heartbeat
 
 
 ACK_SUPPRESS_S = 6 * 3600   # N109-1 — a HUMAN ack mutes the NOTIFICATIONS (email/Telegram) of re-raises for 6 h; the alert ROW always re-opens

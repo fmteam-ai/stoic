@@ -208,4 +208,5 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
         state, headline = "not_started", "Generate a pairing token to begin"
     return {"account_id": str(account.get("_id") or account.get("id") or ""), "state": state, "headline": headline,
             "steps": steps, "webrequest_url": url, "generated_at": now.isoformat(),
+            "vps_terminal": account.get("vps_terminal") or None,   # Phase 2 VPS Agent: agent-managed terminal state
             "done": sum(1 for s in statuses if s == "done"), "total": len(steps)}

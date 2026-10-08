@@ -21,7 +21,8 @@ PATHB_LADDER = ["WAITING_FOR_AGENT", "AGENT_CONNECTED",
 
 ALLOWED_COMMANDS = {"install_mt5", "install_ea", "restart_terminal",
                     "rotate_logs", "freeze", "update_agent",
-                    "run_diagnostics", "rollback_mt5", "rollback_agent"}
+                    "run_diagnostics", "rollback_mt5", "rollback_agent",
+                    "install_terminal"}   # Phase 2 VPS Agent: clone golden portable MT5 + install EA for ONE account
 # failed command → compensation command (spec: failure handling)
 COMPENSATION = {"install_mt5": "rollback_mt5",
                 "update_agent": "rollback_agent",

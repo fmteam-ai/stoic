@@ -468,6 +468,19 @@ async def installer_script():
                         })
 
 
+@api_router.get("/setup/agent.ps1")
+async def vps_agent_script():
+    """STOIC VPS Agent (Phase 2) — public like the installer: no secrets inside; it only becomes useful with an
+    enrollment code / bootstrap token at `Install-StoicAgent`."""
+    path = Path(__file__).parent / "static" / "STOIC-Agent.ps1"
+    if not path.exists():
+        return {"error": "Agent script missing"}
+    import hashlib as _hashlib
+    return FileResponse(path, media_type="text/plain", filename="STOIC-Agent.ps1",
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache",
+                                 "X-STOIC-SHA256": _hashlib.sha256(path.read_bytes()).hexdigest()})
+
+
 @api_router.get("/public/vps-offer")
 async def public_vps_offer():
     """Recommended VPS + referral link (admin-editable on Integrations) — no auth, no PII."""
@@ -490,6 +503,8 @@ async def installer_hash():
 api_router.include_router(admin_router)
 api_router.include_router(migration_router)
 api_router.include_router(setup_router)
+from routes.vps_terminal_routes import router as vps_terminal_router  # noqa: E402
+api_router.include_router(vps_terminal_router)
 api_router.include_router(auth_router)
 api_router.include_router(webauthn_router)
 api_router.include_router(pamm_router)

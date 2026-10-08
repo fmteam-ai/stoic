@@ -3,6 +3,7 @@ import api, { formatApiError, API } from "@/lib/api";
 import { Copy, Loader2, Terminal as TerminalIcon, CheckCircle2, RefreshCw, Server } from "lucide-react";
 import { toast } from "sonner";
 import { InstallProgressPanel } from "@/components/InstallProgressPanel";
+import { VpsAgentInstall } from "@/components/VpsAgentInstall";
 import { VpsOfferButton } from "@/components/VpsOffer";
 
 /**
@@ -167,6 +168,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="quick-install-panel">
             <InstallProgressPanel accountId={accountId} />
+            <VpsAgentInstall accountId={accountId} />
             {trustSection}
             <div className="flex items-center gap-2 mb-2">
                 <TerminalIcon className="w-5 h-5 text-[#FFD700]" />

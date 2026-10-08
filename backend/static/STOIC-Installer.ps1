@@ -372,7 +372,9 @@ function Install-Stoic {
         # (N110-3: when not given, the first open chart starting with EURUSD — broker suffixes included)
         [string]$ChartSymbol = "EURUSD",
         [string]$ChartPeriod = "M15",
-        [switch]$NoRestart
+        [switch]$NoRestart,
+        # Phase 2 VPS Agent — the clone's journal is empty; the agent knows which login this terminal is FOR
+        [string]$TerminalLogin = ""
     )
 
     $InstallerVersion = "1.7"
@@ -394,7 +396,7 @@ function Install-Stoic {
     $terminal = Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId
     if (-not $terminal) { return }
     $terminals = @($terminal)
-    $terminalLogin = Get-StoicTerminalLogin $terminal.FullName
+    $terminalLogin = $(if ($TerminalLogin) { $TerminalLogin } else { Get-StoicTerminalLogin $terminal.FullName })
     Write-Host "    • $($terminal.FullName)" -ForegroundColor White
     if ($terminalLogin) { Write-Host "    • logged in as #$terminalLogin" -ForegroundColor White }
     Write-Host ""

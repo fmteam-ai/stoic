@@ -108,7 +108,7 @@ async def register_agent(db, token: str, facts: dict) -> dict:
         "deployment_id": boot["deployment_id"],
         "fingerprint": facts.get("machine_fingerprint"),
         "facts": {k: facts.get(k) for k in (
-            "agent_version", "windows_version", "cpu", "ram_gb",
+            "agent_version", "windows_version", "cpu", "ram_gb", "hostname",
             "disk_free_gb", "public_ip", "timezone", "clock_offset_ms")},
         "hardening": {}, "revoked": False,
         "registered_at": now, "last_heartbeat": None})
@@ -147,7 +147,9 @@ async def agent_heartbeat(db, agent_token: str, metrics: dict) -> dict:
         "mt5_processes", "agent_version",
         # iter-139 host-agent telemetry expansion
         "disk_free_pct", "broker_latency_ms", "mt5_connected",
-        "ea_attached", "restarts_24h", "service_uptime_sec")}
+        "ea_attached", "restarts_24h", "service_uptime_sec",
+        # Phase 2 VPS Agent (per-account portable terminals)
+        "hostname", "golden_ready", "terminals_managed", "terminals_running")}
     await db.vps_agents.update_one(
         {"_id": agent["_id"]},
         {"$set": {"last_heartbeat": now, "last_metrics": hb}})
