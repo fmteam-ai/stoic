@@ -73,6 +73,7 @@ def gather(root, *, commit=None, backend_digest=None, frontend_digest=None, depl
         "lock.authoritative": lock.get("authoritative"),
         "lock.evidence": sorted((lock.get("evidence") or {}).keys()) or None,
         "model_manifest.code_commit": (mm.get("body") or {}).get("code_commit"),
+        "model_manifest.resigned_from": (mm.get("body") or {}).get("resigned_from_commit"),
         "release_summary.source_commit": summary_source(root),
         "lock.test_manifest_sha256": lock.get("test_manifest_sha256"),
         "actual.test_manifest_sha256": _sha256(os.path.join(root, "docs", "TEST_MANIFEST.md")),
@@ -107,7 +108,17 @@ def compare(facts, *, strict):
         if facts[a] != facts[b]:
             mismatches.append(f"{name}: lock {str(facts[a])[:12]} != actual {str(facts[b])[:12]}")
     digest("lock.test_manifest_sha256", "actual.test_manifest_sha256", "test_manifest_sha256")
-    digest("lock.model_manifest_sha256", "actual.model_manifest_sha256", "model_manifest_sha256")
+    # v1.60.3 — release staging re-signs the model manifest for the release commit (resigned_from_commit set,
+    # code_commit == build_sha): its digest can no longer equal the developer-snapshot lock. Strict verification of
+    # the re-signed manifest happens in `model_manifest verify --build`; here it is a note, not a mismatch — unless
+    # the lock is authoritative (then the lock was frozen AFTER staging and must match).
+    resigned = (facts.get("model_manifest.resigned_from") and not strict
+                and facts["model_manifest.code_commit"] == facts["build_sha"])
+    if resigned and facts["lock.model_manifest_sha256"] != facts["actual.model_manifest_sha256"]:
+        warnings.append(f"model_manifest_sha256: re-signed at release staging from {str(facts['model_manifest.resigned_from'])[:12]} "
+                        f"(lock {str(facts['lock.model_manifest_sha256'])[:12]} is the developer snapshot)")
+    else:
+        digest("lock.model_manifest_sha256", "actual.model_manifest_sha256", "model_manifest_sha256")
     if facts["lock.git_commit"] != facts["lock.source_sha"]:
         mismatches.append("lock.source_sha: differs from lock.git_commit")
     ref = facts["expected.commit"] or facts["lock.git_commit"]

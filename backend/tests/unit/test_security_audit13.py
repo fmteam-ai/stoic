@@ -57,3 +57,28 @@ def test_signer_probe_reports_code_generation_of_the_configured_url():
     assert 'rec["checks"]["code_generation"]' in probe and '"purpose" in fields' in probe and '"host": host' in probe
     rs = _read("backend", "release_signing.py")
     assert "carries no `purpose` field" in rs
+
+
+def test_v1603_release_gates_tolerate_release_staging_and_keep_pin_out_of_test_lanes():
+    vr = _read("scripts", "verify_release.sh")
+    for step in ("step backend_unit", "step backend_integration", "step critical_controls"):
+        line = [ln for ln in vr.splitlines() if ln.startswith(step)][0]
+        assert "-u RELEASE_PUBLIC_KEY_B64" in line and "-u RELEASE_SIGNER_URL" in line, step
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("rcc", os.path.join(ROOT, "scripts", "release_consistency_check.py"))
+    rcc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(rcc)
+    base = {"build_sha": "a" * 40, "lock.git_commit": "b" * 40, "lock.source_sha": "b" * 40, "lock.authoritative": False,
+            "lock.evidence": None, "model_manifest.code_commit": "a" * 40, "model_manifest.resigned_from": "c" * 40,
+            "release_summary.source_commit": "b" * 40, "lock.test_manifest_sha256": "t", "actual.test_manifest_sha256": "t",
+            "lock.model_manifest_sha256": "m1", "actual.model_manifest_sha256": "m2", "lock.images.backend": None,
+            "lock.images.frontend": None, "expected.commit": None, "expected.images.backend": None,
+            "expected.images.frontend": None, "deployed.build": None}
+    mism, warns = rcc.compare(base, strict=False)
+    assert mism == [] and any(w.startswith("model_manifest_sha256: re-signed at release staging") for w in warns)
+    mism, _ = rcc.compare({**base, "model_manifest.resigned_from": None}, strict=False)   # no staging → still a mismatch
+    assert any(m.startswith("model_manifest_sha256") for m in mism)
+    mism, _ = rcc.compare({**base, "lock.authoritative": True}, strict=True)            # authoritative lock → strict
+    assert any(m.startswith("model_manifest_sha256") for m in mism)
+    lib = _read("deploy", "lib.sh")
+    assert lib.index('docker logs --tail 60 "$c"') < lib.index('[ "${created}" -ge "${since}" ] || continue')
