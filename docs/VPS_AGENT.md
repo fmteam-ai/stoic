@@ -23,7 +23,16 @@ dashboard; the agent keeps every terminal alive.
    ```powershell
    Set-StoicTerminalLogin -Login 12345678 -Server "Broker-Demo"
    ```
+   The password is checked when you type it (N113-4): `= [ ]` and other symbols are fine (MT5 reads everything after
+   the first `=`); only line breaks and **non-ASCII** characters are refused — MT5's startup ini is ASCII, so change
+   such a password at the broker or log in by hand once. A stored password that later fails the check does not fail
+   the install: the terminal starts without `[Login]` and reports `awaiting_login` with the reason.
    Windows auto-logon for the VPS user is recommended: the task runs at logon so the terminals stay visible over RDP.
+
+Both `C:\STOIC` and `%ProgramData%\Stoic` are locked down with `icacls /inheritance:r` (Administrators, SYSTEM and the
+agent user only, applied to the whole tree) **before** the first file is written (N113-3). The agent refuses to use a
+folder or file another local user owns ("refusing to use ... owned by") — delete it as Administrator and re-run the
+enrol line. An `icacls` failure stops the enrolment (no warning-and-continue).
 
 ## Install an account
 
@@ -46,9 +55,22 @@ Process dead → start. Heartbeat older than **180 s** (and the terminal is `run
 Experts log advanced in the last 3 min (a heartbeat-ingest outage on the server must not restart every terminal).
 At most **3 restarts per hour** per terminal (ledger persisted in `%ProgramData%\Stoic\restarts.json`, survives agent
 restarts); then status `restart_loop` and the server raises the critical ops alert `vps_terminal_restart_loop`.
-MT5 is never force-killed; `awaiting_login`, `stopped`, `failed` terminals are never restarted. The dashboard's
+MT5 is never force-killed; `awaiting_login`, `installing`, `queued`, `stopped`, `failed`, `restart_loop` terminals are
+never restarted (N113-5). A failing terminal entry is isolated (per-terminal try/catch) and never stops the cycle. The dashboard's
 RESTART TERMINAL asks for confirmation (positions unmanaged during the restart). Installing over an account that
 already has a live terminal is refused (`409 terminal_exists`) until you confirm the replacement.
+
+## Recovery (N113-6)
+
+- **Commands stuck as "delivered" after a server database restore**: the restored `command_seq` is behind the agent's
+  `last_seq`, so the agent sees every new command as a replay. The agent acks such a command with `seq_replay` and
+  reports `last_seq` in every heartbeat; the server advances its sequence (`$max`, never rewinds) — just queue the
+  command again from the dashboard. No re-enrol needed.
+- **`vps-agent.json` corrupted** (log: "agent not installed"): it is written atomically (temp file + `[IO.File]::Replace`),
+  so this should not happen on a crash; if it does, re-run the enrol line from Dashboard → VPS → Connect existing VPS.
+- **Agent task retries every minute without logging**: run
+  `powershell.exe -NoProfile -File %ProgramData%\Stoic\STOIC-Agent.ps1` by hand to see the parse error. The served
+  script is ASCII-only with a UTF-8 BOM and CI parses it under Windows PowerShell 5.1 (N113-2).
 
 ## Files on the VPS
 

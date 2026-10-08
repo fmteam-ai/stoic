@@ -111,14 +111,18 @@ class AccountCreate(BaseModel):
         import re as _re
         self.account_number = (self.account_number or "").strip()
         self.server = (self.server or "").strip()
+        for name in ("broker", "label", "server", "account_number"):
+            v = getattr(self, name) or ""
+            if any(ch in v for ch in "\r\n\x00[]="):
+                raise ValueError(f"{name} must not contain line breaks, NUL, '[', ']' or '='")
+        if self.mode == "paper":          # N113-1 — sandbox: free-form id, server optional (never reaches a VPS)
+            if not self.account_number:
+                raise ValueError("account_number (sandbox id) is required")
+            return self
         if not _re.fullmatch(r"[0-9]{4,12}", self.account_number):
             raise ValueError("account_number must be the 4–12 digit MT5 login")
         if not _re.fullmatch(r"[A-Za-z0-9 ._-]{1,64}", self.server):
             raise ValueError("server may only contain letters, digits, space, '.', '_' and '-' (max 64)")
-        for name in ("broker", "label"):
-            v = getattr(self, name) or ""
-            if any(ch in v for ch in "\r\n\x00[]="):
-                raise ValueError(f"{name} must not contain line breaks, NUL, '[', ']' or '='")
         return self
     # What kind of MT5 account is it? (technical/trading type)
     account_type: Literal["microcent", "cent", "standard", "demo"] = "microcent"
@@ -131,6 +135,10 @@ class AccountCreate(BaseModel):
     pamm_broker_program_id: Optional[str] = None
     base_currency: str = "USD"
     mode: Literal["live", "paper"] = "live"
+    # A17-13 — the wizard asks explicitly: demo or real money? A signed DEMO-only policy refuses "real" at creation.
+    declared_environment: Optional[Literal["demo", "real"]] = None
+    # A17-13 — explicit consent that enabling AutoTrading lets STOIC place trades on this account (recorded, not implied)
+    algo_trading_consent: bool = False
     initial_balance: float = 10000.0  # only used for paper accounts
     investor_password: Optional[str] = None  # encrypted at rest — read-only MT5 password
     master_password: Optional[str] = None    # encrypted at rest — full-trade MT5 password

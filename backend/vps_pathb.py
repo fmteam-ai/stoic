@@ -89,7 +89,8 @@ def vps_agent_enrol_command(code: str) -> str:
     return ('[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; '
             f'$r=iwr "{base}/api/setup/agent.ps1" -UseBasicParsing; '
             f'if ((Get-FileHash -InputStream $r.RawContentStream -Algorithm SHA256).Hash -ne "{sha.upper()}") {{ throw "STOIC agent script hash mismatch" }}; '
-            f'iex $r.Content; Install-StoicAgent -ServerUrl "{base}" -EnrollmentCode "{code}" -ExpectedSha256 "{sha}"')
+            f'iex ([Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()).TrimStart([char]0xFEFF)); '
+            f'Install-StoicAgent -ServerUrl "{base}" -EnrollmentCode "{code}" -ExpectedSha256 "{sha}"')
 
 
 async def connect_existing(db, user_id: str, payload: dict) -> dict:
@@ -365,8 +366,21 @@ async def poll_commands(db, agent_token: str) -> list:
     return out
 
 
+async def _resync_command_seq(db, agent: dict, reported: object) -> bool:
+    """N113-6 — after a server DB restore the agent's last_seq may exceed command_seq; every new command would be
+    skipped as a replay forever. The agent reports its last_seq (heartbeat + replay ack) → advance, never rewind."""
+    try:
+        n = int(reported)
+    except (TypeError, ValueError):
+        return False
+    if n <= 0 or n > 2**53 or n <= int(agent.get("command_seq") or 0):
+        return False
+    await db.vps_agents.update_one({"_id": agent["_id"]}, {"$max": {"command_seq": n}})
+    return True
+
+
 async def ack_command(db, agent_token: str, command_id: str,
-                      ok: bool, detail: str = "") -> dict:
+                      ok: bool, detail: str = "", agent_last_seq: object = None) -> dict:
     """Failed command → compensation action queued automatically."""
     from vps_agent import agent_by_token
     agent = await agent_by_token(db, agent_token)
@@ -374,9 +388,11 @@ async def ack_command(db, agent_token: str, command_id: str,
         {"command_id": command_id, "agent_id": agent["agent_id"]})
     if not cmd:
         raise ValueError("command not found")
+    resynced = await _resync_command_seq(db, agent, agent_last_seq)
+    replay = (not ok) and detail.startswith("seq_replay")
     # iter-122 Phase 3 — monotonic ack ordering: a replayed / stale ack for
     # an already-superseded sequence number is rejected.
-    if cmd.get("seq") is not None:
+    if cmd.get("seq") is not None and not replay:
         last = int(agent.get("last_acked_seq") or 0)
         if int(cmd["seq"]) <= last and cmd.get("status") in ("acked", "done", "failed"):
             raise ValueError(
@@ -391,6 +407,9 @@ async def ack_command(db, agent_token: str, command_id: str,
         {"$set": {"status": "acked" if ok else "failed",
                   "detail": detail[:500], "acked_at": now}})
     compensation = None
+    if replay:
+        return {"ok": True, "compensation": None, "seq_resynced": resynced,
+                "hint": "re-queue the command from the dashboard — the server sequence has been re-synced"}
     if not ok and cmd["command"] in COMPENSATION:
         comp = COMPENSATION[cmd["command"]]
         res = await queue_command(db, agent["user_id"],

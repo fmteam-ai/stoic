@@ -16,6 +16,7 @@ from account_limits import (
     check_can_add_live_account,
 )
 from broker_presets import BROKER_PRESETS
+from inventory_projection import demo_only_policy_active
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -476,7 +477,8 @@ async def broker_presets(user=Depends(get_current_user)):
     able to enumerate presets (keeps it lightly gated for analytics).
     """
     _ = user  # silence linter — auth dependency
-    return {"presets": BROKER_PRESETS}
+    # A17-13 — the wizard greys out "REAL MONEY" while a signed DEMO-only policy is in force
+    return {"presets": BROKER_PRESETS, "demo_only_policy": await demo_only_policy_active(get_db())}
 
 
 @router.post("")
@@ -496,6 +498,11 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         allowed, err = await check_can_add_live_account(db, user["id"], payload.broker)
         if not allowed:
             raise HTTPException(status_code=403, detail=err)
+        # A17-13 — a signed DEMO-only policy never admits a declared real-money account
+        if payload.declared_environment == "real" and await demo_only_policy_active(db):
+            raise HTTPException(status_code=403, detail={
+                "code": "real_refused_demo_policy",
+                "message": "A signed DEMO-only policy is in force: real-money accounts cannot be added until it is replaced."})
 
     # iter-83 · Uniqueness guard. The same (broker, account_number) pair must
     # not exist twice — when the same EA's heartbeats hit two account docs
@@ -588,6 +595,10 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
                                    else None),
         "base_currency": payload.base_currency,
         "mode": payload.mode,
+        # A17-13 — what the owner DECLARED (never authoritative: broker_env.attested_environment decides) + consent record
+        "declared_environment": None if is_paper else payload.declared_environment,
+        "algo_trading_consent_at": (datetime.now(timezone.utc).isoformat()
+                                    if (payload.algo_trading_consent and not is_paper) else None),
         **__import__("bridge_tokens").token_fields(_new_token),  # P1-01 — hash only; paper needs no EA token
         "status": "connected" if is_paper else "disconnected",
         # P0 (release review): enablement is ALWAYS an explicit boolean —

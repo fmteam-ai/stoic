@@ -767,7 +767,8 @@ async def ack_agent_command(payload: dict, cert_fp: str = _FP_HEADER):
                                  str(payload.get("agent_token") or ""),
                                  str(payload.get("command_id") or ""),
                                  bool(payload.get("ok")),
-                                 str(payload.get("detail") or ""))
+                                 str(payload.get("detail") or ""),
+                                 payload.get("last_seq"))
     except ValueError as e:
         raise static_error(401 if "agent" in str(e) else 404, "command_ack_refused", e)
 

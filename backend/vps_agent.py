@@ -153,6 +153,9 @@ async def agent_heartbeat(db, agent_token: str, metrics: dict) -> dict:
     await db.vps_agents.update_one(
         {"_id": agent["_id"]},
         {"$set": {"last_heartbeat": now, "last_metrics": hb}})
+    if metrics.get("last_seq") is not None:            # N113-6 — re-sync the command sequence after a DB restore
+        from vps_pathb import _resync_command_seq
+        await _resync_command_seq(db, agent, metrics.get("last_seq"))
     out = {"ok": True, "next_heartbeat_sec": 60}
     # iter-160 — central config sync: ship desired config with the ack
     if agent.get("desired_config"):
