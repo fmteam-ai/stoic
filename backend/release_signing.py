@@ -296,8 +296,9 @@ def _external_sign(data: bytes, purpose: str) -> str:
     if not isinstance(sig, str) or len(sig) != 128:
         raise RuntimeError("external signer returned no/invalid signature_hex")
     if not verify_hex(data, sig, _pinned_pub(env, purpose), purpose=purpose):
+        gen = "" if body.get("purpose") else " [the /sign response carries no `purpose` field: this URL answers with PRE-N100-11 code]"
         raise RuntimeError("external signer signature failed local verification against the pinned public key"
-                           + _verification_failure_diagnosis(url, data, sig, _pinned_pub(env, purpose), env))
+                           + _verification_failure_diagnosis(url, data, sig, _pinned_pub(env, purpose), env) + gen)
     return sig
 
 
