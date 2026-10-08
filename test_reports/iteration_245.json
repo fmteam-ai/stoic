@@ -1,0 +1,29 @@
+{
+  "summary": "STOIC main111 regression (iter245) — all green. Backend unit lane (/app/backend/tests/unit/test_fixplan_main111.py) 10/10 passed covering corrections N111-1..N111-6. Live HTTP suite (/app/test_reports/main111_live_test.py) 3/3 passed against the preview backend (admin@trading.bot, no TOTP in preview, DB=ai_trading_bot): (1) GET /api/ops/alerts now includes `mutable_kinds` and it equals alerting.EVALUATOR_KINDS exactly (12 kinds: ea_heartbeat_stale, worker_lease_expired, worker_loop_crashloop, worker_loop_stalled, outbox_backlog, outbox_failed, unprotected_positions, reconciliation_stuck, pairing_no_heartbeat, policy_expiring, policy_expired, demo_account_reports_real); every `snoozed_until` / `muted_until` ISO ends with +00:00 (aware). (2) N111-1 naive-datetime probe: inserted an ops_alerts row with native (tz-naive) BSON datetimes for created_at/last_seen_at/notify_muted_until, listed via /api/ops/alerts — endpoint returned 200 (previously 500) and the serialized `snoozed_until` is a +00:00 ISO ~5h ahead; row cleaned up. (3) N111-2 claim-pairing wrong-terminal flow: POST /api/setup/pairing-token → token issued; POST /api/setup/claim-pairing with terminal_login=<account_number+1> → 409 {code:account_mismatch}; pairing_tokens row's `consumed_at` still unset; retry with correct terminal_login → 200, response.bridge_token present AND response.ea_latest_version=='1.62' (derived from EA MQ5 source per N111-6); then `consumed_at` set. Frontend (Playwright, admin@trading.bot): /bot-health AlertsCard (data-testid ops-alerts-card) renders ~50 rows across 5 kinds (worker_lease_expired, soak_checkpoint_due, soak_memory_growth, heartbeat_lost, auto_mode_demotion). Only the mutable kind worker_lease_expired shows ops-alert-mute-worker_lease_expired; soak_checkpoint_due / soak_memory_growth / heartbeat_lost / auto_mode_demotion rows render ACK only — MUTE 24H button is hidden exactly as required by N111-6, directly resolving the iter244 review observation that MUTE on unsupported kinds silently 400'd. Dashboard onboarding card still reads 'Install the STOIC EA (v1.62+)'. No action items for the main agent.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/main111_live_test.py",
+    "/app/test_reports/pytest/iter245_main111.xml",
+    "/app/backend/tests/unit/test_fixplan_main111.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "N111-6 cleanly addresses the iter244 observation: AlertsCard only renders MUTE 24H when kind ∈ data.mutable_kinds, and /api/ops/alerts emits mutable_kinds. Residual (not blocking): the preview DB has ~100 unacked alerts (mostly heartbeat_lost on R9-LIVE, auto_mode_demotion, soak_memory_growth) — pre-existing noise unrelated to main111.",
+    "N111-2 defence correctly places the account_mismatch 409 BEFORE find_one_and_update (verified both by unit assertion on source order and by the live probe: consumed_at remained unset after a mismatch). No pending-token leak observed."
+  ],
+  "updated_files": [
+    "/app/test_reports/main111_live_test.py"
+  ],
+  "success_rate": {"backend": "100% (10/10 unit + 3/3 live)", "frontend": "100% (AlertsCard N111-6 UI probe)"},
+  "test_credentials": "admin@trading.bot per /app/memory/test_credentials.md (not embedded in report or test file). Preview admin_mfa_enforced=false, no TOTP needed.",
+  "seed_data_creation": "Live suite inserts/deletes a single ops_alerts row dedup_key=test-main111-naive-<hex> and may create one QA live account if admin has none (cleaned up in teardown).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Live suite /app/test_reports/main111_live_test.py reuses the main110 harness (reads MONGO_URL/DB_NAME/BE from backend/.env and REACT_APP_BACKEND_URL from frontend/.env; falls back to /app/memory/test_credentials.md for the admin password). Run: DB_NAME=ai_trading_bot STOIC_TESTS_ALLOW_DB_NAME=1 python -m pytest test_reports/main111_live_test.py -v. The claim-pairing probe uses the admin's existing live account_number to compute real/wrong terminal_login; it does NOT consume any production pairing — a fresh token is issued, mismatched (409), then correctly claimed (200) and cleaned-up. The UI /bot-health page shows ~100 unacked alerts (pre-existing); scroll AlertsCard into view and wait ~1.5s after mounting before querying ops-alert-* buttons.",
+  "rca of the issue": "n/a — no issues found. main111 corrections (N111-1 .. N111-6) all verified at the unit, HTTP and UI layers."
+}
