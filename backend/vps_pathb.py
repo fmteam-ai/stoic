@@ -69,6 +69,27 @@ def _enrollment_code() -> str:
     return f"{letters}-{digits}"
 
 
+def agent_script_sha256() -> str:
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "STOIC-Agent.ps1")
+    try:
+        with open(p, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return ""
+
+
+def vps_agent_enrol_command(code: str) -> str:
+    """Phase 2 — the ONE line to paste on the VPS (Administrator PowerShell): TLS 1.2, download the agent script,
+    pin its SHA-256, dot-source, enrol with the code. Mirrors the account installer one-liner."""
+    from connect_service import _base_url
+    base = (_base_url(None) or os.environ.get("PUBLIC_BASE_URL") or "https://<your-stoic-host>").rstrip("/")
+    sha = agent_script_sha256()
+    return ('[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; '
+            f'$r=iwr "{base}/api/setup/agent.ps1" -UseBasicParsing; '
+            f'if ((Get-FileHash -InputStream $r.RawContentStream -Algorithm SHA256).Hash -ne "{sha.upper()}") {{ throw "STOIC agent script hash mismatch" }}; '
+            f'iex $r.Content; Install-StoicAgent -ServerUrl "{base}" -EnrollmentCode "{code}"')
+
+
 async def connect_existing(db, user_id: str, payload: dict) -> dict:
     """Step 1-2 — metadata form (never asks for the RDP password) →
     deployment + short enrollment code + safe install commands."""
@@ -95,8 +116,11 @@ async def connect_existing(db, user_id: str, payload: dict) -> dict:
         "created_at": now,
         "expires_at": now + timedelta(minutes=BOOTSTRAP_TTL_MIN)})
     base = os.environ.get("PUBLIC_BASE_URL") or "https://<your-stoic-host>"
+    agent_cmd = vps_agent_enrol_command(code)
     return {"deployment_id": dep["deployment_id"],
             "enrollment_code": code,
+            "vps_agent_command": agent_cmd,            # Phase 2 — one line: hash-pinned agent script + enrol
+            "vps_agent_sha256": agent_script_sha256(),
             "expires_in_min": BOOTSTRAP_TTL_MIN,
             "install_commands": {
                 "recommended": [

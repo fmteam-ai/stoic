@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import api from "@/lib/api";
-import { CheckCircle2, Circle, Loader2, AlertTriangle, XOctagon, Copy } from "lucide-react";
+import { CheckCircle2, Circle, Loader2, AlertTriangle, XOctagon, Copy, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 
 /**
@@ -58,6 +58,16 @@ export function InstallProgressChip({ accountId }) {
 
 export function InstallProgressPanel({ accountId }) {
     const p = useInstallProgress(accountId, 5000);
+    const [restarting, setRestarting] = useState(false);
+    const restartTerminal = async () => {
+        setRestarting(true);
+        try {
+            const { data } = await api.post(`/vps/agents/${p.vps_terminal.agent_id}/restart-terminal`, { account_id: accountId });
+            toast.success(`Restart queued (${data.command_id}) — the agent closes MT5 gracefully and starts it again`);
+        } catch (e) {
+            toast.error(e?.response?.data?.detail?.message || e?.response?.data?.detail || "restart refused");
+        } finally { setRestarting(false); }
+    };
     if (!p) return null;
     const chip = STATE_CHIP[p.state] || STATE_CHIP.not_started;
     const copyUrl = async () => {
@@ -89,10 +99,19 @@ export function InstallProgressPanel({ accountId }) {
                 })}
             </ol>
             {p.vps_terminal && (
-                <div className="mt-2 font-mono text-[11px] text-[#71717A]" data-testid={`install-vps-terminal-${accountId}`} data-status={p.vps_terminal.status}>
-                    VPS agent terminal: <span className={p.vps_terminal.status === "running" ? "text-[#00FF41]" : (p.vps_terminal.status === "failed" || p.vps_terminal.status === "restart_loop") ? "text-[#FF3B30]" : "text-[#FFD700]"}>{String(p.vps_terminal.status || "").toUpperCase()}</span>
-                    {p.vps_terminal.detail && <span> — {p.vps_terminal.detail}</span>}
-                    {p.vps_terminal.restarts_last_hour > 0 && <span> · {p.vps_terminal.restarts_last_hour} restart{p.vps_terminal.restarts_last_hour === 1 ? "" : "s"} this hour</span>}
+                <div className="mt-2 font-mono text-[11px] text-[#71717A] flex flex-wrap items-center gap-2" data-testid={`install-vps-terminal-${accountId}`} data-status={p.vps_terminal.status}>
+                    <span>
+                        VPS agent terminal: <span className={p.vps_terminal.status === "running" ? "text-[#00FF41]" : (p.vps_terminal.status === "failed" || p.vps_terminal.status === "restart_loop") ? "text-[#FF3B30]" : "text-[#FFD700]"}>{String(p.vps_terminal.status || "").toUpperCase()}</span>
+                        {p.vps_terminal.detail && <span> — {p.vps_terminal.detail}</span>}
+                        {p.vps_terminal.restarts_last_hour > 0 && <span> · {p.vps_terminal.restarts_last_hour} restart{p.vps_terminal.restarts_last_hour === 1 ? "" : "s"} this hour</span>}
+                    </span>
+                    {p.vps_terminal.agent_id && !["queued", "installing"].includes(p.vps_terminal.status) && (
+                        <button onClick={restartTerminal} disabled={restarting} data-testid={`install-vps-restart-${accountId}`}
+                            title="Ask the VPS agent to close this MT5 gracefully and start it again (never force-killed)"
+                            className="flex items-center gap-1 font-mono text-[9px] tracking-widest border border-[#1F1F1F] text-[#A1A1AA] px-2 py-0.5 hover:text-white hover:border-[#00FF41]/50 disabled:opacity-50">
+                            {restarting ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCcw className="w-3 h-3" />} RESTART TERMINAL
+                        </button>
+                    )}
                 </div>
             )}
             {p.webrequest_url && (

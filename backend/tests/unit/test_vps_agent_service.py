@@ -198,6 +198,46 @@ def test_report_terminal_mirrors_account_and_alerts_on_restart_loop(monkeypatch)
         _run(vt.report_terminal(db, agent, {"login": "12345678", "status": "weird"}))
 
 
+def test_queue_restart_terminal_requires_managed_terminal_and_online_agent():
+    import vps_terminals as vt
+    db = _db()
+    with pytest.raises(ValueError, match="install it on the VPS first"):
+        _run(vt.queue_restart_terminal(db, {"id": "u1"}, OID, "agt_1"))
+    db.mt5_instances.docs.append({"agent_id": "agt_1", "account_ref": "12345678", "account_id": OID, "directory": "C:\\STOIC\\MT5\\account-12345678\\", "status": "running"})
+    db.accounts.docs[0]["vps_terminal"] = {"status": "running", "agent_id": "agt_1"}
+    res = _run(vt.queue_restart_terminal(db, {"id": "u1"}, OID, "agt_1"))
+    cmd = db.agent_commands.docs[-1]
+    assert res["ok"] and cmd["command"] == "restart_terminal" and cmd["params"]["login"] == "12345678" and cmd["params"]["directory"].endswith("account-12345678\\")
+    assert db.accounts.updates[-1][1]["$set"]["vps_terminal.restart_command_id"] == res["command_id"]
+    with pytest.raises(ValueError, match="offline"):
+        _run(vt.queue_restart_terminal(_db(agent_hb=NOW - timedelta(minutes=10)), {"id": "u1"}, OID, "agt_1"))
+    with pytest.raises(ValueError, match="not found"):
+        _run(vt.queue_restart_terminal(_db(), {"id": "other"}, OID, "agt_1"))
+
+
+def test_enrol_one_liner_pins_agent_hash(monkeypatch):
+    import vps_pathb as pb
+    for k in ("PUBLIC_BASE_URL", "PUBLIC_BACKEND_URL", "REACT_APP_BACKEND_URL", "CORS_ORIGINS"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://www.example")
+    cmd = pb.vps_agent_enrol_command("ABC-123")
+    sha = pb.agent_script_sha256()
+    assert len(sha) == 64 and sha.upper() in cmd
+    assert cmd.startswith("[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; ")
+    assert '$r=iwr "https://www.example/api/setup/agent.ps1" -UseBasicParsing' in cmd
+    assert 'Install-StoicAgent -ServerUrl "https://www.example" -EnrollmentCode "ABC-123"' in cmd
+    src = _read("backend", "vps_pathb.py")
+    assert '"vps_agent_command": agent_cmd' in src and '"vps_agent_sha256": agent_script_sha256()' in src
+    wiz = _read("frontend", "src", "components", "InfraWizard.jsx")
+    assert "pathbResult.vps_agent_command" in wiz and 'data-testid="vps-agent-enrol-copy"' in wiz
+    panel = _read("frontend", "src", "components", "InstallProgressPanel.jsx")
+    assert "restart-terminal" in panel and "install-vps-restart-" in panel
+    routes = _read("backend", "routes", "vps_terminal_routes.py")
+    assert '@router.post("/agents/{agent_id}/restart-terminal")' in routes
+    ps = _read("backend", "static", "STOIC-Agent.ps1")
+    assert 'dashboard restart: $detail' in ps and "not force-killed" in ps
+
+
 def test_wiring_routes_commands_and_install_progress():
     from vps_pathb import ALLOWED_COMMANDS
     assert "install_terminal" in ALLOWED_COMMANDS

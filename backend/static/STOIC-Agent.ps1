@@ -249,8 +249,12 @@ function Invoke-StoicCommands($cfg) {
             switch ($c.command) {
                 "install_terminal" { $ok = Invoke-StoicInstallTerminal $cfg $c.params; $detail = $(if ($ok) { "installed" } else { "see terminal report" }) }
                 "restart_terminal" {
-                    $dir = Get-StoicTerminalDir "$($c.params.login)"
-                    $ok = (Stop-StoicTerminal $dir); if ($ok) { Start-StoicTerminal $dir (Join-Path $dir "stoic-start.ini") }; $detail = "restarted"
+                    $login = "$($c.params.login)"; $dir = $(if ($c.params.directory) { "$($c.params.directory)" } else { Get-StoicTerminalDir $login })
+                    $base = @{ account_id = "$($c.params.account_id)"; login = $login; directory = $dir }
+                    $ok = (Stop-StoicTerminal $dir)
+                    if ($ok) { Start-Sleep -Seconds 3; Start-StoicTerminal $dir (Join-Path $dir "stoic-start.ini"); $detail = "restarted" }
+                    else { $detail = "terminal would not close within 60 s — not force-killed" }
+                    if ($login) { Send-StoicTerminalReport $cfg ($base + @{ status = $(if ($ok) { "restarted" } else { "running" }); detail = "dashboard restart: $detail"; pid = (Get-StoicTerminalProcess $dir | Select-Object -First 1).Id }) }
                 }
                 "run_diagnostics" { $ok = $true; $detail = "terminals=" + ((Get-ChildItem $script:TerminalsDir -Directory -ErrorAction SilentlyContinue | Measure-Object).Count) }
                 default { $ok = $false; $detail = "unsupported by vps-agent" }

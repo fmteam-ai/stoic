@@ -99,6 +99,32 @@ async def queue_install_terminal(db, user: dict, account_id: str, agent_id: str,
     return {"ok": True, "command_id": res["command_id"], "agent_id": agent_id, "login": login, "vps_terminal": state}
 
 
+async def queue_restart_terminal(db, user: dict, account_id: str, agent_id: str) -> dict:
+    """One-click graceful restart of the account's agent-managed terminal (the agent closes MT5 with
+    CloseMainWindow, waits up to 60 s, starts it again with the startup ini and reports `restarted`)."""
+    from vps_pathb import queue_command
+    account = await db.accounts.find_one({"_id": ObjectId(account_id)})
+    if not account or account.get("user_id") != user["id"]:
+        raise ValueError("account not found")
+    agent = await db.vps_agents.find_one({"agent_id": agent_id, "user_id": user["id"], "revoked": {"$ne": True}})
+    if not agent:
+        raise ValueError("agent not found")
+    age = _age_s(_now(), agent.get("last_heartbeat"))
+    if age is None or age > AGENT_ONLINE_S:
+        raise ValueError("agent offline — start the STOIC VPS Agent on that VPS first")
+    login = str(account.get("account_number") or "")
+    inst = await db.mt5_instances.find_one({"agent_id": agent_id, "account_ref": login})
+    if not inst:
+        raise ValueError("no agent-managed terminal for this account — install it on the VPS first")
+    res = await queue_command(db, user["id"], agent_id, "restart_terminal",
+                              {"account_id": account_id, "login": login, "directory": inst.get("directory")}, f"user:{user['id']}")
+    now = _now()
+    await db.accounts.update_one({"_id": account["_id"]}, {"$set": {
+        "vps_terminal.detail": "restart requested from the dashboard — waiting for the agent",
+        "vps_terminal.restart_command_id": res["command_id"], "vps_terminal.updated_at": now.isoformat()}})
+    return {"ok": True, "command_id": res["command_id"], "agent_id": agent_id, "login": login}
+
+
 async def terminals_status(db, agent: dict) -> dict:
     """What the agent's watchdog needs: for each terminal it manages, is the EA heartbeat fresh?"""
     now = _now()

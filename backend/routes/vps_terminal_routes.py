@@ -39,6 +39,21 @@ async def install_terminal(agent_id: str, payload: InstallTerminalRequest, reque
         raise static_error(404 if "not found" in str(e) else 409, "vps_install_refused", e)
 
 
+class RestartTerminalRequest(BaseModel):
+    account_id: str = Field(min_length=12, max_length=40)
+
+
+@router.post("/agents/{agent_id}/restart-terminal")
+async def restart_terminal(agent_id: str, payload: RestartTerminalRequest, user=Depends(get_current_user)):
+    from entitlements import enforce_feature
+    from vps_terminals import queue_restart_terminal
+    await enforce_feature(user, "vps_quick_connect")
+    try:
+        return await queue_restart_terminal(get_db(), user, payload.account_id, agent_id)
+    except ValueError as e:
+        raise static_error(404 if "not found" in str(e) else 409, "vps_restart_refused", e)
+
+
 async def _agent(db, payload: dict, cert_fp: str) -> dict:
     from routes.infra_routes import _mtls_gate
     from vps_agent import agent_by_token
