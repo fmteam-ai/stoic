@@ -17,7 +17,7 @@ from strategy_presets import list_presets, get_preset
 
 # audit r4 P0 · minimum EA version with command fencing + intent journaling —
 # live activation is blocked below this (paper accounts unaffected).
-from ea_capabilities import LIVE_MIN_VERSION, live_gate, version_str
+from ea_capabilities import LIVE_MIN_VERSION, latest_ea_version, live_gate, version_str
 FENCING_MIN_EA = version_str(LIVE_MIN_VERSION)   # r18 P0-02: capability-derived, compared numerically
 from user_presets import (
     list_user_presets, create_user_preset, delete_user_preset, get_user_preset,
@@ -1780,7 +1780,7 @@ async def bot_health_score(user=Depends(get_current_user)):
             })
 
     # --- 3. EA version currency (max -10) --------------------------------
-    LATEST_EA = "1.62"
+    LATEST_EA = latest_ea_version()
     outdated = [a.get("label") for a in connected
                 if (a.get("ea_version") or "") < LATEST_EA]
     if outdated:

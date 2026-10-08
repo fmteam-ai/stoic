@@ -68,20 +68,29 @@ try {
     Assert-Null (Get-StoicRunningTerminal -Candidates (@(Get-StoicTerminals -Root $tmp -PortableRoots @()))) "no MT5 running → no auto-pick (prompt path)"
     Remove-Item Function:\Get-Process
 
-    # N110-4 — login detection from the terminal's own log (UTF-16)
+    # N110-4 / N111-3 — login detection from the terminal's own journal (UTF-16), REAL MT5 wording ("authorized on")
     New-Item -ItemType Directory -Force (Join-Path $tmp "$idB\logs") | Out-Null
     Set-Content -Path (Join-Path $tmp "$idB\logs\20261007.log") -Encoding Unicode -Value @(
-        "0`t10:00:01.000`tNetwork`t'11111111': login on Broker-Demo through Access Point EU 1",
-        "0`t10:05:01.000`tNetwork`t'22222222': login on Broker-Demo through Access Point EU 1")
-    Assert-Equal (Get-StoicTerminalLogin (Join-Path $tmp $idB)) "22222222" "last login line wins"
+        "CS`t0`t10:00:00.101`tTerminal`tMetaTrader 5 x64 build 4620 started for Broker Ltd",
+        "NS`t0`t10:00:01.000`tNetwork`t'11111111': authorized on Broker-Demo through Access Point EU 1 (ping: 46.19 ms)",
+        "NS`t0`t10:00:01.200`tNetwork`t'11111111': previous successful authorization performed from 1.2.3.4 on 2026.10.06 09:00:00",
+        "NS`t0`t10:05:01.000`tNetwork`t'22222222': authorized on Broker-Demo through Access Point EU 1 (ping: 46.19 ms)")
+    Assert-Equal (Get-StoicTerminalLogin (Join-Path $tmp $idB)) "22222222" "last 'authorized on' line wins (MT5 wording)"
+    Set-Content -Path (Join-Path $tmp "$idB\logs\20261006.log") -Encoding Unicode -Value @("0`t09:00:00.000`tNetwork`t'33333333': login on Broker-Demo")
+    Assert-Equal (Get-StoicTerminalLogin (Join-Path $tmp $idB)) "22222222" "newest log is read first; MT4 'login on' wording still accepted"
     Assert-Equal (Get-StoicTerminalLogin (Join-Path $tmp $idA)) "" "no logs folder → unknown login"
 
-    # N110-3 — chart symbol follows the broker suffix of an OPEN chart
+    # N110-3 / N111-6 — chart symbol follows the broker suffix of an OPEN chart in the ACTIVE profile only
     New-Item -ItemType Directory -Force (Join-Path $tmp "$idB\profiles\charts\Default") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $tmp "$idB\profiles\charts\Scalping") | Out-Null
+    New-Item -ItemType Directory -Force (Join-Path $tmp "$idB\config") | Out-Null
     Set-Content -Path (Join-Path $tmp "$idB\profiles\charts\Default\chart01.chr") -Encoding Unicode -Value @("<chart>", "symbol=XAUUSD.m", "period_type=1", "</chart>")
     Set-Content -Path (Join-Path $tmp "$idB\profiles\charts\Default\chart02.chr") -Encoding Unicode -Value @("<chart>", "symbol=EURUSD.m", "period_type=1", "</chart>")
-    Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idB)) "EURUSD.m" "open EURUSD.m chart preferred over XAUUSD.m"
-    Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idB) -Preferred "GBPUSD") "XAUUSD.m" "no match → first open chart symbol"
+    Set-Content -Path (Join-Path $tmp "$idB\profiles\charts\Scalping\chart01.chr") -Encoding Unicode -Value @("<chart>", "symbol=EURUSD.r", "period_type=1", "</chart>")
+    Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idB)) "EURUSD.m" "no terminal.ini → 'Default' profile; EURUSD.m preferred over XAUUSD.m"
+    Set-Content -Path (Join-Path $tmp "$idB\config\terminal.ini") -Encoding Unicode -Value @("[Charts]", "ProfileLast=Scalping", "MaxBars=50000")
+    Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idB)) "EURUSD.r" "ProfileLast=Scalping → only the active profile is read"
+    Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idB) -Preferred "GBPUSD") "EURUSD.r" "no match → first open chart symbol of the active profile"
     Assert-Equal (Get-StoicChartSymbol -DataFolder (Join-Path $tmp $idA)) "EURUSD" "no charts → preferred symbol as-is"
 } finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
@@ -121,8 +130,10 @@ else { $script:failures++; Write-Host "  FAIL compile path does not remove the s
 # main110 review (N110-2/3/7)
 if ($body -notmatch 'ServerUrl=\$' -and $body -match 'STOIC-Server.txt' -and $body -match '\$eaServerUrl') { Write-Host "  ok   preset carries no ServerUrl; STOIC-Server.txt written from the claim response" -ForegroundColor Green }
 else { $script:failures++; Write-Host "  FAIL preset still overrides ServerUrl or the drop file is not written from server_url (N110-2)" -ForegroundColor Red }
-if ($body -match "notmatch '\^https://'" ) { Write-Host "  ok   non-https -ServerUrl is refused" -ForegroundColor Green }
-else { $script:failures++; Write-Host "  FAIL installer accepts a non-https -ServerUrl (N110-2)" -ForegroundColor Red }
+if ($body -match "cnotmatch '\^https://'" ) { Write-Host "  ok   non-https -ServerUrl is refused (case-sensitive, like the EA)" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL installer accepts a non-https -ServerUrl or checks case-insensitively (N110-2/N111-6)" -ForegroundColor Red }
+if ($body -match 'terminal_login\s*=' -and $body -match 'account_mismatch' -and $body.IndexOf('terminal_login') -lt $body.IndexOf('claimResp.bridge_token')) { Write-Host "  ok   terminal login travels in the claim; 409 account_mismatch handled before anything is spent" -ForegroundColor Green }
+else { $script:failures++; Write-Host "  FAIL claim does not carry terminal_login / handle account_mismatch (N111-2)" -ForegroundColor Red }
 if ($body -notmatch 'AllowDllImport' -and $body -match '\[y/N\]' -and $body -match 'UNMANAGED') { Write-Host "  ok   restart is opt-in with a warning; no terminal-wide AllowDllImport" -ForegroundColor Green }
 else { $script:failures++; Write-Host "  FAIL restart prompt/ini not hardened (N110-3)" -ForegroundColor Red }
 if ($src -notmatch 'Stop-Process') { Write-Host "  ok   MT5 is never force-killed" -ForegroundColor Green }

@@ -1,0 +1,33 @@
+{
+  "summary": "STOIC Easy-Connect Phase 2 (VPS Agent Service) regression — iter246 — all green. Backend unit lane /app/backend/tests/unit/test_vps_agent_service.py 7/7 passed covering: list_agents online/golden/hostname + offline flip; queue_install_terminal issues a fresh pairing token (old unused one replaced), signs an install_terminal command through vps_pathb.queue_command (seq=1, pairing_token echoed, login/server_url propagated), mirrors vps_terminal={'status':'queued'} onto the account; queue_install refuses offline agent / paper account / foreign account_id with 404/409 ValueErrors; terminals_status flags stale heartbeat → restart_wanted=True (respects awaiting_login=no-restart); report_terminal mirrors onto accounts, raises exactly one ops_alert on 'restart_loop' with dedup_key vps_terminal:<agent>:<login>, and alerting.EVALUATOR_KINDS contains 'vps_terminal_restart_loop' (= mutable kind, so MUTE 24H appears in AlertsCard); wiring tests confirm server.py mounts vps_terminal_router and exposes /api/setup/agent.ps1, install_progress surfaces vps_terminal, InstallProgressPanel + QuickInstallPanel + VpsAgentInstall front-end wiring is in place, and STOIC-Agent.ps1 satisfies the operator contract (DPAPI token, scheduled task AtLogOn RunLevel Highest, robocopy /XF accounts.dat + explicit removal, installer hash-pin, -TerminalPath/-NoRestart/-TerminalLogin, /portable + /config:first-start.ini which is deleted after use, password only typed via Read-Host -AsSecureString and never sent to the server, watchdog with MaxRestartsPerHour=3 and StaleS=180 using CloseMainWindow — no Stop-Process force-kill, HMACSHA256 command signature). Live HTTP suite /app/test_reports/iter246_vps_live_test.py 4/4 passed against the preview backend: (1) GET /api/setup/agent.ps1 returns 200 with the agent script and references /api/infra/agent/register + /api/vps/agent/terminals/status + /api/vps/agent/terminals/report; (2) GET /api/vps/agents without auth → 401; (3) admin@trading.bot (preview) GET /api/vps/agents → 200 and lists two previously-enrolled agents (agt_0aaf607e44de, offline); (4) admin POST /api/vps/agents/agt_does_not_exist/install-terminal → 404 code=vps_install_refused — crucially NOT 402, which confirms enforce_feature('vps_quick_connect') short-circuits for the admin tier (entitlements.py:49 'if tier == admin: return feats'). Reviewer concern addressed: admin DOES have vps_quick_connect via the admin short-circuit; starter/free plans explicitly set vps_quick_connect=False, pro/ultra/enterprise set it True (subscription_plans.py). No action items for the main agent.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/unit/test_vps_agent_service.py",
+    "/app/test_reports/iter246_vps_live_test.py",
+    "/app/test_reports/pytest/iter246_vps_agent.xml",
+    "/app/test_reports/pytest/iter246_vps_live.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "entitlement wiring is correct: /api/vps/agents/{agent_id}/install-terminal calls enforce_feature(user, 'vps_quick_connect') and admin bypasses it via the tier=='admin' short-circuit (entitlements.py:49). Non-admin starter/free users will get 402 as designed.",
+    "vps_terminals.queue_install_terminal correctly deletes unconsumed pairing tokens for the account before issuing a fresh one (prevents stacked tokens) and marks older queued install_terminal commands for the same account as 'superseded' so a second click doesn't duplicate work.",
+    "report_terminal is idempotent via upsert on (agent_id, account_ref); the ops_alert on restart_loop uses dedup_key='vps_terminal:<agent>:<login>' so a flapping terminal raises exactly one alert even if the agent re-posts restart_loop every tick.",
+    "STOIC-Agent.ps1 never force-kills MT5 — only CloseMainWindow — and never streams the MT5 password back to the server; stoic-first-start.ini is removed after the terminal starts and ConvertFrom-SecureString is DPAPI-scoped. No obvious credential-leak path.",
+    "Residual (non-blocking): vps_terminal_routes._agent re-imports routes.infra_routes._mtls_gate inside the request path; works but a module-level import would be cleaner. Not blocking."
+  ],
+  "updated_files": [
+    "/app/test_reports/iter246_vps_live_test.py"
+  ],
+  "success_rate": {"backend": "100% (7/7 unit + 4/4 live HTTP)", "frontend": "n/a — UI wiring verified via unit-level file inspection; no interactive regression needed for this scope"},
+  "test_credentials": "admin@trading.bot per /app/memory/test_credentials.md (not embedded in test; the harness strips surrounding double-quotes from backend/.env TEST_ADMIN_PASSWORD so the quoted value in .env now works).",
+  "seed_data_creation": "Live suite performs read-only probes + one POST install-terminal with a bogus agent_id (expected 404), which does NOT create any pairing_tokens, agent_commands, accounts, or mt5_instances rows. Teardown: none required.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Live suite /app/test_reports/iter246_vps_live_test.py: run with `DB_NAME=ai_trading_bot STOIC_TESTS_ALLOW_DB_NAME=1 python -m pytest test_reports/iter246_vps_live_test.py -v`. It reads REACT_APP_BACKEND_URL from frontend/.env and TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD from backend/.env (unquotes); falls back to /app/memory/test_credentials.md for the password. Login path uses httpOnly cookies — the suite also pins the csrf_token cookie into X-CSRF-Token so state-changing POSTs don't 403. Admin currently has two enrolled agents (agt_0aaf607e44de + one more, both offline) — if you need to exercise the full install flow end-to-end, you'll need to simulate agent heartbeat (POST /api/infra/agent/heartbeat with mTLS) or point at a VPS running STOIC-Agent.ps1; the queue path cleanly refuses with 'agent offline' until then.",
+  "rca of the issue": "n/a — Easy-Connect Phase 2 (VPS Agent Service) scope verified. Admin DOES hold vps_quick_connect via the admin tier bypass in enforce_feature; the install endpoint correctly enforces entitlements for non-admin tiers (feature flag true on pro/ultra/enterprise, false on free/starter per subscription_plans.py)."
+}

@@ -35,7 +35,7 @@ def test_version_152_everywhere():
     src = _src(EA_PATH)
     assert f'#property version   "{v}"' in src
     assert f'#define EA_CLIENT_VERSION "{v}"' in src
-    assert f'LATEST_EA = "{v}"' in _src(
+    assert 'LATEST_EA = latest_ea_version()' in _src(
         _os.path.join(_BACKEND_DIR, "routes", "bot_routes.py"))
     # r18 P0-02: the live floor is capability-derived, never a string literal
     assert 'FENCING_MIN_EA = version_str(LIVE_MIN_VERSION)' in _src(

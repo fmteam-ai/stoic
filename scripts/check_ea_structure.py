@@ -56,13 +56,12 @@ def main() -> int:
     v = m.group(1) if m else "?"
     print("EA version:", v)
 
+    # N111-6 — the backend DERIVES its version from this MQ5 (ea_capabilities.latest_ea_version); the routes must
+    # use the resolver (no hard-coded copy), and the resolver must read the same version this script sees.
     consistency = [
-        (os.path.join(REPO, "backend", "routes", "bot_routes.py"),
-         f'LATEST_EA = "{v}"'),
-        (os.path.join(REPO, "backend", "routes", "diagnostic_routes.py"),
-         f'LATEST_EA = "{v}"'),
-        (os.path.join(REPO, "backend", "routes", "setup_routes.py"),
-         f'"ea_latest_version": "{v}"'),
+        (os.path.join(REPO, "backend", "routes", "bot_routes.py"), "LATEST_EA = latest_ea_version()"),
+        (os.path.join(REPO, "backend", "routes", "diagnostic_routes.py"), "LATEST_EA = latest_ea_version()"),
+        (os.path.join(REPO, "backend", "routes", "setup_routes.py"), '"ea_latest_version": latest_ea_version()'),
         (os.path.join(REPO, "frontend", "src", "pages", "Accounts.jsx"),
          f'LATEST_EA_VERSION = "{v}"'),
         (os.path.join(REPO, "frontend", "src", "components",
@@ -72,6 +71,18 @@ def main() -> int:
     for path, needle in consistency:
         if needle not in open(path, encoding="utf-8", errors="replace").read():
             failures.append(f"version drift: {needle!r} missing in {path}")
+    for path in (os.path.join(REPO, "backend", "routes", "bot_routes.py"),
+                 os.path.join(REPO, "backend", "routes", "diagnostic_routes.py")):
+        if re.search(r'LATEST_EA = "\d', open(path, encoding="utf-8", errors="replace").read()):
+            failures.append(f"version drift: hard-coded LATEST_EA literal in {path} (must derive via latest_ea_version())")
+    try:
+        sys.path.insert(0, os.path.join(REPO, "backend"))
+        from ea_capabilities import latest_ea_version
+        derived = latest_ea_version()
+        if derived != v:
+            failures.append(f"version drift: ea_capabilities.latest_ea_version() = {derived!r} but MQ5 says {v!r}")
+    except Exception as e:  # noqa: BLE001
+        failures.append(f"version drift: cannot import ea_capabilities.latest_ea_version ({type(e).__name__}: {e})")
 
     if failures:
         print("FAIL:")

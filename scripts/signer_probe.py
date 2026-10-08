@@ -37,6 +37,8 @@ def main() -> int:
     import release_signing as rs
 
     url = a.url.rstrip("/")
+    a.public_key = (a.public_key or "").strip()      # N111-6 — a secret pasted with a trailing newline must not fail the preflight
+    a.key_id = (a.key_id or "").strip()
     host = urlparse(url).hostname or ""
     env = {"APP_ENV": "production", "RELEASE_SIGNER": "external", "RELEASE_SIGNER_URL": url,
            "RELEASE_SIGNER_ALLOWED_HOSTS": host, "RELEASE_SIGNER_TOKEN": token,

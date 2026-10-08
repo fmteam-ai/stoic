@@ -329,8 +329,12 @@ async def bootstrap_installer(token: str = "", enrollment_code: str = ""):
 
 
 @router.post("/agent/register")
-async def agent_register(payload: dict):
+async def agent_register(payload: dict, request: Request):
     from vps_agent import register_agent
+    # audit #12 P3 — unauthenticated enrolment: throttle per IP so the single-use code cannot be raced
+    from security import client_ip, rate_limit
+    await rate_limit(get_db(), "agent_register", client_ip(request), 20, 600,
+                     "Too many agent registration attempts — try again in 10 minutes.", request=request)
     token = str(payload.get("bootstrap_token") or "")
     if not token and payload.get("enrollment_code"):
         from vps_pathb import resolve_enrollment

@@ -3,7 +3,6 @@ from data the platform already holds (pairing_tokens, installations, account hea
 Read-only, grants nothing. Statuses: done | waiting | blocked | warn | pending."""
 from __future__ import annotations
 
-import os
 from datetime import datetime, timezone
 
 HEARTBEAT_FRESH_S = 120          # EA heartbeats every few seconds; 2 min without = not talking
@@ -54,9 +53,11 @@ def _version_lt(a: str | None, b: str) -> bool:
 
 
 def webrequest_url(request_base: str | None = None, forwarded_proto: str | None = None, forwarded_host: str | None = None) -> str:
-    """The origin MT5 must allow for WebRequest: PUBLIC_BACKEND_URL, else the public origin the
-    browser reached us through (ingress forwarded headers), else the raw request base."""
-    env = (os.environ.get("PUBLIC_BACKEND_URL") or "").strip().rstrip("/")
+    """The origin MT5 must allow for WebRequest. N111-4 — ONE resolver with the one-liner and the claim's
+    server_url (`connect_service._base_url`: PUBLIC_BASE_URL → PUBLIC_BACKEND_URL → first https CORS origin);
+    only when nothing is configured: the public origin the browser reached us through, else the raw request base."""
+    from connect_service import _base_url
+    env = _base_url(None)
     if env:
         return env
     host = (forwarded_host or "").split(",")[0].strip()
@@ -207,4 +208,5 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
         state, headline = "not_started", "Generate a pairing token to begin"
     return {"account_id": str(account.get("_id") or account.get("id") or ""), "state": state, "headline": headline,
             "steps": steps, "webrequest_url": url, "generated_at": now.isoformat(),
+            "vps_terminal": account.get("vps_terminal") or None,   # Phase 2 VPS Agent: agent-managed terminal state
             "done": sum(1 for s in statuses if s == "done"), "total": len(steps)}

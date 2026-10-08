@@ -6,6 +6,7 @@ const STEPS = ["path", "provider", "broker", "recommend", "review"];
 
 export function AddVpsWizard({ onDone }) {
     const [step, setStep] = useState(0);
+    const [copied, setCopied] = useState(false);
     const [form, setForm] = useState({ path: "new_vps", provider: "simulated", broker: "", mt5_instances: 2, research_workload: false, apiKey: "" });
     const [providers, setProviders] = useState([]);
     const [brokers, setBrokers] = useState([]);
@@ -81,7 +82,21 @@ export function AddVpsWizard({ onDone }) {
             <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="pathb-result">
                 <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">CONNECT EXISTING VPS · {pathbResult.deployment_id}</div>
                 <div className="font-mono text-[11px] text-white mb-1">Enrollment code: <span className="text-[#00FF41]" data-testid="enrollment-code">{pathbResult.enrollment_code}</span> <span className="text-[#52525B]">(single use, {pathbResult.expires_in_min} min)</span></div>
-                <div className="font-mono text-[9px] text-[#FFD700] mb-1">Run via RDP on the VPS as Administrator (recommended — downloads, verifies, then runs):</div>
+                {pathbResult.vps_agent_command && (
+                    <div className="border border-[#00FF41]/30 bg-[#00FF41]/5 p-3 my-3" data-testid="vps-agent-enrol">
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                            <div className="font-mono text-[9px] text-[#00FF41] tracking-widest">STOIC VPS AGENT — ONE LINE, ADMINISTRATOR POWERSHELL ON THE VPS</div>
+                            <button onClick={() => { navigator.clipboard?.writeText(pathbResult.vps_agent_command); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+                                data-testid="vps-agent-enrol-copy"
+                                className="font-mono text-[9px] tracking-widest border border-[#00FF41]/50 text-[#00FF41] px-2 py-0.5 hover:bg-[#00FF41]/10">
+                                {copied ? "COPIED" : "COPY"}
+                            </button>
+                        </div>
+                        <pre className="font-mono text-[9px] text-[#A1A1AA] bg-black border border-[#141414] p-2 overflow-x-auto whitespace-pre-wrap break-all" data-testid="vps-agent-enrol-command">{pathbResult.vps_agent_command}</pre>
+                        <div className="font-mono text-[8px] text-[#3F3F46] mt-1">Downloads /api/setup/agent.ps1, checks its SHA-256 ({(pathbResult.vps_agent_sha256 || "").slice(0, 12)}…), enrols with the code and installs the "StoicVpsAgent" task. Prepare C:\STOIC\golden\MT5 first (docs/VPS_AGENT.md).</div>
+                    </div>
+                )}
+                <div className="font-mono text-[9px] text-[#FFD700] mb-1">Legacy host agent (telemetry only) — run via RDP on the VPS as Administrator:</div>
                 <pre className="font-mono text-[9px] text-[#A1A1AA] bg-black border border-[#141414] p-2 overflow-x-auto whitespace-pre-wrap" data-testid="pathb-command">
 {(pathbResult.install_commands?.recommended || []).join("\n")}
                 </pre>

@@ -44,13 +44,14 @@ function Start-Terminal([string]$Ini) {
     Start-Process -FilePath $exe -ArgumentList @("/portable", "/config:`"$Ini`"") -WorkingDirectory $DataFolder | Out-Null
 }
 function Get-LinesSince([datetime]$Since) {
-    # Experts log lines are "0<TAB>HH:mm:ss.fff<TAB>..." in the file named for the day; keep only lines stamped AFTER $Since
+    # N111-5 — MQL5 Experts-log lines are "<2-char code>\t<n>\tHH:mm:ss.fff\t<source>\t<message>": anchor on the
+    # FIRST HH:mm:ss.fff token wherever it sits; keep only lines stamped at/after $Since (older 4014s never count)
     $out = @()
     foreach ($day in @($Since.Date, (Get-Date).Date) | Sort-Object -Unique) {
         $log = Join-Path $logDir ($day.ToString("yyyyMMdd") + ".log")
         if (-not (Test-Path $log)) { continue }
         foreach ($line in ((Get-Content $log -Encoding Unicode -Raw) -split "`n")) {
-            $m = [regex]::Match($line, '^\S*\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})')
+            $m = [regex]::Match($line, '(\d{2}):(\d{2}):(\d{2})\.(\d{3})')
             if (-not $m.Success) { continue }
             $ts = $day.AddHours([int]$m.Groups[1].Value).AddMinutes([int]$m.Groups[2].Value).AddSeconds([int]$m.Groups[3].Value).AddMilliseconds([int]$m.Groups[4].Value)
             if ($ts -ge $Since) { $out += $line }
@@ -62,7 +63,7 @@ function Verdict([string]$Label, [datetime]$Since) {
     Start-Sleep -Seconds $WaitSeconds
     $lines   = @(Get-LinesSince $Since)
     $started = @($lines | Where-Object { $_ -match 'STOIC Bridge EA v' }).Count -gt 0
-    $err4014 = @($lines | Where-Object { $_ -match 'WebRequest error 4014|4014' }).Count -gt 0
+    $err4014 = @($lines | Where-Object { $_ -match 'WebRequest error 4014' }).Count -gt 0     # exact EA text (N111-5)
     $hb      = @($lines | Where-Object { $_ -match 'heartbeat|Heartbeat' }).Count
     $ok = $started -and -not $err4014
     Write-Host ("[{0}] {1}  started={2} err4014={3} heartbeatLines={4} (lines since start: {5})" -f $(if ($ok) { "PASS" } else { "FAIL" }), $Label, $started, $err4014, $hb, $lines.Count) -ForegroundColor $(if ($ok) { "Green" } else { "Red" })
@@ -70,6 +71,8 @@ function Verdict([string]$Label, [datetime]$Since) {
 }
 
 $results = [ordered]@{}
+# N111-5 — back up config\ BEFORE the first (baseline) start: the baseline run itself rewrites terminal.ini
+Copy-Item $cfg $backup -Recurse -Force
 try {
     # ── 0. BASELINE — the plain startup config MUST fail with 4014, otherwise the spike proves nothing ──
     Stop-Terminal; $t0 = Get-Date; Start-Terminal (Join-Path $DataFolder "stoic-start.ini")
@@ -77,8 +80,6 @@ try {
     if (-not $base.started) { throw "baseline: the EA did not start at all — fix the install (chart symbol / compile) before probing WebRequest" }
     if (-not $base.err4014) { throw "baseline: NO 4014 error — the URL is already allowed in this copy (or the EA reached the server); a PASS below would be meaningless. Use a fresh copy." }
     $results["0 baseline"] = "FAIL (expected)"
-
-    Copy-Item $cfg $backup -Recurse -Force
 
     # ── A. candidate [Experts]/[WebRequest] keys in the startup ini ────────────────────────────────────
     $iniA = Join-Path $DataFolder "stoic-spike-a.ini"

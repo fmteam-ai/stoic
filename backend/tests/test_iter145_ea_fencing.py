@@ -40,9 +40,9 @@ class TestEaVersionBump:
         src = _ea()
         assert f'#property version   "{v}"' in src
         assert f'#define EA_CLIENT_VERSION "{v}"' in src
-        assert f'LATEST_EA = "{v}"' in _src(_os.path.join(_BACKEND_DIR, "routes/bot_routes.py"))
-        assert f'LATEST_EA = "{v}"' in _src(_os.path.join(_BACKEND_DIR, "routes/diagnostic_routes.py"))
-        assert f'"ea_latest_version": "{v}"' in _src(_os.path.join(_BACKEND_DIR, "routes/setup_routes.py"))
+        assert 'LATEST_EA = latest_ea_version()' in _src(_os.path.join(_BACKEND_DIR, "routes/bot_routes.py"))
+        assert 'LATEST_EA = latest_ea_version()' in _src(_os.path.join(_BACKEND_DIR, "routes/diagnostic_routes.py"))
+        assert '"ea_latest_version": latest_ea_version()' in _src(_os.path.join(_BACKEND_DIR, "routes/setup_routes.py"))
         assert f'LATEST_EA_VERSION = "{v}"' in _src(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx"))
         assert f'LATEST_EA_VERSION = "{v}"' in _src(_os.path.join(_REPO_DIR, "frontend", "src/components/EaVersionStrip.jsx"))
 

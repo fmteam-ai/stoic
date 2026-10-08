@@ -121,9 +121,9 @@ class TestBackendWiring:
     def test_versions_bumped_everywhere(self):
         from ea_version import current_ea_version
         v = current_ea_version()
-        assert f'LATEST_EA = "{v}"' in open(os.path.join(BACKEND, "routes", "bot_routes.py")).read()
-        assert f'LATEST_EA = "{v}"' in open(os.path.join(BACKEND, "routes", "diagnostic_routes.py")).read()
-        assert f'"ea_latest_version": "{v}"' in open(os.path.join(BACKEND, "routes", "setup_routes.py")).read()
+        assert 'LATEST_EA = latest_ea_version()' in open(os.path.join(BACKEND, "routes", "bot_routes.py")).read()
+        assert 'LATEST_EA = latest_ea_version()' in open(os.path.join(BACKEND, "routes", "diagnostic_routes.py")).read()
+        assert '"ea_latest_version": latest_ea_version()' in open(os.path.join(BACKEND, "routes", "setup_routes.py")).read()
         assert f'LATEST_EA_VERSION = "{v}"' in open(_os.path.join(_REPO_DIR, "frontend", "src/pages/Accounts.jsx")).read()
         assert f'LATEST_EA_VERSION = "{v}"' in open(_os.path.join(_REPO_DIR, "frontend", "src/components/EaVersionStrip.jsx")).read()
 

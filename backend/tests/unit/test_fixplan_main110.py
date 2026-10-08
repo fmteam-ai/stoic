@@ -74,9 +74,9 @@ def test_n110_4_terminal_confirmation_and_login_guard():
     res = ps[ps.index("function Resolve-StoicTerminal"):ps.index("function Test-StoicCompileLog")]
     assert "[scriptblock]$Confirm" in res and "Is this the terminal logged into the account this pairing code belongs to? [y/N]" in res
     body = ps[ps.index("function Install-Stoic"):]
-    assert "$terminalLogin = Get-StoicTerminalLogin" in body
-    assert 'but the pairing code belongs to #$accountNumber' in body and "Nothing was written" in body
-    assert body.index("pairing code belongs to #$accountNumber") < body.index("[3/5] Downloading")
+    assert "Get-StoicTerminalLogin $terminal.FullName" in body
+    # N111-2 — the mismatch is now refused by the SERVER before the claim consumes the code (see test_fixplan_main111)
+    assert "terminal_login" in body and "account_mismatch" in body
     t = _read("scripts", "test_installer.ps1")
     assert "running terminal NOT confirmed" in t and "Get-StoicChartSymbol" in t and "Get-StoicTerminalLogin" in t
 

@@ -78,6 +78,16 @@ _key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(_secret("ED25519_SI
 app = FastAPI(title="STOIC Release Signer", docs_url=None, redoc_url=None)
 
 
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    # audit #12 P3 — HSTS + no-sniff on every response (Fly terminates TLS; the banner is dropped via --no-server-header)
+    resp = await call_next(request)
+    resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
 class SignRequest(BaseModel):
     key_id: str
     data_hex: str

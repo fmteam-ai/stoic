@@ -219,16 +219,19 @@ function Restart-StoicTerminal {
 }
 
 function Get-StoicTerminalLogin {
-    # N110-4 — the account the terminal is logged into right now, from its own log: today's
-    # <data>\logs\YYYYMMDD.log carries "'12345678': login on Broker-Server ..." (UTF-16). "" when unknown.
+    # N110-4 — the account the terminal is logged into right now, from its own journal: <data>\logs\YYYYMMDD.log
+    # (UTF-16) carries "Network\t'12345678': authorized on Broker-Server through Access Point ..." (MT5 wording;
+    # N111-3 — "login on" is the MT4 phrasing, both are accepted). "" when unknown. Newest log first, 7 days back.
     param([Parameter(Mandatory = $true)][string]$DataFolder)
     $logDir = Join-Path $DataFolder "logs"
     if (-not (Test-Path $logDir)) { return "" }
-    $logs = @(Get-ChildItem $logDir -Filter "*.log" -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending | Select-Object -First 2)
+    # N111-3/CI — newest JOURNAL DAY first by file NAME (YYYYMMDD.log), not by mtime: a rotated or re-touched
+    # older file must never outrank today's
+    $logs = @(Get-ChildItem $logDir -Filter "*.log" -ErrorAction SilentlyContinue | Sort-Object Name -Descending | Select-Object -First 7)
     foreach ($log in $logs) {
         $text = ""
         try { $text = Get-Content $log.FullName -Encoding Unicode -Raw -ErrorAction Stop } catch { continue }
-        $hits = [regex]::Matches($text, "'(\d{4,12})':\s*login on\s+(\S+)")
+        $hits = [regex]::Matches($text, "'(\d{4,12})':\s*(?:authorized|login) on\s+(\S+)")
         if ($hits.Count -gt 0) { return $hits[$hits.Count - 1].Groups[1].Value }
     }
     return ""
@@ -236,13 +239,25 @@ function Get-StoicTerminalLogin {
 
 function Get-StoicChartSymbol {
     # N110-3 — brokers suffix symbols (EURUSD.m, EURUSD.r): a startup ini with Symbol=EURUSD opens no chart and
-    # the EA never attaches. Prefer the first OPEN chart whose symbol starts with $Preferred (profiles\charts\*\*.chr),
-    # then any open chart's symbol, then $Preferred itself.
+    # the EA never attaches. Prefer the first OPEN chart whose symbol starts with $Preferred, then any open chart's
+    # symbol, then $Preferred itself. N111-6 — only the ACTIVE profile is read (config\terminal.ini [Charts]
+    # ProfileLast=…, else "Default"); other saved profiles are not what is on screen.
     param([Parameter(Mandatory = $true)][string]$DataFolder, [string]$Preferred = "EURUSD")
     $chartsDir = Join-Path $DataFolder "profiles\charts"
     $symbols = @()
     if (Test-Path $chartsDir) {
-        foreach ($chr in @(Get-ChildItem $chartsDir -Recurse -Filter "*.chr" -ErrorAction SilentlyContinue | Sort-Object FullName)) {
+        $profile = "Default"
+        $ini = Join-Path $DataFolder "config\terminal.ini"
+        if (Test-Path $ini) {
+            $iniText = ""
+            try { $iniText = Get-Content $ini -Encoding Unicode -Raw -ErrorAction Stop } catch { $iniText = "" }
+            if (-not $iniText -or $iniText -notmatch 'ProfileLast=') { try { $iniText = Get-Content $ini -Raw -ErrorAction Stop } catch { $iniText = "" } }
+            $pm = [regex]::Match($iniText, '(?m)^\s*ProfileLast=(.+?)\s*$')
+            if ($pm.Success -and $pm.Groups[1].Value.Trim()) { $profile = $pm.Groups[1].Value.Trim() }
+        }
+        $profileDir = Join-Path $chartsDir $profile
+        if (-not (Test-Path $profileDir)) { $profileDir = $chartsDir }    # unknown profile name → every profile (best effort)
+        foreach ($chr in @(Get-ChildItem $profileDir -Recurse -Filter "*.chr" -ErrorAction SilentlyContinue | Sort-Object FullName)) {
             $text = ""
             try { $text = Get-Content $chr.FullName -Encoding Unicode -Raw -ErrorAction Stop } catch { $text = "" }
             if (-not $text -or $text -notmatch 'symbol=') { try { $text = Get-Content $chr.FullName -Raw -ErrorAction Stop } catch { $text = "" } }
@@ -359,14 +374,16 @@ function Install-Stoic {
         # (N110-3: when not given, the first open chart starting with EURUSD — broker suffixes included)
         [string]$ChartSymbol = "EURUSD",
         [string]$ChartPeriod = "M15",
-        [switch]$NoRestart
+        [switch]$NoRestart,
+        # Phase 2 VPS Agent — the clone's journal is empty; the agent knows which login this terminal is FOR
+        [string]$TerminalLogin = ""
     )
 
-    $InstallerVersion = "1.6"
+    $InstallerVersion = "1.7"
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $ServerUrl = $ServerUrl.TrimEnd('/')
     # N110-2 — the bridge token travels to this host: https only, no exceptions
-    if ($ServerUrl -notmatch '^https://') { throw "STOIC: -ServerUrl must start with https:// (got '$ServerUrl') — the bridge token never travels in clear" }
+    if ($ServerUrl -cnotmatch '^https://') { throw "STOIC: -ServerUrl must start with https:// (got '$ServerUrl') — the bridge token never travels in clear" }   # N111-6 — case-sensitive like the EA
     $script:RotateDeviceKey = [bool]$RotateDeviceKey
     $devicePublicKey = Get-StoicDevicePublicKey
 
@@ -381,7 +398,7 @@ function Install-Stoic {
     $terminal = Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId
     if (-not $terminal) { return }
     $terminals = @($terminal)
-    $terminalLogin = Get-StoicTerminalLogin $terminal.FullName
+    $terminalLogin = $(if ($TerminalLogin) { $TerminalLogin } else { Get-StoicTerminalLogin $terminal.FullName })
     Write-Host "    • $($terminal.FullName)" -ForegroundColor White
     if ($terminalLogin) { Write-Host "    • logged in as #$terminalLogin" -ForegroundColor White }
     Write-Host ""
@@ -397,16 +414,23 @@ function Install-Stoic {
                 token             = $Token
                 hostname          = $Hostname
                 installer_version = $InstallerVersion
+                terminal_login    = $(if ($terminalLogin) { $terminalLogin } else { $null })   # N111-2 — server checks it BEFORE consuming the code
                 device_key        = @{ algorithm = "RSA-PSS-SHA256"; public_key = $devicePublicKey }
             } | ConvertTo-Json -Depth 4)
     } catch {
-        $msg = ""
+        $msg = ""; $code = ""
         if ($_.ErrorDetails -and $_.ErrorDetails.Message) {
-            try { $msg = ($_.ErrorDetails.Message | ConvertFrom-Json).detail.message } catch {}
+            try { $d = ($_.ErrorDetails.Message | ConvertFrom-Json).detail; $msg = $d.message; $code = $d.code } catch {}
         }
         if (-not $msg) { $msg = $_.Exception.Message }
         Write-Host "    ✗ FAILED: $msg" -ForegroundColor Red
         Write-Host ""
+        if ($code -eq "account_mismatch") {
+            # N111-2 — nothing was consumed or rotated: the SAME code still works once the right account is logged in
+            Write-Host "    This terminal is logged in as #$terminalLogin. Log the right account into MT5 (or re-run with" -ForegroundColor Yellow
+            Write-Host "    -TerminalPath pointing at its data folder) and run the SAME line again — the code was not used." -ForegroundColor Yellow
+            return
+        }
         Write-Host "    The pairing token may be expired or already used." -ForegroundColor DarkGray
         Write-Host "    Generate a fresh one from the STOIC dashboard:" -ForegroundColor DarkGray
         Write-Host "    Accounts → your account → 'Quick Install' tab → Generate." -ForegroundColor DarkGray
@@ -423,16 +447,19 @@ function Install-Stoic {
     $eaLatestVer    = $claimResp.ea_latest_version
     # N110-2 — the server URL the EA talks to is the one the server itself announced (same source as the
     # WebRequest host the user is told to allow-list); the -ServerUrl argument is only the bootstrap.
+    # N111-2 — never abort AFTER the claim (the code is spent and the bridge token rotated): a non-https
+    # announcement falls back to the https bootstrap URL with a warning instead.
     $eaServerUrl    = if ($claimResp.server_url) { "$($claimResp.server_url)".TrimEnd('/') } else { $ServerUrl }
-    if ($eaServerUrl -notmatch '^https://') { Write-Host "    ✗ server announced a non-https server_url ($eaServerUrl) — refusing to write it" -ForegroundColor Red; return }
+    if ($eaServerUrl -cnotmatch '^https://') {
+        Write-Host "    ! server announced a non-https server_url ($eaServerUrl) — using $ServerUrl instead (fix PUBLIC_BASE_URL on the server)" -ForegroundColor Yellow
+        $eaServerUrl = $ServerUrl
+    }
 
     Write-Host "    ✓ Paired with: $broker #$accountNumber  ($accountLabel)" -ForegroundColor Green
-    # N110-4 — the pairing code belongs to ONE account: refuse to configure a terminal logged into another one
+    # N110-4/N111-2 — the login/account comparison happened on the SERVER before the code was consumed
+    # (terminal_login in the claim body → 409 account_mismatch with nothing changed); this is only a belt-and-braces echo.
     if ($terminalLogin -and $accountNumber -and ("$accountNumber" -ne "$terminalLogin")) {
-        Write-Host "    ✗ This terminal is logged in as #$terminalLogin but the pairing code belongs to #$accountNumber." -ForegroundColor Red
-        Write-Host "      Nothing was written. Log the right account into MT5 (or re-run with -TerminalPath pointing at its data folder)," -ForegroundColor Yellow
-        Write-Host "      then get a NEW CODE from the dashboard (this one is spent)." -ForegroundColor Yellow
-        return
+        Write-Host "    ! server accepted the claim although this terminal reports login #$terminalLogin (code is for #$accountNumber) — update the server" -ForegroundColor Yellow
     }
     if ($claimResp.device_key_id) { Write-Host "    ✓ Installer device key enrolled (key id $($claimResp.device_key_id))" -ForegroundColor Green }
     else { Write-Host "    ! server did not enrol the device key - live proof will not be attested (update the server)" -ForegroundColor Yellow }

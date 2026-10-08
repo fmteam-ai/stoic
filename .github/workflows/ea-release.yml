@@ -49,7 +49,7 @@ jobs:
             [ -n "${!v}" ] || missing="$missing $v"
           done
           if [ -n "$missing" ]; then
-            echo "::error::EA compiled with 0 errors, but the signed release record cannot be produced: GitHub repository secrets missing —$missing."
+            echo "::error::EA release signing cannot run: GitHub repository secrets missing —$missing. Nothing was compiled; add the secrets (docs/RELEASE_SIGNER.md) and re-run."
             echo "Set them under Settings → Secrets and variables → Actions (see docs/RELEASE_SIGNER.md, section 'GitHub Actions secrets'),"
             echo "then re-run this workflow (Actions → ea-release → Run workflow). Until then the server keeps the previous signed EX5 hash."
             exit 1

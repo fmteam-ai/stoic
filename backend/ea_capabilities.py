@@ -2,6 +2,7 @@
 and canonical authority may only allow new exposure — on terminals whose
 STOIC EA carries the destination-side controls. Versions are compared as
 numeric tuples, never as strings."""
+import os
 import re
 
 # capability → first EA version that implements it
@@ -25,6 +26,25 @@ def version_tuple(v) -> tuple | None:
 
 def version_str(t: tuple) -> str:
     return ".".join(str(x) for x in t)
+
+
+_MQ5_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "EmergentTradingBridge.mq5")
+_latest_cache: dict = {}
+
+
+def latest_ea_version() -> str:
+    """N111-6 — the EA version this server ships, read from `#property version` of the bundled MQ5
+    (cached per file mtime) so no route carries a hard-coded copy that can drift from the source."""
+    try:
+        mtime = os.path.getmtime(_MQ5_PATH)
+        if _latest_cache.get("mtime") != mtime:
+            with open(_MQ5_PATH, encoding="utf-8-sig", errors="replace") as fh:
+                head = fh.read(20000)
+            m = re.search(r'#property\s+version\s+"(\d+(?:\.\d+)*)"', head)
+            _latest_cache.update(mtime=mtime, version=m.group(1) if m else "")
+        return _latest_cache.get("version") or ""
+    except OSError:
+        return ""
 
 
 def capabilities_for(version) -> set[str]:

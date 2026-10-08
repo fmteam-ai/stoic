@@ -177,11 +177,11 @@ class TestEaVersionConsistency:
         for rel in ("backend/routes/bot_routes.py",
                     "backend/routes/diagnostic_routes.py"):
             src = (REPO / rel).read_text()
-            assert f'LATEST_EA = "{self._v}"' in src, f"{rel} not on {self._v}"
+            assert 'LATEST_EA = latest_ea_version()' in src, f"{rel} not derived"
 
     def test_setup_routes_ea_latest_1_49(self):
         src = (REPO / "backend/routes/setup_routes.py").read_text()
-        assert f'"ea_latest_version": "{self._v}"' in src
+        assert '"ea_latest_version": latest_ea_version()' in src
 
     def test_frontend_ea_version_1_49(self):
         for rel in ("frontend/src/pages/Accounts.jsx",
