@@ -317,6 +317,11 @@ def test_compose_up_clears_containers_marked_for_removal():
     assert lib.count("reap_zombies || return 1") == 2 and "for attempt in 1 2 3 4 5 6" in lib   # reap→retry until compose converges
     assert 'grep -E " [0-9a-f]{12}_${project}-"' in lib          # compose-renamed leftovers keep the name → must be reaped
     assert "systemctl restart docker" in lib and "may_detach_mounts" in lib
+    # v1.60.7 — host prerequisites for EXISTING installs: one code path (deploy/host-prereqs.sh) for bootstrap + update
+    boot = _read("deploy", "bootstrap.sh"); upd = _read("deploy", "update.sh")
+    assert boot.count("\nbash deploy/host-prereqs.sh --yes") + boot.count("  bash deploy/host-prereqs.sh --yes") == 2 and "docker-root-slave.sh /usr/local/sbin" not in boot
+    assert ". deploy/preflight.sh" in upd and upd.index("preflight_host || gate_refused") < upd.index("provision_images || rollback")
+    assert "compose_up_guarded" in upd and "--no-host-changes" in upd
     assert lib.count("systemctl reset-failed docker docker.socket") == 2 and "wait_docker" in lib   # r303/r304: start-limit-hit + slow restore
     # last resort for mounts leaked into another namespace (cPanel CageFS/LVE): metadata removal with dockerd
     # stopped — r26 P2-03: opt-in (--repair-docker-mounts), full 64-hex ids re-validated right before rm, journaled

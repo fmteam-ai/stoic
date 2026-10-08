@@ -13,7 +13,7 @@
 #   deploy/docker-orphan-mounts.sh           # list what would be detached (dry run)
 #   deploy/docker-orphan-mounts.sh --apply   # detach, then re-count
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 . deploy/lib.sh
 [ "$(id -u)" = 0 ] || { echo "run as root"; exit 1; }
 docker info >/dev/null 2>&1 || { echo "dockerd not reachable — refusing (every layer would look orphaned)"; exit 1; }

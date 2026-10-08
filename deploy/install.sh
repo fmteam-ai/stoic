@@ -29,6 +29,7 @@ for a in "$@"; do
     --onboarding-close-only) READINESS_POLICY="onboarding-close-only" ;;
     --release-ready) READINESS_POLICY="release-ready" ;;
     --repair-docker-mounts) export STOIC_REPAIR_DOCKER_MOUNTS=1 ;;   # lib.sh: allow host mutation for zombie recovery
+    --yes|-y) export PREFLIGHT_YES=1 ;;   # preflight.sh: accept the CI release key shown without a prompt
     --unlock) ;;   # handled below (install lock)
     *) ARGS+=("$a") ;;
   esac
@@ -192,6 +193,7 @@ fi
 # 0b · secrets added by later releases — generated when missing (upgrade-safe).
 # Key separation: ORDER_AUTH / LEDGER_ANCHOR are distinct from JWT (boot rule).
 . deploy/lib.sh
+. deploy/preflight.sh
 ensure_release_secrets
 # MongoDB single-node replica set (transactions are required in production):
 # cluster keyFile + replicaSet in the app URL — idempotent, upgrade-safe.
@@ -309,9 +311,13 @@ sed -i '/^ED25519_SIGNING_KEY_B64=/d; /^RELEASE_SIGNER_TOKEN=/d; /^RELEASE_SIGNE
 if [ "$( { grep -E '^RELEASE_PUBLIC_KEY_B64=' backend/.env || true; } | cut -d= -f2-)" = "${SIGNER_PUB_B64}" ]; then
   sed -i '/^RELEASE_PUBLIC_KEY_B64=/d' backend/.env; echo "   removed RELEASE_PUBLIC_KEY_B64 pinned to the LOCAL sidecar key (N102-5)"
 fi
+# CI release key: fetched from the PUBLIC signer (RELEASE_SIGNER_PUBLIC_URL, default https://stoic-signer.fly.dev),
+# key_id must equal RELEASE_SIGNER_KEY_ID, shown + confirmed (or --yes) before it is written — no manual .env editing
+ensure_release_public_key_pin
+record_host_profile
 grep -q "^RELEASE_PUBLIC_KEY_B64=." backend/.env \
   && echo "   signer: runtime key stoic-bundle-ed25519-v1 pinned (BUNDLE_PUBLIC_KEY_B64); RELEASE_PUBLIC_KEY_B64 = CI release key" \
-  || echo "!! RELEASE_PUBLIC_KEY_B64 is NOT set: CI-signed EA records / model manifests will not verify here until you pin the CI signer's public key (docs/RELEASE_SIGNER.md). Runtime signing (bundles) works."
+  || echo "!! RELEASE_PUBLIC_KEY_B64 is NOT set: CI-signed EA records / model manifests will not verify here until you pin the CI signer's public key (deploy/update.sh --yes or docs/RELEASE_SIGNER.md). Runtime signing (bundles) works."
 ensure_backup_passphrase
 # test-only bypass secrets never exist on a server install
 sed -i '/^STEP_UP_BYPASS_TOKEN=/d; /^RATE_LIMIT_BYPASS_TOKEN=/d' backend/.env

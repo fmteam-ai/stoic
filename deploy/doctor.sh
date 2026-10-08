@@ -120,6 +120,18 @@ if command -v dnf >/dev/null && [ -x /usr/bin/python3 ]; then
     || fail "system /usr/bin/python3 lacks the dnf module — cPanel/WHM packman breaks (ModuleNotFoundError: dnf); fix: deploy/host-python-fix.sh --apply"
 fi
 
+# shared web host (cPanel/WHM, Plesk, DirectAdmin, httpd/exim/dovecot): fine for demo-only, blocks live trading
+MARKERS=$(. deploy/lib.sh; . deploy/preflight.sh; shared_web_host_markers)
+if [ -n "${MARKERS}" ]; then
+  if [ "$(envval backend/.env APP_ENV)" = production ]; then warn "host suitability: STOIC shares this host with a public web/mail stack (${MARKERS}) — readiness BLOCKS live trading (demo-only: warning); migrate to a dedicated host: docs/HOST_MIGRATION.md"
+  else warn "host suitability: shared web host detected (${MARKERS}) — acceptable for demo-only; plan a dedicated host before live trading (docs/HOST_MIGRATION.md)"; fi
+else ok "host suitability: dedicated host (no cPanel/Plesk/DirectAdmin/httpd/exim/dovecot)"; fi
+# host prerequisites that EXISTING installs may lack (applied by update.sh/restart.sh preflight or `make host-prereqs`)
+if [ "$(id -u)" = 0 ]; then
+  if bash deploy/host-prereqs.sh --check >/dev/null 2>&1; then ok "host prerequisites: fs.may_detach_mounts=1 · docker root slave · drop-ins present"
+  else fail "host prerequisites missing (fs.may_detach_mounts / docker root propagation) — fix: sudo bash deploy/host-prereqs.sh --yes (update.sh applies it automatically)"; fi
+fi
+
 hdr "configuration"
 if [ -f .stoic-installed ]; then ok "installer: LOCKED since $(grep '^installed_at=' .stoic-installed | cut -d= -f2-) ($(grep '^mode=' .stoic-installed | cut -d= -f2-)$(lsattr .stoic-installed 2>/dev/null | grep -q '^....i' && echo ', immutable'))"
 elif [ "$(envval backend/.env APP_ENV)" = production ]; then warn "installer: not locked — a re-run of bootstrap/install.sh would rebuild the stack (finish an install via deploy/bootstrap.sh to lock it)"; fi

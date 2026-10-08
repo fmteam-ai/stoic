@@ -1,5 +1,5 @@
 # STOIC engineering entry points — every lane is one command.
-.PHONY: test-unit test-integration test-full lock lock-check verify-ea manifest publish rollback status backup migrator-on migrator-off staging-acceptance
+.PHONY: test-unit test-integration test-full lock lock-check verify-ea manifest publish rollback apply-env host-prereqs status backup migrator-on migrator-off staging-acceptance
 
 test-unit:            ## reproducible 516-test unit lane (env doctor included)
 	./scripts/test_unit.sh
@@ -28,6 +28,12 @@ publish:              ## re-publish latest origin/main (or REF=v1.2.3): backup �
 
 rollback:             ## roll back to the previous verified release (or REF=<tag|sha>)
 	deploy/rollback.sh $(REF)
+
+apply-env:            ## apply a backend/.env change the supported way (preflight → recreate backend + workers)
+	sudo bash deploy/restart.sh --env-changed --yes
+
+host-prereqs:         ## cPanel/RHEL-8 host prerequisites (fs.may_detach_mounts, docker root slave) — idempotent
+	sudo bash deploy/host-prereqs.sh --yes
 
 status:               ## containers, running build SHA, last releases
 	@docker compose ps --format '{{.Name}}\t{{.Status}}'

@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 985 |
+| unit | pure logic, no external I/O | every CI job | 996 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4171 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5428 tests across 570 files.**
+**Total: 5439 tests across 572 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -566,6 +566,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_r30_ea_release_chain.py` | unit | 4 |
 | `backend/tests/unit/test_rc_lock_manifest_bound.py` | unit | 1 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
+| `backend/tests/unit/test_release_key_pin.py` | unit | 4 |
 | `backend/tests/unit/test_sec002_static_errors.py` | unit | 2 |
 | `backend/tests/unit/test_security_agent_sa1_sa2.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa3.py` | unit | 7 |
@@ -584,4 +585,5 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |
+| `backend/tests/unit/test_update_preflight_shell.py` | unit | 7 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |

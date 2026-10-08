@@ -186,8 +186,10 @@ def check_entry(ea: dict) -> list:
         fails.append("EX5 entry is UNSIGNED")
     else:
         try:
-            from release_signing import verify_hex
-            if not verify_hex(_canonical_payload(ea), sig["sig_hex"], purpose="ea-release"):
+            from release_signing import verify_hex, release_key_pinned, RELEASE_KEY_UNPINNED_MESSAGE, _mode
+            if not release_key_pinned() and _mode(os.environ) != "local":
+                fails.append(RELEASE_KEY_UNPINNED_MESSAGE)
+            elif not verify_hex(_canonical_payload(ea), sig["sig_hex"], purpose="ea-release"):
                 fails.append("Ed25519 signature does NOT verify")
         except Exception as e:  # noqa: BLE001
             fails.append(f"signature verification unavailable: {e}")

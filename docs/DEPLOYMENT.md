@@ -221,6 +221,30 @@ cd /opt/stoic && git fetch --all --tags --prune && git checkout --detach origin/
   && STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV=$(git rev-parse HEAD@{1}) deploy/update.sh
 ```
 
+### Applying a `backend/.env` change (the supported path)
+Editing `backend/.env` and running a plain `docker compose up -d` is **not supported** on
+cPanel/RHEL-8 hosts: without the preflight the recreate jams on overlay EBUSY, compose leaves
+`<id>_stoic-*` containers behind and the API stays offline until a reboot. Use:
+
+```bash
+sudo bash deploy/restart.sh --env-changed        # preflight → recreate backend + 7 workers
+make apply-env                                    # same, non-interactive (--yes)
+sudo bash deploy/restart.sh --env-changed --all   # …also frontend + signer
+```
+Both `update.sh` and `restart.sh` run the same preflight **before** anything is built or
+recreated: host prerequisites (below), leftover cleanup, CI release-key pin and host profile.
+`--no-host-changes` refuses instead of applying missing host prerequisites and prints the exact
+command; `--yes` suppresses prompts (dockerd restart, release-key confirmation).
+
+### CI release public key — no manual `.env` editing
+`install.sh`/`update.sh`/`restart.sh --env-changed` fetch `GET /public-key` from the public signer
+(`RELEASE_SIGNER_PUBLIC_URL`, default `https://stoic-signer.fly.dev`) when `RELEASE_PUBLIC_KEY_B64`
+is empty, require `key_id == RELEASE_SIGNER_KEY_ID` (`stoic-release-ed25519-v1`), print key +
+fingerprint, ask for confirmation (or `--yes`) and write the pin. The local runtime sidecar key is
+never pinned (N102-5). Until the pin exists, readiness reports *release key not pinned* with the
+fix command instead of a misleading "signature does NOT verify" — release purposes (`ea-release`,
+`model-manifest`) never fall back to the runtime/bundle key.
+
 ### Tagged release on a git-checkout host (N101-1)
 A git checkout of a tag always carries the **developer** `release/rc_lock.json`
 (`authoritative: false`, no image digests) and an unsubstituted `backend/BUILD_SHA`; the
@@ -347,6 +371,45 @@ pip-audit/gitleaks/image scans.
 - `docs/RUNBOOK.md` — day-2 operations
 - `docs/DISASTER_RECOVERY.md`, `docs/ROLLBACK.md`, `docs/INCIDENT_RESPONSE.md`
 - `docs/MT5_VALIDATION_CAMPAIGN.md` — pre-live broker validation + soak
+
+## cPanel / shared hosts
+
+**Symptoms** (observed on a cPanel/WHM AlmaLinux-8 host with VirtFS jailed shells, httpd, php-fpm,
+exim, dovecot, monarx-agent): `docker compose up -d` after an `.env` edit recreates backend + 7
+workers; every old container fails removal with `driver "overlay2" failed to remove root
+filesystem … merged: device or resource busy`, compose leaves `<id>_stoic-…` temp containers, then
+fails with name conflicts; the API is offline until a reboot. `umount -l <merged>` says
+"not mounted"; `fs.may_detach_mounts` was never set and the docker root was never made slave —
+the host was installed before those fixes existed and `update.sh` never checked for them.
+
+**One-command fix (idempotent, safe to re-run, root):**
+```bash
+sudo bash deploy/host-prereqs.sh          # or: make host-prereqs
+```
+It applies, and prints a PASS/FIX/WARN summary for: (a) `fs.may_detach_mounts=1` now +
+`/etc/sysctl.d/99-stoic-docker.conf`; (b) `/usr/local/sbin/stoic-docker-root-slave` +
+`docker.service.d/10-stoic-private-root.conf`, restarting dockerd **once** (~20 s, announced
+first) when the propagation is not slave yet; (c) `deploy/host-mount-fix.sh --apply` drop-ins
+(cPanel units are restarted only with `--restart`). Exit code is non-zero only if (a) or (b)
+could not be applied. `bootstrap.sh`, `update.sh` and `restart.sh` call this same script, so
+fresh and existing installs share one code path; `deploy/doctor.sh` reports its state.
+
+**Reboot fallback** — if a recreate still fails with EBUSY after the preflight's single
+cleanup + retry, `update.sh`/`restart.sh` stop (no half-recreated stack, no auto-rollback) and
+print:
+```bash
+docker update --restart=no $(docker ps -aq)
+reboot
+docker ps -aq | xargs -r docker rm -f
+docker compose up -d           # then re-run deploy/update.sh <ref>
+```
+Volumes and data are never touched by any of this.
+
+**Host suitability** — the installer, `update.sh` and `doctor.sh` detect a shared web host
+(cPanel/WHM, Plesk, DirectAdmin, running httpd/exim/dovecot) and record `STOIC_HOST_PROFILE` in
+`backend/.env`. In `APP_ENV=production` with a non-demo-only policy, release readiness shows a
+**blocking** item *"STOIC shares a host with a public web/mail stack — migrate to a dedicated host
+(docs/HOST_MIGRATION.md) before live trading"*; in demo-only mode it is a warning.
 
 ## Docker `device or resource busy` on restarts (cPanel hosts)
 

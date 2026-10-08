@@ -356,12 +356,31 @@ def signer_health(env=None) -> dict:
     return out
 
 
+class ReleaseKeyNotPinned(RuntimeError):
+    """A release-purpose verification was attempted without RELEASE_PUBLIC_KEY_B64."""
+
+
+RELEASE_KEY_UNPINNED_MESSAGE = ("RELEASE_PUBLIC_KEY_B64 not pinned — CI-signed EA records cannot be verified on this host "
+                                "(run deploy/update.sh or see docs/RELEASE_SIGNER.md)")
+
+
+def release_key_pinned(env=None) -> bool:
+    env = env if env is not None else os.environ
+    return bool((env.get("RELEASE_PUBLIC_KEY_B64") or "").strip())
+
+
 def public_key_b64(purpose: str = "ea-release") -> str:
     pinned = _pinned_pub(os.environ, purpose)
     if pinned:
         return pinned
     if _mode(os.environ) == "deferred":
         raise SignerDeferred(DEFERRED_MESSAGE)
+    # Release purposes (ea-release, model-manifest, policy-migration) are signed by the CI key ONLY.
+    # Without the pin, an external/sidecar install must fail closed — never verify them against the
+    # runtime/bundle key (the local signer key is acceptable only in `local` mode, where the same
+    # process signs: developer/CI self-verification).
+    if purpose in RELEASE_PURPOSES and _mode(os.environ) != "local":
+        raise ReleaseKeyNotPinned(RELEASE_KEY_UNPINNED_MESSAGE)
     pub = _private_key().public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)
     return base64.b64encode(pub).decode()
