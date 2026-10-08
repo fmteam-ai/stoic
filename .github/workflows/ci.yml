@@ -492,6 +492,8 @@ jobs:
           ruff check backend --select E9,F63,F7,F82
       - name: Test manifest drift check
         run: python scripts/generate_test_manifest.py --check
+      - name: Release summary drift check (stale docs/RELEASE_SUMMARY.md must fail the PR, not the release)
+        run: python3 scripts/generate_release_summary.py --check
 
   container-build:
     runs-on: ubuntu-latest

@@ -45,7 +45,7 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
     exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
     # round 11 P1-01 — aggregate EVERY bot row; duplicates/orphans/unknown ids are defects
     bot_rows: dict = {}
-    raw_bots = {"configured": 0, "active": 0, "null_account": 0}
+    raw_bots = {"configured": 0, "active": 0, "null_account": 0, "null_account_active": 0}
     account_ids_scope = [str(a["_id"]) async for a in db.accounts.find(q, {"_id": 1})]
     bot_q = ({"$or": [q, {"account_id": {"$in": account_ids_scope}}]} if (q and include_foreign_bots) else q)
     async for b in db.bot_configs.find(bot_q, {"account_id": 1, "active": 1}):
@@ -54,6 +54,7 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
         aid_b = b.get("account_id")
         if not aid_b:
             raw_bots["null_account"] += 1
+            raw_bots["null_account_active"] += bool(b.get("active"))
             continue
         bot_rows.setdefault(str(aid_b), []).append(bool(b.get("active")))
     account_ids_seen: set = set()
@@ -114,8 +115,10 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
     if orphans:
         counts["bots_orphan"] = len(orphans)
         violations.append(f"{len(orphans)} bot configuration(s) reference unknown accounts")
-    if raw_bots["null_account"]:
-        violations.append(f"{raw_bots['null_account']} bot configuration(s) with no account id")
+    # v1.60.6 — seed.py creates the user-default profile (account_id None, active False) on every start;
+    # only an ACTIVE account-less bot is a structural defect (an inactive default profile can never trade)
+    if raw_bots["null_account_active"] > 0:
+        violations.append(f"{raw_bots['null_account_active']} ACTIVE bot configuration(s) with no account id")
     structural = list(violations)
     if exp:
         expiry = policy_expiry(exp)
