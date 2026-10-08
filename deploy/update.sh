@@ -19,12 +19,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . deploy/lib.sh
+. deploy/preflight.sh
 capture_readiness_policy || exit 1            # audit H1: policy is process-local, scrubbed from env
 
 REF="origin/main"
 for a in "$@"; do
   case "$a" in
     --onboarding-close-only) STOIC_DEPLOY_POLICY=onboarding-close-only ;;
+    --no-host-changes) PREFLIGHT_NO_HOST_CHANGES=1 ;;   # refuse instead of applying missing host prerequisites
+    --yes|-y) PREFLIGHT_YES=1 ;;                        # no prompts (release key pin, dockerd restart)
     *) REF="$a" ;;
   esac
 done
@@ -67,7 +70,7 @@ else
   # the update (gates, build, verification, rollback policy) runs with the NEW
   # deploy/update.sh + deploy/lib.sh.
   # The policy is handed over EXPLICITLY (H1) — the re-exec'd script captures and scrubs it again.
-  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" STOIC_UPDATE_BACKUP="${PRE_BACKUP}" STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh "${REF}"
+  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" STOIC_UPDATE_BACKUP="${PRE_BACKUP}" PREFLIGHT_NO_HOST_CHANGES="${PREFLIGHT_NO_HOST_CHANGES}" PREFLIGHT_YES="${PREFLIGHT_YES}" STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh "${REF}"
 fi
 
 # Pre-build gates fail BEFORE anything on the host changed: restore the checkout
@@ -138,6 +141,12 @@ fi
 
 # A14-1 — env templates: deploy/env/ is the source; materialise the dot-files, then refuse drift
 python3 scripts/sync_env_examples.py >/dev/null || { echo "!! env templates could not be materialised from deploy/env/"; gate_refused; }
+# cPanel/RHEL-8 preflight — BEFORE any build/pull/recreate: host prerequisites (fs.may_detach_mounts,
+# docker root slave), leftovers of a previous jam, CI release key pin, shared-host profile
+preflight_host || gate_refused
+clean_leftovers || gate_refused
+ensure_release_public_key_pin
+record_host_profile
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
 ensure_release_secrets || gate_refused   # N100-7 — nothing is built yet: refuse, never restore the database
 ensure_installation_id || gate_refused   # N104-3/N105-4 — installation id: secrets/installation_id ↔ backend/.env (mismatch refuses)
@@ -147,8 +156,14 @@ ensure_backup_passphrase || gate_refused # N101-6 — second stage too (first st
 grep -q "^TRUSTED_PROXY_CIDRS=." backend/.env 2>/dev/null || set_kv backend/.env TRUSTED_PROXY_CIDRS "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8,::1/128,fd00::/8"
 provision_images || rollback
 
-echo "-- restarting stack"
-compose_up || rollback
+echo "-- restarting stack (one recreate; overlay EBUSY → clean once, retry once, else stop with the reboot recipe)"
+set +e; compose_up_guarded; UP_RC=$?; set -e
+if [ "${UP_RC}" = 2 ]; then
+  echo "!! stack left as-is for the reboot (no auto-rollback: a rollback would hit the same EBUSY). After the reboot: deploy/update.sh ${REF}"
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-jammed-ebusy ref=${REF} reboot-required" >> deploy/releases.log
+  exit 1
+fi
+[ "${UP_RC}" = 0 ] || rollback
 
 echo "-- verifying API health"
 wait_api_health 30 || rollback

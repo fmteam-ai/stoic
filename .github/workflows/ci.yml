@@ -494,6 +494,11 @@ jobs:
         run: python scripts/generate_test_manifest.py --check
       - name: Release summary drift check (stale docs/RELEASE_SUMMARY.md must fail the PR, not the release)
         run: python3 scripts/generate_release_summary.py --check
+      - name: shellcheck (deploy scripts — host prerequisites / preflight at warning level, the rest at error level)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck -S warning deploy/host-prereqs.sh deploy/preflight.sh deploy/restart.sh deploy/docker-root-slave.sh deploy/docker-orphan-mounts.sh deploy/host-mount-fix.sh
+          shellcheck -S error -x deploy/update.sh deploy/install.sh deploy/bootstrap.sh deploy/doctor.sh deploy/lib.sh
 
   container-build:
     runs-on: ubuntu-latest

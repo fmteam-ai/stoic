@@ -237,7 +237,9 @@ def _load_body_for_resign() -> dict:
         body, sig, pub = doc["body"], doc["signature_hex"], doc["public_key_b64"]
     except (ValueError, KeyError, TypeError) as e:
         raise ModelRefused(f"model manifest malformed: {type(e).__name__}")
-    from release_signing import verify_hex
+    from release_signing import verify_hex, release_key_pinned, _mode, RELEASE_KEY_UNPINNED_MESSAGE
+    if not pub and not release_key_pinned() and _mode(os.environ) != "local":
+        raise ModelRefused(RELEASE_KEY_UNPINNED_MESSAGE.replace("EA records", "model manifests"))
     if not (verify_hex(_canonical(body), sig, pub, purpose="model-manifest")
             or verify_hex(_canonical(body), sig, pub, purpose=None)):      # pre-N100-11 developer manifest
         raise ModelRefused("model manifest is internally inconsistent (body does not match its own signature)")

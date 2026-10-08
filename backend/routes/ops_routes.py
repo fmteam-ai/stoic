@@ -246,15 +246,39 @@ async def release_readiness(request: Request):
         == "true")
     from app_env import is_production
     ea_required = ea_required or is_production()
+    from release_signing import release_key_pinned, _mode as _signer_mode
+    _key_pinned = release_key_pinned() or _signer_mode(_os.environ) == "local"
     checks["ea_release"] = {
         "ok": (not ea_fails) if ea_required else True,
         "verified": not ea_fails,
         "enforced": ea_required,
         "failures": ea_fails or None,
-        "note": None if not ea_fails else
-        "MQL5 externally unverified — mandatory before Demo Production "
-        "Proof: compile the exact RC MQ5 in Windows MetaEditor (0 errors), "
-        "then scripts/verify_ea_release.py --sign"}
+        "release_key_pinned": _key_pinned,
+        "fix": None if _key_pinned else "sudo bash deploy/update.sh --yes   (pins the CI signer's public key; or see docs/RELEASE_SIGNER.md)",
+        "note": None if not ea_fails else (
+            "release key not pinned — RELEASE_PUBLIC_KEY_B64 is empty on this host, so CI-signed EA records cannot be verified"
+            if not _key_pinned else
+            "MQL5 externally unverified — mandatory before Demo Production "
+            "Proof: compile the exact RC MQ5 in Windows MetaEditor (0 errors), "
+            "then scripts/verify_ea_release.py --sign")}
+    # host suitability — the installer/update preflight records STOIC_HOST_PROFILE (deploy/preflight.sh):
+    # a shared web/mail host (cPanel/WHM, Plesk, DirectAdmin, httpd/exim/dovecot) blocks LIVE trading,
+    # warns in demo-only mode, and is silent on a dedicated host
+    try:
+        from inventory_projection import demo_only_policy_active
+        _profile = (_os.environ.get("STOIC_HOST_PROFILE") or "").strip().lower()
+        _shared = _profile == "shared-web-host"
+        _demo_only = await demo_only_policy_active(db)
+        _blocking = _shared and is_production() and not _demo_only
+        checks["host_suitability"] = {
+            "ok": not _blocking, "profile": _profile or "unknown", "shared_web_host": _shared,
+            "markers": (_os.environ.get("STOIC_HOST_MARKERS") or "").strip('"') or None,
+            "demo_only": _demo_only, "enforced": is_production() and not _demo_only,
+            "severity": "block" if _blocking else ("warn" if _shared else "ok"),
+            "detail": None if not _shared else
+            "STOIC shares a host with a public web/mail stack — migrate to a dedicated host (docs/HOST_MIGRATION.md) before live trading"}
+    except Exception as e:  # noqa: BLE001
+        checks["host_suitability"] = {"ok": True, "profile": "unknown", "detail": f"host profile unavailable: {e}"}
 
     # audit P1-5 — runtime release truth: the signed CI attestation that
     # deploy/lib.sh verified for THIS checkout (release/attestation.current.json)

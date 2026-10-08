@@ -356,16 +356,9 @@ if [ "${FAMILY}" = rhel ]; then
     hash -r
   fi
   systemctl enable --now docker >/dev/null
-  # RHEL 8 default fs.may_detach_mounts=0 makes `docker rm` fail with EBUSY when
-  # a container's overlay mount leaked into another mount namespace (cPanel
-  # CageFS/LVE, httpd PrivateTmp) — the container stays "dead", keeps its name
-  # and every later `compose up` breaks. Docker's own 99-docker.conf is not
-  # always applied on hosts where dockerd was installed after boot.
-  if [ -f /proc/sys/fs/may_detach_mounts ] && [ "$(cat /proc/sys/fs/may_detach_mounts)" != 1 ]; then
-    echo "-- enabling fs.may_detach_mounts=1 (persistent: /etc/sysctl.d/99-stoic-docker.conf)"
-    printf 'fs.may_detach_mounts = 1\n' > /etc/sysctl.d/99-stoic-docker.conf
-    sysctl -q -p /etc/sysctl.d/99-stoic-docker.conf
-  fi
+  # fs.may_detach_mounts + docker root slave propagation + MountFlags drop-ins — ONE code path with
+  # deploy/update.sh / deploy/restart.sh (deploy/host-prereqs.sh), so existing installs get the same fixes
+  bash deploy/host-prereqs.sh --yes || echo "!! host prerequisites incomplete — re-run: sudo bash deploy/host-prereqs.sh --yes"
   if command -v getenforce >/dev/null; then echo "-- SELinux: $(getenforce)"; fi
 else
   export DEBIAN_FRONTEND=noninteractive
@@ -446,29 +439,10 @@ if [ "${SKIP_ATTEST}" = 1 ]; then
 fi
 
 # ------------------------------------------------------------------ 4 · install
-# Mount propagation: on systemd hosts `/` is `shared`, so every container rootfs
-# mount Docker creates is propagated instantly into the mount namespace of every
-# sandboxed service (php-fpm pools, mariadb, named, chronyd, node apps …). The
-# RHEL 8 kernel then refuses to rmdir the merged dir while any copy exists →
-# `docker rm` fails "device or resource busy" on EVERY recreate/upgrade.
-# deploy/docker-root-slave.sh makes the Docker root a real SLAVE of `/` (see the
-# script header for why not private) and runs as ExecStartPre of docker.service.
-DOCKER_ROOT=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
-install -m 0755 deploy/docker-root-slave.sh /usr/local/sbin/stoic-docker-root-slave
-mkdir -p /etc/systemd/system/docker.service.d
-printf '[Service]\nExecStartPre=-/usr/local/sbin/stoic-docker-root-slave %s\n' "${DOCKER_ROOT}" > /etc/systemd/system/docker.service.d/10-stoic-private-root.conf
-systemctl daemon-reload
-case "$(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null)" in
-  *slave*) ;;
-  *)
-    echo "-- making ${DOCKER_ROOT} a slave mount (container mounts no longer propagate into other namespaces) — dockerd is stopped for ~20 s"
-    systemctl stop docker docker.socket 2>/dev/null || true
-    /usr/local/sbin/stoic-docker-root-slave "${DOCKER_ROOT}"
-    systemctl reset-failed docker docker.socket 2>/dev/null || true
-    systemctl start docker
-    for i in $(seq 1 45); do docker info >/dev/null 2>&1 && break; sleep 2; done ;;
-esac
-echo "-- ${DOCKER_ROOT} propagation: $(findmnt -no PROPAGATION "${DOCKER_ROOT}" 2>/dev/null || echo '?')"
+# Host prerequisites (fs.may_detach_mounts, docker root as SLAVE of `/`, MountFlags=slave drop-ins) —
+# deploy/host-prereqs.sh is the single code path shared with update.sh/restart.sh; idempotent, so
+# re-running here after the Docker install step is a no-op when step 3 already applied them.
+bash deploy/host-prereqs.sh --yes || { echo "ERROR: host prerequisites could not be applied — fix the FAIL lines above (sudo bash deploy/host-prereqs.sh --yes) and re-run"; exit 1; }
 STEP="install"
 log "4/5 install (deploy/install.sh ${MODE} ${DOMAIN} ${EXTRA[*]:-})"
 bash deploy/install.sh "${MODE}" ${DOMAIN:+"${DOMAIN}"} ${EXTRA[@]+"${EXTRA[@]}"}

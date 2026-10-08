@@ -84,6 +84,28 @@ export const ReadinessCard = () => {
                     <Pill key={k} ok={!!checks[k]?.ok} label={CHECK_LABELS[k]} detail={detailFor(k)} />
                 ))}
             </div>
+            {checks.ea_release && checks.ea_release.release_key_pinned === false && (
+                <div className="border border-[#FFB020]/40 bg-[#FFB020]/5 px-3 py-2 mt-3" data-testid="readiness-release-key-unpinned">
+                    <div className="font-mono text-[9px] tracking-widest text-[#FFB020]">RELEASE KEY NOT PINNED</div>
+                    <div className="font-mono text-xs text-[#E4E4E7] mt-0.5">
+                        RELEASE_PUBLIC_KEY_B64 is empty on this host — CI-signed EA records cannot be verified.
+                    </div>
+                    {checks.ea_release.fix && (
+                        <code className="block font-mono text-[11px] text-[#00FF41] mt-1" data-testid="readiness-release-key-fix">{checks.ea_release.fix}</code>
+                    )}
+                </div>
+            )}
+            {checks.host_suitability && checks.host_suitability.shared_web_host && (
+                <div className={`border px-3 py-2 mt-3 ${checks.host_suitability.ok ? "border-[#FFB020]/40 bg-[#FFB020]/5" : "border-[#FF3B30]/40 bg-[#FF3B30]/5"}`}
+                    data-testid="readiness-host-suitability">
+                    <div className={`font-mono text-[9px] tracking-widest ${checks.host_suitability.ok ? "text-[#FFB020]" : "text-[#FF3B30]"}`}>
+                        HOST SUITABILITY · {checks.host_suitability.ok ? "WARN (DEMO-ONLY)" : "BLOCKING"}
+                    </div>
+                    <div className="font-mono text-xs text-[#E4E4E7] mt-0.5">
+                        {checks.host_suitability.detail}{checks.host_suitability.markers ? ` · detected: ${checks.host_suitability.markers}` : ""}
+                    </div>
+                </div>
+            )}
             {!d.ready && (
                 <div className="font-mono text-[10px] tracking-widest text-[#A1A1AA] mt-3">
                     IN PREVIEW / SINGLE-PROCESS MODE, DEDICATED WORKER LEASES ARE EXPECTED TO BE ABSENT — FULL TOPOLOGY IS VERIFIED ON THE DOCKER DEPLOYMENT.
