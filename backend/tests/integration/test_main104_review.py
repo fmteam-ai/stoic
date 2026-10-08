@@ -74,7 +74,9 @@ def test_installer_ps1_public():
     assert idx_claim != -1, "/api/setup/claim-pairing not found in Install-Stoic"
     assert idx_resolve < idx_claim, f"Resolve-StoicTerminal must precede claim-pairing (resolve={idx_resolve} claim={idx_claim})"
     assert '"$eaScriptUrl?v=' not in body, "raw $eaScriptUrl?v= concatenation present (N104-1 bug)"
-    assert "config\\terminal.ini" not in body, "installer writes terminal.ini (N104-4)"
+    for ln in body.splitlines():                                  # N104-4 — terminal.ini is READ (N111-6 ProfileLast), never written
+        if "terminal.ini" in ln:
+            assert not any(w in ln for w in ("Set-Content", "Add-Content", "Out-File")), f"installer writes terminal.ini (N104-4): {ln}"
 
 
 def test_release_gate(admin_session):

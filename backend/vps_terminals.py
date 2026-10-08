@@ -198,6 +198,8 @@ async def report_terminal(db, agent: dict, payload: dict) -> dict:
             raise ValueError("account_id does not belong to this agent's user")
     now = _now()
     started_at = _aware(payload.get("started_at")) if payload.get("started_at") else None
+    if started_at and started_at > now:
+        started_at = now          # audit #13 — a future started_at must not hold the restart grace open forever
     doc = {
         "user_id": agent["user_id"], "agent_id": agent["agent_id"], "deployment_id": agent.get("deployment_id"),
         "account_ref": login, "account_id": account_id or None,

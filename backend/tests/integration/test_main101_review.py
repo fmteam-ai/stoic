@@ -120,7 +120,8 @@ class TestHealthRelease:
         assert isinstance(ri, dict), body
         # N101-7 — image_digest + ea_shipped_version live under release_identity
         assert "image_digest" in ri, ri
-        assert ri.get("ea_shipped_version") == "1.60", ri
+        from ea_capabilities import shipped_ea_version            # N111-6 — parsed from the bundled MQ5, not a literal
+        assert ri.get("ea_shipped_version") == shipped_ea_version(), ri
         assert isinstance(ri.get("ea_signed_record"), bool), ri
         # In preview there is no signed record on disk
         assert ri["ea_signed_record"] is False, ri

@@ -181,7 +181,7 @@ def test_transactions_required_by_capability(world, monkeypatch):
     _run(db.accounts.insert_one({"user_id": uid, "trading_enabled": True, "mode": "live", "status": "active"}))
     assert _run(fn(db)) is True
     _run(db.accounts.delete_many({"user_id": uid}))
-    if not live_ids:
+    if not live_ids and not _run(nx.capital_capable(db)):                   # r20 P1-02 — bound terminals left by other suites also count
         assert _run(fn(db)) is False                                        # synthetic-only + zero live accounts
     monkeypatch.setattr(app_env, "is_production", lambda: True)
     assert _run(fn(db)) is True
