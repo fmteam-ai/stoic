@@ -996,8 +996,9 @@ async def ack_alert(alert_id: str, request: Request):
 @router.post("/ops/alerts/mute")
 async def mute_alert_kind(request: Request):
     """N109-2 — mute the NOTIFICATIONS of one alert kind for ≤24 h. The alert rows stay open and
-    keep gating; only email/Telegram pushes pause. Human admin only (no METRICS_TOKEN)."""
-    allowed, actor = await _ops_actor(request)
+    keep gating; only email/Telegram pushes pause. Human admin WITH a fresh step-up (audit #12 P3:
+    a hijacked session must not silence a dead-terminal alert for a day); never METRICS_TOKEN."""
+    allowed, actor = await _ops_admin_step_up(request, "ops_alert_mute")
     if not allowed or actor == "metrics-token":
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     from alerting import EVALUATOR_KINDS, MUTE_MAX_H
@@ -1024,7 +1025,7 @@ async def mute_alert_kind(request: Request):
 
 @router.delete("/ops/alerts/mute/{kind}")
 async def unmute_alert_kind(kind: str, request: Request):
-    allowed, actor = await _ops_actor(request)
+    allowed, actor = await _ops_admin_step_up(request, "ops_alert_unmute")
     if not allowed or actor == "metrics-token":
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     db = get_db()

@@ -6,6 +6,7 @@ manifest (signed/checksummed), broker profile registry and the
 failure-handling matrix (every automatic step has a recovery action).
 """
 import hashlib
+import json
 import logging
 import os
 import re
@@ -63,9 +64,10 @@ def _aware(dt):
 
 
 def _enrollment_code() -> str:
+    # audit #12 P3 — 4 letters + 4 digits (~4.6 billion) instead of AAA-123 (~17.5 million); still typeable
     letters = "".join(secrets.choice(string.ascii_uppercase)
-                      for _ in range(3))
-    digits = "".join(secrets.choice(string.digits) for _ in range(3))
+                      for _ in range(4))
+    digits = "".join(secrets.choice(string.digits) for _ in range(4))
     return f"{letters}-{digits}"
 
 
@@ -269,6 +271,25 @@ async def decide_terminal(db, user_id: str, discovery_id: str,
 
 
 # ── agent command queue ─────────────────────────────────────────
+def canonical_params(params: dict) -> str:
+    """Deterministic, escaping-free encoding both sides can reproduce byte-for-byte (the PowerShell agent
+    mirrors it in ConvertTo-StoicCanonicalParams): keys in ORDINAL order, `key\\0value\\n`, None → "",
+    bools → true/false, scalars → str(); nested values fall back to compact sorted JSON."""
+    out = []
+    for k in sorted(params.keys()):
+        v = params[k]
+        if v is None:
+            s = ""
+        elif isinstance(v, bool):
+            s = "true" if v else "false"
+        elif isinstance(v, (dict, list, tuple)):
+            s = json.dumps(v, sort_keys=True, separators=(",", ":"), default=str)
+        else:
+            s = str(v)
+        out.append(f"{k}\x00{s}\n")
+    return "".join(out)
+
+
 async def queue_command(db, user_id: str, agent_id: str, command: str,
                         params: dict | None, issued_by: str) -> dict:
     if command not in ALLOWED_COMMANDS:
@@ -298,6 +319,10 @@ async def queue_command(db, user_id: str, agent_id: str, command: str,
     seq = int((bumped or {}).get("command_seq") or 1)
     command_id = f"cmd_{uuid.uuid4().hex[:10]}"
     sig = None
+    sig_v2 = None
+    # audit #12 P3 — bind the PARAMS too (pairing_token, server_url, directory…): canonical-JSON hash in a second
+    # signature; legacy host agents keep verifying `sig`, the VPS agent requires `sig_v2`.
+    params_sha256 = hashlib.sha256(canonical_params(params or {}).encode("utf-8")).hexdigest()
     from vps_agent import agent_command_key
     cmd_key = agent_command_key(agent)
     if cmd_key:
@@ -306,11 +331,15 @@ async def queue_command(db, user_id: str, agent_id: str, command: str,
             cmd_key.encode(),
             f"{agent_id}|{command_id}|{seq}|{command}".encode(),
             hashlib.sha256).hexdigest()
+        sig_v2 = _hmac.new(
+            cmd_key.encode(),
+            f"{agent_id}|{command_id}|{seq}|{command}|{params_sha256}".encode(),
+            hashlib.sha256).hexdigest()
     from correlation import get_correlation_id
     cmd = {"command_id": command_id,
            "agent_id": agent_id, "user_id": user_id,
            "command": command, "params": params or {},
-           "seq": seq, "sig": sig, "trace_id": get_correlation_id(),
+           "seq": seq, "sig": sig, "sig_v2": sig_v2, "params_sha256": params_sha256, "trace_id": get_correlation_id(),
            "issued_by": issued_by, "status": "queued",
            "created_at": datetime.now(timezone.utc)}
     await db.agent_commands.insert_one(cmd)
@@ -331,6 +360,7 @@ async def poll_commands(db, agent_token: str) -> list:
         out.append({"command_id": c["command_id"],
                     "command": c["command"], "params": c["params"],
                     "seq": c.get("seq"), "sig": c.get("sig"),
+                    "sig_v2": c.get("sig_v2"), "params_sha256": c.get("params_sha256"),
                     "trace_id": c.get("trace_id")})
     return out
 

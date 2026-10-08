@@ -4,4 +4,4 @@ COPY signer-requirements.txt requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app.py .
 EXPOSE 9443
-CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9443"]
+CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "9443", "--no-server-header"]

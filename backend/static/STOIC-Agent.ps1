@@ -234,15 +234,42 @@ function Invoke-StoicWatchdog($cfg) {
     return @($st.terminals).Count
 }
 
+function ConvertTo-StoicCanonicalParams($Value) {
+    # mirrors backend/vps_pathb.canonical_params: ORDINAL-sorted keys, "key`0value`n", $null → "", bool → true/false,
+    # scalars as-is; nested objects → compact sorted JSON (not used by vps-agent commands). No JSON string escaping
+    # anywhere, so PowerShell 5.1 / 7 and Python agree byte-for-byte.
+    if ($null -eq $Value) { return "" }
+    $pairs = @{}
+    if ($Value -is [hashtable]) { foreach ($k in $Value.Keys) { $pairs[[string]$k] = $Value[$k] } }
+    else { foreach ($p in $Value.PSObject.Properties) { $pairs[$p.Name] = $p.Value } }
+    [string[]]$keys = @($pairs.Keys)
+    [Array]::Sort($keys, [StringComparer]::Ordinal)
+    $sb = New-Object System.Text.StringBuilder
+    foreach ($k in $keys) {
+        $v = $pairs[$k]
+        $s = ""
+        if ($null -eq $v) { $s = "" }
+        elseif ($v -is [bool]) { $s = $(if ($v) { "true" } else { "false" }) }
+        elseif ($v -is [array] -or $v -is [pscustomobject] -or $v -is [hashtable]) { $s = ($v | ConvertTo-Json -Compress -Depth 8) }
+        else { $s = "$v" }
+        [void]$sb.Append($k).Append([char]0).Append($s).Append("`n")
+    }
+    return $sb.ToString()
+}
+
 function Invoke-StoicCommands($cfg) {
     $resp = Invoke-StoicApi $cfg "POST" "/api/infra/agent/commands/poll" @{}
     foreach ($c in @($resp.commands)) {
-        # signed command sequence (iter-122 P3): verify HMAC(agent_id|command_id|seq|command) with the enrolment command_key
-        if ($cfg.command_key_enc -and $c.sig) {
+        # signed command sequence (iter-122 P3 + audit #12 P3): HMAC(agent_id|command_id|seq|command|sha256(params))
+        # with the enrolment command_key — the PARAMS (pairing token, server URL, directory) are bound too
+        if ($cfg.command_key_enc) {
+            if (-not $c.sig_v2) { Write-StoicLog "command $($c.command_id) has no sig_v2 (server too old?) — ignored" "WARN"; continue }
             $key = [Text.Encoding]::UTF8.GetBytes((Unprotect-StoicSecret $cfg.command_key_enc))
             $h = New-Object System.Security.Cryptography.HMACSHA256 (,$key)
-            $calc = ([BitConverter]::ToString($h.ComputeHash([Text.Encoding]::UTF8.GetBytes("$($cfg.agent_id)|$($c.command_id)|$($c.seq)|$($c.command)"))) -replace '-', '').ToLower()
-            if ($calc -ne "$($c.sig)".ToLower()) { Write-StoicLog "command $($c.command_id) signature mismatch — ignored" "WARN"; continue }
+            $paramsCanon = ConvertTo-StoicCanonicalParams $c.params
+            $paramsHash = ([BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($paramsCanon))) -replace '-', '').ToLower()
+            $calc = ([BitConverter]::ToString($h.ComputeHash([Text.Encoding]::UTF8.GetBytes("$($cfg.agent_id)|$($c.command_id)|$($c.seq)|$($c.command)|$paramsHash"))) -replace '-', '').ToLower()
+            if ($calc -ne "$($c.sig_v2)".ToLower()) { Write-StoicLog "command $($c.command_id) signature mismatch — ignored" "WARN"; continue }
         }
         $ok = $false; $detail = ""
         try {
