@@ -85,7 +85,25 @@ clean_leftovers() {   # detach orphan copies, then rm the leftovers — containe
   # shellcheck disable=SC2086
   docker rm -f ${ids} >/dev/null 2>&1 || true
   list=$(leftover_containers)
-  [ -z "${list// /}" ] && echo "   leftovers removed" || { echo "!! still present after rm -f:"; printf '%s\n' "${list}" | sed 's/^/   /'; return 1; }
+  if [ -n "${list// /}" ]; then
+    # M117-5 — "unlinkat …/merged: device or resource busy": the dead container's overlay is STILL MOUNTED in the
+    # host namespace because dockerd's umount hit EBUSY (cPanel scanners/php-fpm/dovecot holding files inside the
+    # rootfs). Nothing runs in a dead container ⇒ lazy-unmount its merged dir, show the holders, retry rm once.
+    printf '%s\n' "${list}" | awk '{print $1}' | while read -r id; do
+      [ -n "${id}" ] || continue
+      err=$(docker rm -f "${id}" 2>&1 >/dev/null | tail -1 || true)
+      [ -n "${err}" ] && echo "   ${id:0:12}: ${err#Error response from daemon: }"
+      m=$(docker inspect --format '{{.GraphDriver.Data.MergedDir}}' "${id}" 2>/dev/null || true)
+      if [ -n "${m}" ] && [ "$(id -u)" = 0 ] && mountpoint -q "${m}" 2>/dev/null; then
+        command -v fuser >/dev/null 2>&1 && { fuser -vm "${m}" 2>&1 | awk 'NR>1 && NR<=7 {print "      holder: "$0}' || true; }
+        repair_journal leftover_umount "id=${id} merged=${m}" 2>/dev/null || true
+        umount -l "${m}" 2>/dev/null && echo "   ${id:0:12}: lazily unmounted ${m}"
+        docker rm -f "${id}" >/dev/null 2>&1 && echo "   ${id:0:12}: removed after unmount"
+      fi
+    done
+    list=$(leftover_containers)
+  fi
+  [ -z "${list// /}" ] && echo "   leftovers removed" || { echo "!! still present after rm -f (exclude /var/lib/docker from imunify360/clamd/lfd/maldet, or restart the holder service shown above, then re-run):"; printf '%s\n' "${list}" | sed 's/^/   /'; return 1; }
 }
 
 reboot_recipe() {
