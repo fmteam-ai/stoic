@@ -28,6 +28,26 @@ logger = logging.getLogger("worker")
 LEASE_TTL_SEC = 45
 LEASE_RENEW_SEC = 15
 HOLDER = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+# M117-6 — container health for workers (they serve no HTTP): the lease keeper / standby loop touches this file
+# every LEASE_RENEW_SEC; the compose healthcheck fails when it is older than WORKER_HEARTBEAT_MAX_AGE_SEC.
+HEARTBEAT_FILE = os.environ.get("WORKER_HEARTBEAT_FILE", "/tmp/stoic-worker-heartbeat")
+HEARTBEAT_MAX_AGE_SEC = 90
+
+
+def touch_heartbeat() -> None:
+    try:
+        with open(HEARTBEAT_FILE, "a"):
+            os.utime(HEARTBEAT_FILE, None)
+    except OSError as e:
+        logger.warning("worker heartbeat file not writable (%s): %s", HEARTBEAT_FILE, e)
+
+
+def heartbeat_healthy(path: str = HEARTBEAT_FILE, max_age: int = HEARTBEAT_MAX_AGE_SEC) -> bool:
+    try:
+        import time
+        return (time.time() - os.path.getmtime(path)) < max_age
+    except OSError:
+        return False
 
 # Per-loop progress telemetry — loops call record_progress() once per
 # iteration; the lease keeper persists it (BSON datetimes) so readiness can
@@ -110,6 +130,7 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                 logger.error("worker %s lost its lease — stopping loops", name)
                 lost.set()
                 return
+            touch_heartbeat()
             # loop-execution monitoring: leases prove the PROCESS is alive,
             # loops_running + per-loop supervisor stats prove every loop is
             # executing, and record_progress() telemetry proves it is making
@@ -170,11 +191,14 @@ async def run_worker(name: str, loop_factories: list) -> None:
     db = get_db()
     logger.info("worker %s starting (holder=%s)", name, HOLDER)
     os.environ.setdefault("STOIC_PROCESS_ROLE", f"worker-{name}")
+    touch_heartbeat()
     while not await _try_acquire(db, name):
         logger.info("worker %s standing by — another holder owns the lease",
                     name)
+        touch_heartbeat()   # standing by is healthy — the process is alive and polling
         await asyncio.sleep(LEASE_RENEW_SEC)
     logger.info("worker %s acquired leader lease", name)
+    touch_heartbeat()
     lost = asyncio.Event()
     loop_stats = {}
     tasks = []
