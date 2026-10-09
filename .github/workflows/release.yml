@@ -28,6 +28,9 @@ jobs:
       - run: |
           case "${GITHUB_REF}" in refs/tags/v*) echo "release ref ${GITHUB_REF_NAME}" ;;
             *) echo "::error::release.yml must run on a v* tag (got ${GITHUB_REF}) — pick the tag under 'Use workflow from'"; exit 1 ;; esac
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - name: Release discipline — no tag while an un-waived P0/P1 review finding is open (M119-7)
+        run: python3 scripts/check_open_findings.py
 
   ci-gates:
     needs: tag-only

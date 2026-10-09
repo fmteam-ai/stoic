@@ -33,6 +33,8 @@ for a in "$@"; do
 done
 ONBOARDING=0; [ "$(readiness_policy)" = "onboarding-close-only" ] && ONBOARDING=1
 LOCK=/tmp/stoic-deploy.lock
+JAM_MARKER=deploy/state/update-jam   # M119-3 — written when the recreate jams; HEAD==ref + marker ⇒ resume
+export STOIC_UPDATE_REF="${REF}"
 
 if [ -n "${STOIC_UPDATE_REEXEC:-}" ]; then
   # second stage: already fetched + checked out by the first stage; the flock
@@ -43,6 +45,12 @@ if [ -n "${STOIC_UPDATE_REEXEC:-}" ]; then
 else
   PREV=$(git rev-parse HEAD)
   exec 9>"${LOCK}"; flock -n 9 || { echo "ERROR: another deploy is running (${LOCK})"; exit 1; }
+  # M119-3 — resume after a jam: HEAD already IS the target and a jam/partial-restart marker exists (the previous
+  # run built the images and jammed on the recreate) → skip backup/fetch/checkout/build, resume restart + verify.
+  if [ -f "${JAM_MARKER}" ] && [ -n "${REF}" ] && [ "$(git rev-parse "${REF}^{commit}" 2>/dev/null)" = "${PREV}" ]; then
+    echo "== STOIC update: resuming ${REF} after a jam ($(cat "${JAM_MARKER}" 2>/dev/null | head -1)) — images already provisioned, skipping backup/fetch/build =="
+    exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_RESUME=1 STOIC_UPDATE_PREV="${PREV}" PREFLIGHT_NO_HOST_CHANGES="${PREFLIGHT_NO_HOST_CHANGES}" PREFLIGHT_YES="${PREFLIGHT_YES}" STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh "${REF}"
+  fi
 
   echo "== STOIC update: $(git rev-parse --short HEAD) -> ${REF} =="
 
@@ -157,28 +165,32 @@ python3 scripts/sync_env_examples.py >/dev/null || { echo "!! env templates coul
 # cPanel/RHEL-8 preflight — BEFORE any build/pull/recreate: host prerequisites (fs.may_detach_mounts,
 # docker root slave), leftovers of a previous jam, CI release key pin, shared-host profile
 preflight_host || gate_refused
+virtfs_docker_root_gate || gate_refused   # M119-2 — cPanel VirtFS: docker root must be outside /var/lib
 clean_leftovers || gate_refused
 ensure_release_public_key_pin
 record_host_profile
 echo "-- provisioning images ($(deploy_mode): build with provenance | pull attested GHCR digests)"
 ensure_release_secrets || gate_refused   # N100-7 — nothing is built yet: refuse, never restore the database
 ensure_installation_id || gate_refused   # N104-3/N105-4 — installation id: secrets/installation_id ↔ backend/.env (mismatch refuses)
-ensure_bundle_key_pins                   # N101-5 — runtime key id/pin; CI release token never on the API host
+ensure_bundle_key_pins || gate_refused   # N101-5 / M119-1 — runtime key id/pin; refuses when the sidecar key IS the release pin
 ensure_backup_passphrase || gate_refused # N101-6 — second stage too (first stage may have run an older script)
 # N-R1 — hosts installed before the trusted-proxy chain existed: default the docker ranges once
 grep -q "^TRUSTED_PROXY_CIDRS=." backend/.env 2>/dev/null || set_kv backend/.env TRUSTED_PROXY_CIDRS "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8,::1/128,fd00::/8"
-provision_images || rollback
+if [ -n "${STOIC_UPDATE_RESUME:-}" ]; then echo "-- resume: images of $(git rev-parse --short HEAD) already provisioned — skipping build/pull"
+else provision_images || rollback; fi
 
 echo "-- restarting stack (one recreate; overlay EBUSY → clean once, retry once, else stop with the reboot recipe)"
 set +e; compose_up_guarded; UP_RC=$?; set -e
 if [ "${UP_RC}" = 2 ]; then
   # M114-2 — never leave worker-trading running while protection/reconciliation may be down
   pause_trading_after_jam "${REF}"
-  echo "!! stack left as-is for the reboot (no auto-rollback: a rollback would hit the same EBUSY). After the reboot: deploy/update.sh ${REF} (clears TRADING PAUSED)"
+  mkdir -p deploy/state; echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) jam ref=${REF} head=$(git rev-parse --short HEAD)" > "${JAM_MARKER}"
+  echo "!! stack left as-is for the reboot (no auto-rollback: a rollback would hit the same EBUSY). After the reboot: deploy/update.sh ${REF} RESUMES at the restart step (marker ${JAM_MARKER}) and clears TRADING PAUSED"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-jammed-ebusy ref=${REF} reboot-required" >> deploy/releases.log
   exit 1
 fi
 [ "${UP_RC}" = 0 ] || rollback
+rm -f "${JAM_MARKER}"
 clear_deploy_jam_marker
 
 echo "-- verifying API health"
@@ -193,6 +205,9 @@ echo "   frontend serving"
 echo "-- verifying release readiness (workers, leases, Mongo, reconciliation, outbox, schema)"
 BODY=$(wait_release_ready 45) || rollback
 echo "   release-readiness: ${BODY}"
+echo "-- verifying worker health (leader leases)"
+wait_workers_healthy 20 || rollback   # M118-5
+echo "   workers healthy"
 
 if grep -q 'docker-compose.forecast.yml' .env 2>/dev/null; then
   echo "-- verifying forecast profile"

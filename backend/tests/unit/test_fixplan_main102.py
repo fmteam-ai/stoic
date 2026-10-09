@@ -122,7 +122,8 @@ def test_n102_5_release_pin_is_never_the_sidecar_key_and_preflight_flags_identic
     assert "removed RELEASE_PUBLIC_KEY_B64 pinned to the LOCAL sidecar key" in inst
     lib = _read("deploy/lib.sh")
     fn = re.search(r"^ensure_bundle_key_pins\(\) \{.*?^\}", lib, re.S | re.M).group(0)
-    assert "was the LOCAL sidecar key" in fn and "sed -i '/^RELEASE_PUBLIC_KEY_B64=/d' backend/.env" in fn
+    # M119-1 — never silently delete the pin: refuse with the rotate command instead
+    assert "equals the LOCAL sidecar key" in fn and "deploy/rotate-runtime-key.sh" in fn and "sed -i '/^RELEASE_PUBLIC_KEY_B64=/d'" not in fn
     import deploy_preflight as dp
     import release_signing as rs
     _, pub = _keypair(); _, pub2 = _keypair()

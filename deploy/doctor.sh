@@ -128,6 +128,25 @@ if [ -n "${MARKERS}" ]; then
 else ok "host suitability: dedicated host (no cPanel/Plesk/DirectAdmin/httpd/exim/dovecot)"; fi
 # host prerequisites that EXISTING installs may lack (applied by update.sh/restart.sh preflight or `make host-prereqs`)
 if [ "$(id -u)" = 0 ]; then
+  # M119-1 — SECURITY: the CI release private key must never live on the API host
+  REL_PIN=$(envval backend/.env RELEASE_PUBLIC_KEY_B64)
+  if [ -n "${REL_PIN}" ]; then
+    if [ -f secrets/signer_public_key ] && printf '%s' "${REL_PIN}" | cmp -s - secrets/signer_public_key; then
+      fail "SECURITY: CI release private key present on this host — the sidecar key IS the release pin (secrets/signer_ed25519_key). Fix: sudo bash deploy/rotate-runtime-key.sh"
+    fi
+    for pv in secrets/signer_public_key.prev-*; do
+      [ -f "${pv}" ] || continue
+      if [ "$(cat "${pv}")" = "${REL_PIN}" ] && [ -f "secrets/signer_ed25519_key.${pv##*signer_public_key.}" ]; then
+        fail "SECURITY: CI release private key present on this host — secrets/signer_ed25519_key.${pv##*signer_public_key.} (rotated-out sidecar key == release pin). Rotate the CI signer (docs/RELEASE_SIGNER.md), then: shred -u secrets/signer_ed25519_key.${pv##*signer_public_key.}"
+      fi
+    done
+  fi
+  # M119-2 — cPanel VirtFS with the docker root under /var/lib ⇒ recurring EBUSY jams
+  if { [ -d /home/virtfs ] && [ -n "$(ls -A /home/virtfs 2>/dev/null)" ]; } || grep -qs jailshell /etc/passwd; then
+    DR=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
+    case "${DR}" in /var/lib/*) fail "cPanel VirtFS present and docker root is ${DR} (under /var/lib) — every recreate can jam on EBUSY. Fix: sudo bash deploy/move-docker-root.sh /srv/docker --yes" ;;
+                    *) ok "cPanel VirtFS present — docker root ${DR} is outside /var/lib" ;; esac
+  fi
   if bash deploy/host-prereqs.sh --check >/dev/null 2>&1; then ok "host prerequisites: fs.may_detach_mounts=1 · docker root slave · drop-ins present · host-profile timer active"
   else fail "host prerequisites missing (fs.may_detach_mounts / docker root propagation / stoic-host-profile.timer) — fix: sudo bash deploy/host-prereqs.sh --yes (update.sh applies it automatically)"; fi
   # M117-1 — the signed host profile expires 24 h after the last refresh; a missing/failed timer blocks live trading daily
@@ -221,6 +240,7 @@ hdr "containers"
 if docker compose ps >/dev/null 2>&1; then
   while read -r name state health; do
     case "${state}${health}" in
+      *unhealthy*) fail "${name}: ${state} ${health} — $(case "${name}" in *worker*) echo 'worker lease not held/fresh (M118-5): docker compose logs --tail 30 '"${name#*-}" ;; *) echo 'docker compose logs --tail 50 '"${name}" ;; esac)" ;;
       *running*healthy*|running) ok "${name}: ${state} ${health}" ;;
       *running*starting*) warn "${name}: ${state} ${health}" ;;
       *) fail "${name}: ${state} ${health:-}" ;;

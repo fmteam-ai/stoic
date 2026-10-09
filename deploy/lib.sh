@@ -146,10 +146,14 @@ ensure_bundle_key_pins() {
     set_kv .env SIGNER_KEY_ID stoic-bundle-ed25519-v1
     echo "   pinned the sidecar as runtime key stoic-bundle-ed25519-v1 (BUNDLE_PUBLIC_KEY_B64)"
   }
-  # N102-5 — the sidecar key must never double as the CI release pin (root here could sign EA records).
+  # N102-5 / M119-1 — the sidecar key must never double as the CI release pin (root here could sign EA records).
+  # Never silently delete the release pin: REFUSE with the exact remedy (rotate the RUNTIME key, keep the pin).
   if [ "$( { grep -E '^RELEASE_PUBLIC_KEY_B64=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")" = "${sidecar}" ]; then
-    sed -i '/^RELEASE_PUBLIC_KEY_B64=/d' backend/.env
-    echo "!! RELEASE_PUBLIC_KEY_B64 was the LOCAL sidecar key — removed. Pin the CI signer's public key (docs/RELEASE_SIGNER.md); until then EA records / model manifests do not verify here (runtime signing is unaffected)."
+    echo "!! SECURITY: RELEASE_PUBLIC_KEY_B64 equals the LOCAL sidecar key — this host holds the CI release PRIVATE key (secrets/signer_ed25519_key)."
+    echo "   Refusing to continue (the pin is NOT deleted). Fix, then re-run:"
+    echo "     sudo bash deploy/rotate-runtime-key.sh      # new sidecar key, re-pins BUNDLE_*; RELEASE_PUBLIC_KEY_B64 stays the CI release key"
+    echo "     sudo bash deploy/update.sh ${REF:-<ref>}"
+    return 1
   fi
   if grep -qE '^RELEASE_SIGNER_TOKEN=.' backend/.env 2>/dev/null; then
     sed -i '/^RELEASE_SIGNER_TOKEN=/d' backend/.env
@@ -368,6 +372,24 @@ strict_prebuild_gate() {
   fi
   [ -z "${bad}" ] && return 0
   echo "!! production gates already failing on the RUNNING stack:${bad} — a rebuild cannot fix these; complete onboarding first (docs/PUBLISH_RUNBOOK.md)"
+  return 1
+}
+
+# M118-5 — every worker container must report HEALTHY (leader lease held + fresh); a real unhealthy worker fails the update
+wait_workers_healthy() {
+  local n="${1:-20}" i c name health bad
+  for i in $(seq 1 "$n"); do
+    bad=""
+    for c in $(docker compose ps -q 2>/dev/null); do
+      name=$(docker inspect -f '{{.Name}}' "$c" 2>/dev/null | sed 's#^/##')
+      echo "${name}" | grep -qE -- '-worker-[a-z]+-[0-9]+$' || continue
+      health=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$c" 2>/dev/null || echo "?")
+      [ "${health}" = "healthy" ] || [ "${health}" = "none" ] || bad="${bad} ${name}=${health}"
+    done
+    [ -z "${bad}" ] && return 0
+    sleep 3
+  done
+  echo "!! workers not healthy after $((n * 3))s:${bad} — leader lease not held/fresh (docker compose logs --tail 30 <worker>)" >&2
   return 1
 }
 

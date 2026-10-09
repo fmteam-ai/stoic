@@ -56,12 +56,13 @@ x-app-common: &app-common
     signer:
       condition: service_healthy
 
-# M117-6 — workers serve no HTTP, so the image's /api/health HEALTHCHECK can never pass for them (every worker showed
-# "unhealthy" after the 120 s start period). Their health is the heartbeat file the lease keeper touches every 15 s.
+# M118-5 — workers serve no HTTP, so the image's /api/health HEALTHCHECK can never pass for them (every worker showed
+# "unhealthy" after the 120 s start period). Their health is the LEADER LEASE: worker_leases[name] held by this
+# process and not expired (python -m workers.base --health).
 x-worker-common: &worker-common
   <<: *app-common
   healthcheck:
-    test: ["CMD", "python", "-c", "import sys; from workers.base import heartbeat_healthy; sys.exit(0 if heartbeat_healthy() else 1)"]
+    test: ["CMD", "python", "-m", "workers.base", "--health"]
     interval: 15s
     timeout: 5s
     retries: 3

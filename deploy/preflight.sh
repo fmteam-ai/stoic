@@ -116,9 +116,10 @@ reboot_recipe() {
   echo "ERROR: container recreate still fails with overlay EBUSY after one cleanup+retry — reboot required:"
   echo '   docker update --restart=no $(docker ps -aq)'
   echo '   reboot'
-  echo '   docker ps -aq | xargs -r docker rm -f'
-  echo '   docker compose up -d'
-  echo "   then a clean deploy/update.sh <ref> (or deploy/restart.sh --env-changed) lifts TRADING PAUSED"
+  echo "   # after the reboot (images are already built — the update RESUMES at the restart step, M119-3):"
+  echo "   cd $(pwd) && sudo bash deploy/update.sh ${STOIC_UPDATE_REF:-<ref>}"
+  echo "   (volumes and data are untouched; deploy/doctor.sh → 'docker mount propagation' shows which host processes hold the mounts;"
+  echo "    on cPanel hosts the permanent fix is deploy/move-docker-root.sh /srv/docker — M119-2)"
   echo "   (volumes and data are untouched; deploy/doctor.sh → 'docker mount propagation' shows which host processes hold the mounts)"
 }
 
@@ -168,6 +169,30 @@ clear_deploy_jam_marker() {   # after a CLEAN recreate
   docker compose exec -T backend python ops/deploy_jam.py clear 2>/dev/null | grep -q '"cleared": 1' \
     && { echo "   deploy-jam marker cleared (TRADING PAUSED lifted — worker-trading is managed by compose again)"; repair_journal trading_resumed "clean recreate" 2>/dev/null || true; }
   return 0
+}
+
+# ---------------------------------------------------------------- M119-2 — cPanel VirtFS vs docker root under /var/lib
+# VirtFS rbinds /var/lib into every jailshell; the bind copies of live container rootfs mounts make `docker rm`
+# fail with EBUSY on every recreate (the recurring deploy jam). The only clean fix is a docker root OUTSIDE
+# /var/lib — deploy/move-docker-root.sh. The update REFUSES until it is done (PREFLIGHT_YES=1 runs the move).
+virtfs_docker_root_gate() {
+  local vdir="${STOIC_VIRTFS_DIR:-/home/virtfs}" droot target="${STOIC_DOCKER_ROOT_TARGET:-/srv/docker}" jailed=0
+  command -v docker >/dev/null 2>&1 || return 0
+  [ -d "${vdir}" ] && [ -n "$(ls -A "${vdir}" 2>/dev/null)" ] && jailed=1
+  [ "${jailed}" = 1 ] || grep -qs 'jailshell' /etc/passwd && jailed=1
+  [ "${jailed}" = 1 ] || return 0
+  droot=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker); droot="${droot:-/var/lib/docker}"
+  case "${droot}" in /var/lib/*) ;; *) echo "   cPanel VirtFS present — docker root ${droot} is outside /var/lib (ok)"; return 0 ;; esac
+  echo "!! cPanel VirtFS (${vdir} / jailshell users) rbinds /var/lib into every jail — with the docker root at ${droot} every"
+  echo "   container recreate can jam on EBUSY. The docker root must move out of /var/lib before this update continues."
+  if [ "${PREFLIGHT_YES}" = 1 ] && [ "${PREFLIGHT_NO_HOST_CHANGES}" != 1 ]; then
+    echo "-- preflight: moving the docker root to ${target} (deploy/move-docker-root.sh — every container stops for the move)"
+    bash deploy/move-docker-root.sh "${target}" --yes || return 1
+    return 0
+  fi
+  echo "   fix (one-off, ~1 min, containers stop during the move):  sudo bash deploy/move-docker-root.sh ${target} --yes"
+  echo "   then re-run: sudo bash deploy/update.sh ${STOIC_UPDATE_REF:-<ref>}   (or PREFLIGHT_YES=1 to let update.sh do the move)"
+  return 1
 }
 
 # ---------------------------------------------------------------- CI release public key pin

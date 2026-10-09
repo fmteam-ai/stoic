@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import socket
+import sys
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -28,26 +29,42 @@ logger = logging.getLogger("worker")
 LEASE_TTL_SEC = 45
 LEASE_RENEW_SEC = 15
 HOLDER = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
-# M117-6 — container health for workers (they serve no HTTP): the lease keeper / standby loop touches this file
-# every LEASE_RENEW_SEC; the compose healthcheck fails when it is older than WORKER_HEARTBEAT_MAX_AGE_SEC.
-HEARTBEAT_FILE = os.environ.get("WORKER_HEARTBEAT_FILE", "/tmp/stoic-worker-heartbeat")
-HEARTBEAT_MAX_AGE_SEC = 90
+# M118-5 — container health for workers (they serve no HTTP) comes from the LEADER LEASE in worker_leases: the
+# process records "<name> <holder>" in IDENTITY_FILE; the compose healthcheck (`python -m workers.base --health`)
+# is healthy only when worker_leases[name].holder == that holder and the lease has not expired.
+IDENTITY_FILE = os.environ.get("WORKER_IDENTITY_FILE", "/tmp/stoic-worker-identity")
 
 
-def touch_heartbeat() -> None:
+def record_identity(name: str) -> None:
     try:
-        with open(HEARTBEAT_FILE, "a"):
-            os.utime(HEARTBEAT_FILE, None)
+        with open(IDENTITY_FILE, "w") as f:
+            f.write(f"{name} {HOLDER}\n")
     except OSError as e:
-        logger.warning("worker heartbeat file not writable (%s): %s", HEARTBEAT_FILE, e)
+        logger.warning("worker identity file not writable (%s): %s", IDENTITY_FILE, e)
 
 
-def heartbeat_healthy(path: str = HEARTBEAT_FILE, max_age: int = HEARTBEAT_MAX_AGE_SEC) -> bool:
+def lease_health(lease: dict | None, holder: str, now: datetime) -> tuple[bool, str]:
+    if not lease:
+        return False, "no lease document"
+    if lease.get("holder") != holder:
+        return False, f"lease held by {lease.get('holder')} (standby)"
+    exp = lease.get("expires_at")
+    if not isinstance(exp, datetime):
+        return False, "lease expires_at invalid"
+    if exp.tzinfo is None:
+        exp = exp.replace(tzinfo=timezone.utc)
+    if exp <= now:
+        return False, f"lease expired {int((now - exp).total_seconds())}s ago"
+    return True, "leader lease fresh"
+
+
+async def health_from_lease(db, identity_path: str = IDENTITY_FILE) -> tuple[bool, str]:
     try:
-        import time
-        return (time.time() - os.path.getmtime(path)) < max_age
-    except OSError:
-        return False
+        name, holder = open(identity_path).read().split()[:2]
+    except (OSError, ValueError):
+        return False, "worker identity not recorded yet"
+    lease = await db.worker_leases.find_one({"_id": name})
+    return lease_health(lease, holder, datetime.now(timezone.utc))
 
 # Per-loop progress telemetry — loops call record_progress() once per
 # iteration; the lease keeper persists it (BSON datetimes) so readiness can
@@ -130,7 +147,6 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                 logger.error("worker %s lost its lease — stopping loops", name)
                 lost.set()
                 return
-            touch_heartbeat()
             # loop-execution monitoring: leases prove the PROCESS is alive,
             # loops_running + per-loop supervisor stats prove every loop is
             # executing, and record_progress() telemetry proves it is making
@@ -191,14 +207,12 @@ async def run_worker(name: str, loop_factories: list) -> None:
     db = get_db()
     logger.info("worker %s starting (holder=%s)", name, HOLDER)
     os.environ.setdefault("STOIC_PROCESS_ROLE", f"worker-{name}")
-    touch_heartbeat()
+    record_identity(name)
     while not await _try_acquire(db, name):
         logger.info("worker %s standing by — another holder owns the lease",
                     name)
-        touch_heartbeat()   # standing by is healthy — the process is alive and polling
         await asyncio.sleep(LEASE_RENEW_SEC)
     logger.info("worker %s acquired leader lease", name)
-    touch_heartbeat()
     lost = asyncio.Event()
     loop_stats = {}
     tasks = []
@@ -232,3 +246,11 @@ def main(name: str, loop_factories: list) -> None:
         asyncio.run(run_worker(name, loop_factories))
     except KeyboardInterrupt:
         pass
+
+
+if __name__ == "__main__" and "--health" in sys.argv:   # compose healthcheck entrypoint (M118-5)
+    async def _h():
+        return await health_from_lease(get_db())
+    _ok, _why = asyncio.run(_h())
+    print(("healthy: " if _ok else "unhealthy: ") + _why)
+    sys.exit(0 if _ok else 1)
