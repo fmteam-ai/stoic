@@ -88,6 +88,10 @@ async def infrastructure_domain(db, account: dict | None = None) -> dict:
             if gate:
                 return {"level": "CLOSE_ONLY", "reason": gate["reason"], "code": gate["code"]}
         hb = str(account.get("last_heartbeat") or "")
+        vt = account.get("vps_terminal") or {}
+        if vt.get("status") == "agent_degraded":   # P2-01 — the VPS agent will not restart this terminal: readiness flags it
+            return {"level": "REDUCED", "code": "VPS_AGENT_DEGRADED",
+                    "reason": f"VPS agent degraded — automatic MT5 restarts suspended ({vt.get('detail') or 'restart ledger not persistable'})"}
         if hb and hb >= _ago(180):
             return {"level": "FULL", "reason": "terminal heartbeat fresh"}
         if hb:
@@ -354,6 +358,23 @@ async def release_gate_domain(db, account: dict | None = None) -> dict:
             "code": "RELEASE_NOT_AUTHORITATIVE"}
 
 
+async def deploy_posture_domain(db, account: dict | None = None) -> dict:
+    """M115-2 / P1-03 — the TRADING PAUSED marker deploy/update.sh sets after an overlay-EBUSY jam
+    (platform_state.deploy_jam) is an EXECUTION gate, not a label: new exposure is CLOSE_ONLY while it is
+    set, and also while the jam state cannot be read (fail closed — a `docker compose up -d` that brings
+    worker-trading back must not trade past the card). Close / protect stay allowed (CLOSE_ONLY)."""
+    try:
+        jam = await db.platform_state.find_one({"_id": "deploy_jam"})
+    except Exception as e:  # noqa: BLE001
+        return {"level": "CLOSE_ONLY", "code": "DEPLOY_JAM_UNKNOWN",
+                "reason": f"deploy jam state unreadable ({type(e).__name__}) — fail closed until platform_state is readable"}
+    if jam and jam.get("trading_paused"):
+        return {"level": "CLOSE_ONLY", "code": "TRADING_PAUSED_DEPLOY_JAM",
+                "reason": f"TRADING PAUSED by deploy/update.sh since {jam.get('at')} — {jam.get('reason') or 'overlay EBUSY jam'}; "
+                          "a clean deploy/update.sh or deploy/restart.sh --env-changed clears it"}
+    return {"level": "FULL", "reason": "no deploy jam marker"}
+
+
 async def crypto_protection_domain(db, account: dict | None = None) -> dict:
     """P0-01 — an open crypto position without exchange-side protection closes new exposure."""
     from crypto_bridge.crypto_execution import unprotected_open_count
@@ -393,6 +414,7 @@ _DOMAINS = {
     "acceptance": acceptance_domain,
     "release_gate": release_gate_domain,
     "crypto_protection": crypto_protection_domain,
+    "deploy_posture": deploy_posture_domain,
 }
 # Typed registry contract (audit v5 P0-1): every domain is
 # `async def domain(db, account=None) -> dict` and declares its scope.
@@ -406,7 +428,8 @@ DOMAIN_SCOPE = {"platform": "platform_global", "broker": "account_bound",
                 "certification": "account_bound", "bot_health": "account_bound",
                 "performance_truth": "account_bound", "recovery": "account_bound",
                 "inventory": "platform_global", "acceptance": "account_bound",
-                "release_gate": "account_bound", "crypto_protection": "account_bound"}
+                "release_gate": "account_bound", "crypto_protection": "account_bound",
+                "deploy_posture": "platform_global"}
 # domains whose FRESH/FULL state is a precondition for RESIZING (REDUCED)
 HARD_TRUTH_DOMAINS = ("position_truth", "broker", "execution")
 

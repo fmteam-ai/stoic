@@ -46,6 +46,7 @@ $script:MaxRestartsPerHour = 3
 $script:Restarts = @{}          # login -> [datetime[]] restart stamps (last hour) - mirrored to disk (A17-7)
 $script:StartedAt = @{}         # login -> last start time (A17-7 post-start grace)
 $script:RestartLedger = "$env:ProgramData\Stoic\restarts.json"
+$script:Degraded = $null          # P2-01 - non-null reason => no automatic restarts (restart ledger not persistable)
 $script:StartGraceS = 180
 $script:LoginRe = '\A\d{4,12}\z'                       # N113-7 - \A \z: "$" would also match before a trailing newline
 $script:TrustedOwners = @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM", "$($env:USERDOMAIN)\$($env:USERNAME)")
@@ -109,8 +110,17 @@ function Initialize-StoicDataDir {
 # -- config (agent token DPAPI-protected, current-user scope == the scheduled task's user) --------------------------
 function Protect-StoicSecret([string]$Plain) { ConvertTo-SecureString $Plain -AsPlainText -Force | ConvertFrom-SecureString }
 function Unprotect-StoicSecret([string]$Blob) {
+    # P1-04 - the unmanaged copy is zeroed AND freed on EVERY path (finally, error paths included). What remains
+    # exposed in this process's memory: the returned managed .NET string until the GC collects it (needed for the
+    # request body / ini write it feeds) - never written to logs, process arguments, environment or files.
     $ss = ConvertTo-SecureString $Blob
-    [Runtime.InteropServices.Marshal]::PtrToStringUni([Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($ss))
+    $ptr = [IntPtr]::Zero
+    try {
+        $ptr = [Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($ss)
+        [Runtime.InteropServices.Marshal]::PtrToStringUni($ptr)
+    } finally {
+        if ($ptr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($ptr) }
+    }
 }
 function Get-StoicAgentConfig {
     if (-not (Test-Path $ConfigPath)) { throw "agent not installed - run the enrol line from Dashboard > VPS > Connect existing VPS" }
@@ -234,10 +244,16 @@ function Set-StoicTerminalLogin {
     $null = Assert-StoicIniValue "Server" $Server
     Initialize-StoicDataDir                                              # N113-3
     $pw = Read-Host "  MT5 password for #$Login on $Server (stored DPAPI-encrypted on THIS machine only)" -AsSecureString
-    $plain = [Runtime.InteropServices.Marshal]::PtrToStringUni([Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($pw))
-    $why = Test-StoicPassword $plain
+    # P1-04 - validate straight from the unmanaged copy and free it in finally; the plaintext never lives in a
+    # named variable and is never returned - only the DPAPI blob leaves this function
+    $ptr = [IntPtr]::Zero; $why = $null
+    try {
+        $ptr = [Runtime.InteropServices.Marshal]::SecureStringToGlobalAllocUnicode($pw)
+        $why = Test-StoicPassword ([Runtime.InteropServices.Marshal]::PtrToStringUni($ptr))
+    } finally {
+        if ($ptr -ne [IntPtr]::Zero) { [Runtime.InteropServices.Marshal]::ZeroFreeGlobalAllocUnicode($ptr) }
+    }
     if ($why) { throw "password not stored: $why" }
-    $plain = $null
     $json = @{ login = $Login; server = $Server; password_enc = ($pw | ConvertFrom-SecureString); saved_at = (Get-Date).ToUniversalTime().ToString("o") } | ConvertTo-Json
     Write-StoicFileAtomic (Join-Path $script:LoginsDir "$Login.json") $json
     Write-Host "  OK  login #$Login stored for the agent's first start of that terminal" -ForegroundColor Green
@@ -282,9 +298,25 @@ function Read-StoicRestartLedger {
     } catch { Write-StoicLog "restart ledger unreadable - starting fresh" "WARN" }
 }
 function Save-StoicRestartLedger {
+    # P2-01 - the ledger IS the restart budget across agent restarts. If it cannot be persisted (ACL, disk full)
+    # the agent is DEGRADED: critical log + health event, and no automatic terminal restarts until a save succeeds.
     $out = @{}; $hour = (Get-Date).AddHours(-1)
     foreach ($k in $script:Restarts.Keys) { $out[$k] = @($script:Restarts[$k] | Where-Object { $_ -gt $hour } | ForEach-Object { $_.ToString("o") }) }
-    try { Write-StoicFileAtomic $script:RestartLedger ($out | ConvertTo-Json -Depth 3) } catch { }
+    try {
+        Write-StoicFileAtomic $script:RestartLedger ($out | ConvertTo-Json -Depth 3)
+        if ($script:Degraded) { Write-StoicLog "restart ledger writable again - agent no longer degraded" "WARN"; $script:Degraded = $null }
+        return $true
+    } catch {
+        $script:Degraded = "restart ledger unsaved: $($_.Exception.Message)"
+        Write-StoicLog "CRITICAL $($script:Degraded) - automatic terminal restarts suspended (budget would not survive an agent restart)" "ERROR"
+        return $false
+    }
+}
+function Test-StoicRestartAllowed($cfg, [hashtable]$Base) {
+    # P2-01 - refuse automatic restarts while degraded; the server sees the terminal as `agent_degraded`
+    if (-not $script:Degraded) { return $true }
+    Send-StoicTerminalReport $cfg ($Base + @{ status = "agent_degraded"; detail = $script:Degraded; restarts_last_hour = @($script:Restarts[$Base.login]).Count })
+    return $false
 }
 function Remove-StoicPasswordLeftovers {
     # A17-4 - a crash/reboot inside the 90 s window must never leave Password= on disk
@@ -408,11 +440,13 @@ function Invoke-StoicWatchdogTerminal($cfg, $t) {
     $todayLog = Join-Path $dir ("MQL5\Logs\" + (Get-Date).ToString("yyyyMMdd") + ".log")
     $logFresh = (Test-Path $todayLog) -and (((Get-Date) - (Get-Item $todayLog).LastWriteTime).TotalSeconds -lt $script:StaleS)
     if ($procs.Count -eq 0) {
+        if (-not (Test-StoicRestartAllowed $cfg $base)) { return }                                   # P2-01
         if ($script:Restarts[$login].Count -ge $script:MaxRestartsPerHour) { Send-StoicTerminalReport $cfg ($base + @{ status = "restart_loop"; detail = "process keeps dying"; restarts_last_hour = $script:Restarts[$login].Count }); return }
         Write-StoicLog "terminal #$login not running - starting"
         Start-StoicTerminal $dir $ini; $script:Restarts[$login] += Get-Date; $script:StartedAt[$login] = Get-Date; Save-StoicRestartLedger
         Send-StoicTerminalReport $cfg ($base + @{ status = "restarted"; detail = "process was not running - started"; restarts_last_hour = $script:Restarts[$login].Count; started_at = (Get-Date).ToUniversalTime().ToString("o") })
     } elseif ($t.restart_wanted -and -not $logFresh) {
+        if (-not (Test-StoicRestartAllowed $cfg $base)) { return }                                   # P2-01
         if ($script:Restarts[$login].Count -ge $script:MaxRestartsPerHour) {
             Send-StoicTerminalReport $cfg ($base + @{ status = "restart_loop"; detail = "EA heartbeat still stale after $($script:Restarts[$login].Count) restarts this hour"; restarts_last_hour = $script:Restarts[$login].Count }); return
         }
@@ -516,6 +550,7 @@ function Send-StoicHeartbeat($cfg, [int]$Managed) {
         disk_free_gb = [math]::Round($disk.Free / 1GB, 1)
         ram_percent = [math]::Round((1 - ($os.FreePhysicalMemory / $os.TotalVisibleMemorySize)) * 100, 0)
         last_seq = (Get-StoicLastSeq $cfg)                                   # N113-6 - lets the server re-sync after a DB restore
+        degraded = $(if ($script:Degraded) { "$script:Degraded" } else { $null })   # P2-01 - server health event + readiness flag
     }
     try { Invoke-StoicApi $cfg "POST" "/api/infra/agent/heartbeat" @{ metrics = $metrics } | Out-Null } catch { Write-StoicLog "heartbeat failed: $($_.Exception.Message)" "WARN" }
 }
@@ -526,6 +561,7 @@ function Start-StoicAgentLoop {
     Write-StoicLog "STOIC VPS Agent $script:AgentVersion started ($($cfg.agent_id))"
     Remove-StoicPasswordLeftovers      # A17-4
     Read-StoicRestartLedger            # A17-7 - the restart budget survives an agent restart
+    $null = Save-StoicRestartLedger    # P2-01 - probe persistence at start: unsaveable ledger => degraded before any restart
     while ($true) {
         $managed = 0
         try { Invoke-StoicCommands $cfg } catch { Write-StoicLog "commands: $($_.Exception.Message)" "WARN" }

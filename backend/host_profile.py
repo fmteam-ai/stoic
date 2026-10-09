@@ -14,8 +14,18 @@ import os
 from datetime import datetime, timezone
 
 
+HOST_PROFILE_KDF_LABEL = "stoic-host-profile-v1"
+
+
+def derive_host_profile_key(ledger_anchor_key: str) -> bytes:
+    """M115-3 — HKDF-style derivation (extract with a fixed label) so the host-profile HMAC never uses the
+    evidence key directly. LIMIT: root on the host can read the anchor key and re-sign a hand-edited
+    profile — the signature stops accidental edits and config drift, not a determined administrator."""
+    return hmac.new(ledger_anchor_key.encode(), HOST_PROFILE_KDF_LABEL.encode(), hashlib.sha256).digest()
+
+
 def _sig(key: str, profile: str, markers: str, detected_at: str) -> str:
-    return hmac.new(key.encode(), f"{profile}|{markers}|{detected_at}".encode(), hashlib.sha256).hexdigest()
+    return hmac.new(derive_host_profile_key(key), "|".join((profile, markers, detected_at)).encode(), hashlib.sha256).hexdigest()
 
 
 def host_profile(env=None) -> dict:

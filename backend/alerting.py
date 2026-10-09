@@ -25,6 +25,7 @@ EVALUATOR_KINDS = (
     "worker_loop_stalled", "outbox_backlog", "outbox_failed",
     "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real",
     "vps_terminal_restart_loop",   # Phase 2 VPS Agent: restart budget exhausted without a fresh EA heartbeat
+    "vps_agent_degraded",          # P2-01: the agent cannot persist its restart ledger — automatic restarts suspended
     "vps_agent_offline")           # A17-8: an agent that manages terminals has not polled for 5 min (reboot without auto-logon)
 
 

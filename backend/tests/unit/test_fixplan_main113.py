@@ -85,7 +85,7 @@ def test_n113_4_password_gate_only_linebreak_nul_nonascii_at_entry_with_awaiting
     fn = ps.split("function Test-StoicPassword")[1].split("function Set-StoicTerminalLogin")[0]
     assert r"'[\r\n\x00]'" in fn and r"'[^\x20-\x7E]'" in fn and r"\[\]=" not in fn
     setl = ps.split("function Set-StoicTerminalLogin")[1].split("function Get-StoicStoredLogin")[0]
-    assert "Test-StoicPassword $plain" in setl and "password not stored" in setl
+    assert "Test-StoicPassword ([Runtime.InteropServices.Marshal]::PtrToStringUni($ptr))" in setl and "password not stored" in setl   # P1-04: no $plain variable
     inst = ps.split("function Invoke-StoicInstallTerminal")[1].split("function Invoke-StoicWatchdogTerminal")[0]
     assert 'Assert-StoicIniValue "Password"' not in inst                       # = [ ] allowed in passwords
     assert "$why = Test-StoicPassword $stored.password" in inst and "$skipWhy = $why; $stored = $null" in inst

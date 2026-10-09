@@ -109,6 +109,7 @@ def _degraded_status(note: str) -> dict:
             "headline": "Platform degraded · status probe timed out",
             "deployment": {"region": os.environ.get("DEPLOYMENT_REGION") or None,
                            "app_env": os.environ.get("APP_ENV") or "development"},
+            "release": _release_identity(),   # P2-03 — signed release id + short commit, never hand-typed
             "checked_at": utc_now.isoformat()}
 
 
@@ -122,6 +123,14 @@ class _Stage:
         now = time.monotonic()
         self.t[name] = now - self.last
         self.last = now
+
+
+def _release_identity() -> dict:
+    try:
+        from release_truth import public_release_identity
+        return public_release_identity()
+    except Exception as e:  # noqa: BLE001
+        return {"short_commit": None, "release_id": None, "signed": False, "note": f"unavailable: {type(e).__name__}"}
 
 
 async def _compute_status(now: float, timings: dict | None = None):
@@ -272,6 +281,7 @@ async def _compute_status(now: float, timings: dict | None = None):
             # round 10 P2-01 — deployment metadata, never hard-coded copy
             "deployment": {"region": os.environ.get("DEPLOYMENT_REGION") or None,
                            "app_env": os.environ.get("APP_ENV") or "development"},
+            "release": _release_identity(),   # P2-03 — signed release id + short commit, never hand-typed
             "checked_at": utc_now.isoformat()}
     total = time.monotonic() - started
     if total > STATUS_SLOW_LOG_SEC:

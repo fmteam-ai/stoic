@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-10-08T20:42:09.809393+00:00",
-  "git_commit": "492cf59803eaa0223226ee41999d9f097bffac48",
-  "source_sha": "492cf59803eaa0223226ee41999d9f097bffac48",
+  "captured_at": "2026-10-09T06:56:37.977613+00:00",
+  "git_commit": "b57131586c904151f3725e3f384833ca12985185",
+  "source_sha": "b57131586c904151f3725e3f384833ca12985185",
   "images": {
     "backend": null,
     "frontend": null
@@ -11,8 +11,8 @@
   "note": "developer snapshot \u2014 NOT release evidence; release.yml regenerates the lock bound to the tagged commit",
   "signer_key_id": "stoic-release-ed25519-v1",
   "migrations_sha256": "9d5e137fa0fd8bfa5658435dff724140e6ed8b022067d5e001d4d3741415b94a",
-  "frontend_asset_digest": "49a8477d2c5558d5814b16dcb27ae2c173a1187c940403f7a17121739311fb9f",
-  "test_manifest_sha256": "8d632d86538fbff230d9632df0bb7960e1ac8081d9026af312bb99d3b080fd3a",
+  "frontend_asset_digest": "3f8bd825389a32f1d6fbbbff03555bca7d2da27fb2850bd0bd6975d2a6f704ce",
+  "test_manifest_sha256": "3828b1c2e23d69fd595aa1284398a1a634c3c4685dad5e4e4e735d4041afa70f",
   "model_manifest_sha256": "7e1c621d9df39e1a9d3f6d2a0f6f5c9cb63c3585418f8041d0f05d01fdbe1373",
   "python": {
     "version": "3.11.17",

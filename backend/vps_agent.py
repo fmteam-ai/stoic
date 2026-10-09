@@ -149,10 +149,16 @@ async def agent_heartbeat(db, agent_token: str, metrics: dict) -> dict:
         "disk_free_pct", "broker_latency_ms", "mt5_connected",
         "ea_attached", "restarts_24h", "service_uptime_sec",
         # Phase 2 VPS Agent (per-account portable terminals)
-        "hostname", "golden_ready", "terminals_managed", "terminals_running")}
+        "hostname", "golden_ready", "terminals_managed", "terminals_running",
+        "degraded")}   # P2-01 — non-null reason: restart ledger not persistable, automatic restarts suspended
     await db.vps_agents.update_one(
         {"_id": agent["_id"]},
-        {"$set": {"last_heartbeat": now, "last_metrics": hb}})
+        {"$set": {"last_heartbeat": now, "last_metrics": hb, "degraded": hb.get("degraded") or None}})
+    if hb.get("degraded"):
+        from alerting import raise_alert
+        await raise_alert(db, "vps_agent_degraded", "critical",
+                          f"VPS agent {agent['agent_id']} reports DEGRADED: {hb['degraded']} — automatic MT5 restarts are suspended on that host.",
+                          dedup_key=f"vps_agent_degraded:{agent['agent_id']}", meta={"agent_id": agent["agent_id"]})
     if metrics.get("last_seq") is not None:            # N113-6 — re-sync the command sequence after a DB restore
         from vps_pathb import _resync_command_seq
         await _resync_command_seq(db, agent, metrics.get("last_seq"))

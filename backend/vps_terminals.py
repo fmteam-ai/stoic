@@ -20,7 +20,8 @@ STALE_S = 180                   # EA heartbeat older than this → the agent res
 START_GRACE_S = 180             # A17-7 — no staleness restart within this long after a (re)start
 MAX_RESTARTS_PER_HOUR = 3       # beyond this the agent stops restarting and we alert
 AGENT_ONLINE_S = 180            # agent heartbeat age for "online" in the dashboard
-TERMINAL_STATUSES = ("queued", "installing", "awaiting_login", "running", "restarted", "restart_loop", "failed", "stopped")
+TERMINAL_STATUSES = ("queued", "installing", "awaiting_login", "running", "restarted", "restart_loop", "failed", "stopped",
+                     "agent_degraded")   # P2-01 — agent cannot persist its restart ledger: automatic restarts suspended
 ALERT_KIND = "vps_terminal_restart_loop"
 
 
@@ -219,6 +220,13 @@ async def report_terminal(db, agent: dict, payload: dict) -> dict:
             {"$set": {"vps_terminal": {"status": status, "agent_id": agent["agent_id"], "detail": doc["detail"],
                                        "directory": doc["directory"], "restarts_last_hour": doc["restarts_last_hour"],
                                        "updated_at": now.isoformat()}}})
+    if status == "agent_degraded":   # P2-01 — the agent refuses automatic restarts; readiness flags the terminal
+        from alerting import raise_alert
+        await raise_alert(db, "vps_agent_degraded", "critical",
+                          f"VPS agent {agent['agent_id']} is DEGRADED and will not restart MT5 for login {login}: {doc['detail']} — "
+                          "free disk space / fix ACLs on %ProgramData%\\Stoic so the restart ledger can be saved.",
+                          dedup_key=f"vps_agent_degraded:{agent['agent_id']}:{login}",
+                          meta={"agent_id": agent["agent_id"], "login": login, "account_id": account_id})
     if status == "restart_loop":
         from alerting import raise_alert
         await raise_alert(db, ALERT_KIND, "critical",

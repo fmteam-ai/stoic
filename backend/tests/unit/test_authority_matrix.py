@@ -20,7 +20,7 @@ DOMAINS = ["platform", "broker", "risk", "pamm", "execution",
            # round 9 P0-01/P0-02 blocker domains
            "certification", "bot_health", "performance_truth", "recovery", "inventory",
            # A13 Part 2 — acceptance bundle, release gate, crypto exchange-side protection
-           "acceptance", "release_gate", "crypto_protection"]
+           "acceptance", "release_gate", "crypto_protection", "deploy_posture"]
 
 
 def _run(coro):

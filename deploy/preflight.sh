@@ -215,14 +215,20 @@ record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedi
   set_kv backend/.env STOIC_HOST_PROFILE "${profile}"
   set_kv backend/.env STOIC_HOST_MARKERS "\"${markers}\""
   set_kv backend/.env STOIC_HOST_DETECTED_AT "${at}"
-  # signed with the dedicated evidence key (secrets/ledger_anchor_key → LEDGER_ANCHOR_KEY in the backend): a
-  # hand-edited `dedicated` without the matching signature is reported UNVERIFIED (blocks in production)
+  # M114-7/M115-3 — signed with a key DERIVED (HKDF-style, label stoic-host-profile-v1) from the ledger anchor
+  # key (secrets/ledger_anchor_key → LEDGER_ANCHOR_KEY in the backend); a hand-edited `dedicated` without the
+  # matching signature is reported UNVERIFIED (blocks in production). Limit: root can re-sign — this stops
+  # accidental edits/drift, not a determined admin. M115-1: values go in as argv (no f-string escapes —
+  # python 3.6 safe) and a signing failure is NON-fatal: the profile is recorded unsigned with a warning.
   key=$(cat secrets/ledger_anchor_key 2>/dev/null || { grep -E '^LEDGER_ANCHOR_KEY=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+  sig=""
   if [ -n "${key}" ]; then
-    sig=$(KEY="${key}" P="${profile}" M="${markers}" T="${at}" python3 -c 'import hmac,hashlib,os; print(hmac.new(os.environ["KEY"].encode(), f"{os.environ[\"P\"]}|{os.environ[\"M\"]}|{os.environ[\"T\"]}".encode(), hashlib.sha256).hexdigest())')
-    set_kv backend/.env STOIC_HOST_PROFILE_SIG "${sig}"
+    sig=$(python3 -c 'import hmac, hashlib, sys; dk = hmac.new(sys.argv[1].encode(), b"stoic-host-profile-v1", hashlib.sha256).digest(); print(hmac.new(dk, "|".join(sys.argv[2:5]).encode(), hashlib.sha256).hexdigest())' "${key}" "${profile}" "${markers}" "${at}" 2>/dev/null) || sig=""
+  fi
+  if [ -n "${sig}" ]; then set_kv backend/.env STOIC_HOST_PROFILE_SIG "${sig}"
   else
-    echo "!! host: no ledger anchor key available — host profile recorded UNSIGNED (readiness reports it unverified)"
+    set_kv backend/.env STOIC_HOST_PROFILE_SIG ""
+    echo "!! host: host profile recorded UNSIGNED ($( [ -n "${key}" ] && echo 'python3 HMAC failed' || echo 'no ledger anchor key available')) — readiness reports it unverified"
   fi
   if [ -n "${markers}" ]; then
     echo "!! host: STOIC shares this host with a public web/mail stack (${markers}) — fine for demo-only; migrate to a dedicated host before live trading (docs/HOST_MIGRATION.md)"

@@ -66,7 +66,7 @@ export const ReadinessCard = () => {
             const base = h.shared_web_host ? "SHARED HOST" : h.profile === "dedicated" ? "DEDICATED" : "UNKNOWN";
             return `${base}${h.verified === false ? " · UNVERIFIED" : ""}${h.detected_at ? ` · ${new Date(h.detected_at).toLocaleDateString()}` : ""}`;
         }
-        if (k === "deploy_jam") return checks[k]?.trading_paused ? "TRADING PAUSED" : "MANAGED";
+        if (k === "deploy_jam") return checks[k]?.unknown ? "UNKNOWN" : checks[k]?.trading_paused ? "TRADING PAUSED" : "MANAGED";
         return "";
     };
 

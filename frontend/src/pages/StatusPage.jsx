@@ -104,6 +104,9 @@ export default function StatusPage() {
                                     {data.trading.attestation?.basis && <span> · {data.trading.attestation.basis}</span>}
                                     {data.trading.attestation?.inventory_hash && <span> · inv {data.trading.attestation.inventory_hash}</span>}</div>
                                 <div>new exposure: <span className="text-white">{data.trading.readiness?.new_exposure_allowed ? "allowed" : "refused"}</span></div>
+                                <div data-testid="status-release-identity">release: <span className={data.release?.signed ? "text-[#00FF41]" : "text-[#FFB000]"}>
+                                    {data.release?.signed ? `signed ${data.release.release_id}` : (data.release?.note || "unsigned")}</span>
+                                    {data.release?.short_commit && <span> · commit {data.release.short_commit}</span>}</div>
                                 <div>as of: <span className="text-white">{data.trading.attestation?.as_of || data.checked_at || "—"}</span></div>
                                 {Array.isArray(data.trading.requirements) && data.trading.requirements.length > 0 && (
                                     <div className="sm:col-span-2 border-t border-[#1F1F1F] pt-2 mt-1" data-testid="status-requirements">
