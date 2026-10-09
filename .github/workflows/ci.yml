@@ -279,6 +279,13 @@ jobs:
           # the exact invocation the scheduled task uses, minus -Run: must load (parse + param binding) and exit 0
           powershell.exe -NoProfile -ExecutionPolicy Bypass -File backend\static\STOIC-Agent.ps1 -ConfigPath "$env:RUNNER_TEMP\no-such-agent.json"
           if ($LASTEXITCODE -ne 0) { throw "STOIC-Agent.ps1 failed to load in Windows PowerShell 5.1 (exit $LASTEXITCODE)" }
+      - name: Agent recovery behavioural test under Windows PowerShell 5.1 (M117-2 — degraded → recovering → recovered, byte-exact ledger read-back)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw "expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)" }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_agent_recovery.ps1
+          if ($LASTEXITCODE -ne 0) { throw "agent recovery test failed under Windows PowerShell 5.1 (exit $LASTEXITCODE)" }
       - name: Installer behavioural tests (N104-1 — URL building, terminal choice before the token)
         shell: pwsh
         run: ./scripts/test_installer.ps1

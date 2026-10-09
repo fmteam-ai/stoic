@@ -34,7 +34,9 @@ def _sig(key: str, profile: str, markers: str, detected_at: str) -> str:
     return hmac.new(derive_host_profile_key(key), canonical_payload(profile, markers, detected_at), hashlib.sha256).hexdigest()
 
 
-MAX_AGE_HOURS = 24.0        # A19-P1-04 — a signed profile older than this is NOT verified (timer refreshes daily)
+MAX_AGE_HOURS = 24.0        # A19-P1-04 — a signed profile older than this is NOT verified
+REFRESH_INTERVAL_HOURS = 6.0   # A20-P1-03 — stoic-host-profile.timer cadence (OnUnitActiveSec=6h + ≤10 min jitter)
+WARN_AGE_HOURS = 12.0       # A20-P1-03 — older than this ⇒ refresh overdue (≥1 missed run): readiness warns + ops alert
 MAX_FUTURE_SKEW_S = 300     # future-dated by more than 5 min of clock skew ⇒ not verified
 
 
@@ -67,7 +69,7 @@ def host_profile(env=None, now=None) -> dict:
         sig = (env.get("STOIC_HOST_PROFILE_SIG") or "").strip().strip('"')
     key = (env.get("LEDGER_ANCHOR_KEY") or "").strip()
     sig_ok = bool(profile and sig and key) and hmac.compare_digest(sig, _sig(key, profile, markers, detected_at))
-    age_h, reason = None, None
+    age_h, reason, refresh_overdue = None, None, False
     if not sig_ok:
         reason = "signature missing/invalid" if profile else "no host profile recorded"
     try:
@@ -81,6 +83,7 @@ def host_profile(env=None, now=None) -> dict:
     else:
         delta_s = (now - ts).total_seconds()
         age_h = round(delta_s / 3600, 1)
+        refresh_overdue = delta_s > WARN_AGE_HOURS * 3600
         if delta_s < -MAX_FUTURE_SKEW_S:
             reason = reason or f"detected_at is {round(-delta_s / 60)} min in the future"
         elif delta_s > MAX_AGE_HOURS * 3600:
@@ -88,4 +91,7 @@ def host_profile(env=None, now=None) -> dict:
     verified = sig_ok and reason is None
     return {"profile": profile or "unknown", "shared_web_host": profile == "shared-web-host", "markers": markers or None,
             "detected_at": detected_at or None, "age_hours": age_h, "verified": verified, "source": source,
-            "unverified_reason": reason}
+            "unverified_reason": reason, "refresh_overdue": refresh_overdue,
+            "refresh_warning": (f"profile is {age_h} h old — refresh overdue (timer runs every {REFRESH_INTERVAL_HOURS:g} h; "
+                                f"unverified at {MAX_AGE_HOURS:g} h): check systemctl status stoic-host-profile.timer")
+            if refresh_overdue and verified else None}

@@ -186,26 +186,28 @@ if grep -q 'docker-compose.forecast.yml' .env 2>/dev/null; then
   docker compose exec -T worker-trading python ops/verify_forecast_profile.py || rollback
 fi
 
-# round-5 P1 / round-6 P1 — topology policy gate. RECONCILE_EXPECT=accounts/enabled/bots
-# in ./.env (e.g. 6/3/3). In PRODUCTION the gate is MANDATORY and fail-closed:
-# the variable must exist, match N/N/N, equal the approved policy
-# (RECONCILE_APPROVED_POLICY, default 6/3/3), the reconciliation must be scoped
-# to the production tenant (RECONCILE_SCOPE_USER_ID) and the evidence must carry
-# a non-null signature from the dedicated key. Any missing element → rollback.
+# round-5 P1 / round-6 P1 — topology policy gate. RECONCILE_EXPECT in ./.env is either `approved`
+# (A20-P0-02: accounts/enabled/bots AND the exact account ids come from the SIGNED policy approved in
+# Admin → Inventory — never a fixed 6/3/3) or an explicit N/N/N that must equal RECONCILE_APPROVED_POLICY.
+# In PRODUCTION the gate is MANDATORY and fail-closed: the variable must exist (default: approved),
+# the reconciliation must be scoped to the production tenant (RECONCILE_SCOPE_USER_ID) and the
+# evidence must carry a non-null signature from the dedicated key. Any missing element → rollback.
 _envval() { { grep -E "^$1=" .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d '"'"'"; }   # never non-zero under pipefail
 _benvval() { { grep -E "^$1=" backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d '"'"'"; }   # what the backend process actually loads
 APP_ENV_VAL=$(app_env)   # production if ./.env OR backend/.env says so (lib.sh — the backend reads backend/.env)
 RECONCILE_EXPECT=$(_envval RECONCILE_EXPECT)
 RECONCILE_SCOPE=$(_envval RECONCILE_SCOPE_USER_ID)
-APPROVED_POLICY=$(_envval RECONCILE_APPROVED_POLICY); APPROVED_POLICY="${APPROVED_POLICY:-6/3/3}"
+APPROVED_POLICY=$(_envval RECONCILE_APPROVED_POLICY); APPROVED_POLICY="${APPROVED_POLICY:-approved}"
 if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 1 ]; then
   echo "!! topology policy gate SKIPPED (onboarding-close-only) — RECONCILE_EXPECT=${RECONCILE_EXPECT:-unset}; trading stays CLOSE_ONLY until a full deploy/update.sh passes"
   RECONCILE_EXPECT=""
 fi
 if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 0 ]; then
-  [ -n "${RECONCILE_EXPECT}" ] || { echo "!! production requires RECONCILE_EXPECT in .env (approved policy ${APPROVED_POLICY})"; rollback; }
-  echo "${RECONCILE_EXPECT}" | grep -Eq '^[0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N)"; rollback; }
-  [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY}"; rollback; }
+  [ -n "${RECONCILE_EXPECT}" ] || { echo "!! production requires RECONCILE_EXPECT in .env — RECONCILE_EXPECT=approved takes the counts from the signed policy (approved policy: ${APPROVED_POLICY})"; rollback; }
+  echo "${RECONCILE_EXPECT}" | grep -Eq '^([0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}|approved)$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N) or 'approved'"; rollback; }
+  if [ "${RECONCILE_EXPECT}" != approved ]; then
+    [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY} (set RECONCILE_EXPECT=approved to use the signed policy itself)"; rollback; }
+  fi
   [ -n "${RECONCILE_SCOPE}" ] || { echo "!! production requires RECONCILE_SCOPE_USER_ID (explicit tenant scope)"; rollback; }
   [ -n "$(_envval LEDGER_ANCHOR_KEY)" ] || [ -s secrets/ledger_anchor_key ] || { echo "!! production requires LEDGER_ANCHOR_KEY (dedicated evidence signing key — secrets/ledger_anchor_key or ./.env)"; rollback; }
   # N99-5 — the backend reads backend/.env (never ./.env); check the file the process sees

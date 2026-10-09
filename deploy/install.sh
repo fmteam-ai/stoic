@@ -417,7 +417,7 @@ import json, os, sys
 d = json.loads(os.environ["STATE"]); c = d.get("checks", {}); policy = os.environ["POLICY"]
 gates = {k: v for k, v in c.items() if isinstance(v, dict) and v.get("ok") is False}
 hints = {
-  "inventory": "declare the 6/3/3 inventory expectation and approve it in Admin → Inventory after adding the MT5 accounts",
+  "inventory": "propose + approve the SIGNED inventory policy (accounts/enabled/bots + account ids) in Admin → Inventory after adding the MT5 accounts",
   "canonical_decision": "clears automatically once inventory is approved and positions reconcile",
   "ea_release": "compile the RC MQ5 in Windows MetaEditor, then scripts/verify_ea_release.py --sign (docs/RELEASE_SUMMARY.md)",
   "release_attestation": "install from a CI-attested tag without --skip-attestation, or run deploy/lib.sh verify_attestation",

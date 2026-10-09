@@ -27,6 +27,13 @@ host_prereqs_missing() {   # 0 = something missing (prints what), 1 = all presen
     prop=$(findmnt -no PROPAGATION "${droot}" 2>/dev/null || echo "?")
     case "${prop}" in *slave*) ;; *) echo "   docker root ${droot} propagation '${prop}' (want slave)"; missing=1 ;; esac
   fi
+  # M117-1 — the signed host-profile refresh timer is a prerequisite too: without it the profile expires 24 h after
+  # every update (live: blocks trading daily). Checked on EVERY update so hosts that already have (a)+(b) get it.
+  if [ "${STOIC_SKIP_HOST_TIMER:-0}" != 1 ] && command -v systemctl >/dev/null 2>&1; then
+    if ! systemctl is-active --quiet stoic-host-profile.timer 2>/dev/null; then
+      echo "   stoic-host-profile.timer not active (want installed + enabled; refreshes the signed host profile every 6 h)"; missing=1
+    fi
+  fi
   [ "${missing}" = 1 ]
 }
 
@@ -211,9 +218,17 @@ host_profile_sig() {   # host_profile_sig <key> <profile> <markers> <detected_at
   python3 -c 'import hmac, hashlib, sys; dk = hmac.new(sys.argv[1].encode(), b"stoic-host-profile-v1", hashlib.sha256).digest(); payload = "".join("%d:%s;" % (len(v), v) for v in sys.argv[2:5]).encode(); print(hmac.new(dk, payload, hashlib.sha256).hexdigest())' "$@" 2>/dev/null
 }
 write_host_profile_file() {   # write_host_profile_file <profile> <markers> <detected_at> <sig>  → deploy/state/host_profile.json (A19-P1-04)
-  mkdir -p deploy/state 2>/dev/null || return 0
-  python3 -c 'import json, sys; json.dump({"profile": sys.argv[1], "markers": sys.argv[2], "detected_at": sys.argv[3], "sig": sys.argv[4], "schema": 1}, open(sys.argv[5], "w"), sort_keys=True)' "$1" "$2" "$3" "$4" deploy/state/host_profile.json.tmp 2>/dev/null \
-    && mv -f deploy/state/host_profile.json.tmp deploy/state/host_profile.json && chmod 0644 deploy/state/host_profile.json
+  # A20-P1-04 — every step is checked: a failed mkdir/write/mv/chmod returns non-zero with the path and error, the
+  # previous file stays intact and the temp file is removed (host-profile-refresh.sh exits 1 ⇒ systemd unit FAILED).
+  local dir="${STOIC_HOST_PROFILE_DIR:-deploy/state}" tmp err
+  tmp="${dir}/host_profile.json.tmp"
+  if ! err=$(mkdir -p "${dir}" 2>&1); then echo "!! host profile: cannot create ${dir}: ${err}" >&2; return 1; fi
+  if ! err=$(python3 -c 'import json, sys; json.dump({"profile": sys.argv[1], "markers": sys.argv[2], "detected_at": sys.argv[3], "sig": sys.argv[4], "schema": 1}, open(sys.argv[5], "w"), sort_keys=True)' "$1" "$2" "$3" "$4" "${tmp}" 2>&1); then
+    echo "!! host profile: cannot write ${tmp}: ${err##*$'\n'}" >&2; rm -f "${tmp}" 2>/dev/null; return 1
+  fi
+  if ! err=$(chmod 0644 "${tmp}" 2>&1); then echo "!! host profile: chmod ${tmp} failed: ${err}" >&2; rm -f "${tmp}" 2>/dev/null; return 1; fi
+  if ! err=$(mv -f "${tmp}" "${dir}/host_profile.json" 2>&1); then echo "!! host profile: cannot replace ${dir}/host_profile.json: ${err}" >&2; rm -f "${tmp}" 2>/dev/null; return 1; fi
+  return 0
 }
 
 record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedicated + markers + detected_at + HMAC (M114-7)
@@ -233,7 +248,7 @@ record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedi
   key=$(cat secrets/ledger_anchor_key 2>/dev/null || { grep -E '^LEDGER_ANCHOR_KEY=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   sig=""
   if [ -n "${key}" ]; then sig=$(host_profile_sig "${key}" "${profile}" "${markers}" "${at}") || sig=""; fi
-  write_host_profile_file "${profile}" "${markers}" "${at}" "${sig}" || true   # A19-P1-04 — the file the containers read (ro mount)
+  write_host_profile_file "${profile}" "${markers}" "${at}" "${sig}" || echo "!! host: deploy/state/host_profile.json not written (see error above) — readiness reports the profile unverified until deploy/host-profile-refresh.sh succeeds"   # A19-P1-04 — the file the containers read (ro mount)
   if [ -n "${sig}" ]; then set_kv backend/.env STOIC_HOST_PROFILE_SIG "${sig}"
   else
     set_kv backend/.env STOIC_HOST_PROFILE_SIG ""

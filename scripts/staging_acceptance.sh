@@ -3,7 +3,7 @@
 #
 #   make staging-acceptance                 # AT-01 only (no downtime)
 #   make staging-acceptance ROLLBACK=1      # + AT-15 forced-failure rollback drill (downtime!)
-#   make staging-acceptance EXPECT=6/3/3    # + signed read-only reconciliation must match accounts/enabled/bots
+#   make staging-acceptance EXPECT=approved  # + signed read-only reconciliation must match the approved signed policy (or EXPECT=N/N/N)
 #   make staging-acceptance DRILLS=1        # + readiness fail-closed fault drills (restores every injected fault)
 #   scripts/staging_acceptance.sh [--rollback] [--yes]
 #

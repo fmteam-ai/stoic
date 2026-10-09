@@ -33,7 +33,7 @@ param(
     [string]$ConfigPath = "$env:ProgramData\Stoic\vps-agent.json"
 )
 
-$script:AgentVersion = "1.3"
+$script:AgentVersion = "1.4"
 $script:TaskName = "StoicVpsAgent"
 $script:Root = "C:\STOIC"
 $script:DataDir = "$env:ProgramData\Stoic"
@@ -299,15 +299,21 @@ function Read-StoicRestartLedger {
         foreach ($p in $d.PSObject.Properties) { $script:Restarts[$p.Name] = @($p.Value | ForEach-Object { [datetime]$_ }) }
     } catch { Write-StoicLog "restart ledger unreadable - starting fresh" "WARN" }
 }
-function Disable-StoicCrashDumps {
-    # A19-P2-01 - Windows Error Reporting LocalDumps for THIS account's processes are disabled (DumpCount=0, Disabled=1):
-    # a crash dump would contain the DPAPI-unprotected agent token / MT5 password strings. What remains exposed: the
-    # managed .NET string of a secret until GC, readable only by a local admin with a debugger on the live process.
+function Set-StoicCrashDumpPolicy {
+    # A19-P2-01 / A20-P2-01 - best-effort, per-user and narrow: WER LocalDumps DumpCount=0 for THIS Windows account
+    # (a crash dump would contain the DPAPI-unprotected agent token / MT5 password strings). Windows reads LocalDumps
+    # primarily from HKLM, so this HKCU value may be ignored - the robust setup is documented in docs/VPS_AGENT.md:
+    # a DEDICATED Windows user for the agent + the optional admin-only HKLM per-exe LocalDumps (terminal64.exe,
+    # powershell.exe) with DumpCount=0. The previous agent (1.3) also set "Windows Error Reporting\Disabled=1", which
+    # switched error reporting off for EVERY program of the user: too broad - removed here and reverted on upgrade.
     try {
         $wer = "HKCU:\Software\Microsoft\Windows\Windows Error Reporting"
         New-Item -Path "$wer\LocalDumps" -Force | Out-Null
         Set-ItemProperty -Path "$wer\LocalDumps" -Name DumpCount -Value 0 -Type DWord
-        Set-ItemProperty -Path $wer -Name Disabled -Value 1 -Type DWord
+        if ((Get-ItemProperty -Path $wer -Name Disabled -ErrorAction SilentlyContinue).Disabled -eq 1) {
+            Remove-ItemProperty -Path $wer -Name Disabled -ErrorAction Stop
+            Write-StoicLog "reverted the user-wide 'Windows Error Reporting\Disabled=1' set by agent 1.3 (A20-P2-01)" "WARN"
+        }
     } catch { Write-StoicLog "crash-dump policy not applied: $($_.Exception.Message)" "WARN" }
 }
 function Save-StoicRestartLedger {
@@ -316,13 +322,16 @@ function Save-StoicRestartLedger {
     $out = @{}; $hour = (Get-Date).AddHours(-1)
     foreach ($k in $script:Restarts.Keys) { $out[$k] = @($script:Restarts[$k] | Where-Object { $_ -gt $hour } | ForEach-Object { $_.ToString("o") }) }
     try {
-        Write-StoicFileAtomic $script:RestartLedger ($out | ConvertTo-Json -Depth 3)
+        $json = ($out | ConvertTo-Json -Depth 3)
+        Write-StoicFileAtomic $script:RestartLedger $json
         if ($script:Degraded) {
             # A19-P1-03 - documented recovery transition: a DURABLE write (read back equal) starts a stability window;
             # the agent stays degraded (status agent_degraded, detail "recovering") until the window has elapsed with
             # every save succeeding; any failure inside the window restarts it.
-            $back = Get-Content -Raw -Path $script:RestartLedger -ErrorAction Stop
-            if (($back | ConvertFrom-Json | ConvertTo-Json -Depth 3) -ne ($out | ConvertTo-Json -Depth 3)) { throw "ledger read-back mismatch" }
+            # M117-2 - the read-back compares the BYTES written (SHA-256 of the file vs the string we wrote), never a
+            # re-serialised object: PowerShell JSON formatting quirks (empty objects, one-item arrays, 5.1 vs 7 date
+            # handling) can no longer keep the agent degraded on a false mismatch.
+            if (-not (Test-StoicLedgerReadBack $script:RestartLedger $json)) { throw "ledger read-back mismatch" }
             if (-not $script:RecoverySince) { $script:RecoverySince = Get-Date; Write-StoicLog "restart ledger durable again - stability window of $($script:RecoveryWindowMinutes) min started" "WARN" }
             if ((Get-Date) -ge $script:RecoverySince.AddMinutes($script:RecoveryWindowMinutes)) {
                 Write-StoicLog "stability window elapsed - agent no longer degraded (automatic restarts resume)" "WARN"
@@ -336,6 +345,15 @@ function Save-StoicRestartLedger {
         Write-StoicLog "CRITICAL $($script:Degraded) - automatic terminal restarts suspended (budget would not survive an agent restart)" "ERROR"
         return $false
     }
+}
+function Test-StoicLedgerReadBack([string]$Path, [string]$Written) {
+    # M117-2 - byte-exact read-back: SHA-256 over the file bytes equals SHA-256 over the UTF-8 (no BOM) bytes written
+    $sha = [Security.Cryptography.SHA256]::Create()
+    try {
+        $onDisk = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($Path)))
+        $wrote = [BitConverter]::ToString($sha.ComputeHash((New-Object Text.UTF8Encoding $false).GetBytes($Written)))
+        return ($onDisk -ceq $wrote)
+    } finally { $sha.Dispose() }
 }
 function Test-StoicRestartAllowed($cfg, [hashtable]$Base) {
     # P2-01 - refuse automatic restarts while degraded; the server sees the terminal as `agent_degraded`
@@ -587,7 +605,7 @@ function Start-StoicAgentLoop {
     Remove-StoicPasswordLeftovers      # A17-4
     Read-StoicRestartLedger            # A17-7 - the restart budget survives an agent restart
     $null = Save-StoicRestartLedger    # P2-01 - probe persistence at start: unsaveable ledger => degraded before any restart
-    Disable-StoicCrashDumps            # A19-P2-01 - no user-mode crash dumps of this process (they would contain unprotected secrets)
+    Set-StoicCrashDumpPolicy           # A19-P2-01 / A20-P2-01 - narrow per-user LocalDumps=0; reverts the 1.3 user-wide WER Disabled=1
     while ($true) {
         if ($script:Degraded) { $null = Save-StoicRestartLedger }   # M116-2 - re-probe once per loop so the agent recovers without a manual restart
         $managed = 0

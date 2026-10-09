@@ -65,7 +65,7 @@ def world(tmp_path):
                STOIC_SYSCTL_CONF=str(etc / "99-stoic-docker.conf"), STOIC_SLAVE_BIN=str(etc / "stoic-docker-root-slave"),
                STOIC_DOCKER_DROPIN=str(etc / "docker.service.d" / "10-stoic-private-root.conf"),
                STOIC_MAY_DETACH_MOUNTS=str(state / "mdm"), STOIC_REPAIR_JOURNAL=str(tmp_path / "journal.jsonl"),
-               STOIC_SKIP_MOUNT_FIX="1", PREFLIGHT_YES="1")
+               STOIC_SKIP_MOUNT_FIX="1", STOIC_SKIP_HOST_TIMER="1", PREFLIGHT_YES="1")
     return {"env": env, "state": state, "etc": etc, "tmp": tmp_path}
 
 

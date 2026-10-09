@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# A19-P1-04 — daily host-profile refresh (systemd timer installed by deploy/host-prereqs.sh).
+# A19-P1-04 — host-profile refresh (systemd timer installed by deploy/host-prereqs.sh: every 6 h, A20-P1-03).
 # Re-detects shared-web-host markers (cPanel/WHM, Plesk, DirectAdmin, httpd/exim/dovecot) and writes the
 # signed deploy/state/host_profile.json the containers read on EVERY readiness check (read-only mount,
 # no container restart needed). Older than 24 h / future-dated / unparseable ⇒ UNVERIFIED (blocks live).
+# A20-P1-04 — any write failure exits non-zero (the systemd unit shows FAILED; the previous file is kept).
 set -u
 cd "$(dirname "$0")/.." || exit 1
 . deploy/lib.sh
@@ -12,5 +13,8 @@ profile=dedicated; [ -n "${markers}" ] && profile=shared-web-host
 at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 key=$(cat secrets/ledger_anchor_key 2>/dev/null || true)
 sig=""; [ -n "${key}" ] && { sig=$(host_profile_sig "${key}" "${profile}" "${markers}" "${at}") || sig=""; }
-write_host_profile_file "${profile}" "${markers}" "${at}" "${sig}" || { echo "host-profile-refresh: could not write deploy/state/host_profile.json"; exit 1; }
+if ! write_host_profile_file "${profile}" "${markers}" "${at}" "${sig}"; then
+  echo "host-profile-refresh: FAILED — ${STOIC_HOST_PROFILE_DIR:-deploy/state}/host_profile.json not updated (previous file kept)" >&2
+  exit 1
+fi
 echo "host-profile-refresh: ${profile}${markers:+ (${markers})} at ${at} $( [ -n "${sig}" ] && echo signed || echo UNSIGNED)"

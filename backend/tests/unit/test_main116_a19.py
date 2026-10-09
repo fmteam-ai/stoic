@@ -75,7 +75,7 @@ def test_refresh_script_writes_file_the_backend_verifies(world, tmp_path):   # n
     assert p["verified"] is True and p["source"] == "file"
     assert os.path.exists(os.path.join(ROOT, "deploy", "host-profile-refresh.sh"))
     hp_sh = open(os.path.join(ROOT, "deploy", "host-prereqs.sh")).read()
-    assert "stoic-host-profile.timer" in hp_sh and "OnUnitActiveSec=24h" in hp_sh
+    assert "stoic-host-profile.timer" in hp_sh and "OnUnitActiveSec=6h" in hp_sh and "RandomizedDelaySec=10min" in hp_sh   # A20-P1-03
     compose = open(os.path.join(ROOT, "docker-compose.yml")).read()
     assert "./deploy/state:/app/state:ro" in compose and "STOIC_HOST_PROFILE_FILE: /app/state/host_profile.json" in compose
 
@@ -116,7 +116,10 @@ def test_agent_reprobes_ledger_each_loop_and_recovers_through_stability_window()
     assert "$script:RecoveryWindowMinutes = 10" in src and "ledger read-back mismatch" in src
     assert "stability window elapsed - agent no longer degraded" in src
     assert src.count("$script:RecoverySince = $null") >= 2                               # cleared on failure + on recovery
-    assert "Disable-StoicCrashDumps" in src and "LocalDumps" in src and "DumpCount" in src   # A19-P2-01
+    assert "Set-StoicCrashDumpPolicy" in src and "LocalDumps" in src and "DumpCount" in src   # A19-P2-01 / A20-P2-01
+    assert "Set-ItemProperty -Path $wer -Name Disabled" not in src                       # A20-P2-01 — no user-wide WER off-switch
+    assert "Remove-ItemProperty -Path $wer -Name Disabled" in src                        # … and the 1.3 one is reverted on upgrade
+    assert "Test-StoicLedgerReadBack" in src and "ConvertFrom-Json | ConvertTo-Json" not in src   # M117-2 — byte-exact read-back
     wiz = open(os.path.join(ROOT, "frontend", "src", "components", "AddAccountWizard.jsx")).read()
     assert "wizard-real-manual-login" in wiz and "awaiting_login" in wiz
 

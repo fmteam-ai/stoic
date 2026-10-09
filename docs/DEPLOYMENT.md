@@ -419,12 +419,18 @@ Limit: root on the host can read the anchor key and re-sign — the signature st
 and config drift, not a determined administrator. Signing failure is non-fatal (profile recorded
 unsigned, warning printed).
 
-**Daily refresh (A19-P1-04)** — `host-prereqs.sh` installs `stoic-host-profile.timer` which runs
-`deploy/host-profile-refresh.sh` every 24 h and writes the signed `deploy/state/host_profile.json`;
-the containers read it on every readiness check through the read-only `/app/state` mount, so a new
-marker (e.g. httpd installed) blocks live within one timer cycle and no restart is needed. A profile
-older than 24 h, future-dated by more than 5 min, or unparseable is UNVERIFIED. Manual refresh:
-`sudo bash deploy/host-profile-refresh.sh`.
+**Refresh timer (A19-P1-04 / A20-P1-03 / M117-1)** — `host-prereqs.sh` installs `stoic-host-profile.timer`, which
+runs `deploy/host-profile-refresh.sh` **every 6 h (+ ≤10 min jitter)** and writes the signed
+`deploy/state/host_profile.json`; the containers read it on every readiness check through the read-only
+`/app/state` mount, so a new marker (e.g. httpd installed) blocks live within one timer cycle and no restart is
+needed. The 24 h maximum age leaves a budget of three missed runs. A profile **older than 12 h** shows a
+*refresh overdue* warning on the Readiness card and raises the `host_profile_refresh_overdue` ops alert; older
+than 24 h, future-dated by more than 5 min, or unparseable ⇒ UNVERIFIED (`host_profile_unverified` critical
+alert; blocks live, warns demo-only). The timer is a **host prerequisite**: `deploy/update.sh` installs or
+repairs it on every update (not only when the Docker fixes are missing), `host-prereqs.sh --check` and
+`doctor.sh` report it (`systemctl list-timers stoic-host-profile.timer`). A failed write (`A20-P1-04`) leaves the
+previous file intact, removes the temp file and marks `stoic-host-profile.service` FAILED
+(`journalctl -u stoic-host-profile.service`). Manual refresh: `sudo bash deploy/host-profile-refresh.sh`.
 
 **Host suitability** — the installer, `update.sh` and `doctor.sh` detect a shared web host
 (cPanel/WHM, Plesk, DirectAdmin, running httpd/exim/dovecot) and record `STOIC_HOST_PROFILE` in

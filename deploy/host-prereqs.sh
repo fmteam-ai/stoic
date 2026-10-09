@@ -123,20 +123,35 @@ else
   fi
 fi
 
-# ---------------------------------------------------------------- (d) daily signed host-profile refresh (A19-P1-04)
+# ---------------------------------------------------------------- (d) signed host-profile refresh timer (A19-P1-04 / A20-P1-03 / M117-1)
+# Every 6 h (+ ≤10 min jitter) against a 24 h maximum age: the retry budget covers systemd's 1-min accuracy, the run
+# time and up to three missed runs before the profile reads as expired. (Persistent= has no effect on
+# OnUnitActiveSec timers, so it is not set.) Evaluated in --check mode too, so update.sh repairs it on every update.
 TIMER_DIR="${STOIC_SYSTEMD_DIR:-/etc/systemd/system}"
-if [ "${CHECK}" = 1 ] || [ "${STOIC_SKIP_MOUNT_FIX:-0}" = 1 ] || ! command -v systemctl >/dev/null 2>&1; then
-  note PASS "host-profile timer: $( [ "${CHECK}" = 1 ] && echo 'not evaluated in --check mode' || echo 'skipped (no systemd / test mode)')"
+REPO=$(pwd)
+svc=$(printf '[Unit]\nDescription=STOIC signed host-profile refresh\n[Service]\nType=oneshot\nWorkingDirectory=%s\nExecStart=/usr/bin/env bash %s/deploy/host-profile-refresh.sh\n' "${REPO}" "${REPO}")
+tmr=$(printf '[Unit]\nDescription=STOIC host-profile refresh (every 6 h, 24 h max age)\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=6h\nRandomizedDelaySec=10min\n[Install]\nWantedBy=timers.target\n')
+timer_units_current() { [ "$(cat "${TIMER_DIR}/stoic-host-profile.service" 2>/dev/null)" = "${svc}" ] && [ "$(cat "${TIMER_DIR}/stoic-host-profile.timer" 2>/dev/null)" = "${tmr}" ]; }
+timer_active() { systemctl is-active --quiet stoic-host-profile.timer 2>/dev/null; }
+if [ "${STOIC_SKIP_HOST_TIMER:-0}" = 1 ] || ! command -v systemctl >/dev/null 2>&1; then
+  note PASS "host-profile timer: skipped ($( command -v systemctl >/dev/null 2>&1 && echo 'test mode' || echo 'no systemd'))"
+elif [ "${CHECK}" = 1 ]; then
+  if timer_units_current && timer_active; then note PASS "stoic-host-profile.timer installed and active (6 h refresh)"
+  else note FIX "stoic-host-profile.timer $( timer_units_current && echo inactive || echo 'missing/outdated') → would install + enable --now"; HARD_FAIL=1; fi
 else
-  REPO=$(pwd); mkdir -p deploy/state
-  svc=$(printf '[Unit]\nDescription=STOIC signed host-profile refresh\n[Service]\nType=oneshot\nWorkingDirectory=%s\nExecStart=/usr/bin/env bash %s/deploy/host-profile-refresh.sh\n' "${REPO}" "${REPO}")
-  tmr=$(printf '[Unit]\nDescription=STOIC host-profile refresh (daily)\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=24h\nPersistent=true\n[Install]\nWantedBy=timers.target\n')
+  mkdir -p deploy/state
   changed=0
-  [ "$(cat "${TIMER_DIR}/stoic-host-profile.service" 2>/dev/null)" = "${svc}" ] || { printf '%s\n' "${svc}" > "${TIMER_DIR}/stoic-host-profile.service"; changed=1; }
-  [ "$(cat "${TIMER_DIR}/stoic-host-profile.timer" 2>/dev/null)" = "${tmr}" ] || { printf '%s\n' "${tmr}" > "${TIMER_DIR}/stoic-host-profile.timer"; changed=1; }
-  if [ "${changed}" = 1 ]; then systemctl daemon-reload; systemctl enable --now stoic-host-profile.timer >/dev/null 2>&1 || true; log "installed stoic-host-profile.timer (daily)"; note FIX "daily signed host-profile refresh timer installed"
-  else note PASS "stoic-host-profile.timer present"; fi
-  bash deploy/host-profile-refresh.sh >/dev/null 2>&1 && note PASS "host profile refreshed now (deploy/state/host_profile.json)" || note WARN "host-profile-refresh.sh failed (non-fatal) — readiness reports the profile unverified until it runs"
+  if ! timer_units_current; then
+    printf '%s\n' "${svc}" > "${TIMER_DIR}/stoic-host-profile.service"; printf '%s\n' "${tmr}" > "${TIMER_DIR}/stoic-host-profile.timer"; changed=1
+    systemctl daemon-reload
+  fi
+  if [ "${changed}" = 1 ] || ! timer_active; then
+    if systemctl enable --now stoic-host-profile.timer >/dev/null 2>&1 && timer_active; then
+      log "installed/enabled stoic-host-profile.timer (every 6 h)"; note FIX "signed host-profile refresh timer installed + active (every 6 h)"
+    else note FAIL "stoic-host-profile.timer could not be enabled (systemctl enable --now failed) — the host profile will expire 24 h after this update"; HARD_FAIL=1; fi
+  else note PASS "stoic-host-profile.timer installed and active (6 h refresh)"; fi
+  if bash deploy/host-profile-refresh.sh >/dev/null 2>&1; then note PASS "host profile refreshed now (deploy/state/host_profile.json)"
+  else note WARN "host-profile-refresh.sh failed (non-fatal) — readiness reports the profile unverified until it runs"; fi
 fi
 
 # ---------------------------------------------------------------- summary

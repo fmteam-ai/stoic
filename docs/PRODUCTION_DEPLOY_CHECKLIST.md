@@ -231,6 +231,7 @@ pinned, `EA_BINARY_PROOF_MISSING` until the terminal reports `ea_binary_sha256`
 on its heartbeat, and `EA_BINARY_HASH_MISMATCH` when they differ.
 
 ## Not boot-blocking, but needed for the operational tooling
-`STOIC_INSTALLATION_ID`, `RECONCILE_EXPECT=6/3/3`, `RECONCILE_APPROVED_POLICY`,
+`STOIC_INSTALLATION_ID`, `RECONCILE_EXPECT=approved` (counts + account ids from the signed policy
+approved in Admin → Inventory — A20-P0-02; an explicit `N/N/N` must equal `RECONCILE_APPROVED_POLICY`),
 `RECONCILE_SCOPE_USER_ID` are read by `ops/production_reconcile.py` and the
 policy-migration flow — set them once the API is up.

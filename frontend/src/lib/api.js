@@ -63,7 +63,10 @@ function makeResponseInterceptor(client) {
         // re-auth verdict (wrong password / TOTP on an admin write) is NOT an
         // expired session: never refresh-and-replay it (N13).
         const reauthFailed = error.response?.data?.detail?.code === "reauth_failed";
-        if (status === 401 && !cfg._retried && !isAuthPath && !reauthFailed) {
+        // A20-P2-02: an anonymous visit (no session-hint cookie, no csrf cookie from an earlier session)
+        // must not spend a second round trip on /auth/refresh — redirect to /login after ONE request.
+        const anonymousMe = url.includes("/auth/me") && !readCookie("stoic_session") && !readCookie("csrf_token");
+        if (status === 401 && !cfg._retried && !isAuthPath && !reauthFailed && !anonymousMe) {
             cfg._retried = true;
             try {
                 await silentRefresh();

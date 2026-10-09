@@ -2,7 +2,8 @@
 SIGNS the actual account/bot/EA truth so the release decision can attach it.
 
   docker compose exec -T backend python ops/production_reconcile.py \
-      --expect 6/3/3 --scope-user <tenant user id> [--expect-ids a,b,c]
+      --expect approved --scope-user <tenant user id>        # counts + ids from the SIGNED policy (A20-P0-02)
+      --expect 2/2/2 --scope-user <tenant user id> [--expect-ids a,b]   # explicit (must equal the approved policy)
 
 Hard requirements (enforced when APP_ENV=production or --strict):
   * explicit tenant scope (--scope-user / RECONCILE_SCOPE_USER_ID) — never
@@ -12,7 +13,9 @@ Hard requirements (enforced when APP_ENV=production or --strict):
   * GIT_SHA must be known (never "unknown");
   * a DEDICATED signing key (LEDGER_ANCHOR_KEY) — no JWT_SECRET fallback,
     unsigned evidence exits non-zero;
-  * --expect N/N/N validated by format; --expect-ids requires the EXACT
+  * --expect approved reads platform_state.inventory_expectation (two-admin approved, signed
+    policy; REFUSED when missing/unapproved/expired) and pins the exact account id set;
+    --expect N/N/N validated by format; --expect-ids requires the EXACT
     identity set (enabled == bots == fresh EA == expected ids).
 Never writes to the database. Exit 0 = every gate PASSED.
 """
@@ -37,6 +40,32 @@ resolve_file_secrets()
 
 FRESH_S = 600
 EXPECT_RE = re.compile(r"^\d{1,4}/\d{1,4}/\d{1,4}$")
+EXPECT_APPROVED = "approved"   # A20-P0-02 — counts/ids come from the SIGNED policy approved in Admin → Inventory, never a fixed 6/3/3
+
+
+async def approved_policy_expectation(db, now=None) -> dict:
+    """The approved (two-admin, signed) inventory expectation → {accounts, enabled, bots, account_ids, policy_version,
+    demo_only, expires_at, problems[]}. problems non-empty ⇒ the reconciliation must REFUSE (no approved truth)."""
+    from inventory_projection import policy_expiry
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"}) or {}
+    problems = []
+    if not exp:
+        problems.append("no approved inventory expectation — propose + approve the signed policy in Admin → Inventory first")
+    elif not exp.get("approved_by"):
+        problems.append("inventory expectation was set directly (not approved) — production requires the two-admin approval")
+    pe = policy_expiry(exp, now) if exp else {"expired": False, "expires_at": None}
+    if exp and pe["expired"]:
+        problems.append(f"approved policy {exp.get('policy_version')} expired {str(pe['expires_at'])[:10]} — approve a new signed policy")
+    try:
+        counts = {k: int(exp.get(k)) for k in ("accounts", "enabled", "bots")}
+    except (TypeError, ValueError):
+        counts = {"accounts": None, "enabled": None, "bots": None}
+        if exp:
+            problems.append("approved expectation has invalid counts")
+    return {**counts, "account_ids": sorted(str(x) for x in (exp.get("account_ids") or [])),
+            "policy_version": exp.get("policy_version"), "demo_only": bool(exp.get("demo_only")),
+            "expires_at": pe.get("expires_at"), "approved_by": exp.get("approved_by"), "set_at": exp.get("set_at"),
+            "problems": problems}
 
 
 def _age(hb, now):
@@ -50,13 +79,13 @@ def preflight(args, env: dict) -> list:
     """Pure gate evaluation (unit-testable): returns the list of violations."""
     strict = args.strict or env.get("APP_ENV", "").lower() == "production"
     problems = []
-    if args.expect and not EXPECT_RE.match(args.expect):
-        problems.append(f"--expect '{args.expect}' malformed (want accounts/enabled/bots e.g. 6/3/3)")
+    if args.expect and args.expect != EXPECT_APPROVED and not EXPECT_RE.match(args.expect):
+        problems.append(f"--expect '{args.expect}' malformed (want accounts/enabled/bots e.g. 2/2/2, or 'approved' = the signed policy)")
     if strict:
         if not args.scope_user:
             problems.append("production scope required: --scope-user <tenant user id> (or RECONCILE_SCOPE_USER_ID)")
         if not args.expect:
-            problems.append("production requires --expect N/N/N (the approved topology policy)")
+            problems.append("production requires --expect approved (counts from the signed policy) or N/N/N")
         if (env.get("GIT_SHA") or "unknown") == "unknown":
             problems.append("GIT_SHA unknown — evidence must be bound to the exact release build")
         if not env.get("LEDGER_ANCHOR_KEY"):
@@ -66,7 +95,7 @@ def preflight(args, env: dict) -> list:
 
 async def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--expect", help="accounts/enabled/bots e.g. 6/3/3")
+    ap.add_argument("--expect", help="accounts/enabled/bots e.g. 2/2/2, or 'approved' (the signed policy approved in Admin → Inventory)")
     ap.add_argument("--expect-ids", help="comma-separated EXACT set of enabled account ids")
     ap.add_argument("--scope-user", default=os.environ.get("RECONCILE_SCOPE_USER_ID"),
                     help="tenant/portfolio owner user id (mandatory in production)")
@@ -86,6 +115,18 @@ async def main() -> int:
     from synthetic_data import is_synthetic_account
     db = get_db()
     now = datetime.now(timezone.utc)
+    policy = None
+    if a.expect == EXPECT_APPROVED:
+        # A20-P0-02 (test #1) — the expected topology IS the approved signed policy: counts AND the exact id set
+        policy = await approved_policy_expectation(db, now)
+        if policy["problems"]:
+            print(json.dumps({"report": "production-reconciliation", "result": "REFUSED", "problems": policy["problems"],
+                              "policy": {k: policy.get(k) for k in ("policy_version", "demo_only", "expires_at")}}, indent=1, default=str))
+            print("RECONCILE REFUSED: " + " | ".join(policy["problems"]), file=sys.stderr)
+            return 2
+        a.expect = f"{policy['accounts']}/{policy['enabled']}/{policy['bots']}"
+        if policy["account_ids"] and not a.expect_ids:
+            a.expect_ids = ",".join(policy["account_ids"])
     q = {"status": {"$ne": "deleted"}}
     if a.scope_user:
         q["user_id"] = a.scope_user
@@ -125,6 +166,8 @@ async def main() -> int:
     body = {"report": "production-reconciliation", "read_only": True, "at": now.isoformat(),
             "build": os.environ.get("GIT_SHA") or "unknown", "strict": strict,
             "scope": {"user_id": a.scope_user} if a.scope_user else "all non-deleted accounts (NOT production-grade)",
+            "expected_source": "approved_signed_policy" if policy else "cli",
+            "policy": ({k: policy.get(k) for k in ("policy_version", "demo_only", "expires_at", "approved_by", "set_at")} if policy else None),
             "excluded": excluded, "accounts": rows, "totals": totals}
     ok, fails = True, []
     if a.expect:
@@ -134,7 +177,11 @@ async def main() -> int:
                   "no_bots_on_disabled_accounts": not totals["bots_on_disabled_accounts"],
                   "all_flags_boolean": not totals["non_boolean_flags"], "sets_identical": totals["sets_identical"]}
         if strict:
-            checks["enabled_environments_all_live"] = totals["environments_enabled"] in ([], ["LIVE"])
+            if policy and policy["demo_only"]:
+                # a signed DEMO-only policy: every enabled account must be demo/paper — a real-money account is a violation
+                checks["enabled_environments_all_demo"] = all(e in ("DEMO", "PAPER") for e in totals["environments_enabled"])
+            else:
+                checks["enabled_environments_all_live"] = totals["environments_enabled"] in ([], ["LIVE"])
         body["expected"], body["checks"] = a.expect, checks
         fails = [k for k, v in checks.items() if not v]
         ok = not fails

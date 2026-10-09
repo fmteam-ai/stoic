@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, useCallback, useMemo } 
 import api, { formatApiError } from "@/lib/api";
 
 const AuthContext = createContext(null);
+export const AUTH_CHECK_TIMEOUT_MS = 8000;
 
 export function AuthProvider({ children }) {
     // null = checking, false = logged out (explicit 401/403), object = user
@@ -12,8 +13,14 @@ export function AuthProvider({ children }) {
     const [outage, setOutage] = useState(null);
 
     const refresh = useCallback(async () => {
+        // A20-P2-02 / M117-3: the auth check has an 8 s deadline — a hung backend shows the outage
+        // screen (with retry) instead of INITIALIZING TERMINAL forever.
+        let timer;
+        const deadline = new Promise((_, reject) => {
+            timer = setTimeout(() => reject(Object.assign(new Error("auth check timed out after 8 s"), { code: "AUTH_TIMEOUT" })), AUTH_CHECK_TIMEOUT_MS);
+        });
         try {
-            const { data } = await api.get("/auth/me");
+            const { data } = await Promise.race([api.get("/auth/me", { timeout: AUTH_CHECK_TIMEOUT_MS }), deadline]);
             setOutage(null);
             setUser(data);
             return data;
@@ -25,16 +32,20 @@ export function AuthProvider({ children }) {
                 return null;
             }
             const headers = err?.response?.headers || {};
+            const timedOut = err?.code === "AUTH_TIMEOUT" || err?.code === "ECONNABORTED";
             setOutage((prev) => ({
                 status: status || 0,
                 correlationId: headers["x-request-id"] || headers["x-trace-id"]
                     || `client_${Math.random().toString(16).slice(2, 14)}`,
-                message: status ? `backend responded ${status}` : "backend unreachable (network error / timeout)",
+                message: status ? `backend responded ${status}`
+                    : (timedOut ? "backend did not answer the sign-in check within 8 s" : "backend unreachable (network error / timeout)"),
                 at: new Date().toISOString(),
                 attempt: (prev?.attempt || 0) + 1,
             }));
             setUser(null);
             return null;
+        } finally {
+            clearTimeout(timer);
         }
     }, []);
 
