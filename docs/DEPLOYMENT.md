@@ -419,6 +419,8 @@ Limit: root on the host can read the anchor key and re-sign — the signature st
 and config drift, not a determined administrator. Signing failure is non-fatal (profile recorded
 unsigned, warning printed).
 
+**overlay2 unbindable (M117-7)** — on cPanel hosts, VirtFS `rbind`s `/var/lib` into every jailshell; a bind copy of a live container rootfs makes `docker rm` fail with EBUSY on recreate even when the Docker root is already `slave`. `host-prereqs.sh` therefore also makes `/var/lib/docker/overlay2` **unbindable** (one dockerd restart, applied at ExecStartPre); `doctor.sh` / `host-prereqs.sh --check` report `want unbindable` until it is. Manual: `systemctl stop docker && /usr/local/sbin/stoic-docker-root-slave /var/lib/docker && systemctl start docker`.
+
 **Refresh timer (A19-P1-04 / A20-P1-03 / M117-1)** — `host-prereqs.sh` installs `stoic-host-profile.timer`, which
 runs `deploy/host-profile-refresh.sh` **every 6 h (+ ≤10 min jitter)** and writes the signed
 `deploy/state/host_profile.json`; the containers read it on every readiness check through the read-only

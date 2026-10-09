@@ -26,6 +26,12 @@ host_prereqs_missing() {   # 0 = something missing (prints what), 1 = all presen
     droot=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
     prop=$(findmnt -no PROPAGATION "${droot}" 2>/dev/null || echo "?")
     case "${prop}" in *slave*) ;; *) echo "   docker root ${droot} propagation '${prop}' (want slave)"; missing=1 ;; esac
+    # M117-7 — overlay2 must be UNBINDABLE: a cPanel VirtFS `rbind /var/lib` copies live overlay mounts (→ rm EBUSY)
+    odir="${STOIC_OVERLAY_DIR:-${droot}/overlay2}"
+    if [ -d "${odir}" ]; then
+      oprop=$(findmnt -no PROPAGATION "${odir}" 2>/dev/null || echo "?")
+      case "${oprop}" in *unbindable*) ;; *) echo "   docker overlay2 ${odir} propagation '${oprop}' (want unbindable — VirtFS rbind copies)"; missing=1 ;; esac
+    fi
   fi
   # M117-1 — the signed host-profile refresh timer is a prerequisite too: without it the profile expires 24 h after
   # every update (live: blocks trading daily). Checked on EVERY update so hosts that already have (a)+(b) get it.
