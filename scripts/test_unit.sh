@@ -6,7 +6,7 @@
 # Validates the interpreter + every dependency the unit lane needs
 # (including bson/pymongo, pulled in transitively by backend modules even
 # though unit tests never touch a database), installs anything missing from
-# requirements.txt, asserts the collected count matches docs/TEST_MANIFEST.md,
+# requirements.txt, verifies docs/TEST_MANIFEST.md is current (same check as CI),
 # then runs the exact unit lane.
 set -euo pipefail
 cd "$(dirname "$0")/../backend"
@@ -35,9 +35,13 @@ if [ -n "${MISSING// /}" ]; then
     $PY -m pip install -q -r requirements.txt
 fi
 
-# Manifest truth check — the lane must collect EXACTLY the count published
-# in docs/TEST_MANIFEST.md (CI regenerates that file and fails on drift).
-EXPECTED=$(grep -oP '^\| unit \|.*\| \K[0-9]+(?= \|$)' ../docs/TEST_MANIFEST.md | head -1)
+# Manifest truth check (M114-5) — the SAME check CI runs: docs/TEST_MANIFEST.md counts declared
+# `def test_` functions per file, while pytest collects parametrised cases, so the two totals legitimately
+# differ (996 declared vs 1160 collected). Never compare them — regenerate-and-diff instead.
+$PY ../scripts/generate_test_manifest.py --check || {
+    echo "FATAL: docs/TEST_MANIFEST.md drifted from the tree — regenerate: python scripts/generate_test_manifest.py" >&2
+    exit 2
+}
 COLLECTED=$($PY -m pytest tests/unit --collect-only -q 2>/dev/null \
             | grep -oP '^[0-9]+(?= tests? collected)' | tail -1)
 if [ -z "${COLLECTED:-}" ]; then
@@ -45,12 +49,7 @@ if [ -z "${COLLECTED:-}" ]; then
     echo "       $PY -m pytest tests/unit --collect-only -q   for details" >&2
     exit 2
 fi
-if [ -n "${EXPECTED:-}" ] && [ "$COLLECTED" != "$EXPECTED" ]; then
-    echo "FATAL: collected ${COLLECTED} unit tests but docs/TEST_MANIFEST.md" >&2
-    echo "       declares ${EXPECTED}. Regenerate the manifest:" >&2
-    echo "       python scripts/generate_test_manifest.py" >&2
-    exit 2
-fi
+EXPECTED=$(grep -oP '^\| unit \|.*\| \K[0-9]+(?= \|$)' ../docs/TEST_MANIFEST.md | head -1)
 
-echo "== unit lane: ${COLLECTED} tests (manifest: ${EXPECTED:-n/a}) =="
+echo "== unit lane: ${COLLECTED} collected cases (${EXPECTED:-n/a} declared test functions in docs/TEST_MANIFEST.md) =="
 exec $PY -m pytest tests/unit -q "$@"

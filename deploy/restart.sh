@@ -41,13 +41,18 @@ preflight_host || exit 1
 clean_leftovers || { echo "!! leftovers could not be removed — see above"; exit 1; }
 if [ "${ENV_CHANGED}" = 1 ]; then ensure_release_public_key_pin; record_host_profile; fi
 
+set +e
 if [ "${#SERVICES[@]}" -gt 0 ]; then
   echo "-- recreating ${#SERVICES[@]} service(s) with the current backend/.env: ${SERVICES[*]}"
-  compose_up_guarded --force-recreate --no-deps "${SERVICES[@]}" || exit 1
+  compose_up_guarded --force-recreate --no-deps "${SERVICES[@]}"; UP_RC=$?
 else
   echo "-- recreating the whole stack"
-  compose_up_guarded --force-recreate || exit 1
+  compose_up_guarded --force-recreate; UP_RC=$?
 fi
+set -e
+[ "${UP_RC}" = 2 ] && { pause_trading_after_jam "restart"; exit 1; }   # M114-2
+[ "${UP_RC}" = 0 ] || exit 1
+clear_deploy_jam_marker
 
 echo "-- verifying API health"
 wait_api_health 30 || { echo "!! API not healthy after the restart — docker compose logs backend --tail 100"; exit 1; }

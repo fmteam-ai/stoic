@@ -159,11 +159,14 @@ provision_images || rollback
 echo "-- restarting stack (one recreate; overlay EBUSY → clean once, retry once, else stop with the reboot recipe)"
 set +e; compose_up_guarded; UP_RC=$?; set -e
 if [ "${UP_RC}" = 2 ]; then
-  echo "!! stack left as-is for the reboot (no auto-rollback: a rollback would hit the same EBUSY). After the reboot: deploy/update.sh ${REF}"
+  # M114-2 — never leave worker-trading running while protection/reconciliation may be down
+  pause_trading_after_jam "${REF}"
+  echo "!! stack left as-is for the reboot (no auto-rollback: a rollback would hit the same EBUSY). After the reboot: deploy/update.sh ${REF} (clears TRADING PAUSED)"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-jammed-ebusy ref=${REF} reboot-required" >> deploy/releases.log
   exit 1
 fi
 [ "${UP_RC}" = 0 ] || rollback
+clear_deploy_jam_marker
 
 echo "-- verifying API health"
 wait_api_health 30 || rollback

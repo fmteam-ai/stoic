@@ -9,6 +9,8 @@ const CHECK_LABELS = {
     outbox: "OUTBOX BACKLOG",
     schema: "SCHEMA COMPAT",
     unique_ticket_index: "TICKET INDEX",
+    host_suitability: "HOST SUITABILITY",
+    deploy_jam: "TRADING POSTURE",
 };
 
 function Pill({ ok, label, detail }) {
@@ -59,6 +61,12 @@ export const ReadinessCard = () => {
         if (k === "outbox") return `${checks[k]?.pending ?? 0} pending`;
         if (k === "schema") return `v${checks[k]?.code_version ?? "?"}`;
         if (k === "unique_ticket_index") return checks[k]?.ok ? "" : checks[k]?.stale ? "STALE" : checks[k]?.present === false ? "NOT BUILT" : "UNVERIFIED";
+        if (k === "host_suitability") {
+            const h = checks[k] || {};
+            const base = h.shared_web_host ? "SHARED HOST" : h.profile === "dedicated" ? "DEDICATED" : "UNKNOWN";
+            return `${base}${h.verified === false ? " · UNVERIFIED" : ""}${h.detected_at ? ` · ${new Date(h.detected_at).toLocaleDateString()}` : ""}`;
+        }
+        if (k === "deploy_jam") return checks[k]?.trading_paused ? "TRADING PAUSED" : "MANAGED";
         return "";
     };
 
@@ -79,8 +87,8 @@ export const ReadinessCard = () => {
                     <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
                 </button>
             </div>
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mt-3">
-                {Object.keys(CHECK_LABELS).map(k => (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 mt-3">
+                {Object.keys(CHECK_LABELS).filter(k => k !== "deploy_jam" || checks.deploy_jam).map(k => (
                     <Pill key={k} ok={!!checks[k]?.ok} label={CHECK_LABELS[k]} detail={detailFor(k)} />
                 ))}
             </div>
@@ -103,7 +111,14 @@ export const ReadinessCard = () => {
                     </div>
                     <div className="font-mono text-xs text-[#E4E4E7] mt-0.5">
                         {checks.host_suitability.detail}{checks.host_suitability.markers ? ` · detected: ${checks.host_suitability.markers}` : ""}
+                        {checks.host_suitability.detected_at ? ` · recorded ${new Date(checks.host_suitability.detected_at).toLocaleString()}${checks.host_suitability.verified ? " (signed)" : " (UNVERIFIED)"}` : ""}
                     </div>
+                </div>
+            )}
+            {checks.deploy_jam && checks.deploy_jam.trading_paused && (
+                <div className="border border-[#FF3B30]/40 bg-[#FF3B30]/5 px-3 py-2 mt-3" data-testid="readiness-trading-paused">
+                    <div className="font-mono text-[9px] tracking-widest text-[#FF3B30]">TRADING PAUSED · DEPLOY JAM</div>
+                    <div className="font-mono text-xs text-[#E4E4E7] mt-0.5">{checks.deploy_jam.detail}{checks.deploy_jam.since ? ` · since ${new Date(checks.deploy_jam.since).toLocaleString()}` : ""}</div>
                 </div>
             )}
             {!d.ready && (
