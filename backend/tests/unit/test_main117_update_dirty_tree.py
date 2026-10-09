@@ -31,14 +31,19 @@ def test_update_sh_saves_patch_and_discards_local_edits_before_checkout(tmp_path
     (repo / "deploy" / "preflight.sh").write_text("echo v2\n"); _git(repo, "commit", "-qam", "v2"); _git(repo, "tag", "v2")
     _git(repo, "checkout", "-q", "--detach", "v1")
     (repo / "deploy" / "preflight.sh").write_text("echo HOTPATCH\n")          # operator hot-patch on the host
+    (repo / "deploy" / "host-prereqs.sh").write_text("echo ADDED\n")
+    _git(repo, "add", "deploy")                                                 # … and STAGED (the real ded5552 case: `M `/`A `)
+    (repo / "README").write_text("unstaged edit\n")
     (repo / "untracked.txt").write_text("keep me\n")                            # untracked files are never touched
     script = "set -euo pipefail\nREF=v2\n" + _extract_block() + '  git checkout --detach "${REF}"\n'
     r = subprocess.run(["bash", "-c", script], cwd=repo, capture_output=True, text=True)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "local modifications to tracked files saved to deploy/releases/local-changes-" in r.stdout and "deploy/preflight.sh" in r.stdout
     assert (repo / "deploy" / "preflight.sh").read_text() == "echo v2\n" and _git(repo, "rev-parse", "HEAD") == _git(repo, "rev-parse", "v2")
+    assert not (repo / "deploy" / "host-prereqs.sh").exists() and (repo / "README").read_text() == "r\n"
     patches = list((repo / "deploy" / "releases").glob("local-changes-*.patch"))
-    assert len(patches) == 1 and "+echo HOTPATCH" in patches[0].read_text()
+    txt = patches[0].read_text()
+    assert len(patches) == 1 and "+echo HOTPATCH" in txt and "+echo ADDED" in txt and "+unstaged edit" in txt
     assert (repo / "untracked.txt").read_text() == "keep me\n"
 
 
