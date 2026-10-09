@@ -68,7 +68,24 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "deploying ${TAG} @ ${SHA}"
 
+      - name: Zero-touch publish configured? (opt-in — skip cleanly when the DEPLOY_* secrets are absent)
+        id: cfg
+        env:
+          HAS_HOST: ${{ secrets.DEPLOY_HOST != '' }}
+          HAS_USER: ${{ secrets.DEPLOY_USER != '' }}
+          HAS_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+          HAS_PATH: ${{ secrets.DEPLOY_PATH != '' }}
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          if [ "${HAS_HOST}${HAS_USER}${HAS_KEY}${HAS_PATH}" = "truetruetruetrue" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::zero-touch publish not configured (DEPLOY_HOST/DEPLOY_USER/DEPLOY_SSH_KEY/DEPLOY_PATH secrets missing) — publish manually: deploy/update.sh ${TAG}"
+          fi
+
       - name: Prepare SSH
+        if: steps.cfg.outputs.enabled == 'true'
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
@@ -76,13 +93,14 @@ jobs:
           ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Publish on server (deploy/update.sh)
+        if: steps.cfg.outputs.enabled == 'true'
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
               "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
               "cd '${{ secrets.DEPLOY_PATH }}' && git fetch --all --tags --prune && deploy/update.sh ${{ steps.ref.outputs.sha }}"
 
       - name: Report
-        if: always()
+        if: always() && steps.cfg.outputs.enabled == 'true'
         run: |
           ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
               "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
