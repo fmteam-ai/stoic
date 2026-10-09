@@ -90,3 +90,15 @@ def rc_lock_check(production: bool) -> dict:
     if not ok:
         out["note"] = "rc_lock is not the CI-bound lock for the running build (commit/digest/authoritative mismatch)"
     return out
+
+
+def public_release_identity() -> dict:
+    """P2-03 — what the public status page shows: the signed release id (rc_lock commit when the lock is the
+    CI-authoritative one for the running build) and the short running commit. Never a hand-typed version."""
+    chk = rc_lock_check(production=False)
+    running = chk.get("running_build_sha")
+    signed = bool(chk.get("present")) and bool(chk.get("authoritative")) and bool(chk.get("sha_matches_running"))
+    return {"short_commit": running[:12] if running else None,
+            "release_id": (chk.get("commit") or "")[:12] if signed else None,
+            "signed": signed, "signer_key_id": None,
+            "note": None if signed else ("developer snapshot — not a signed release" if chk.get("present") else "no rc_lock on this host")}

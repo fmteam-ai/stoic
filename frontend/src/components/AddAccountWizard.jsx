@@ -27,19 +27,27 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
     const [busy, setBusy] = useState(false);
     const [err, setErr] = useState("");
     const [created, setCreated] = useState(null);
-    const [f, setF] = useState({ mode: "live", environment: "demo", consent: false, broker: "", server: "", account_number: "", label: "", account_type: "microcent", base_currency: "USD", vps: pairedHosts[0] ? pairedHosts[0] : "new" });
-    const [demoPolicy, setDemoPolicy] = useState(false);
+    const freshForm = () => ({ mode: "live", environment: "demo", consent: false, broker: "", server: "", account_number: "", label: "", account_type: "microcent", base_currency: "USD", vps: pairedHosts[0] ? pairedHosts[0] : "new" });
+    const [f, setF] = useState(freshForm);
+    // P2-02 — the policy is loading | known | unknown; real money is disabled unless it is KNOWN to allow it
+    const [policy, setPolicy] = useState({ state: "loading", demoOnly: false });
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
     const vpsOffer = useVpsOffer();
     useEffect(() => {
         if (!open) return;
-        setStep(0); setCreated(null); setErr("");
-        api.get("/accounts/broker-presets").then(r => { setPresets(r.data.presets || []); setDemoPolicy(!!r.data.demo_only_policy); }).catch(() => setPresets([]));
+        setStep(0); setCreated(null); setErr(""); setF(freshForm()); setPolicy({ state: "loading", demoOnly: false });   // P2-02 — reset on EVERY open
+        let cancelled = false;
+        api.get("/accounts/broker-presets")
+            .then(r => { if (cancelled) return; setPresets(r.data.presets || []); setPolicy({ state: "known", demoOnly: !!r.data.demo_only_policy }); })
+            .catch(() => { if (cancelled) return; setPresets([]); setPolicy({ state: "unknown", demoOnly: false }); });
+        return () => { cancelled = true; };
     }, [open]);
     const preset = useMemo(() => presets.find(p => p.broker === f.broker), [presets, f.broker]);
     const servers = preset?.servers || [];
     const brokerName = f.broker === "__other" ? (f.broker_other || "") : f.broker;
-    const realBlocked = f.mode === "live" && f.environment === "real" && demoPolicy;
+    const demoPolicy = policy.state === "known" && policy.demoOnly;
+    const policyUnknown = policy.state !== "known";
+    const realBlocked = f.mode === "live" && f.environment === "real" && (demoPolicy || policyUnknown);
     const canNext = step === 0
         ? (f.mode === "paper" ? !!f.account_number : !!(brokerName && f.server && f.account_number) && !realBlocked)
         : true;
@@ -105,12 +113,15 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                 <div className="flex gap-2" data-testid="wizard-environment">
                                     {[["demo", "DEMO ACCOUNT"], ["real", "REAL MONEY"]].map(([id, lbl]) => (
                                         <button key={id} type="button" onClick={() => set("environment", id)} data-testid={`wizard-env-${id}`}
-                                            className={`flex-1 py-1.5 text-xs font-mono tracking-widest border ${f.environment === id ? (id === "real" ? "border-[#FF3B30] bg-[#FF3B30]/10 text-[#FF3B30]" : "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]") : "border-[#1F1F1F] text-[#A1A1AA]"}`}>
+                                            disabled={id === "real" && policyUnknown}
+                                            className={`flex-1 py-1.5 text-xs font-mono tracking-widest border ${id === "real" && policyUnknown ? "opacity-40 cursor-not-allowed " : ""}${f.environment === id ? (id === "real" ? "border-[#FF3B30] bg-[#FF3B30]/10 text-[#FF3B30]" : "border-[#00FF41] bg-[#00FF41]/10 text-[#00FF41]") : "border-[#1F1F1F] text-[#A1A1AA]"}`}>
                                             {lbl}
                                         </button>
                                     ))}
                                 </div>
-                                {realBlocked && <p className="text-[11px] text-[#FF3B30] mt-1" data-testid="wizard-real-blocked">A signed DEMO-only policy is in force — real-money accounts cannot be added until the admin replaces it.</p>}
+                                {policy.state === "loading" && <p className="text-[11px] text-[#A1A1AA] mt-1" data-testid="wizard-policy-loading">Checking the signed account policy…</p>}
+                                {policy.state === "unknown" && <p className="text-[11px] text-[#FFB020] mt-1" data-testid="wizard-policy-unavailable">Policy unavailable — the signed account policy could not be loaded, so real-money accounts are blocked. Close and reopen to retry.</p>}
+                                {realBlocked && demoPolicy && <p className="text-[11px] text-[#FF3B30] mt-1" data-testid="wizard-real-blocked">A signed DEMO-only policy is in force — real-money accounts cannot be added until the admin replaces it.</p>}
                                 {!realBlocked && f.environment === "real" && <p className="text-[11px] text-[#FFD700] mt-1">Real money: the EA must attest the account as live; trading stays OFF until you enable it per bot.</p>}
                             </Field>
                         )}

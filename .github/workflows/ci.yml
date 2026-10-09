@@ -499,6 +499,8 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck -S warning deploy/host-prereqs.sh deploy/preflight.sh deploy/restart.sh deploy/docker-root-slave.sh deploy/docker-orphan-mounts.sh deploy/host-mount-fix.sh
           shellcheck -S error -x deploy/update.sh deploy/install.sh deploy/bootstrap.sh deploy/doctor.sh deploy/lib.sh
+      - name: python3 -c snippets in deploy/ parse under Python 3.6 syntax (M115-1 — AlmaLinux 8 system python)
+        run: python3 scripts/check_deploy_python_snippets.py
 
   container-build:
     runs-on: ubuntu-latest

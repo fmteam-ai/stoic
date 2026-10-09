@@ -196,10 +196,67 @@ def check_entry(ea: dict) -> list:
     return fails
 
 
-def check(_args):
+FINGERPRINT_FILE = os.path.join(ROOT, "release", "release_key.fingerprint")
+
+
+def committed_fingerprint(key_id: str) -> str:
+    """P0-01 / M114-3 — the repo (not the network) says which CI key is trusted: `<key_id> SHA256:<hex>`."""
+    try:
+        for line in open(FINGERPRINT_FILE, encoding="utf-8"):
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] == key_id:
+                return parts[1]
+    except OSError:
+        pass
+    return ""
+
+
+def fingerprint_b64(pub_b64: str) -> str:
+    import base64
+    import hashlib
+    raw = base64.b64decode(pub_b64.strip())
+    if len(raw) != 32:
+        raise ValueError("not a 32-byte Ed25519 public key")
+    return "SHA256:" + hashlib.sha256(raw).hexdigest()
+
+
+def resolve_public_key(args) -> str | None:
+    """P0-01 — `--check` is OFFLINE: the key comes from RELEASE_PUBLIC_KEY_B64, or from --public-key whose
+    fingerprint must equal the committed release/release_key.fingerprint; otherwise it fails with the exact fix.
+    Never the runtime/bundle key (release_signing refuses release purposes without the pin)."""
+    key_id = os.environ.get("RELEASE_SIGNER_KEY_ID") or "stoic-release-ed25519-v1"
+    expected = committed_fingerprint(key_id)
+    given = getattr(args, "public_key", None)
+    if given:
+        try:
+            fp = fingerprint_b64(given)
+        except (ValueError, Exception) as e:  # noqa: BLE001
+            raise SystemExit(f"FAIL: --public-key is not a base64 32-byte Ed25519 key ({e})")
+        if expected and fp != expected:
+            raise SystemExit(f"FAIL: --public-key fingerprint {fp} does not match the committed {expected} "
+                             f"for {key_id} ({os.path.relpath(FINGERPRINT_FILE, ROOT)})")
+        os.environ["RELEASE_PUBLIC_KEY_B64"] = given.strip()
+        return given.strip()
+    pinned = (os.environ.get("RELEASE_PUBLIC_KEY_B64") or "").strip()
+    if pinned:
+        if expected:
+            fp = fingerprint_b64(pinned)
+            if fp != expected:
+                raise SystemExit(f"FAIL: RELEASE_PUBLIC_KEY_B64 fingerprint {fp} does not match the committed {expected} for {key_id}")
+        return pinned
+    return None
+
+
+def check(args):
     if not os.path.exists(HASHES):
         raise SystemExit("FAIL: docs/RELEASE_HASHES.json missing — run "
                          "scripts/capture_release_hashes.py first")
+    from release_signing import _mode
+    if resolve_public_key(args) is None and _mode(os.environ) != "local":
+        exp = committed_fingerprint(os.environ.get("RELEASE_SIGNER_KEY_ID") or "stoic-release-ed25519-v1")
+        raise SystemExit("FAIL: no release public key for --check — set RELEASE_PUBLIC_KEY_B64 or pass "
+                         f"--public-key <b64> (its fingerprint must be {exp or 'the committed one'}; "
+                         "release/release_key.fingerprint). The runtime/bundle key is never used for ea-release.")
     ea = json.load(open(HASHES)).get("ea") or {}
     fails = check_entry(ea)
     if fails:
@@ -215,6 +272,7 @@ def check(_args):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--check", action="store_true")
+    ap.add_argument("--public-key", help="CI release public key (b64) for an offline --check; fingerprint must match release/release_key.fingerprint")
     ap.add_argument("--ex5")
     ap.add_argument("--compile-log")
     ap.add_argument("--metaeditor-version")

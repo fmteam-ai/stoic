@@ -292,7 +292,9 @@ async def release_readiness(request: Request):
                                 "TRADING PAUSED — worker-trading was stopped by deploy/update.sh after an overlay EBUSY jam; "
                                 "finish the reboot recipe, then a clean deploy/update.sh <ref> (or deploy/restart.sh --env-changed) clears this"}
     except Exception as e:  # noqa: BLE001
-        checks["deploy_jam"] = {"ok": True, "detail": f"deploy jam state unavailable: {e}"}
+        # P1-03 — a read error is UNKNOWN, never "managed": production fails closed, demo/paper advisory
+        checks["deploy_jam"] = {"ok": not is_production(), "unknown": True, "trading_paused": None,
+                                "detail": f"deploy jam state unreadable ({type(e).__name__}: {e}) — execution is CLOSE_ONLY until platform_state is readable"}
     # audit P1-5 — runtime release truth: the signed CI attestation that
     # deploy/lib.sh verified for THIS checkout (release/attestation.current.json)
     # is exposed here and compared with the running build SHA / image digest.

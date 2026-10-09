@@ -412,6 +412,13 @@ Readiness card) so no new exposure runs while protection/reconciliation may be d
 partition mounted at `/var/lib/docker` is never unmounted by `docker-root-slave.sh` — it is bound
 over itself and demoted in place (M114-1); check with `findmnt -no SOURCE,TARGET,PROPAGATION /var/lib/docker`.
 
+**Host profile signature (M114-7/M115-3)** — the preflight signs `STOIC_HOST_PROFILE` with a key
+*derived* from the ledger anchor key (HKDF-style label `stoic-host-profile-v1`), and the backend
+verifies it at read time; a hand-edited `dedicated` shows UNVERIFIED and blocks in production.
+Limit: root on the host can read the anchor key and re-sign — the signature stops accidental edits
+and config drift, not a determined administrator. Signing failure is non-fatal (profile recorded
+unsigned, warning printed).
+
 **Host suitability** — the installer, `update.sh` and `doctor.sh` detect a shared web host
 (cPanel/WHM, Plesk, DirectAdmin, running httpd/exim/dovecot) and record `STOIC_HOST_PROFILE` in
 `backend/.env`. In `APP_ENV=production` with a non-demo-only policy, release readiness shows a
