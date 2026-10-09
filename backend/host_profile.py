@@ -24,8 +24,13 @@ def derive_host_profile_key(ledger_anchor_key: str) -> bytes:
     return hmac.new(ledger_anchor_key.encode(), HOST_PROFILE_KDF_LABEL.encode(), hashlib.sha256).digest()
 
 
+def canonical_payload(profile: str, markers: str, detected_at: str) -> bytes:
+    """Audit #15 P3 — length-prefixed fields (`len:value;`) so a `|` inside a marker can never shift fields."""
+    return "".join(f"{len(v)}:{v};" for v in (profile, markers, detected_at)).encode()
+
+
 def _sig(key: str, profile: str, markers: str, detected_at: str) -> str:
-    return hmac.new(derive_host_profile_key(key), "|".join((profile, markers, detected_at)).encode(), hashlib.sha256).hexdigest()
+    return hmac.new(derive_host_profile_key(key), canonical_payload(profile, markers, detected_at), hashlib.sha256).hexdigest()
 
 
 def host_profile(env=None) -> dict:

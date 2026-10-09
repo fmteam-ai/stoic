@@ -69,8 +69,10 @@ def test_record_host_profile_runs_under_strict_shell_and_backend_verifies_it(wor
     p = hp.host_profile(hp_env)
     assert p["verified"] is True and p["detected_at"]
     # M115-3 — derived key, never the raw anchor key
-    raw = hmac.new(b"anchor-key-for-test", f"{env['STOIC_HOST_PROFILE']}|{env['STOIC_HOST_MARKERS'].strip(chr(34))}|{env['STOIC_HOST_DETECTED_AT']}".encode(), hashlib.sha256).hexdigest()
+    raw = hmac.new(b"anchor-key-for-test", hp.canonical_payload(env['STOIC_HOST_PROFILE'], env['STOIC_HOST_MARKERS'].strip(chr(34)), env['STOIC_HOST_DETECTED_AT']), hashlib.sha256).hexdigest()
     assert raw != env["STOIC_HOST_PROFILE_SIG"]
+    # audit #15 P3 — field shifting via "|" is impossible with length-prefixed canonicalisation
+    assert hp.canonical_payload("a|b", "c", "d") != hp.canonical_payload("a", "b|c", "d")
     assert hp.derive_host_profile_key("k") == hmac.new(b"k", b"stoic-host-profile-v1", hashlib.sha256).digest()
 
 
@@ -162,3 +164,34 @@ def test_public_status_release_identity():
     assert out["signed"] is False or out["release_id"]
     page = open(os.path.join(ROOT, "frontend", "src", "pages", "StatusPage.jsx")).read()
     assert "status-release-identity" in page
+
+
+def test_audit15_no_inline_untrusted_context_in_workflow_run_steps():
+    """SEC-001 — github.event.* / inputs.* must never be expanded inline inside a `run:` block."""
+    import glob
+    offenders = []
+    for wf in glob.glob(os.path.join(ROOT, ".github", "workflows", "*.yml")):
+        in_run = False
+        for i, line in enumerate(open(wf), 1):
+            if re.match(r"^\s*run:\s*\|?\s*$", line) or re.match(r"^\s*run:\s*\S", line):
+                in_run = True
+                if re.match(r"^\s*run:\s*\S", line) and not line.rstrip().endswith("|"):
+                    in_run = False
+                    if "${{ github.event" in line or "${{ inputs" in line:
+                        offenders.append(f"{os.path.basename(wf)}:{i}")
+                continue
+            if in_run and re.match(r"^\s*(-\s+name:|-\s+uses:|env:|with:|if:|id:|shell:|working-directory:)", line):
+                in_run = False
+            if in_run and ("${{ github.event" in line or "${{ inputs" in line):
+                offenders.append(f"{os.path.basename(wf)}:{i}")
+    assert offenders == [], offenders
+
+
+def test_audit15_release_key_pin_refuses_tofu(world, tmp_path):   # noqa: F811
+    from tests.unit.test_update_preflight_shell import _stub
+    fp_file = tmp_path / "empty.fingerprint"; fp_file.write_text("# none\n")
+    _stub(world["tmp"] / "bin", "curl", '#!/usr/bin/env bash\necho \'{"key_id":"stoic-release-ed25519-v1","public_key_b64":"1NgD7Rq2/8Fa31kwU2N18krBt3d5zPkwmg60MUW0Gkc="}\'\n')
+    proj = tmp_path / "tofu"; (proj / "backend").mkdir(parents=True); (proj / "deploy").symlink_to(os.path.join(ROOT, "deploy"))
+    (proj / "backend" / ".env").write_text("RELEASE_SIGNER_KEY_ID=stoic-release-ed25519-v1\n")
+    r = _run(world, "ensure_release_public_key_pin; echo RC=$?", {"RELEASE_KEY_FINGERPRINT_FILE": str(fp_file)}, cwd=str(proj))
+    assert "NOT pinning" in r.stdout and "RELEASE_PUBLIC_KEY_B64=" not in (proj / "backend" / ".env").read_text()

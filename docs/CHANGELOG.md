@@ -3,6 +3,7 @@
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
 ## v1.60.9 — main115 review + A18 audit fix list
+- **Security Audit #15** (docs/SECURITY_AUDIT_15.md): SEC-001 deploy-production workflow no longer expands branch/dispatch input inline in `run:` (env-bound; guard test over all workflows); host-profile HMAC uses length-prefixed canonicalisation; release-key pin refuses trust-on-first-use (fingerprint must be committed).
 - **M115-1 (P0)** `record_host_profile`: HMAC values passed as argv (no f-string escapes — Python 3.6 safe), signing failure non-fatal (profile recorded unsigned + warning). Shell test runs it under `set -euo pipefail`; CI (`scripts/check_deploy_python_snippets.py`) parses every `python3 -c` snippet in `deploy/` with Python 3.6 syntax rules.
 - **M115-2 + P1-03 (P1, live)** TRADING PAUSED is an execution gate: new authority domain `deploy_posture` → `canonical_decision` is CLOSE_ONLY while `platform_state.deploy_jam.trading_paused` is set **or the jam state is unreadable** (`DEPLOY_JAM_UNKNOWN`); worker-trading refuses new entries through the choke point, close/protect stay allowed. Readiness reports `unknown: true, ok: false` on a read error in production (advisory in demo/paper); the card shows `TRADING POSTURE · UNKNOWN`, never MANAGED.
 - **M115-3 (P3)** host-profile HMAC uses a key derived from the ledger anchor key (HKDF-style, label `stoic-host-profile-v1`). Limit documented: root can re-sign — it stops accidental edits/drift, not a determined admin.

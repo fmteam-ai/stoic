@@ -48,9 +48,15 @@ jobs:
 
       - name: Resolve ref → immutable SHA reachable from a signed release tag
         id: ref
+        # SEC-001 (audit #15): untrusted context (branch / dispatch input) is bound to env, never expanded
+        # inline in the shell — a crafted ref name must not run in the job that holds the production SSH key
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          INPUT_REF: ${{ inputs.ref }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "workflow_run" ]; then REQ="${{ github.event.workflow_run.head_branch }}"; else REQ="${{ inputs.ref }}"; fi
+          if [ "${EVENT_NAME}" = "workflow_run" ]; then REQ="${HEAD_BRANCH}"; else REQ="${INPUT_REF}"; fi
           # only tags, branches or hex SHAs — no shell metacharacters ever reach the server
           echo "${REQ}" | grep -qE '^[A-Za-z0-9._/-]{1,128}$' || { echo "::error::invalid ref '${REQ}'"; exit 1; }
           SHA=$(git rev-parse --verify "${REQ}^{commit}")

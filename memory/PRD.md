@@ -3571,3 +3571,6 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 - Tests: tests/unit/test_main115_a18.py (+11). M115-4: expected behaviour, no change.
 - BACKLOG (programme-level, not done): P0-01 single signed release envelope (all artefacts + full test evidence, promotion fails on any null/mismatch); P0-02 single signed canonical projection for every API/badge/chart/gate + read-only audit role + seeded demo tenant with all risk states + CI screenshots; A18 "test #1" fixed to signed policy counts (needs the audit harness reference — ask reviewer which test file).
 - Operator: Save to GitHub → tag v1.60.9 → update.sh v1.60.9 --yes. (v1.60.8 run was still pending when this landed.)
+
+## 2026-10-08 — Security Audit #15 (changed surface) → CONDITIONAL PASS, all findings fixed (unit lane 1187 green)
+- SEC-001 P2: deploy-production.yml inline `${{ github.event.workflow_run.head_branch }}`/`inputs.ref` in run: → env-bound; guard test scans all workflows. H-1 P3: host_profile canonical_payload length-prefixed (shell mirror). H-2 P3: no TOFU in ensure_release_public_key_pin. H-3 info accepted. Report docs/SECURITY_AUDIT_15.md. Manifest/rc_lock/summary regenerated. Next tag still v1.60.9.
