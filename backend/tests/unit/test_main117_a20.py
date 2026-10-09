@@ -128,7 +128,7 @@ def test_host_prereqs_check_and_apply_install_the_timer(world, tmp_path):   # no
 # ---------------------------------------------------------------- A20-P1-04 — writer fails loudly, keeps the previous file
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
 def test_write_host_profile_file_fails_on_unwritable_dir_and_keeps_previous(world, tmp_path):   # noqa: F811
-    d = tmp_path / "state"; d.mkdir()
+    d = tmp_path / "hp_unwritable"; d.mkdir()        # not "state" — the `world` fixture already owns tmp_path/state
     (d / "host_profile.json").write_text('{"profile":"dedicated"}')
     d.chmod(stat.S_IRUSR | stat.S_IXUSR)
     try:
@@ -150,7 +150,7 @@ def test_write_host_profile_file_mkdir_failure_is_nonzero(world, tmp_path):   # 
 
 
 def test_write_host_profile_file_success_path(world, tmp_path):   # noqa: F811
-    d = tmp_path / "state"
+    d = tmp_path / "hp_ok"
     r = _run(world, "write_host_profile_file shared-web-host cpanel 2026-01-01T00:00:00Z abc; echo RC=$?", {"STOIC_HOST_PROFILE_DIR": str(d)})
     assert "RC=0" in r.stdout, r.stdout + r.stderr
     doc = json.loads((d / "host_profile.json").read_text())
