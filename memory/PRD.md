@@ -3574,3 +3574,9 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 
 ## 2026-10-08 — Security Audit #15 (changed surface) → CONDITIONAL PASS, all findings fixed (unit lane 1187 green)
 - SEC-001 P2: deploy-production.yml inline `${{ github.event.workflow_run.head_branch }}`/`inputs.ref` in run: → env-bound; guard test scans all workflows. H-1 P3: host_profile canonical_payload length-prefixed (shell mirror). H-2 P3: no TOFU in ensure_release_public_key_pin. H-3 info accepted. Report docs/SECURITY_AUDIT_15.md. Manifest/rc_lock/summary regenerated. Next tag still v1.60.9.
+
+## 2026-10-08 — main116 REVIEW + A18 fix list rev.1 (A19 items) DONE → tag v1.60.9 (unit lane 1193 green · manifest/rc_lock/summary regenerated)
+- A19-P1-04: deploy/host-profile-refresh.sh + stoic-host-profile.timer (host-prereqs.sh (d)); deploy/state/host_profile.json (ro mount /app/state, STOIC_HOST_PROFILE_FILE in compose x-app-common); host_profile.py reads file each call, 24h expiry, 5-min future skew, unverified_reason; ops detail shows reason. write_host_profile_file also called by record_host_profile.
+- A19-P1-03/M116-4: infrastructure_domain agent_degraded → CLOSE_ONLY unless broker_environment DEMO/PAPER (REDUCED). Agent: durable write read-back + 10-min stability window ($script:RecoverySince/RecoveryWindowMinutes). M116-2: re-probe per loop. A19-P2-01: Disable-StoicCrashDumps (WER LocalDumps) + wizard manual-login note for real. M116-3: double-quoted snippets.
+- M116-1 process: operator must mark GitHub release v1.60.8 "DO NOT DEPLOY — contains M115-1"; tag v1.60.9.
+- Tests: tests/unit/test_main116_a19.py (+6). BACKLOG unchanged: P0-01 signed envelope, P0-02 canonical projection/audit role/demo tenant, A18 test #1 counts.

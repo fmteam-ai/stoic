@@ -47,6 +47,8 @@ $script:Restarts = @{}          # login -> [datetime[]] restart stamps (last hou
 $script:StartedAt = @{}         # login -> last start time (A17-7 post-start grace)
 $script:RestartLedger = "$env:ProgramData\Stoic\restarts.json"
 $script:Degraded = $null          # P2-01 - non-null reason => no automatic restarts (restart ledger not persistable)
+$script:RecoverySince = $null     # A19-P1-03 - first durable write after degradation; cleared on any failure
+$script:RecoveryWindowMinutes = 10
 $script:StartGraceS = 180
 $script:LoginRe = '\A\d{4,12}\z'                       # N113-7 - \A \z: "$" would also match before a trailing newline
 $script:TrustedOwners = @("BUILTIN\Administrators", "NT AUTHORITY\SYSTEM", "$($env:USERDOMAIN)\$($env:USERNAME)")
@@ -297,6 +299,17 @@ function Read-StoicRestartLedger {
         foreach ($p in $d.PSObject.Properties) { $script:Restarts[$p.Name] = @($p.Value | ForEach-Object { [datetime]$_ }) }
     } catch { Write-StoicLog "restart ledger unreadable - starting fresh" "WARN" }
 }
+function Disable-StoicCrashDumps {
+    # A19-P2-01 - Windows Error Reporting LocalDumps for THIS account's processes are disabled (DumpCount=0, Disabled=1):
+    # a crash dump would contain the DPAPI-unprotected agent token / MT5 password strings. What remains exposed: the
+    # managed .NET string of a secret until GC, readable only by a local admin with a debugger on the live process.
+    try {
+        $wer = "HKCU:\Software\Microsoft\Windows\Windows Error Reporting"
+        New-Item -Path "$wer\LocalDumps" -Force | Out-Null
+        Set-ItemProperty -Path "$wer\LocalDumps" -Name DumpCount -Value 0 -Type DWord
+        Set-ItemProperty -Path $wer -Name Disabled -Value 1 -Type DWord
+    } catch { Write-StoicLog "crash-dump policy not applied: $($_.Exception.Message)" "WARN" }
+}
 function Save-StoicRestartLedger {
     # P2-01 - the ledger IS the restart budget across agent restarts. If it cannot be persisted (ACL, disk full)
     # the agent is DEGRADED: critical log + health event, and no automatic terminal restarts until a save succeeds.
@@ -304,9 +317,21 @@ function Save-StoicRestartLedger {
     foreach ($k in $script:Restarts.Keys) { $out[$k] = @($script:Restarts[$k] | Where-Object { $_ -gt $hour } | ForEach-Object { $_.ToString("o") }) }
     try {
         Write-StoicFileAtomic $script:RestartLedger ($out | ConvertTo-Json -Depth 3)
-        if ($script:Degraded) { Write-StoicLog "restart ledger writable again - agent no longer degraded" "WARN"; $script:Degraded = $null }
+        if ($script:Degraded) {
+            # A19-P1-03 - documented recovery transition: a DURABLE write (read back equal) starts a stability window;
+            # the agent stays degraded (status agent_degraded, detail "recovering") until the window has elapsed with
+            # every save succeeding; any failure inside the window restarts it.
+            $back = Get-Content -Raw -Path $script:RestartLedger -ErrorAction Stop
+            if (($back | ConvertFrom-Json | ConvertTo-Json -Depth 3) -ne ($out | ConvertTo-Json -Depth 3)) { throw "ledger read-back mismatch" }
+            if (-not $script:RecoverySince) { $script:RecoverySince = Get-Date; Write-StoicLog "restart ledger durable again - stability window of $($script:RecoveryWindowMinutes) min started" "WARN" }
+            if ((Get-Date) -ge $script:RecoverySince.AddMinutes($script:RecoveryWindowMinutes)) {
+                Write-StoicLog "stability window elapsed - agent no longer degraded (automatic restarts resume)" "WARN"
+                $script:Degraded = $null; $script:RecoverySince = $null
+            } else { $script:Degraded = "recovering: ledger durable since $($script:RecoverySince.ToString('o')) - restarts resume after the stability window" }
+        }
         return $true
     } catch {
+        $script:RecoverySince = $null
         $script:Degraded = "restart ledger unsaved: $($_.Exception.Message)"
         Write-StoicLog "CRITICAL $($script:Degraded) - automatic terminal restarts suspended (budget would not survive an agent restart)" "ERROR"
         return $false
@@ -562,7 +587,9 @@ function Start-StoicAgentLoop {
     Remove-StoicPasswordLeftovers      # A17-4
     Read-StoicRestartLedger            # A17-7 - the restart budget survives an agent restart
     $null = Save-StoicRestartLedger    # P2-01 - probe persistence at start: unsaveable ledger => degraded before any restart
+    Disable-StoicCrashDumps            # A19-P2-01 - no user-mode crash dumps of this process (they would contain unprotected secrets)
     while ($true) {
+        if ($script:Degraded) { $null = Save-StoicRestartLedger }   # M116-2 - re-probe once per loop so the agent recovers without a manual restart
         $managed = 0
         try { Invoke-StoicCommands $cfg } catch { Write-StoicLog "commands: $($_.Exception.Message)" "WARN" }
         try { $managed = Invoke-StoicWatchdog $cfg } catch { Write-StoicLog "watchdog: $($_.Exception.Message)" "WARN" }

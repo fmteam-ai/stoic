@@ -419,6 +419,13 @@ Limit: root on the host can read the anchor key and re-sign — the signature st
 and config drift, not a determined administrator. Signing failure is non-fatal (profile recorded
 unsigned, warning printed).
 
+**Daily refresh (A19-P1-04)** — `host-prereqs.sh` installs `stoic-host-profile.timer` which runs
+`deploy/host-profile-refresh.sh` every 24 h and writes the signed `deploy/state/host_profile.json`;
+the containers read it on every readiness check through the read-only `/app/state` mount, so a new
+marker (e.g. httpd installed) blocks live within one timer cycle and no restart is needed. A profile
+older than 24 h, future-dated by more than 5 min, or unparseable is UNVERIFIED. Manual refresh:
+`sudo bash deploy/host-profile-refresh.sh`.
+
 **Host suitability** — the installer, `update.sh` and `doctor.sh` detect a shared web host
 (cPanel/WHM, Plesk, DirectAdmin, running httpd/exim/dovecot) and record `STOIC_HOST_PROFILE` in
 `backend/.env`. In `APP_ENV=production` with a non-demo-only policy, release readiness shows a

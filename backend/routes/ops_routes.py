@@ -277,7 +277,7 @@ async def release_readiness(request: Request):
             "severity": "block" if _blocking else ("warn" if (_hp["shared_web_host"] or not _hp["verified"]) else "ok"),
             "detail": ("STOIC shares a host with a public web/mail stack — migrate to a dedicated host (docs/HOST_MIGRATION.md) before live trading"
                        if _hp["shared_web_host"] else
-                       ("host profile not recorded/verified — run deploy/update.sh (or deploy/restart.sh --env-changed) so the preflight records a signed profile"
+                       ((f"host profile not verified ({_hp.get('unverified_reason')}) — run deploy/update.sh (or sudo bash deploy/host-profile-refresh.sh) so a fresh signed profile is recorded")
                         if not _hp["verified"] else None))}
     except Exception as e:  # noqa: BLE001
         checks["host_suitability"] = {"ok": not is_production(), "profile": "unknown", "verified": False,
