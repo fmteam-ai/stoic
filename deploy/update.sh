@@ -61,6 +61,18 @@ else
   # secrets (backend/.env is untouched) → restore them before switching trees.
   # N101-1 — the adopted authoritative rc_lock/BUILD_SHA are tracked too (kept per commit in deploy/releases/).
   restore_tracked_release_files
+  # M117-4 — operators hot-patch deploy/*.sh on the host (e.g. during a deploy jam); a modified tracked file makes
+  # `git checkout` refuse AFTER the backup. The deployed tree must equal the signed release, so the edits are
+  # saved as a patch (deploy/releases/local-changes-<ts>.patch) and discarded — never silently lost.
+  DIRTY=$(git status --porcelain --untracked-files=no | awk '{print $2}')
+  if [ -n "${DIRTY}" ]; then
+    mkdir -p deploy/releases
+    PATCH="deploy/releases/local-changes-$(date -u +%Y%m%dT%H%M%SZ).patch"
+    git diff > "${PATCH}"
+    echo "!! local modifications to tracked files saved to ${PATCH} and discarded (the deployed tree must equal the signed release):"
+    echo "${DIRTY}" | sed 's/^/     /'
+    echo "${DIRTY}" | xargs git checkout --
+  fi
   git checkout --detach "${REF}"
   if [ "$(git rev-parse HEAD)" = "${PREV}" ]; then
     echo "   already on $(git rev-parse --short HEAD) — nothing to publish"
