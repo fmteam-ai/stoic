@@ -121,6 +121,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                 </div>
                                 {policy.state === "loading" && <p className="text-[11px] text-[#A1A1AA] mt-1" data-testid="wizard-policy-loading">Checking the signed account policy…</p>}
                                 {policy.state === "unknown" && <p className="text-[11px] text-[#FFB020] mt-1" data-testid="wizard-policy-unavailable">Policy unavailable — the signed account policy could not be loaded, so real-money accounts are blocked. Close and reopen to retry.</p>}
+                                {f.environment === "real" && !realBlocked && <p className="text-[11px] text-[#FFB020] mt-1" data-testid="wizard-real-manual-login">Real money: log in to MT5 manually on the VPS (default) — do not store the account password with the agent; the terminal shows <span className="font-mono">awaiting_login</span> until you do.</p>}
                                 {realBlocked && demoPolicy && <p className="text-[11px] text-[#FF3B30] mt-1" data-testid="wizard-real-blocked">A signed DEMO-only policy is in force — real-money accounts cannot be added until the admin replaces it.</p>}
                                 {!realBlocked && f.environment === "real" && <p className="text-[11px] text-[#FFD700] mt-1">Real money: the EA must attest the account as live; trading stays OFF until you enable it per bot.</p>}
                             </Field>

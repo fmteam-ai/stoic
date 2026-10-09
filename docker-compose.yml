@@ -34,6 +34,11 @@ x-app-common: &app-common
     # Exact backend image identity — REQUIRED in production risk snapshots
     # (deploy/install.sh writes it to .env after the image build).
     STOIC_IMAGE_DIGEST: ${STOIC_IMAGE_DIGEST:-}
+    # A19-P1-04 — signed host profile refreshed daily by the host timer (deploy/host-profile-refresh.sh);
+    # read on every readiness check, never cached in env, expires after 24 h
+    STOIC_HOST_PROFILE_FILE: /app/state/host_profile.json
+  volumes:
+    - ./deploy/state:/app/state:ro
   secrets:
     - mongo_url
     - jwt_secret

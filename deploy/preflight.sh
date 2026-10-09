@@ -207,6 +207,15 @@ shared_web_host_markers() {   # prints the markers found (empty = dedicated host
   printf '%s' "${m# }"
 }
 
+host_profile_sig() {   # host_profile_sig <key> <profile> <markers> <detected_at>  (derived key, length-prefixed canonical payload)
+  python3 -c 'import hmac, hashlib, sys; dk = hmac.new(sys.argv[1].encode(), b"stoic-host-profile-v1", hashlib.sha256).digest(); payload = "".join("%d:%s;" % (len(v), v) for v in sys.argv[2:5]).encode(); print(hmac.new(dk, payload, hashlib.sha256).hexdigest())' "$@" 2>/dev/null
+}
+write_host_profile_file() {   # write_host_profile_file <profile> <markers> <detected_at> <sig>  → deploy/state/host_profile.json (A19-P1-04)
+  mkdir -p deploy/state 2>/dev/null || return 0
+  python3 -c 'import json, sys; json.dump({"profile": sys.argv[1], "markers": sys.argv[2], "detected_at": sys.argv[3], "sig": sys.argv[4], "schema": 1}, open(sys.argv[5], "w"), sort_keys=True)' "$1" "$2" "$3" "$4" deploy/state/host_profile.json.tmp 2>/dev/null \
+    && mv -f deploy/state/host_profile.json.tmp deploy/state/host_profile.json && chmod 0644 deploy/state/host_profile.json
+}
+
 record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedicated + markers + detected_at + HMAC (M114-7)
   local markers profile at key sig
   markers=$(shared_web_host_markers)
@@ -223,9 +232,8 @@ record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedi
   # python 3.6 safe) and a signing failure is NON-fatal: the profile is recorded unsigned with a warning.
   key=$(cat secrets/ledger_anchor_key 2>/dev/null || { grep -E '^LEDGER_ANCHOR_KEY=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   sig=""
-  if [ -n "${key}" ]; then
-    sig=$(python3 -c 'import hmac, hashlib, sys; dk = hmac.new(sys.argv[1].encode(), b"stoic-host-profile-v1", hashlib.sha256).digest(); payload = "".join("%d:%s;" % (len(v), v) for v in sys.argv[2:5]).encode(); print(hmac.new(dk, payload, hashlib.sha256).hexdigest())' "${key}" "${profile}" "${markers}" "${at}" 2>/dev/null) || sig=""
-  fi
+  if [ -n "${key}" ]; then sig=$(host_profile_sig "${key}" "${profile}" "${markers}" "${at}") || sig=""; fi
+  write_host_profile_file "${profile}" "${markers}" "${at}" "${sig}" || true   # A19-P1-04 — the file the containers read (ro mount)
   if [ -n "${sig}" ]; then set_kv backend/.env STOIC_HOST_PROFILE_SIG "${sig}"
   else
     set_kv backend/.env STOIC_HOST_PROFILE_SIG ""

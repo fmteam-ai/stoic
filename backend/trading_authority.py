@@ -89,9 +89,16 @@ async def infrastructure_domain(db, account: dict | None = None) -> dict:
                 return {"level": "CLOSE_ONLY", "reason": gate["reason"], "code": gate["code"]}
         hb = str(account.get("last_heartbeat") or "")
         vt = account.get("vps_terminal") or {}
-        if vt.get("status") == "agent_degraded":   # P2-01 — the VPS agent will not restart this terminal: readiness flags it
-            return {"level": "REDUCED", "code": "VPS_AGENT_DEGRADED",
-                    "reason": f"VPS agent degraded — automatic MT5 restarts suspended ({vt.get('detail') or 'restart ledger not persistable'})"}
+        if vt.get("status") == "agent_degraded":
+            # P2-01 / A19-P1-03 — the VPS agent will not restart this terminal. Real money ⇒ CLOSE_ONLY (no new
+            # exposure; close/cancel/protect allowed); only an account ATTESTED demo/paper keeps REDUCED.
+            # Recovery is the agent's documented transition: durable ledger write + 10-min stability window.
+            from broker_env import attested_environment   # audit #16 SEC-001: declared fields never downgrade
+            env_ = attested_environment(account)
+            level = "REDUCED" if env_ in ("DEMO", "PAPER") else "CLOSE_ONLY"
+            return {"level": level, "code": "VPS_AGENT_DEGRADED",
+                    "reason": f"VPS agent degraded — automatic MT5 restarts suspended ({vt.get('detail') or 'restart ledger not persistable'}); "
+                              f"{'demo/paper account: reduced size' if level == 'REDUCED' else 'real-money account: close-only until the agent recovers (durable ledger write + stability window)'}"}
         if hb and hb >= _ago(180):
             return {"level": "FULL", "reason": "terminal heartbeat fresh"}
         if hb:

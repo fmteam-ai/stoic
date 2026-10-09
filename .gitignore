@@ -189,3 +189,5 @@ deploy/cloudflare/Caddyfile
 # A14-1 — .env.example / backend/.env.example are GENERATED from deploy/env/*.env.example (scripts/sync_env_examples.py)
 /.env.example
 /backend/.env.example
+deploy/state/host_profile.json
+deploy/state/*.tmp

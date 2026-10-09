@@ -123,6 +123,22 @@ else
   fi
 fi
 
+# ---------------------------------------------------------------- (d) daily signed host-profile refresh (A19-P1-04)
+TIMER_DIR="${STOIC_SYSTEMD_DIR:-/etc/systemd/system}"
+if [ "${CHECK}" = 1 ] || [ "${STOIC_SKIP_MOUNT_FIX:-0}" = 1 ] || ! command -v systemctl >/dev/null 2>&1; then
+  note PASS "host-profile timer: $( [ "${CHECK}" = 1 ] && echo 'not evaluated in --check mode' || echo 'skipped (no systemd / test mode)')"
+else
+  REPO=$(pwd); mkdir -p deploy/state
+  svc=$(printf '[Unit]\nDescription=STOIC signed host-profile refresh\n[Service]\nType=oneshot\nWorkingDirectory=%s\nExecStart=/usr/bin/env bash %s/deploy/host-profile-refresh.sh\n' "${REPO}" "${REPO}")
+  tmr=$(printf '[Unit]\nDescription=STOIC host-profile refresh (daily)\n[Timer]\nOnBootSec=5min\nOnUnitActiveSec=24h\nPersistent=true\n[Install]\nWantedBy=timers.target\n')
+  changed=0
+  [ "$(cat "${TIMER_DIR}/stoic-host-profile.service" 2>/dev/null)" = "${svc}" ] || { printf '%s\n' "${svc}" > "${TIMER_DIR}/stoic-host-profile.service"; changed=1; }
+  [ "$(cat "${TIMER_DIR}/stoic-host-profile.timer" 2>/dev/null)" = "${tmr}" ] || { printf '%s\n' "${tmr}" > "${TIMER_DIR}/stoic-host-profile.timer"; changed=1; }
+  if [ "${changed}" = 1 ]; then systemctl daemon-reload; systemctl enable --now stoic-host-profile.timer >/dev/null 2>&1 || true; log "installed stoic-host-profile.timer (daily)"; note FIX "daily signed host-profile refresh timer installed"
+  else note PASS "stoic-host-profile.timer present"; fi
+  bash deploy/host-profile-refresh.sh >/dev/null 2>&1 && note PASS "host profile refreshed now (deploy/state/host_profile.json)" || note WARN "host-profile-refresh.sh failed (non-fatal) — readiness reports the profile unverified until it runs"
+fi
+
 # ---------------------------------------------------------------- summary
 echo "== host-prereqs ($( [ "${CHECK}" = 1 ] && echo check || echo apply )) =="
 for s in "${SUMMARY[@]}"; do echo "   ${s}"; done

@@ -10,14 +10,18 @@ import re
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SNIPPET_RE = re.compile(r"python3?\s+-c\s+'((?:[^'\\]|\\.)*)'", re.S)
+# M116-3 — single- AND double-quoted snippets (double-quoted ones are unescaped as the shell would)
+SNIPPET_RE = re.compile(r"""python3?\s+-c\s+(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")""", re.S)
 
 
 def snippets(path):
     text = open(path, encoding="utf-8").read()
     for m in SNIPPET_RE.finditer(text):
         line = text.count("\n", 0, m.start()) + 1
-        yield line, m.group(1)
+        if m.group(1) is not None:
+            yield line, m.group(1)
+        else:
+            yield line, re.sub(r'\\([$`"\\])', r"\1", m.group(2))
 
 
 def check(path):
