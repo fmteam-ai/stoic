@@ -71,6 +71,37 @@ already has a live terminal is refused (`409 terminal_exists`) until you confirm
 - **Agent task retries every minute without logging**: run
   `powershell.exe -NoProfile -File %ProgramData%\Stoic\STOIC-Agent.ps1` by hand to see the parse error. The served
   script is ASCII-only with a UTF-8 BOM and CI parses it under Windows PowerShell 5.1 (N113-2).
+- **Agent `agent_degraded` / "restart ledger unsaved"** (P2-01): `%ProgramData%\Stoic\restarts.json` could not be written
+  (ACL, disk full). The agent re-probes once per loop; the first save that reads back **byte-exact** (SHA-256 of the file
+  vs the bytes written — M117-2, never a re-serialised JSON comparison) starts a 10-minute stability window
+  (detail `recovering: …`); automatic restarts resume after it. Behavioural test: `scripts/test_agent_recovery.ps1`
+  (CI runs it under Windows PowerShell 5.1).
+
+## Crash dumps and secrets in memory (A19-P2-01 / A20-P2-01)
+
+While running, the agent holds the DPAPI-unprotected agent token and — only during a terminal start — the MT5
+password as managed .NET strings. A user-mode crash dump of `powershell.exe` or `terminal64.exe` could contain them.
+
+- The agent itself only sets the **narrow, per-user** `HKCU\…\Windows Error Reporting\LocalDumps\DumpCount=0`
+  (best effort — Windows reads LocalDumps primarily from HKLM, so treat it as a hint, not a guarantee). Agent 1.3
+  also set the user-wide `Windows Error Reporting\Disabled=1`, which switched error reporting off for *every*
+  program of that user; **1.4 no longer sets it and removes it on upgrade**.
+- **Recommended: run the agent under its own Windows user** (e.g. `stoic-agent`, local, auto-logon, member of
+  Administrators only if your broker's terminal needs it). Nothing else runs as that user, so a dump policy for it
+  affects nothing else, its profile/`%ProgramData%\Stoic` ACL is clean, and RDP sessions of other users cannot
+  read its process memory without admin rights.
+- **Optional admin step (robust, machine-wide, per executable only)** — in an Administrator PowerShell:
+  ```powershell
+  foreach ($exe in "terminal64.exe", "powershell.exe") {
+      $k = "HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\$exe"
+      New-Item -Path $k -Force | Out-Null
+      Set-ItemProperty -Path $k -Name DumpCount -Value 0 -Type DWord
+  }
+  ```
+  This disables **only** the local crash dumps of those two executables (per-exe LocalDumps keys override the global
+  one); error reporting for everything else is untouched. Remove the two keys to revert.
+- What remains: the managed string of a secret until the GC collects it, readable only by a local administrator with
+  a debugger attached to the live process.
 
 ## Files on the VPS
 

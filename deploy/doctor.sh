@@ -128,8 +128,24 @@ if [ -n "${MARKERS}" ]; then
 else ok "host suitability: dedicated host (no cPanel/Plesk/DirectAdmin/httpd/exim/dovecot)"; fi
 # host prerequisites that EXISTING installs may lack (applied by update.sh/restart.sh preflight or `make host-prereqs`)
 if [ "$(id -u)" = 0 ]; then
-  if bash deploy/host-prereqs.sh --check >/dev/null 2>&1; then ok "host prerequisites: fs.may_detach_mounts=1 · docker root slave · drop-ins present"
-  else fail "host prerequisites missing (fs.may_detach_mounts / docker root propagation) — fix: sudo bash deploy/host-prereqs.sh --yes (update.sh applies it automatically)"; fi
+  if bash deploy/host-prereqs.sh --check >/dev/null 2>&1; then ok "host prerequisites: fs.may_detach_mounts=1 · docker root slave · drop-ins present · host-profile timer active"
+  else fail "host prerequisites missing (fs.may_detach_mounts / docker root propagation / stoic-host-profile.timer) — fix: sudo bash deploy/host-prereqs.sh --yes (update.sh applies it automatically)"; fi
+  # M117-1 — the signed host profile expires 24 h after the last refresh; a missing/failed timer blocks live trading daily
+  if command -v systemctl >/dev/null 2>&1; then
+    if systemctl is-active --quiet stoic-host-profile.timer 2>/dev/null; then
+      if systemctl is-failed --quiet stoic-host-profile.service 2>/dev/null; then fail "host-profile refresh: last run FAILED (journalctl -u stoic-host-profile.service) — profile expires 24 h after the last good write"
+      else ok "host-profile timer: active (next: $(systemctl list-timers stoic-host-profile.timer --no-legend 2>/dev/null | awk '{print $1" "$2" "$3}' | head -1))"; fi
+    else fail "host-profile timer: stoic-host-profile.timer not active — sudo bash deploy/host-prereqs.sh --yes (live trading blocks when the profile is >24 h old)"; fi
+  fi
+  if [ -f deploy/state/host_profile.json ]; then
+    AGE_H=$(python3 -c 'import json, sys, time, calendar; d = json.load(open(sys.argv[1])); t = calendar.timegm(time.strptime(d["detected_at"], "%Y-%m-%dT%H:%M:%SZ")); print(round((time.time() - t) / 3600, 1))' deploy/state/host_profile.json 2>/dev/null || echo "?")
+    case "${AGE_H}" in
+      "?") warn "host profile file: deploy/state/host_profile.json unparseable — readiness reports it unverified" ;;
+      *) if python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) > 24 else 1)' "${AGE_H}" 2>/dev/null; then fail "host profile file: ${AGE_H} h old (max 24 h) — UNVERIFIED, live trading blocked; run: sudo bash deploy/host-profile-refresh.sh"
+         elif python3 -c 'import sys; sys.exit(0 if float(sys.argv[1]) > 12 else 1)' "${AGE_H}" 2>/dev/null; then warn "host profile file: ${AGE_H} h old — refresh overdue (timer runs every 6 h); check: systemctl status stoic-host-profile.timer"
+         else ok "host profile file: ${AGE_H} h old (refreshed every 6 h, 24 h max)"; fi ;;
+    esac
+  else warn "host profile file: deploy/state/host_profile.json missing — readiness falls back to backend/.env (unverified once stale); run: sudo bash deploy/host-profile-refresh.sh"; fi
 fi
 
 hdr "configuration"

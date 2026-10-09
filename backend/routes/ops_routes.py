@@ -274,11 +274,11 @@ async def release_readiness(request: Request):
         _blocking = _live and (_hp["shared_web_host"] or not _hp["verified"])
         checks["host_suitability"] = {
             **_hp, "ok": not _blocking, "demo_only": _demo_only, "enforced": _live,
-            "severity": "block" if _blocking else ("warn" if (_hp["shared_web_host"] or not _hp["verified"]) else "ok"),
+            "severity": "block" if _blocking else ("warn" if (_hp["shared_web_host"] or not _hp["verified"] or _hp.get("refresh_overdue")) else "ok"),
             "detail": ("STOIC shares a host with a public web/mail stack — migrate to a dedicated host (docs/HOST_MIGRATION.md) before live trading"
                        if _hp["shared_web_host"] else
                        ((f"host profile not verified ({_hp.get('unverified_reason')}) — run deploy/update.sh (or sudo bash deploy/host-profile-refresh.sh) so a fresh signed profile is recorded")
-                        if not _hp["verified"] else None))}
+                        if not _hp["verified"] else _hp.get("refresh_warning")))}   # A20-P1-03 — >12 h: warn before it expires
     except Exception as e:  # noqa: BLE001
         checks["host_suitability"] = {"ok": not is_production(), "profile": "unknown", "verified": False,
                                       "detail": f"host profile unavailable: {e}"}

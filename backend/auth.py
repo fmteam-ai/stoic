@@ -71,6 +71,12 @@ def set_auth_cookies(response, access_token: str, refresh_token: str):
         key="refresh_token", value=refresh_token, httponly=True,
         secure=True, samesite="none", max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400, path="/"
     )
+    # A20-P2-02 — JS-readable session HINT (no secret: constant "1"): lets the SPA skip the /auth/refresh
+    # round trip on anonymous visits; the real session stays in the httpOnly cookies above.
+    response.set_cookie(
+        key="stoic_session", value="1", httponly=False,
+        secure=True, samesite="none", max_age=REFRESH_TOKEN_EXPIRE_DAYS * 86400, path="/"
+    )
     from security import set_csrf_cookie
     set_csrf_cookie(response)
 
@@ -78,6 +84,7 @@ def set_auth_cookies(response, access_token: str, refresh_token: str):
 def clear_auth_cookies(response):
     response.delete_cookie("access_token", path="/")
     response.delete_cookie("refresh_token", path="/")
+    response.delete_cookie("stoic_session", path="/")
     response.delete_cookie("csrf_token", path="/")
 
 

@@ -26,6 +26,7 @@ EVALUATOR_KINDS = (
     "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real",
     "vps_terminal_restart_loop",   # Phase 2 VPS Agent: restart budget exhausted without a fresh EA heartbeat
     "vps_agent_degraded",          # P2-01: the agent cannot persist its restart ledger — automatic restarts suspended
+    "host_profile_refresh_overdue", "host_profile_unverified",   # A20-P1-03: signed host profile >12 h old / expired
     "vps_agent_offline")           # A17-8: an agent that manages terminals has not polled for 5 min (reboot without auto-logon)
 
 
@@ -290,6 +291,20 @@ async def evaluate_ops_alerts(db) -> int:
                 {"kind": "demo_account_reports_real", "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
         except Exception as e2:  # noqa: BLE001
             logger.warning("demo mode keep-open failed: %s", type(e2).__name__)
+
+    # 5e · A20-P1-03 — signed host profile overdue (>12 h) / unverified (>24 h): the timer is not running
+    try:
+        import host_profile_alerts
+        _hp_active, _hp_raised = await host_profile_alerts.evaluate(db, now, raise_alert=raise_alert)
+        active |= _hp_active
+        raised += _hp_raised
+    except Exception as e:  # noqa: BLE001
+        logger.warning("host profile alert evaluation failed: %s", type(e).__name__)
+        try:
+            active |= {a["dedup_key"] async for a in db.ops_alerts.find(
+                {"kind": {"$in": ["host_profile_refresh_overdue", "host_profile_unverified"]}, "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("host profile keep-open failed: %s", type(e2).__name__)
 
     # 5b · paired VPS terminal silent since the installer ran (WebRequest / EA attach / AutoTrading) —
     #      ops alert + security Telegram push, recovery announced when the first heartbeat lands
