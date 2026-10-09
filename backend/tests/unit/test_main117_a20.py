@@ -207,6 +207,9 @@ def test_reconcile_expect_approved_takes_counts_and_ids_from_the_signed_policy()
     assert any("malformed" in x for x in pr.preflight(A, {"GIT_SHA": "abc", "LEDGER_ANCHOR_KEY": "k"}))
     src = open(os.path.join(ROOT, "backend", "ops", "production_reconcile.py")).read()
     assert "enabled_environments_all_demo" in src and 'EXPECT_APPROVED = "approved"' in src
+    # audit #17 P3 — the demo_only check classifies by the ATTESTED environment, and an id-less policy is REFUSED
+    assert 'for e in totals["attested_environments_enabled"]' in src and '"attested_environment": attested_environment(acc)' in src
+    assert "approved policy names no account ids" in src
 
 
 def test_update_sh_defaults_to_the_signed_policy_not_633():

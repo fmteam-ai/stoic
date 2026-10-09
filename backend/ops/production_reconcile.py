@@ -111,7 +111,7 @@ async def main() -> int:
         print("RECONCILE REFUSED: " + " | ".join(problems), file=sys.stderr)
         return 2
     from database import get_db
-    from broker_env import broker_environment
+    from broker_env import broker_environment, attested_environment
     from synthetic_data import is_synthetic_account
     db = get_db()
     now = datetime.now(timezone.utc)
@@ -125,6 +125,12 @@ async def main() -> int:
             print("RECONCILE REFUSED: " + " | ".join(policy["problems"]), file=sys.stderr)
             return 2
         a.expect = f"{policy['accounts']}/{policy['enabled']}/{policy['bots']}"
+        if not policy["account_ids"] and int(policy["enabled"] or 0) > 0:
+            # audit #17 P3 — never degrade to counts-only: the approved policy must pin the exact account identities
+            msg = "approved policy names no account ids — the signed policy must pin the exact enabled account set"
+            print(json.dumps({"report": "production-reconciliation", "result": "REFUSED", "problems": [msg]}, indent=1, default=str))
+            print("RECONCILE REFUSED: " + msg, file=sys.stderr)
+            return 2
         if policy["account_ids"] and not a.expect_ids:
             a.expect_ids = ",".join(policy["account_ids"])
     q = {"status": {"$ne": "deleted"}}
@@ -142,7 +148,7 @@ async def main() -> int:
         age = _age(acc.get("last_heartbeat"), now)
         vi = acc.get("verified_identity") or {}
         row = {"id": aid, "label": acc.get("label"), "user_id": acc.get("user_id"),
-               "environment": broker_environment(acc), "trading_enabled": flag,
+               "environment": broker_environment(acc), "attested_environment": attested_environment(acc), "trading_enabled": flag,
                "trading_enabled_is_bool": isinstance(flag, bool), "explicitly_enabled": flag is True,
                "verified_identity": {"account_number": vi.get("account_number"), "broker_server": vi.get("broker_server")},
                "ea_version": acc.get("ea_version"), "policy_version": acc.get("policy_version"),
@@ -162,6 +168,7 @@ async def main() -> int:
               "enabled_ids": sorted(enabled), "bot_ids": sorted(bot_ids), "fresh_ids": sorted(fresh),
               "sets_identical": enabled == bot_ids == fresh,
               "environments_enabled": sorted({r["environment"] for r in rows if r["explicitly_enabled"]}),
+              "attested_environments_enabled": sorted({r["attested_environment"] for r in rows if r["explicitly_enabled"]}),
               "excluded_synthetic": len(excluded)}
     body = {"report": "production-reconciliation", "read_only": True, "at": now.isoformat(),
             "build": os.environ.get("GIT_SHA") or "unknown", "strict": strict,
@@ -178,8 +185,9 @@ async def main() -> int:
                   "all_flags_boolean": not totals["non_boolean_flags"], "sets_identical": totals["sets_identical"]}
         if strict:
             if policy and policy["demo_only"]:
-                # a signed DEMO-only policy: every enabled account must be demo/paper — a real-money account is a violation
-                checks["enabled_environments_all_demo"] = all(e in ("DEMO", "PAPER") for e in totals["environments_enabled"])
+                # a signed DEMO-only policy: every enabled account must be demo/paper by the server-authoritative
+                # ATTESTED classification (audit #17 P3 — declared fields never count), a real-money account is a violation
+                checks["enabled_environments_all_demo"] = all(e in ("DEMO", "PAPER") for e in totals["attested_environments_enabled"])
             else:
                 checks["enabled_environments_all_live"] = totals["environments_enabled"] in ([], ["LIVE"])
         body["expected"], body["checks"] = a.expect, checks
