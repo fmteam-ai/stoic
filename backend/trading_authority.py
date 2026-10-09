@@ -93,8 +93,8 @@ async def infrastructure_domain(db, account: dict | None = None) -> dict:
             # P2-01 / A19-P1-03 — the VPS agent will not restart this terminal. Real money ⇒ CLOSE_ONLY (no new
             # exposure; close/cancel/protect allowed); only an account ATTESTED demo/paper keeps REDUCED.
             # Recovery is the agent's documented transition: durable ledger write + 10-min stability window.
-            from broker_env import broker_environment
-            env_ = broker_environment(account)
+            from broker_env import attested_environment   # audit #16 SEC-001: declared fields never downgrade
+            env_ = attested_environment(account)
             level = "REDUCED" if env_ in ("DEMO", "PAPER") else "CLOSE_ONLY"
             return {"level": level, "code": "VPS_AGENT_DEGRADED",
                     "reason": f"VPS agent degraded — automatic MT5 restarts suspended ({vt.get('detail') or 'restart ledger not persistable'}); "

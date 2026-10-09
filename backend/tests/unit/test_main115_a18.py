@@ -123,7 +123,8 @@ def test_infrastructure_domain_flags_degraded_agent():
            "vps_terminal": {"status": "agent_degraded", "detail": "restart ledger unsaved: disk full"}}
     d = _go(ta.infrastructure_domain(FakeDb(), acc))
     assert d["level"] == "CLOSE_ONLY" and d["code"] == "VPS_AGENT_DEGRADED"      # A19-P1-03: unattested ⇒ real ⇒ close-only
-    assert _go(ta.infrastructure_domain(FakeDb(), {**acc, "broker_environment": "DEMO"}))["level"] == "REDUCED"
+    # audit #16 SEC-001: a declared (unattested) DEMO is still real money ⇒ CLOSE_ONLY
+    assert _go(ta.infrastructure_domain(FakeDb(), {**acc, "broker_environment": "DEMO"}))["level"] == "CLOSE_ONLY"
 
 
 # ---------------------------------------------------------------- P2-02 — wizard policy states

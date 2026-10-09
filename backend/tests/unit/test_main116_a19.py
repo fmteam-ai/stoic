@@ -87,8 +87,21 @@ def test_degraded_agent_close_only_for_real_reduced_for_demo():
             "vps_terminal": {"status": "agent_degraded", "detail": "restart ledger unsaved: disk full"}}
     real = _go(ta.infrastructure_domain(FakeDb(), {**base, "broker_environment": "LIVE"}))
     assert real["level"] == "CLOSE_ONLY" and real["code"] == "VPS_AGENT_DEGRADED"
-    demo = _go(ta.infrastructure_domain(FakeDb(), {**base, "broker_environment": "DEMO"}))
+    # audit #16 SEC-001: a self-DECLARED demo (no admin attestation) is still real money ⇒ CLOSE_ONLY
+    declared = _go(ta.infrastructure_domain(FakeDb(), {**base, "broker_environment": "DEMO", "account_type": "demo",
+                                                       "server": "ICMarkets-Demo"}))
+    assert declared["level"] == "CLOSE_ONLY"
+    from broker_env import attestation_identity
+    att = {**base, "broker": "ICM", "account_number": 5012345, "server": "ICMarkets-Demo", "broker_server": "ICMarkets-Demo",
+           "broker_environment": "DEMO", "account_type": "demo", "broker_account_id_reported": "5012345",
+           "ea_identity": {"authoritative": True, "installation_id": "inst_1", "broker_server": "ICMarkets-Demo", "ea_version": "1.60"}}
+    att["environment_attestation"] = {"environment": "DEMO", "approved_by": "admin@x", "identity_hash": attestation_identity(att),
+                                      "proof": {"verifier": "ea_heartbeat"}}
+    demo = _go(ta.infrastructure_domain(FakeDb(), att))
     assert demo["level"] == "REDUCED"
+    # broker-reported real trade mode voids the attestation ⇒ CLOSE_ONLY
+    voided = _go(ta.infrastructure_domain(FakeDb(), {**att, "account_trade_mode": "real"}))
+    assert voided["level"] == "CLOSE_ONLY"
     unattested = _go(ta.infrastructure_domain(FakeDb(), base))      # no attestation ⇒ treated as real
     assert unattested["level"] == "CLOSE_ONLY"
     import canonical_decision as cd
