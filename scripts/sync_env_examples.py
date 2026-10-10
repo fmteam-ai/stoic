@@ -9,6 +9,7 @@ deploy/update.sh run it (update.sh also `--check`s) before anything reads a temp
   python scripts/sync_env_examples.py          # write .env.example + backend/.env.example
   python scripts/sync_env_examples.py --check  # exit 1 if a dot-file drifted from its source
 """
+from __future__ import annotations   # host-side: AlmaLinux 9 ships Python 3.9 (no `str | None` at runtime)
 import os
 import sys
 

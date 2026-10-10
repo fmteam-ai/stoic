@@ -17,6 +17,7 @@ Runtime: verify_model(path, known_events=…) → digest, or raises ModelRefused
 NEVER loadable; promotion (ml_ensemble.promote_candidate) is the only path
 from candidate to production.
 """
+from __future__ import annotations   # host-side: AlmaLinux 9 ships Python 3.9 (no `str | None` at runtime)
 import hashlib
 import json
 import logging

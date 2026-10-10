@@ -9,6 +9,7 @@ Checks: /healthz liveness, /public-key equals the pinned key, authenticated
 /health identity, and a sign → verify round-trip (plus tamper rejection) using
 the SAME client code the API uses (backend/release_signing). Exit 0 = PASS.
 """
+from __future__ import annotations   # host-side: AlmaLinux 9 ships Python 3.9 (no `str | None` at runtime)
 import argparse
 import json
 import os

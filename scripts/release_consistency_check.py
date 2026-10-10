@@ -16,6 +16,7 @@ match; commit fields are reported. Strict (release job, or automatically when th
 lock is authoritative): EVERY field must match exactly → exit 1 on any mismatch,
 printed as a concise per-field report (never a traceback).
 """
+from __future__ import annotations   # host-side: AlmaLinux 9 ships Python 3.9 (no `str | None` at runtime)
 import argparse
 import hashlib
 import json
