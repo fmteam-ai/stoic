@@ -213,7 +213,7 @@ current_release_key_id() {   # the key id the repo marks `current` (empty when t
 ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFLIGHT_YES)
   local cur url kid want sidecar body key fp exp st repo_cur
   cur=$( { grep -E '^RELEASE_PUBLIC_KEY_B64=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
-  want=$( { grep -E '^RELEASE_SIGNER_KEY_ID=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'"); want="${want:-stoic-release-ed25519-v1}"
+  want=$( { grep -E '^RELEASE_SIGNER_KEY_ID=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'"); want="${want:-$(current_release_key_id)}"
   url=$( { grep -E '^RELEASE_SIGNER_PUBLIC_URL=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   url="${RELEASE_SIGNER_PUBLIC_URL:-${url:-https://stoic-signer.fly.dev}}"
   exp=$(expected_release_fingerprint "${want}")
@@ -301,7 +301,7 @@ write_host_profile_file() {   # write_host_profile_file <profile> <markers> <det
 write_key_ages_file() {   # M120-2 — deploy/state/key_ages.json: release key created=, runtime key mtime, Origin CA notAfter (advisory, unsigned)
   local dir="${STOIC_HOST_PROFILE_DIR:-deploy/state}" kid cert_end=""
   kid=$( { grep -E '^RELEASE_SIGNER_KEY_ID=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
-  kid="${kid:-$(current_release_key_id)}"; kid="${kid:-stoic-release-ed25519-v1}"
+  kid="${kid:-$(current_release_key_id)}"
   [ -f secrets/origin_cert.pem ] && cert_end=$(openssl x509 -enddate -noout -in secrets/origin_cert.pem 2>/dev/null | cut -d= -f2-)
   mkdir -p "${dir}" 2>/dev/null || { echo "!! key ages: cannot create ${dir}" >&2; return 1; }
   python3 - "${RELEASE_KEY_FINGERPRINT_FILE}" "${kid}" secrets/signer_ed25519_key secrets/origin_cert.pem "${cert_end}" "${dir}/key_ages.json" <<'PY' || { echo "!! key ages: ${dir}/key_ages.json not written" >&2; return 1; }

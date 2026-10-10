@@ -2,6 +2,13 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.13 — main120 review fixes (no strategy/risk change)
+- **M120-4 (P2)** `InfraWizard` bootstrap command and `StatusPage` use `BACKEND_URL` from `lib/api.js` (`REACT_APP_BACKEND_URL || window.location.origin`) — on the VPS the build has no `REACT_APP_BACKEND_URL`, so the PowerShell `iwr` line rendered a relative URL.
+- **M120-1 (P3)** `deploy/state/key_ages.json` and `release/ledger-anchors.jsonl` untracked + ignored (host/preview state; `deploy/state/deploy_source.json`, `deploy/state/release/` ignored too).
+- **M120-2 (P3)** `compose_up` passes `--no-build` in auto mode after a successful registry pull (`deploy/state/deploy_source.json` = registry), not only under `DEPLOY_MODE=registry`.
+- **M120-3 (P3)** developer `rc_lock.json` regenerated under `stoic-release-ed25519-v2`; the default release key id now follows the repo's `current` fingerprint line everywhere (`release_signing.KEY_ID`, `verify_ea_release.py`, `preflight.sh`, `rotate-release-pin.sh`) — no hard-coded id left.
+- Tidy: `verify_attestation` also clears `deploy/state/release/attestation.current.json`, so an untagged build never leaves the previous release's attestation in the host truth folder.
+
 ## v1.60.12 — registry deploys by default (A18 Part 3) · v1 release key revoked · key-age doctor · onboarding flags from ./.env (no strategy/risk change)
 - **Registry deploy default** `DEPLOY_MODE` unset = **auto**: an attested release is deployed from the signed GHCR digests (`cosign verify` → `docker pull @sha256` → pinned for `docker-compose.registry.yml`); untagged refs, missing assets or a failed pull/verification fall back to an **on-host build of the same commit** (`registry-fallback-build` in `deploy/releases.log`, `deploy/state/deploy_source.json`, readiness `deploy_source` WARN). `DEPLOY_MODE=registry` stays strict (never builds), `DEPLOY_MODE=build` always builds (and drops the registry overlay). Private packages: read-only `GITHUB_TOKEN` (`read:packages`) in `./.env` — documented in DEPLOYMENT.md → *Registry deploys*.
 - **Authoritative lock adopted in auto mode** even on hosts with `ATTESTATION_REQUIRED=false` (demo-only onboarding): the signed release assets are fetched opportunistically; when present the authoritative `rc_lock.json`, `BUILD_SHA`, model manifest and release summary are adopted and the host's verified copies are published to `deploy/state/release/` — the backend reads them first (a registry image cannot carry the lock holding its own digest), so readiness `rc_lock` / `release_attestation` turn green with real digests. Rollback (`rollback.sh`, auto-rollback) re-fetches the target's attestation, re-adopts its lock and pulls its digests.

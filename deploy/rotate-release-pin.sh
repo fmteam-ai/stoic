@@ -45,7 +45,7 @@ done
 
 if [ "${MODE}" = revoke ]; then
   CUR=$(envv RELEASE_SIGNER_KEY_ID)
-  [ "${KID}" != "${CUR:-stoic-release-ed25519-v1}" ] || { echo "!! ${KID} is the CURRENT key id — pin the new key first (rotate-release-pin.sh <new-key-id>)"; exit 1; }
+  [ "${KID}" != "${CUR:-$(current_release_key_id)}" ] || { echo "!! ${KID} is the CURRENT key id — pin the new key first (rotate-release-pin.sh <new-key-id>)"; exit 1; }
   set_kv "${ENV_FILE}" RELEASE_ACCEPTED_KEY_IDS "$(csv_del "$(envv RELEASE_ACCEPTED_KEY_IDS)" "${KID}")"
   set_kv "${ENV_FILE}" RELEASE_TRANSITION_PUBLIC_KEYS "$(csv_del "$(envv RELEASE_TRANSITION_PUBLIC_KEYS)" "${KID}")"
   set_kv "${ENV_FILE}" RELEASE_REVOKED_KEY_IDS "$(csv_add "$(envv RELEASE_REVOKED_KEY_IDS)" "${KID}")"
@@ -57,7 +57,7 @@ else
   [ -z "${REPO_CUR}" ] || [ "${REPO_CUR}" = "${KID}" ] || { echo "!! repo marks ${REPO_CUR} as the current key, not ${KID} — check out the release that carries the rotation first"; exit 1; }
   [ -n "$(expected_release_fingerprint "${KID}")" ] || { echo "!! no committed fingerprint for ${KID} in ${RELEASE_KEY_FINGERPRINT_FILE} — refusing (the repo, not the network, decides which key is trusted)"; exit 1; }
   [ "$(release_key_status "${KID}")" != revoked ] || { echo "!! ${KID} is revoked in ${RELEASE_KEY_FINGERPRINT_FILE}"; exit 1; }
-  OLD_ID=$(envv RELEASE_SIGNER_KEY_ID); OLD_ID="${OLD_ID:-stoic-release-ed25519-v1}"
+  OLD_ID=$(envv RELEASE_SIGNER_KEY_ID); OLD_ID="${OLD_ID:-$(current_release_key_id)}"
   OLD_PUB=$(envv RELEASE_PUBLIC_KEY_B64)
   [ "${OLD_ID}" != "${KID}" ] || { echo "rotate-release-pin: ${KID} is already the pinned key id"; status; exit 0; }
   if [ -n "${OLD_PUB}" ] && [ "$(release_key_status "${OLD_ID}")" != revoked ]; then

@@ -25,7 +25,23 @@ from app_env import removable_secret
 
 logger = logging.getLogger("release_signing")
 
-KEY_ID = "stoic-release-ed25519-v1"          # CI release key: EA records, model manifests, policy migrations
+def _repo_current_release_key_id() -> str | None:
+    """S-1 — the key id the repo marks `current` in release/release_key.fingerprint (checkout or image copy)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for p in (os.path.join(here, "..", "release", "release_key.fingerprint"), os.path.join(here, "release", "release_key.fingerprint"),
+              "/app/release/release_key.fingerprint", "release/release_key.fingerprint"):
+        try:
+            with open(p) as f:
+                for line in f:
+                    parts = line.split()
+                    if len(parts) >= 3 and not parts[0].startswith("#") and parts[2] == "current":
+                        return parts[0]
+        except OSError:
+            continue
+    return None
+
+
+KEY_ID = _repo_current_release_key_id() or "stoic-release-ed25519-v2"   # CI release key: EA records, model manifests, policy migrations
 BUNDLE_KEY_ID = "stoic-bundle-ed25519-v1"    # N101-5 — runtime (sidecar) key: bundles, anchors, artifact manifests
 DEFAULT_TIMEOUT = 10.0
 

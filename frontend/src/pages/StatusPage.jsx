@@ -1,12 +1,13 @@
 import { useEffect, useState, useCallback } from "react";
 import { ClosedBetaBanner } from "@/components/ClosedBetaBanner";
 import axios from "axios";
+import { BACKEND_URL } from "@/lib/api";
 import { StoicMark } from "@/components/StoicLogo";
 import {
     Activity, Database, Cpu, Plug, CreditCard, Mail, RefreshCw, Loader2,
 } from "lucide-react";
 
-const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const API = `${BACKEND_URL}/api`;   // M120-4 — same-origin fallback like lib/api.js (REACT_APP_BACKEND_URL is empty on the VPS)
 
 const COMPONENT_META = [
     { key: "api", label: "API", icon: Activity, desc: "Application endpoints" },
