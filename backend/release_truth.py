@@ -1,5 +1,6 @@
 """Runtime release truth (audit P1-5): read the cosign-verified attestation
 recorded by deploy/lib.sh and reconcile it with what is actually running."""
+from __future__ import annotations
 import json
 import os
 
@@ -64,15 +65,19 @@ def deploy_source_check() -> dict:
     """A18 Part 3 — what the running images were provisioned from (deploy/state/deploy_source.json): registry (signed
     CI digests), build (on-host), build-fallback (registry pull/verification failed → on-host build of the same commit).
     Informational; `warn` on a fallback so the operator sees that the live digest gate cannot be green."""
-    p = os.path.join(STATE_DIR, "deploy_source.json")
-    try:
-        d = json.load(open(p))
-    except Exception:  # noqa: BLE001
-        d = None
-    if not isinstance(d, dict):
+    d = _deploy_source()
+    if not d:
         return {"ok": True, "severity": "ok", "available": False, "source": None,
                 "detail": "no deploy_source.json yet (written by deploy/update.sh provision_images)"}
     src = d.get("source")
+    containers = d.get("containers") or {}
+    mixed = bool(d.get("mixed")) or any(c.get("status") == "MISMATCH" for c in containers.values())
+    if mixed:   # M121-5 — a mixed stack is a failed deploy, never "ok"
+        bad = sorted(n for n, c in containers.items() if c.get("status") == "MISMATCH")
+        return {"ok": False, "severity": "block", "available": True, "source": src, "reason": d.get("reason"), "commit": d.get("commit"),
+                "mixed": True, "containers": containers, "at": d.get("at"),
+                "detail": "MIXED STACK — container(s) not running the provisioned image: " + (", ".join(bad) or "unknown"),
+                "fix": "deploy/update.sh <tag> --reprovision --yes (then docker compose ps; a service missing from docker-compose.registry.yml keeps its old image)"}
     sev = "warn" if src == "build-fallback" else "ok"
     detail = {"registry": "running the signed CI images pulled by attested digest",
               "build": f"built on this host ({d.get('reason') or 'DEPLOY_MODE=build'})",
@@ -80,6 +85,7 @@ def deploy_source_check() -> dict:
                                 "(re-run deploy/update.sh <tag> once GHCR is reachable for live digest authority)"}.get(src, str(src))
     return {"ok": True, "severity": sev, "available": True, "source": src, "reason": d.get("reason"), "commit": d.get("commit"),
             "backend_image": d.get("backend_image"), "deploy_mode": d.get("deploy_mode"), "at": d.get("at"), "detail": detail,
+            "mixed": False, "containers_checked": len(containers),
             "fix": "deploy/update.sh <tag> --yes" if src == "build-fallback" else None}
 
 
@@ -110,15 +116,33 @@ def rc_lock_check(production: bool) -> dict:
         out.update(ok=not production, note="no rc_lock.json on this host")
         return out
     be = (lock.get("images") or {}).get("backend") or ""
+    fe = (lock.get("images") or {}).get("frontend") or ""
     out.update(commit=lock.get("git_commit"), authoritative=bool(lock.get("authoritative")),
                deployment_target=lock.get("deployment_target"),
                sha_matches_running=bool(running_sha) and lock.get("git_commit") == running_sha,
                digest_matches_running=bool(running_digest) and running_digest in be)
-    ok = out["authoritative"] and out["sha_matches_running"] and (out["digest_matches_running"] or not production)
+    # M121-5 — EVERY running app container (deploy/state/deploy_source.json "containers", written by the host after
+    # verify_stack_images) must run the locked digest; one stale/unpinned worker makes the stack non-authoritative.
+    containers = (_deploy_source() or {}).get("containers") or {}
+    stale = sorted(n for n, c in containers.items()
+                   if not (c.get("repo_digest") and c["repo_digest"].split("@")[-1] in (be if c.get("kind") == "backend" else fe)))
+    out.update(containers_checked=len(containers), containers_stale=stale,
+               all_containers_match=bool(containers) and not stale if containers else None)
+    ok = (out["authoritative"] and out["sha_matches_running"] and (out["digest_matches_running"] or not production)
+          and not (production and stale))
     out["ok"] = ok if production else True
     if not ok:
-        out["note"] = "rc_lock is not the CI-bound lock for the running build (commit/digest/authoritative mismatch)"
+        out["note"] = ("mixed stack — container(s) not running the locked digest: " + ", ".join(stale)) if stale else \
+            "rc_lock is not the CI-bound lock for the running build (commit/digest/authoritative mismatch)"
     return out
+
+
+def _deploy_source() -> dict | None:
+    try:
+        d = json.load(open(os.path.join(STATE_DIR, "deploy_source.json")))
+    except Exception:  # noqa: BLE001
+        return None
+    return d if isinstance(d, dict) else None
 
 
 def public_release_identity() -> dict:

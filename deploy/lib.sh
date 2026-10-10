@@ -445,6 +445,62 @@ verify_running_sha() {
   echo "   running build_sha verified: ${running}"
 }
 
+# M121-5 — every running app container must run THE provisioned image: a service missing from the registry overlay
+# (or a stale container) would keep an old locally built image forever under --no-build. Records per-service image
+# ids/digests in deploy/state/deploy_source.json ("containers", "mixed") for readiness; fails on a mixed stack.
+app_services() {   # "<service> <backend|frontend>" for every service built from Dockerfile.backend / Dockerfile.frontend
+  docker compose config --format json 2>/dev/null | python3 -c '
+import json, sys
+cfg = json.load(sys.stdin)
+for name, svc in sorted((cfg.get("services") or {}).items()):
+    df = ((svc.get("build") or {}).get("dockerfile") or "")
+    if df.endswith("Dockerfile.backend"): print(name, "backend")
+    elif df.endswith("Dockerfile.frontend"): print(name, "frontend")
+' 2>/dev/null
+}
+
+verify_stack_images() {
+  local want_be want_fe svc kind cid img want bad=0 rows="" repo
+  want_be=$(docker inspect --format '{{.Id}}' "${STOIC_BACKEND_IMAGE:-stoic-backend}" 2>/dev/null || true)
+  want_fe=$(docker inspect --format '{{.Id}}' "${STOIC_FRONTEND_IMAGE:-stoic-frontend}" 2>/dev/null || true)
+  while read -r svc kind; do
+    [ -n "${svc}" ] || continue
+    cid=$(docker compose ps -q "${svc}" 2>/dev/null | head -1)
+    [ -n "${cid}" ] || continue                     # not running here (profile / scaled to 0)
+    img=$(docker inspect --format '{{.Image}}' "${cid}" 2>/dev/null || true)
+    repo=$(docker inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "${img}" 2>/dev/null || true)
+    [ "${kind}" = backend ] && want="${want_be}" || want="${want_fe}"
+    rows="${rows}${svc}|${kind}|${img}|${repo}|$( [ -n "${want}" ] && [ "${img}" = "${want}" ] && echo ok || echo MISMATCH)
+"
+    if [ -z "${want}" ] || [ "${img}" != "${want}" ]; then
+      echo "!! ${svc} runs image ${img:-none} (${repo:-local build}) — expected ${want:-unknown} (${kind} image provisioned this deploy)"; bad=1
+    fi
+  done < <(app_services)
+  record_deploy_source_containers "${rows}" "${bad}"
+  if [ "${bad}" = 1 ]; then
+    echo "!! MIXED STACK: at least one app container does not run the provisioned image (a service missing from docker-compose.registry.yml, or a stale container) — failing the deploy verification"
+    return 1
+  fi
+  echo "   stack images verified: every app container runs the provisioned backend/frontend image"
+}
+
+record_deploy_source_containers() {   # record_deploy_source_containers <rows svc|kind|image|repo_digest|status …> <mixed 0|1>
+  [ -s deploy/state/deploy_source.json ] || return 0
+  python3 - "$1" "$2" deploy/state/deploy_source.json <<'PY' || true
+import json, os, sys
+rows, mixed, out = sys.argv[1], sys.argv[2] == "1", sys.argv[3]
+doc = json.load(open(out))
+containers = {}
+for line in rows.splitlines():
+    parts = line.split("|")
+    if len(parts) == 5 and parts[0]:
+        containers[parts[0]] = {"kind": parts[1], "image_id": parts[2] or None, "repo_digest": parts[3] or None, "status": parts[4]}
+doc["containers"] = containers
+doc["mixed"] = mixed
+json.dump(doc, open(out + ".tmp", "w"), sort_keys=True); os.chmod(out + ".tmp", 0o644); os.replace(out + ".tmp", out)
+PY
+}
+
 # ── Release attestation gate (release review P1-2) ──────────────────────────
 # Production deploys consume ONLY commits that carry a signed
 # release-attestation (CI: SHA, image digests, test counts, scan results,

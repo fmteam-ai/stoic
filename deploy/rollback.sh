@@ -54,6 +54,7 @@ echo "-- verifying API health"
 wait_api_health 30 || { echo "!! API never became healthy after rollback — inspect: docker compose logs backend"; exit 1; }
 echo "   API healthy"
 verify_running_sha || exit 1
+verify_stack_images || { echo "ERROR: mixed stack after rollback — inspect: docker compose ps; deploy/doctor.sh"; exit 1; }   # M121-5
 
 echo "-- verifying release readiness (same policy as install/update: infra checks; release gates block only in production)"
 wait_release_ready 45 >/dev/null || { echo "!! release-readiness not acceptable after rollback (see failing checks above)"; exit 1; }

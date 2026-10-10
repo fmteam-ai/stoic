@@ -220,6 +220,7 @@ echo "-- verifying API health"
 wait_api_health 30 || rollback
 echo "   API healthy"
 verify_running_sha || rollback
+verify_stack_images || rollback   # M121-5 — no mixed stack: every app container runs the provisioned image
 
 echo "-- verifying frontend"
 wait_frontend 30 || rollback
