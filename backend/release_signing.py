@@ -11,6 +11,7 @@ Modes (RELEASE_SIGNER):
   local     — ED25519_SIGNING_KEY_B64 in-process (non-production only); if
               RELEASE_PUBLIC_KEY_B64 is also set it must match the derived key.
 """
+from __future__ import annotations   # host-side: AlmaLinux 9 ships Python 3.9 (no `str | None` at runtime)
 import base64
 import logging
 import os

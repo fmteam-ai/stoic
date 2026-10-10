@@ -508,6 +508,14 @@ jobs:
           shellcheck -S error -x deploy/update.sh deploy/install.sh deploy/bootstrap.sh deploy/doctor.sh deploy/lib.sh
       - name: python3 -c snippets in deploy/ parse under Python 3.6 syntax (M115-1 — AlmaLinux 8 system python)
         run: python3 scripts/check_deploy_python_snippets.py
+      - name: Host-side scripts import under Python 3.9 (M121-4 — AlmaLinux 9 system python; annotations are evaluated at import)
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.9"
+      - name: Host-side scripts import under Python 3.9 — run the gate
+        run: |
+          python3.9 -m pip install -q cryptography requests
+          python3.9 scripts/check_host_python_compat.py
 
   container-build:
     runs-on: ubuntu-latest

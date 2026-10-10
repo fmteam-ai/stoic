@@ -15,6 +15,7 @@ stdlib only (runs on a bare server before any image is built).
 
 Exit codes: 0 ok · 2 content gate failed · 3 fetch failed · 4 bad input.
 """
+from __future__ import annotations   # host-side: AlmaLinux 9 ships Python 3.9 (no `str | None` at runtime)
 import argparse
 import re
 import hashlib

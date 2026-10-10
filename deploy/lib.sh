@@ -562,7 +562,12 @@ verify_attestation() {
         echo "   (override, builds an UNATTESTED copy on this host: deploy/update.sh ${ATTESTATION_TAG:-<tag>} --allow-unattested)"
         return 1
       fi
-      echo "   attestation gate: not required — signed release not available for $(git rev-parse --short "${GIT_SHA}") (see above) → developer lock + on-host build"
+      case "${ATTESTATION_FETCH_STATE:-}" in
+        untagged) echo "   attestation gate: not required — $(git rev-parse --short "${GIT_SHA}") is not a release tag → developer lock + on-host build" ;;
+        not-finished) echo "!! --allow-unattested: ${ATTESTATION_FAIL_REASON} — building an UNATTESTED copy on the host (developer lock + on-host build)" ;;
+        *) echo "!! registry path unavailable: ${ATTESTATION_FAIL_REASON:-unknown} — building on the host instead (developer lock)" ;;
+      esac
+      export ATTESTATION_FAIL_REASON
       return 0
     fi
     echo "   attestation gate: not required (ATTESTATION_REQUIRED=false / dev)"; return 0
@@ -571,12 +576,12 @@ verify_attestation() {
 }
 
 _verify_attestation_core() {
-  local repo tag dest=release/attestation rc
-  ATTESTATION_FETCH_STATE=""; ATTESTATION_TAG=""
+  local repo tag dest=release/attestation rc errlog
+  ATTESTATION_FETCH_STATE=""; ATTESTATION_TAG=""; ATTESTATION_FAIL_REASON=""
   repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${repo}" ] || repo=$(_repo_slug)
   tag=$(git tag --points-at "${GIT_SHA}" | grep -E '^v[0-9]' | head -1 || true)
   if [ -z "${tag}" ]; then
-    ATTESTATION_FETCH_STATE="untagged"
+    ATTESTATION_FETCH_STATE="untagged"; ATTESTATION_FAIL_REASON="${GIT_SHA} carries no v* release tag"
     echo "!! attestation gate: ${GIT_SHA} carries no v* release tag — production deploys only tagged, attested releases"
     return 1
   fi
@@ -584,17 +589,22 @@ _verify_attestation_core() {
   echo "-- attestation gate: ${tag} @ ${GIT_SHA} (repo ${repo})"
   rm -rf "${dest}"
   # GITHUB_TOKEN from ./.env is exported for private-repo asset downloads
-  rc=0
+  rc=0; errlog=$(mktemp)
   GITHUB_TOKEN="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2-)}" \
-    python3 scripts/release_attestation.py fetch --repo "${repo}" --tag "${tag}" --dest "${dest}" || rc=$?
+    python3 scripts/release_attestation.py fetch --repo "${repo}" --tag "${tag}" --dest "${dest}" 2>"${errlog}" || rc=$?
+  cat "${errlog}" >&2
+  # the REAL reason, never a generic one (M121-4: a Python 3.9 TypeError at import looked like "unreachable")
+  local last; last=$(grep -v '^\s*$' "${errlog}" | tail -1 | cut -c1-200); rm -f "${errlog}"
   case "${rc}" in
     0) ;;
-    5) ATTESTATION_FETCH_STATE="not-finished"
+    5) ATTESTATION_FETCH_STATE="not-finished"; ATTESTATION_FAIL_REASON="Release workflow for ${tag} not finished"
        echo "!! Release workflow for ${tag} not finished — its signed assets are not published yet; re-run when the Release workflow is green"; return 1 ;;
-    6) ATTESTATION_FETCH_STATE="forbidden"; return 1 ;;
-    *) ATTESTATION_FETCH_STATE="unreachable"; return 1 ;;
+    6) ATTESTATION_FETCH_STATE="forbidden"; ATTESTATION_FAIL_REASON="release assets forbidden (${last:-HTTP 401/403})"; return 1 ;;
+    3) ATTESTATION_FETCH_STATE="unreachable"; ATTESTATION_FAIL_REASON="GitHub unreachable (${last:-network error})"; return 1 ;;
+    *) ATTESTATION_FETCH_STATE="error"; ATTESTATION_FAIL_REASON="release_attestation.py fetch crashed (exit ${rc}: ${last:-no output}) — python3 $(python3 -c 'import sys;print("%d.%d"%sys.version_info[:2])' 2>/dev/null)"
+       echo "!! attestation tooling failed (exit ${rc}): ${last:-no output}"; return 1 ;;
   esac
-  ensure_cosign || { echo "!! cosign unavailable — cannot verify the release signature"; return 1; }
+  ensure_cosign || { ATTESTATION_FETCH_STATE="error"; ATTESTATION_FAIL_REASON="cosign unavailable"; echo "!! cosign unavailable — cannot verify the release signature"; return 1; }
   # audit P2-2 — identity pinned to the EXACT release workflow at THIS tag
   # (not any workflow in the repo); the Rekor bundle is kept for offline DR verification.
   local ident="https://github.com/${repo}/.github/workflows/release.yml@refs/tags/${tag}"
@@ -604,10 +614,10 @@ _verify_attestation_core() {
       --certificate-identity "${ident}" \
       --certificate-github-workflow-repository "${repo}" \
       --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-    || { echo "!! attestation SIGNATURE invalid or not issued by ${ident}"; return 1; }
+    || { ATTESTATION_FETCH_STATE="error"; ATTESTATION_FAIL_REASON="attestation signature invalid / wrong identity"; echo "!! attestation SIGNATURE invalid or not issued by ${ident}"; return 1; }
   [ -f "${dest}/release-attestation.json.bundle" ] && cp "${dest}/release-attestation.json.bundle" release/attestation.current.bundle
   python3 scripts/release_attestation.py verify --file "${dest}/release-attestation.json" \
-      --sha "${GIT_SHA}" --tag "${tag}" || return 1
+      --sha "${GIT_SHA}" --tag "${tag}" || { ATTESTATION_FETCH_STATE="error"; ATTESTATION_FAIL_REASON="attestation content rejected (release_attestation.py verify — see above)"; return 1; }
   cp "${dest}/release-attestation.json" release/attestation.current.json
   publish_release_truth
   echo "   attestation gate: PASSED — recorded at release/attestation.current.json"
@@ -737,9 +747,10 @@ provision_images() {
           record_deploy_source build-fallback "registry pull/verification failed"
         fi
       else
-        echo "   deploy mode: auto — no attested images for $(git rev-parse --short "${GIT_SHA}") (untagged ref, attestation unavailable or ATTESTATION_REQUIRED=false without a release) → building on this host"
+        local why="${ATTESTATION_FAIL_REASON:-no attested images for this ref}"
+        echo "   deploy mode: auto — ${why} → building on this host"
         build_with_provenance || return 1
-        record_deploy_source build "no attested images for this ref"
+        record_deploy_source build "${why}"
       fi ;;
   esac
 }

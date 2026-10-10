@@ -11,6 +11,7 @@ convenience pointers.
   verify: verify_admission.py release-admission.json --backend-digest D1 --frontend-digest D2 [--tag vX] [--commit SHA]
 Exit 0 = PASS.
 """
+from __future__ import annotations   # host-side: AlmaLinux 9 ships Python 3.9 (no `str | None` at runtime)
 import argparse
 import json
 import re

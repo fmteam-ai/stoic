@@ -185,7 +185,8 @@ def test_auto_mode_adopts_signed_release_even_with_attestation_not_required(tmp_
     (root2 / "release" / "rc_lock.json").write_text(json.dumps({"authoritative": False, "git_commit": "dev"}))
     r = _run(root2, env2, "verify_attestation; echo VA=$?; adopt_release_lock; echo AD=$?; provision_images; echo RC=$?")
     assert "VA=0" in r.stdout and "AD=0" in r.stdout and "RC=0" in r.stdout, r.stdout + r.stderr
-    assert "signed release not available" in r.stdout and "developer lock kept" in r.stdout
+    assert "registry path unavailable: GitHub unreachable" in r.stdout and "building on the host instead" in r.stdout and "developer lock kept" in r.stdout
+    assert _src(root2)["reason"].startswith("GitHub unreachable")                 # M121-4 — the real reason, recorded
     assert json.loads((root2 / "release" / "rc_lock.json").read_text())["authoritative"] is False
     assert not (root2 / "release" / "attestation.current.json").exists() and _src(root2)["source"] == "build"
     # ATTESTATION_REQUIRED (production default) + outage → gate refuses (unchanged fail-closed behaviour)
@@ -274,11 +275,48 @@ def test_release_not_finished_refuses_tag_in_auto_mode_unless_overridden(tmp_pat
     assert "VA=1" in r.stdout and "STATE=not-finished" in r.stdout, r.stdout + r.stderr
     assert "Release workflow for v9.9.9 not finished" in r.stdout and "--allow-unattested" in r.stdout
     r = _run(root, dict(env, STUB_FETCH_RC="5", STOIC_ALLOW_UNATTESTED="1"), "verify_attestation; echo VA=$?")
-    assert "VA=0" in r.stdout and "developer lock + on-host build" in r.stdout                 # explicit override
+    assert "VA=0" in r.stdout and "--allow-unattested: Release workflow for v9.9.9 not finished — building an UNATTESTED copy" in r.stdout   # explicit override
     r = _run(root, dict(env, STUB_FETCH_RC="3"), "verify_attestation; echo VA=$?; echo STATE=$ATTESTATION_FETCH_STATE")
     assert "VA=0" in r.stdout and "STATE=unreachable" in r.stdout                               # outage never blocks
     r = _run(root, dict(env, STUB_FETCH_RC="5"), "sed -i 's/^ATTESTATION_REQUIRED=false$//' .env; verify_attestation; echo VA=$?")
     assert "VA=1" in r.stdout and "not finished" in r.stdout                                    # required mode: same clear message
+
+
+def test_attestation_tooling_crash_is_reported_with_real_reason(tmp_path):
+    # M121-4 — the VPS case: system python 3.9 → `str | None` TypeError at import → fetch exit 1 looked like "unreachable"
+    root, env = _world(tmp_path, env_lines=("APP_ENV=production", "GITHUB_REPO=x/y", "ATTESTATION_REQUIRED=false"), attested=False)
+    (root / "scripts" / "release_attestation.py").write_text(
+        "import sys\nraise TypeError(\"unsupported operand type(s) for |: 'type' and 'NoneType'\")\n")
+    r = _run(root, env, "verify_attestation; echo VA=$?; echo STATE=$ATTESTATION_FETCH_STATE; provision_images >/dev/null; echo RC=$?")
+    assert "VA=0" in r.stdout and "STATE=error" in r.stdout and "RC=0" in r.stdout, r.stdout + r.stderr
+    assert "attestation tooling failed (exit 1): TypeError: unsupported operand" in r.stdout
+    assert "!! registry path unavailable: release_attestation.py fetch crashed (exit 1: TypeError" in r.stdout
+    assert "no attested images for this ref" not in r.stdout
+    src = _src(root)
+    assert src["source"] == "build" and "fetch crashed (exit 1: TypeError: unsupported operand" in src["reason"] and "python3 3." in src["reason"]
+
+
+def test_host_python_compat_gate(tmp_path):
+    gate = os.path.join(ROOT, "scripts", "check_host_python_compat.py")
+    r = subprocess.run([sys.executable, gate], capture_output=True, text=True, cwd=ROOT, timeout=120)
+    assert r.returncode == 0 and "ok    scripts/release_attestation.py" in r.stdout and "backend/release_signing.py" in r.stdout, r.stdout + r.stderr
+    for f in ("release_attestation.py", "verify_admission.py", "release_consistency_check.py", "signer_probe.py", "sync_env_examples.py", "verify_ea_release.py"):
+        assert "from __future__ import annotations" in open(os.path.join(ROOT, "scripts", f)).read(), f
+    for f in ("release_signing.py", "model_manifest.py"):
+        assert "from __future__ import annotations" in open(os.path.join(ROOT, "backend", f)).read(), f
+    assert "check_host_python_compat.py" in open(os.path.join(ROOT, ".github", "workflows", "ci.yml")).read()
+    # the gate really detects the failure class (a `str | None` def) under the running interpreter when it is < 3.10;
+    # under newer interpreters we at least prove it runs the discovered scripts
+    py39 = shutil.which("python3.9") or (os.path.exists("/tmp/venv39/bin/python") and "/tmp/venv39/bin/python")
+    if py39:
+        r = subprocess.run([py39, gate], capture_output=True, text=True, cwd=ROOT, timeout=180)
+        assert r.returncode == 0, r.stdout + r.stderr
+        bad = tmp_path / "deploy"; bad.mkdir(); (tmp_path / "scripts").mkdir()
+        (bad / "x.sh").write_text("python3 scripts/bad_sig.py\n")
+        (tmp_path / "scripts" / "bad_sig.py").write_text("def f(x: str | None) -> list[str]:\n    return []\n")
+        (tmp_path / "scripts" / "check_host_python_compat.py").write_text(open(gate).read()); (tmp_path / "backend").mkdir()
+        r = subprocess.run([py39, str(tmp_path / "scripts" / "check_host_python_compat.py")], capture_output=True, text=True, timeout=120)
+        assert r.returncode == 1 and "FAIL  scripts/bad_sig.py: TypeError" in r.stdout, r.stdout + r.stderr
 
 
 def test_release_attestation_fetch_exit_codes(monkeypatch, tmp_path):

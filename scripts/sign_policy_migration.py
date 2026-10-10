@@ -11,6 +11,7 @@ the Inventory Go-Live panel loads that file and submits it with the expectation.
       --account-ids <uuid>,<uuid> --demo-only --reason "4-week MT5 demo on two attested demo accounts" \
       --issuer ops@example.com --expires-days 45
 """
+from __future__ import annotations   # host-side: AlmaLinux 9 ships Python 3.9 (no `str | None` at runtime)
 import argparse
 import json
 import os
