@@ -167,7 +167,11 @@ ensure_bundle_key_pins() {
 # signature against the release workflow identity, check the lock's digest + commit, then write it into
 # the checkout (release/rc_lock.json, backend/BUILD_SHA) and keep a copy per commit for rollbacks.
 adopt_release_lock() {
-  attestation_required || { echo "   release lock: attestation not required — developer lock kept"; return 0; }
+  # A18 Part 3 — adopt whenever THIS commit's attestation was verified (required or found by auto mode)
+  if ! attestation_for_head; then
+    attestation_required && { echo "!! release lock: no verified attestation for ${GIT_SHA:-HEAD} — run verify_attestation first"; return 1; }
+    echo "   release lock: attestation not available/required — developer lock kept"; publish_release_truth; return 0
+  fi
   local dest=release/attestation tag repo ident want got
   repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${repo}" ] || repo=$(_repo_slug)
   tag=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("tag",""))' release/attestation.current.json 2>/dev/null || true)
@@ -216,17 +220,19 @@ PY
     cp "${dest}/${f}" "${asset}"
   done
   echo "   release lock: authoritative rc_lock of ${tag} adopted (signed SHA256SUMS ✓, commit ✓) · BUILD_SHA stamped · model manifest + release summary adopted"
-  [ "$(deploy_mode)" = "registry" ] || echo "   note: LIVE release gate compares the running image digest with the locked CI digest — a locally BUILT image never matches; set DEPLOY_MODE=registry for live authority (demo accounts are exempt, N101-2)"
+  publish_release_truth
+  [ "$(deploy_mode)" != "build" ] || echo "   note: LIVE release gate compares the running image digest with the locked CI digest — a locally BUILT image never matches; remove DEPLOY_MODE=build (auto) for live authority (demo accounts are exempt, N101-2)"
 }
 
 # Put a previously adopted authoritative lock back after `git checkout` (rollback to PREV).
 restore_adopted_lock() {
   local sha="$1"
-  [ -s "deploy/releases/rc_lock-${sha}.json" ] || return 0
+  [ -s "deploy/releases/rc_lock-${sha}.json" ] || { publish_release_truth; return 0; }
   cp "deploy/releases/rc_lock-${sha}.json" release/rc_lock.json
   printf '%s\n' "${sha}" > backend/BUILD_SHA
   [ -s "deploy/releases/MODEL_MANIFEST-${sha}.json" ] && cp "deploy/releases/MODEL_MANIFEST-${sha}.json" backend/models_store/MODEL_MANIFEST.json
   [ -s "deploy/releases/RELEASE_SUMMARY-${sha}.md" ] && cp "deploy/releases/RELEASE_SUMMARY-${sha}.md" docs/RELEASE_SUMMARY.md
+  publish_release_truth
   echo "   release lock: re-adopted authoritative rc_lock for ${sha}"
 }
 
@@ -284,6 +290,7 @@ resolve_git_sha() {
 # into ./.env (production boot + risk snapshots require STOIC_IMAGE_DIGEST).
 build_with_provenance() {
   resolve_git_sha || return 1
+  disable_registry_compose_file   # a build never runs under the registry overlay (pull_policy: never + pinned images)
   docker compose build || { echo "ERROR: image build failed — see the build log above (nothing was restarted)"; return 1; }
   local img
   img=$(docker compose config --images 2>/dev/null | grep -m1 backend || true)
@@ -459,12 +466,43 @@ ensure_cosign() {
     && sudo install -m 0755 /tmp/cosign /usr/local/bin/cosign
 }
 
-# build (default): rebuild images locally from the checkout.
-# registry: pull the exact CI-built GHCR images by attested digest (no rebuild).
+# DEPLOY_MODE in ./.env — auto (default, A18 Part 3): pull the signed CI images by attested digest when the
+# ref is an attested release and the pull verifies; otherwise (or on a GHCR outage) build on the host.
+# registry: pull only — never build (strict). build: always build locally (never pull).
 deploy_mode() {
   local v
-  v=$( { grep -E '^DEPLOY_MODE=' .env 2>/dev/null || true; } | cut -d= -f2-)
-  case "${v}" in registry) echo registry;; *) echo build;; esac
+  v=$( { grep -E '^DEPLOY_MODE=' .env 2>/dev/null || true; } | cut -d= -f2- | tr -d "\"'")
+  case "${v}" in registry) echo registry;; build) echo build;; *) echo auto;; esac
+}
+
+# The verified attestation on disk belongs to the commit being deployed (verify_attestation wrote it this run).
+attestation_for_head() {
+  [ -s release/attestation.current.json ] || return 1
+  [ -n "${GIT_SHA:-}" ] || return 1
+  [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("commit",""))' release/attestation.current.json 2>/dev/null)" = "${GIT_SHA}" ]
+}
+
+# auto mode can deploy from the registry when the attestation of THIS commit carries both image digests and the
+# signed admission manifest was fetched with it.
+registry_available() {
+  [ "$(deploy_mode)" = "build" ] && return 1
+  attestation_for_head || return 1
+  [ -s release/attestation/release-admission.json ] || return 1
+  python3 scripts/release_attestation.py verify --file release/attestation.current.json --sha "${GIT_SHA}" --require-images >/dev/null 2>&1
+}
+
+# deploy/state/deploy_source.json — what the running stack was provisioned from (registry | build | build-fallback);
+# the backend shows it in release readiness (ro mount /app/state).
+record_deploy_source() {   # record_deploy_source <source> <reason>
+  mkdir -p deploy/state 2>/dev/null || return 0
+  python3 - "$1" "$2" "${GIT_SHA:-}" "${STOIC_BACKEND_IMAGE:-}" "$(deploy_mode)" deploy/state/deploy_source.json <<'PY' || true
+import json, os, sys
+from datetime import datetime
+src, reason, sha, img, mode, out = sys.argv[1:7]
+doc = {"source": src, "reason": reason or None, "commit": sha or None, "backend_image": img or None, "deploy_mode": mode,
+       "at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
+json.dump(doc, open(out + ".tmp", "w"), sort_keys=True); os.chmod(out + ".tmp", 0o644); os.replace(out + ".tmp", out)
+PY
 }
 
 attestation_required() {
@@ -507,9 +545,21 @@ verify_release_provenance() {
 
 verify_attestation() {
   resolve_git_sha || return 1
+  rm -f release/attestation.current.json release/attestation.current.bundle   # never reuse another commit's truth
   if ! attestation_required; then
+    # A18 Part 3 — auto mode still LOOKS for the signed release: if it is there, the authoritative lock is adopted
+    # and the images can be pulled by digest; if not, this stays a developer/on-host build (no gate).
+    if [ "$(deploy_mode)" = "auto" ]; then
+      if _verify_attestation_core; then return 0; fi
+      echo "   attestation gate: not required — signed release not available for $(git rev-parse --short "${GIT_SHA}") (see above) → developer lock + on-host build"
+      return 0
+    fi
     echo "   attestation gate: not required (ATTESTATION_REQUIRED=false / dev)"; return 0
   fi
+  _verify_attestation_core
+}
+
+_verify_attestation_core() {
   local repo tag dest=release/attestation
   repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${repo}" ] || repo=$(_repo_slug)
   tag=$(git tag --points-at "${GIT_SHA}" | grep -E '^v[0-9]' | head -1 || true)
@@ -537,7 +587,19 @@ verify_attestation() {
   python3 scripts/release_attestation.py verify --file "${dest}/release-attestation.json" \
       --sha "${GIT_SHA}" --tag "${tag}" || return 1
   cp "${dest}/release-attestation.json" release/attestation.current.json
+  publish_release_truth
   echo "   attestation gate: PASSED — recorded at release/attestation.current.json"
+}
+
+# The backend reads the host's release truth through the ro mount ./deploy/state:/app/state (a REGISTRY image
+# cannot carry the lock that holds its own digest, so the copy baked into the image is never the authoritative one).
+publish_release_truth() {
+  mkdir -p deploy/state/release 2>/dev/null || return 0
+  local f
+  for f in release/attestation.current.json release/rc_lock.json; do
+    [ -s "${f}" ] && cp "${f}" "deploy/state/release/$(basename "${f}")" && chmod 644 "deploy/state/release/$(basename "${f}")"
+  done
+  return 0
 }
 
 # ── Registry image deploys (DEPLOY_MODE=registry) ───────────────────────────
@@ -554,13 +616,26 @@ ensure_registry_compose_file() {
   esac
 }
 
+disable_registry_compose_file() {   # on-host build: drop the registry overlay + pinned image refs from ./.env
+  [ -f .env ] || return 0
+  local cf new
+  cf=$( { grep -E '^COMPOSE_FILE=' .env 2>/dev/null || true; } | cut -d= -f2-)
+  case ":${cf}:" in
+    *:docker-compose.registry.yml:*)
+      new=$(printf '%s' "${cf}" | tr ':' '\n' | grep -vx 'docker-compose.registry.yml' | paste -sd: -)
+      set_kv .env COMPOSE_FILE "${new:-docker-compose.yml}" ;;
+  esac
+  sed -i.bak '/^STOIC_BACKEND_IMAGE=/d;/^STOIC_FRONTEND_IMAGE=/d' .env && rm -f .env.bak
+  unset STOIC_BACKEND_IMAGE STOIC_FRONTEND_IMAGE
+}
+
 registry_login() {
   local tok user
   tok="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2-)}"
-  [ -n "${tok}" ] || return 0   # public packages need no login
+  [ -n "${tok}" ] || { echo "   (no GITHUB_TOKEN in ./.env — pulling anonymously; private GHCR packages need a read:packages token, docs/DEPLOYMENT.md → Registry deploys)"; return 0; }
   user=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2- | cut -d/ -f1); [ -n "${user}" ] || user=$(_repo_slug | cut -d/ -f1)
   echo "${tok}" | docker login ghcr.io -u "${user:-stoic}" --password-stdin >/dev/null 2>&1 \
-    || echo "   (ghcr.io login failed — continuing; public images still pull)"
+    || echo "   (ghcr.io login failed — continuing; public images still pull, private ones need a valid read:packages GITHUB_TOKEN)"
 }
 
 pull_attested_images() {
@@ -597,13 +672,12 @@ pull_attested_images() {
         --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null \
       || { echo "!! image SIGNATURE invalid or not issued by ${repo} workflows: ${d}"; return 1; }
     echo "   image signature verified: ${d}"
-    docker pull -q "${d}" >/dev/null || { echo "!! pull failed: ${d}"; return 1; }
+    docker pull -q "${d}" >/dev/null || { echo "!! pull failed: ${d} (GHCR outage, or a private package without a read:packages GITHUB_TOKEN in ./.env)"; return 1; }
     id=$(docker inspect --format '{{index .RepoDigests 0}}' "${d}" 2>/dev/null || true)
     [ "${id}" = "${d}" ] || { echo "!! pulled digest ${id:-none} != attested ${d}"; return 1; }
   done
   touch .env
   ensure_registry_compose_file
-  set_kv .env DEPLOY_MODE registry
   set_kv .env STOIC_BACKEND_IMAGE "${be}"
   set_kv .env STOIC_FRONTEND_IMAGE "${fe}"
   set_kv .env STOIC_IMAGE_DIGEST "${be#*@}"
@@ -612,16 +686,40 @@ pull_attested_images() {
   echo "   image provenance (registry): ${be#*@}"
 }
 
-# Make the images for the checked-out commit available: build locally
-# (default) or pull the attested digests (DEPLOY_MODE=registry).
+# Make the images for the checked-out commit available.
+#   registry : pull the attested digests — strict, never builds (an unverified tree must not become "the release")
+#   build    : always build on the host
+#   auto     : registry when this commit is an attested release and pull+verification succeed; otherwise build on the
+#              host (logged + deploy/state/deploy_source.json → readiness `deploy_source`) — a GHCR outage never blocks
 provision_images() {
   resolve_git_sha || return 1
-  if [ "$(deploy_mode)" = "registry" ]; then
-    echo "   deploy mode: registry — pulling CI-built images by attested digest (no local build)"
-    pull_attested_images
-  else
-    build_with_provenance
-  fi
+  local mode; mode=$(deploy_mode)
+  case "${mode}" in
+    registry)
+      echo "   deploy mode: registry — pulling CI-built images by attested digest (no local build)"
+      pull_attested_images || return 1
+      record_deploy_source registry "DEPLOY_MODE=registry" ;;
+    build)
+      echo "   deploy mode: build — building on this host (DEPLOY_MODE=build)"
+      build_with_provenance || return 1
+      record_deploy_source build "DEPLOY_MODE=build" ;;
+    *)
+      if registry_available; then
+        echo "   deploy mode: auto — attested release found: pulling CI-built images by digest"
+        if pull_attested_images; then
+          record_deploy_source registry "attested release $(git rev-parse --short "${GIT_SHA}")"
+        else
+          echo "!! registry pull/verification failed — falling back to an on-host build of the same commit (deploy/state/deploy_source.json records it; the LIVE digest gate stays red until a registry deploy succeeds)"
+          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) registry-fallback-build sha=${GIT_SHA}" >> deploy/releases.log
+          build_with_provenance || return 1
+          record_deploy_source build-fallback "registry pull/verification failed"
+        fi
+      else
+        echo "   deploy mode: auto — no attested images for $(git rev-parse --short "${GIT_SHA}") (untagged ref, attestation unavailable or ATTESTATION_REQUIRED=false without a release) → building on this host"
+        build_with_provenance || return 1
+        record_deploy_source build "no attested images for this ref"
+      fi ;;
+  esac
 }
 
 # `docker compose up` for the active deploy mode — registry mode must never

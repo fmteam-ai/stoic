@@ -81,7 +81,7 @@ def test_n102_3_release_ships_model_manifest_and_summary_as_signed_assets_and_up
 def test_n102_4_6_docs_and_attestation_env_var():
     dep = _read("docs/DEPLOYMENT.md")
     assert "Pre-step on a host still running main100/main101" in dep and "/root/.stoic-backup-pass" in dep
-    assert "ATTESTATION_REQUIRED=false" in dep and "registry mode ALWAYS requires attestation" in dep
+    assert "ATTESTATION_REQUIRED=false" in dep and "`registry` | pull only, strict" in dep
     chk = _read("docs/PRODUCTION_DEPLOY_CHECKLIST.md")
     assert "RELEASE_SIGNER_TOKEN=<SIGNER_TOKEN>" not in chk and "RELEASE_SIGNER_BUNDLE_TOKEN=" in chk
     assert "BUNDLE_PUBLIC_KEY_B64" in chk

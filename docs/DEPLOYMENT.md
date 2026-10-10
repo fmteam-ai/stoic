@@ -263,10 +263,30 @@ provenance check (`deploy/lib.sh adopt_release_lock`):
    signed `SHA256SUMS`; copies are kept as `deploy/releases/*-<sha>.*` so a rollback re-adopts
    the previous release's files.
 
-The image build copies both files, so the running backend sees the authoritative lock.
-**LIVE authority still needs `DEPLOY_MODE=registry`**: the release gate compares the running
-image digest with the digest locked by CI, and a locally *built* image never matches
-(docs/PUBLISH_RUNBOOK.md "registry mode"). Attested DEMO accounts are exempt (N101-2).
+The image build copies both files, so the running backend sees the authoritative lock; the host's
+verified copies are also published to `deploy/state/release/` (ro mount `/app/state`), which the
+backend reads **first** — a registry image cannot carry the lock that holds its own digest.
+
+### Registry deploys (default since v1.60.12 — A18 Part 3)
+`DEPLOY_MODE` in `./.env` (unset = **auto**):
+
+| mode | behaviour |
+|---|---|
+| **auto** (default) | the ref is an attested release (signed attestation + admission manifest + both digests) → `cosign verify` each image, `docker pull` **by digest**, pin them for `docker-compose.registry.yml`; otherwise (untagged ref, assets unavailable, GHCR outage, pull/verification failure) → **on-host build of the same commit**, logged as `registry-fallback-build` in `deploy/releases.log` and in `deploy/state/deploy_source.json` (readiness `deploy_source` = WARN until a registry deploy succeeds). An update is never blocked by GHCR. |
+| `registry` | pull only, strict — any pull/verification failure refuses the release (never builds an unverified tree). |
+| `build` | always build on the host (the LIVE digest gate stays red: a locally built image never matches the locked CI digest). |
+
+- **Attestation in auto mode** is fetched even when `ATTESTATION_REQUIRED=false`: when the signed
+  release exists its authoritative `rc_lock.json`, `BUILD_SHA`, model manifest and summary are adopted
+  (readiness `rc_lock` / `release_attestation` green); when it does not, the developer lock is kept and
+  the deploy proceeds as before.
+- **Private GHCR packages**: put a **read-only** token in `./.env` — `GITHUB_TOKEN=<fine-grained PAT, Packages: read>`
+  (classic: scope `read:packages` only, no `repo`/`write`). The same line is used to download the release assets
+  of a private repo. Public packages need no token (`registry_login` says so).
+- **Rollback** (`deploy/rollback.sh <tag>` or the automatic one): the target's attestation is fetched again,
+  its lock re-adopted and its digests pulled; without an attestation the target is built on the host.
+- The release-asset check `release_consistency_check.py --strict --commit … --backend-digest … --frontend-digest …`
+  runs inside `release.yml` on every tag against the frozen tree; the host repeats it after adoption.
 
 ### Demo-only install mode (production host, before the first authoritative release)
 Since main97 a production host (`APP_ENV=production`) sets **every** broker account close-only
@@ -288,12 +308,14 @@ Keep a copy of the passphrase in your password manager. From this release on, `i
 Then, in **`./.env`** (a line in the file — `update.sh` also honours an exported variable, N102-6):
 ```
 APP_ENV=production            # keep
-ATTESTATION_REQUIRED=false    # provenance runs non-strict (developer snapshot accepted)
-# DEPLOY_MODE unset (= build) — registry mode ALWAYS requires attestation
+ATTESTATION_REQUIRED=false    # provenance runs non-strict (developer snapshot accepted) — auto mode still adopts a signed release when one exists
+# DEPLOY_MODE unset (= auto) — registry when the ref is an attested release, on-host build otherwise
+STOIC_READINESS_POLICY=onboarding-close-only   # M120-3 — update.sh reads it from here (and backend/.env); remove when the gates are green
+UPDATE_HOLD_ON_FAILURE=1                       # optional: keep a failed verification running for inspection
 # CRYPTO_LIVE_TRADING_ENABLED / BINANCE_LIVE_ENABLED unset
 ```
 ```bash
-UPDATE_HOLD_ON_FAILURE=1 STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh
+deploy/update.sh            # flags/exports still override the file lines
 ```
 Expect `attestation gate: not required` and `developer-snapshot` in the output. Then Admin →
 Demo Readiness → *04 · Live authority gates* lists the release-gate verdict per account:

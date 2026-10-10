@@ -312,9 +312,10 @@ async def release_readiness(request: Request):
     # audit P1-5 — runtime release truth: the signed CI attestation that
     # deploy/lib.sh verified for THIS checkout (release/attestation.current.json)
     # is exposed here and compared with the running build SHA / image digest.
-    from release_truth import release_attestation_check, rc_lock_check
+    from release_truth import release_attestation_check, rc_lock_check, deploy_source_check
     checks["release_attestation"] = release_attestation_check(is_production())
     checks["rc_lock"] = rc_lock_check(is_production())
+    checks["deploy_source"] = deploy_source_check()   # A18 Part 3 — registry | build | build-fallback (warn)
     try:
         from seed import ticket_index_check
         checks["unique_ticket_index"] = await ticket_index_check(db)   # A6/H12

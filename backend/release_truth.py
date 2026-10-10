@@ -3,7 +3,12 @@ recorded by deploy/lib.sh and reconcile it with what is actually running."""
 import json
 import os
 
-ATT_PATHS = ("release/attestation.current.json", "../release/attestation.current.json",
+# A18 Part 3 — the HOST's verified truth comes first (ro mount ./deploy/state:/app/state, written by deploy/lib.sh
+# publish_release_truth): a registry image cannot carry the lock that holds its own digest, so the copies baked into
+# the image are only the fallback (on-host builds).
+STATE_DIR = os.environ.get("STOIC_STATE_DIR") or "/app/state"
+ATT_PATHS = (os.path.join(STATE_DIR, "release", "attestation.current.json"),
+             "release/attestation.current.json", "../release/attestation.current.json",
              "/stoic/release/attestation.current.json")
 
 
@@ -51,7 +56,31 @@ def release_attestation_check(production: bool) -> dict:
     return out
 
 
-LOCK_PATHS = ("release/rc_lock.json", "../release/rc_lock.json", "/stoic/release/rc_lock.json")
+LOCK_PATHS = (os.path.join(STATE_DIR, "release", "rc_lock.json"),
+              "release/rc_lock.json", "../release/rc_lock.json", "/stoic/release/rc_lock.json")
+
+
+def deploy_source_check() -> dict:
+    """A18 Part 3 — what the running images were provisioned from (deploy/state/deploy_source.json): registry (signed
+    CI digests), build (on-host), build-fallback (registry pull/verification failed → on-host build of the same commit).
+    Informational; `warn` on a fallback so the operator sees that the live digest gate cannot be green."""
+    p = os.path.join(STATE_DIR, "deploy_source.json")
+    try:
+        d = json.load(open(p))
+    except Exception:  # noqa: BLE001
+        d = None
+    if not isinstance(d, dict):
+        return {"ok": True, "severity": "ok", "available": False, "source": None,
+                "detail": "no deploy_source.json yet (written by deploy/update.sh provision_images)"}
+    src = d.get("source")
+    sev = "warn" if src == "build-fallback" else "ok"
+    detail = {"registry": "running the signed CI images pulled by attested digest",
+              "build": f"built on this host ({d.get('reason') or 'DEPLOY_MODE=build'})",
+              "build-fallback": f"REGISTRY FALLBACK — {d.get('reason')}; on-host build of the same commit is running "
+                                "(re-run deploy/update.sh <tag> once GHCR is reachable for live digest authority)"}.get(src, str(src))
+    return {"ok": True, "severity": sev, "available": True, "source": src, "reason": d.get("reason"), "commit": d.get("commit"),
+            "backend_image": d.get("backend_image"), "deploy_mode": d.get("deploy_mode"), "at": d.get("at"), "detail": detail,
+            "fix": "deploy/update.sh <tag> --yes" if src == "build-fallback" else None}
 
 
 def rc_lock_check(production: bool) -> dict:

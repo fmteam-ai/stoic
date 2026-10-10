@@ -43,7 +43,10 @@ git checkout --detach "${REF}"
 echo "-- provisioning images ($(deploy_mode)) + restarting stack"
 if [ "$(deploy_mode)" = "registry" ]; then
   verify_attestation || { echo "ERROR: ${REF} is not an attested release — registry rollback needs its digests"; exit 1; }
+elif [ "$(deploy_mode)" = "auto" ]; then
+  verify_attestation || true        # attested target → registry digests + authoritative lock; otherwise on-host build
 fi
+adopt_release_lock || { echo "ERROR: could not adopt the signed release lock of ${REF}"; exit 1; }
 provision_images || { echo "ERROR: image provisioning failed during rollback"; exit 1; }
 compose_up
 

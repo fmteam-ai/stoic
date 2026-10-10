@@ -20,6 +20,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 . deploy/lib.sh
 . deploy/preflight.sh
+# M120-3 — onboarding defaults live in ./.env (deploy-production.yml reads the same line); backend/.env is honoured
+# too. Explicit environment / flags win. The backend never sees STOIC_READINESS_POLICY (audit H1: scrubbed below).
+_file_default() { local v; v=$( { grep -E "^$1=" .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+                  [ -n "${v}" ] || v=$( { grep -E "^$1=" backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'"); printf '%s' "${v}"; }
+POLICY_SOURCE="environment"
+if [ -z "${STOIC_READINESS_POLICY:-}" ]; then
+  STOIC_READINESS_POLICY=$(_file_default STOIC_READINESS_POLICY); [ -n "${STOIC_READINESS_POLICY}" ] && POLICY_SOURCE="./.env" || POLICY_SOURCE="default"
+fi
+if [ -z "${UPDATE_HOLD_ON_FAILURE:-}" ]; then UPDATE_HOLD_ON_FAILURE=$(_file_default UPDATE_HOLD_ON_FAILURE); fi
 capture_readiness_policy || exit 1            # audit H1: policy is process-local, scrubbed from env
 
 REF="origin/main"
@@ -32,6 +41,7 @@ for a in "$@"; do
   esac
 done
 ONBOARDING=0; [ "$(readiness_policy)" = "onboarding-close-only" ] && ONBOARDING=1
+[ -n "$(readiness_policy)" ] && echo "   readiness policy: $(readiness_policy) (from ${POLICY_SOURCE})$( [ "${UPDATE_HOLD_ON_FAILURE:-0}" = 1 ] && echo ' · UPDATE_HOLD_ON_FAILURE=1')"
 LOCK=/tmp/stoic-deploy.lock
 JAM_MARKER=deploy/state/update-jam   # M119-3 — written when the recreate jams; HEAD==ref + marker ⇒ resume
 export STOIC_UPDATE_REF="${REF}"
@@ -133,7 +143,7 @@ rollback() {
   restore_tracked_release_files
   git checkout --detach "${PREV}"
   restore_adopted_lock "${PREV}"
-  if [ "$(deploy_mode)" = "registry" ]; then verify_attestation >/dev/null 2>&1 || true; fi
+  [ "$(deploy_mode)" = "build" ] || verify_attestation >/dev/null 2>&1 || true   # registry/auto: the PREV digests come from its attestation
   provision_images || true
   compose_up
   echo "!! rolled back to $(git rev-parse --short HEAD). Inspect: docker compose logs backend --tail 100"
@@ -295,6 +305,8 @@ print("   deployment state: " + state + " · trading posture: " + posture + tail
 ' || echo "!! could not record deploy/releases/deployment_state.json"
 
 echo "   API + frontend + full topology verified on $(git rev-parse --short HEAD)"
+[ -s deploy/state/deploy_source.json ] && echo "   images: $(python3 -c 'import json,sys;d=json.load(open(sys.argv[1]));print(d.get("source"),"—",d.get("reason") or "")' deploy/state/deploy_source.json 2>/dev/null)"
+[ "${POLICY_SOURCE}" = "./.env" ] && [ "${ONBOARDING}" = 1 ] && echo "   note: STOIC_READINESS_POLICY=onboarding-close-only comes from ./.env — remove the line once Admin → Inventory & Go-Live Gate is green so the next update enforces the release gates"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) update-from=$(git rev-parse --short "${PREV}")$([ "${ONBOARDING}" = 1 ] && echo ' policy=onboarding-close-only')" >> deploy/releases.log
 docker compose ps --format '{{.Name}}\t{{.Status}}'
 echo "== update complete =="

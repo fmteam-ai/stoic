@@ -182,6 +182,48 @@ if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
   esac
 fi
 
+hdr "key & certificate ages (rotate keys every 180 d · renew the Origin CA cert 30 d before expiry — M120-2)"
+KA=deploy/state/key_ages.json
+if [ ! -s "${KA}" ] && [ "$(id -u)" = 0 ] && [ -f deploy/preflight.sh ]; then
+  ( . deploy/lib.sh; . deploy/preflight.sh; write_key_ages_file ) >/dev/null 2>&1 || true
+fi
+if [ -s "${KA}" ]; then
+  while IFS='|' read -r lvl line; do
+    case "${lvl}" in WARN) warn "${line}" ;; *) ok "${line}" ;; esac
+  done < <(python3 - "${KA}" <<'PY'
+import json, sys
+from datetime import datetime, timezone
+d = json.load(open(sys.argv[1])); now = datetime.now(timezone.utc)
+def ts(s):
+    try: return datetime.fromisoformat(str(s).replace("Z", "+00:00")).astimezone(timezone.utc) if s else None
+    except ValueError: return None
+def key(label, created, fix):
+    c = ts(created)
+    if not c: print("PASS|%s: created date unknown (%s)" % (label, "no created= in release/release_key.fingerprint" if "release" in label else "key file missing")); return
+    age = (now - c).days; left = 180 - age
+    lvl = "WARN" if left < 0 else "PASS"
+    due = ("OVERDUE by %d d" % -left) if left < 0 else ("rotate in %d d" % left)
+    print("%s|%s: %d days old (created %s) — %s%s" % (lvl, label, age, c.date(), due, (" → " + fix) if left < 0 else ""))
+rk = d.get("release_key") or {}; key("CI release key %s" % (rk.get("key_id") or "?"), rk.get("created"), "docs/RELEASE_KEY_ROTATION.md")
+rt = d.get("runtime_key") or {}; key("runtime (sidecar) key", rt.get("created"), "sudo bash deploy/rotate-runtime-key.sh")
+oc = d.get("origin_cert") or {}
+if oc.get("present"):
+    na = ts(oc.get("not_after"))
+    if not na: print("PASS|Origin CA certificate: notAfter unparseable")
+    else:
+        left = (na - now).days
+        lvl = "WARN" if left < 30 else "PASS"
+        print("%s|Origin CA certificate: expires %s (%s) — %s" % (lvl, na.date(), ("in %d d" % left) if left >= 0 else ("EXPIRED %d d ago" % -left),
+              "renew now: Cloudflare → SSL/TLS → Origin Server, replace secrets/origin_cert.pem + origin_key.pem, deploy/restart.sh caddy" if left < 30 else "renew 30 d before expiry"))
+else:
+    print("PASS|Origin CA certificate: not installed (no Cloudflare origin profile)")
+print("PASS|ages measured %s (deploy/state/key_ages.json — refreshed by update.sh and stoic-host-profile.timer)" % (d.get("generated_at") or "?"))
+PY
+)
+else
+  warn "deploy/state/key_ages.json missing — run as root (doctor writes it) or: sudo bash deploy/host-profile-refresh.sh"
+fi
+
 hdr "configuration"
 if [ -f .stoic-installed ]; then ok "installer: LOCKED since $(grep '^installed_at=' .stoic-installed | cut -d= -f2-) ($(grep '^mode=' .stoic-installed | cut -d= -f2-)$(lsattr .stoic-installed 2>/dev/null | grep -q '^....i' && echo ', immutable'))"
 elif [ "$(envval backend/.env APP_ENV)" = production ]; then warn "installer: not locked — a re-run of bootstrap/install.sh would rebuild the stack (finish an install via deploy/bootstrap.sh to lock it)"; fi
