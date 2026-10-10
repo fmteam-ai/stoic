@@ -21,6 +21,7 @@ import hashlib
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -204,13 +205,28 @@ def _gh(url: str, accept: str) -> bytes:
         return r.read()
 
 
+# fetch exit codes (deploy/lib.sh _verify_attestation_core reads them):
+#   3 = GitHub unreachable / server error (outage)        5 = release not finished (no release yet or asset missing)
+#   6 = forbidden (private repo without a usable GITHUB_TOKEN)
+FETCH_UNREACHABLE, FETCH_NOT_FINISHED, FETCH_FORBIDDEN = 3, 5, 6
+
+
 def cmd_fetch(a) -> int:
     api = f"https://api.github.com/repos/{a.repo}/releases/tags/{a.tag}"
     try:
         rel = json.loads(_gh(api, "application/vnd.github+json"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"fetch failed: no GitHub release for {a.tag} yet (Release workflow not finished?)", file=sys.stderr)
+            return FETCH_NOT_FINISHED
+        if e.code in (401, 403):
+            print(f"fetch failed: {api}: HTTP {e.code} — private repo? set a read-only GITHUB_TOKEN in ./.env", file=sys.stderr)
+            return FETCH_FORBIDDEN
+        print(f"fetch failed: {api}: {e}", file=sys.stderr)
+        return FETCH_UNREACHABLE
     except Exception as e:  # noqa: BLE001
         print(f"fetch failed: {api}: {e}", file=sys.stderr)
-        return 3
+        return FETCH_UNREACHABLE
     assets = {x["name"]: x["url"] for x in rel.get("assets", [])}
     os.makedirs(a.dest, exist_ok=True)
     for name in ("release-attestation.json", "release-attestation.json.sig",
@@ -223,14 +239,14 @@ def cmd_fetch(a) -> int:
         if name not in assets:
             if name.endswith(".bundle") or name == "MODEL_MANIFEST.json":
                 continue   # Rekor bundle (older releases) / model manifest (model-less releases) are optional
-            print(f"fetch failed: asset {name} missing on release {a.tag}",
+            print(f"fetch failed: asset {name} missing on release {a.tag} — Release workflow not finished (or failed)",
                   file=sys.stderr)
-            return 3
+            return FETCH_NOT_FINISHED
         try:
             data = _gh(assets[name], "application/octet-stream")
         except Exception as e:  # noqa: BLE001
             print(f"fetch failed: {name}: {e}", file=sys.stderr)
-            return 3
+            return FETCH_UNREACHABLE
         open(os.path.join(a.dest, name), "wb").write(data)
         print(f"fetched {name} ({len(data)} bytes)")
     return 0

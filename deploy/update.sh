@@ -7,6 +7,9 @@
 #   deploy/update.sh             → latest origin/main
 #   deploy/update.sh v1.4.2      → a tag
 #   deploy/update.sh <sha>       → an exact commit
+#   deploy/update.sh <tag> --reprovision   → HEAD already is <tag>: redo attestation gate + lock adoption + registry pull
+#                                            (or build) + restart + verification, same backup/hold/rollback (M121-1)
+#   deploy/update.sh <tag> --allow-unattested → build a tag on the host although its Release workflow has not finished
 #   UPDATE_HOLD_ON_FAILURE=1 deploy/update.sh → keep the new build running on
 #   verification failure (print failing checks, no auto-rollback) for inspection
 #   STOIC_READINESS_POLICY=onboarding-close-only deploy/update.sh [ref]
@@ -37,9 +40,12 @@ for a in "$@"; do
     --onboarding-close-only) STOIC_DEPLOY_POLICY=onboarding-close-only ;;
     --no-host-changes) PREFLIGHT_NO_HOST_CHANGES=1 ;;   # refuse instead of applying missing host prerequisites
     --yes|-y) PREFLIGHT_YES=1 ;;                        # no prompts (release key pin, dockerd restart)
+    --reprovision) REPROVISION=1 ;;                     # M121-1 — HEAD already is <ref>: redo attestation + registry pull/build + restart + verify
+    --allow-unattested) STOIC_ALLOW_UNATTESTED=1 ;;     # M121-1 — build a tag on the host although its Release workflow has not finished
     *) REF="$a" ;;
   esac
 done
+REPROVISION="${REPROVISION:-${STOIC_UPDATE_REPROVISION:-0}}"; export STOIC_ALLOW_UNATTESTED="${STOIC_ALLOW_UNATTESTED:-0}"
 ONBOARDING=0; [ "$(readiness_policy)" = "onboarding-close-only" ] && ONBOARDING=1
 [ -n "$(readiness_policy)" ] && echo "   readiness policy: $(readiness_policy) (from ${POLICY_SOURCE})$( [ "${UPDATE_HOLD_ON_FAILURE:-0}" = 1 ] && echo ' · UPDATE_HOLD_ON_FAILURE=1')"
 LOCK=/tmp/stoic-deploy.lock
@@ -93,15 +99,17 @@ else
     git reset -q --hard HEAD
   fi
   git checkout --detach "${REF}"
-  if [ "$(git rev-parse HEAD)" = "${PREV}" ]; then
+  if [ "$(git rev-parse HEAD)" = "${PREV}" ] && [ "${REPROVISION}" != 1 ]; then
     echo "   already on $(git rev-parse --short HEAD) — nothing to publish"
+    echo "   (re-run the attestation + registry pull/build + restart + verification for this commit: deploy/update.sh ${REF} --reprovision)"
     exit 0
   fi
+  [ "${REPROVISION}" = 1 ] && echo "== reprovisioning $(git rev-parse --short HEAD): attestation gate → lock adoption → pull/build → restart → verify (backup taken, rollback = on-host build of the same commit) =="
   # The scripts sourced above came from the OLD checkout. Re-exec so the rest of
   # the update (gates, build, verification, rollback policy) runs with the NEW
   # deploy/update.sh + deploy/lib.sh.
   # The policy is handed over EXPLICITLY (H1) — the re-exec'd script captures and scrubs it again.
-  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" STOIC_UPDATE_BACKUP="${PRE_BACKUP}" PREFLIGHT_NO_HOST_CHANGES="${PREFLIGHT_NO_HOST_CHANGES}" PREFLIGHT_YES="${PREFLIGHT_YES}" STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh "${REF}"
+  exec env STOIC_UPDATE_REEXEC=1 STOIC_UPDATE_PREV="${PREV}" STOIC_UPDATE_BACKUP="${PRE_BACKUP}" STOIC_UPDATE_REPROVISION="${REPROVISION}" STOIC_ALLOW_UNATTESTED="${STOIC_ALLOW_UNATTESTED}" PREFLIGHT_NO_HOST_CHANGES="${PREFLIGHT_NO_HOST_CHANGES}" PREFLIGHT_YES="${PREFLIGHT_YES}" STOIC_READINESS_POLICY="$(readiness_policy)" bash deploy/update.sh "${REF}"
 fi
 
 # Pre-build gates fail BEFORE anything on the host changed: restore the checkout
@@ -143,8 +151,13 @@ rollback() {
   restore_tracked_release_files
   git checkout --detach "${PREV}"
   restore_adopted_lock "${PREV}"
-  [ "$(deploy_mode)" = "build" ] || verify_attestation >/dev/null 2>&1 || true   # registry/auto: the PREV digests come from its attestation
-  provision_images || true
+  if [ "${REPROVISION}" = 1 ]; then
+    # M121-1 — PREV == HEAD: the registry images of this very commit just failed → the safe way back is the on-host build
+    DEPLOY_MODE_OVERRIDE=build provision_images || true
+  else
+    [ "$(deploy_mode)" = "build" ] || verify_attestation >/dev/null 2>&1 || true   # registry/auto: the PREV digests come from its attestation
+    provision_images || true
+  fi
   compose_up
   echo "!! rolled back to $(git rev-parse --short HEAD). Inspect: docker compose logs backend --tail 100"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) auto-rollback-from=${REF}" >> deploy/releases.log
