@@ -662,7 +662,10 @@ async def delete_account(account_id: str, force: bool = False,
     await db.bot_configs.delete_one(
         {"user_id": user["id"], "account_id": account_id}
     )
-    return {"ok": True}
+    # M119-5 — pairing tokens + open alerts go with the account (an orphan token kept VPS PAIRING SILENT firing)
+    from account_cleanup import cleanup_deleted_account
+    cleanup = await cleanup_deleted_account(db, account_id)
+    return {"ok": True, **{k: v for k, v in cleanup.items() if k != "account_id"}}
 
 
 @router.get("/{account_id}/installations")

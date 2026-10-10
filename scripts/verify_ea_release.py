@@ -186,10 +186,15 @@ def check_entry(ea: dict) -> list:
         fails.append("EX5 entry is UNSIGNED")
     else:
         try:
-            from release_signing import verify_hex, release_key_pinned, RELEASE_KEY_UNPINNED_MESSAGE, _mode
+            from release_signing import (verify_hex, release_key_pinned, RELEASE_KEY_UNPINNED_MESSAGE, _mode,
+                                         key_id_accepted, release_public_key_for)
+            kid = sig.get("key_id")
             if not release_key_pinned() and _mode(os.environ) != "local":
                 fails.append(RELEASE_KEY_UNPINNED_MESSAGE)
-            elif not verify_hex(_canonical_payload(ea), sig["sig_hex"], purpose="ea-release"):
+            elif not key_id_accepted(kid):
+                fails.append(f"EX5 entry is signed by key id {kid!r} which is not accepted (revoked, unknown, or a rotation "
+                             "not yet reflected in RELEASE_SIGNER_KEY_ID / RELEASE_ACCEPTED_KEY_IDS — docs/RELEASE_KEY_ROTATION.md)")
+            elif not verify_hex(_canonical_payload(ea), sig["sig_hex"], release_public_key_for(kid), purpose="ea-release"):
                 fails.append("Ed25519 signature does NOT verify")
         except Exception as e:  # noqa: BLE001
             fails.append(f"signature verification unavailable: {e}")

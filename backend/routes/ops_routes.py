@@ -261,6 +261,14 @@ async def release_readiness(request: Request):
             "MQL5 externally unverified — mandatory before Demo Production "
             "Proof: compile the exact RC MQ5 in Windows MetaEditor (0 errors), "
             "then scripts/verify_ea_release.py --sign")}
+    # S-1 — release key rotation: WARN while a previous key id is still accepted; a misconfigured set blocks
+    from release_signing import release_key_rotation_status
+    _rot = release_key_rotation_status()
+    checks["release_key_rotation"] = {
+        **_rot, "ok": _rot["ok"],
+        "severity": "block" if not _rot["ok"] else ("warn" if _rot["in_transition"] else "ok"),
+        "detail": (_rot["problems"][0] if _rot["problems"] else _rot["warning"]),
+        "fix": None if _rot["ok"] and not _rot["in_transition"] else "docs/RELEASE_KEY_ROTATION.md"}
     # host suitability (M114-7) — the installer/update preflight records a SIGNED host profile
     # (deploy/preflight.sh record_host_profile → host_profile.py verifies it at read time): a shared
     # web/mail host (cPanel/WHM, Plesk, DirectAdmin, httpd/exim/dovecot) blocks LIVE trading, warns in

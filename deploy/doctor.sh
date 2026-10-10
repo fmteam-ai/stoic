@@ -167,6 +167,21 @@ if [ "$(id -u)" = 0 ]; then
   else warn "host profile file: deploy/state/host_profile.json missing — readiness falls back to backend/.env (unverified once stale); run: sudo bash deploy/host-profile-refresh.sh"; fi
 fi
 
+hdr "host (virtualisation · clock · docker storage driver)"
+VIRT=$(systemd-detect-virt 2>/dev/null || true); [ -d /proc/vz ] && [ ! -d /proc/bc ] && VIRT="${VIRT:-openvz}"
+ok "virtualisation: ${VIRT:-none/bare-metal} · kernel $(uname -r)"
+if timedatectl show 2>/dev/null | grep -q "NTPSynchronized=yes"; then ok "clock: NTP-synchronised"
+elif [ "${VIRT}" = openvz ]; then ok "clock: host-managed (OpenVZ — chronyd cannot run inside the container; the node keeps the clock) · $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+else warn "clock: not NTP-synchronised — TLS/JWT/TOTP need a correct clock (enable chronyd)"; fi
+if command -v docker >/dev/null && docker info >/dev/null 2>&1; then
+  DDRV=$(docker info -f '{{.Driver}}' 2>/dev/null || echo "?")
+  case "${DDRV}" in
+    overlay2) ok "docker storage driver: overlay2" ;;
+    overlayfs) ok "docker storage driver: overlayfs (containerd snapshotter, Docker ≥ 28 default) — overlay2-specific checks below are informational" ;;
+    *) warn "docker storage driver: ${DDRV} — STOIC is validated on overlay2/overlayfs" ;;
+  esac
+fi
+
 hdr "configuration"
 if [ -f .stoic-installed ]; then ok "installer: LOCKED since $(grep '^installed_at=' .stoic-installed | cut -d= -f2-) ($(grep '^mode=' .stoic-installed | cut -d= -f2-)$(lsattr .stoic-installed 2>/dev/null | grep -q '^....i' && echo ', immutable'))"
 elif [ "$(envval backend/.env APP_ENV)" = production ]; then warn "installer: not locked — a re-run of bootstrap/install.sh would rebuild the stack (finish an install via deploy/bootstrap.sh to lock it)"; fi

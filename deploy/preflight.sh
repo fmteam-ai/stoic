@@ -203,14 +203,27 @@ RELEASE_KEY_FINGERPRINT_FILE="${RELEASE_KEY_FINGERPRINT_FILE:-release/release_ke
 expected_release_fingerprint() {   # expected_release_fingerprint <key_id> → committed SHA256:… for that key id (empty = none committed)
   awk -v k="$1" '$1 == k {print $2}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
 }
+release_key_status() {   # release_key_status <key_id> → current|transition|revoked (S-1; empty = no status column / unknown id)
+  awk -v k="$1" '$1 == k {print $3}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
+}
+current_release_key_id() {   # the key id the repo marks `current` (empty when the file has no status column)
+  awk '$3 == "current" {print $1}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
+}
 
 ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFLIGHT_YES)
-  local cur url kid want sidecar body key fp exp
+  local cur url kid want sidecar body key fp exp st repo_cur
   cur=$( { grep -E '^RELEASE_PUBLIC_KEY_B64=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   want=$( { grep -E '^RELEASE_SIGNER_KEY_ID=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'"); want="${want:-stoic-release-ed25519-v1}"
   url=$( { grep -E '^RELEASE_SIGNER_PUBLIC_URL=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   url="${RELEASE_SIGNER_PUBLIC_URL:-${url:-https://stoic-signer.fly.dev}}"
   exp=$(expected_release_fingerprint "${want}")
+  st=$(release_key_status "${want}"); repo_cur=$(current_release_key_id)
+  # S-1 — the repo says which key id is current: a host still on a revoked/transition id must re-pin (docs/RELEASE_KEY_ROTATION.md)
+  case "${st}" in
+    revoked) echo "!! release key: RELEASE_SIGNER_KEY_ID=${want} is REVOKED in ${RELEASE_KEY_FINGERPRINT_FILE} — re-pin to ${repo_cur:-the current key}: sudo bash deploy/rotate-release-pin.sh ${repo_cur:-<key_id>}" ;;
+    transition) echo "!! release key: RELEASE_SIGNER_KEY_ID=${want} is a TRANSITION key — the current CI key is ${repo_cur}; re-pin: sudo bash deploy/rotate-release-pin.sh ${repo_cur}" ;;
+    *) [ -n "${repo_cur}" ] && [ "${repo_cur}" != "${want}" ] && echo "!! release key: repo marks ${repo_cur} current but RELEASE_SIGNER_KEY_ID=${want} — re-pin: sudo bash deploy/rotate-release-pin.sh ${repo_cur}" ;;
+  esac
   if [ -n "${cur}" ]; then
     # M114-3 — an existing pin is checked against the committed fingerprint and the live signer; drift WARNS (never silently rewritten)
     fp=$(key_fingerprint "${cur}" || echo "invalid")
@@ -236,6 +249,7 @@ ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFL
   fi
   # audit #15 P3 — no trust-on-first-use: every pinnable key id must be fingerprinted in the repo
   [ -n "${exp}" ] || { echo "!! release key: no committed fingerprint for ${want} in ${RELEASE_KEY_FINGERPRINT_FILE} — NOT pinning (add the fingerprint to the repo via a signed release first)"; return 0; }
+  [ "${st}" = revoked ] && { echo "!! release key: ${want} is REVOKED in ${RELEASE_KEY_FINGERPRINT_FILE} — NOT pinning"; return 0; }
   sidecar=$(cat secrets/signer_public_key 2>/dev/null || true)
   [ -n "${sidecar}" ] && [ "${key}" = "${sidecar}" ] && { echo "!! release key: ${url} returned the LOCAL runtime sidecar key — refusing to pin it as the CI release key (N102-5)"; return 0; }
   echo "   key_id      ${kid}"

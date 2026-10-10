@@ -171,6 +171,14 @@ async def evaluate(db, now: datetime | None = None, *, raise_alert, notify=None,
          "installer_version": 1, "last_heartbeat": 1, "synthetic": 1, "status": 1, "user_id": 1}
     ).sort("installer_paired_at", -1).limit(SCAN_LIMIT)]                       # newest pairings first — deterministic
     open_keys = {a["dedup_key"] async for a in db.ops_alerts.find({"kind": KIND, "acked_at": None}, {"dedup_key": 1})}
+    # M119-5 — a token/alert whose account no longer exists is an orphan, never an incident: sweep it so it
+    # cannot keep the alert row alive (and `active` never carries a key for a missing account)
+    try:
+        from account_cleanup import purge_orphan_pairing_tokens
+        for o in await purge_orphan_pairing_tokens(db):
+            open_keys.discard(dedup_key(o["account_id"]))
+    except Exception as e:  # noqa: BLE001 — the sweep is hygiene; the detector must still run
+        logger.warning("orphan pairing token sweep failed: %s", type(e).__name__)
     p = plan(accounts, open_keys, now, url=webrequest_url(), is_test=is_test)
     if len(accounts) >= SCAN_LIMIT:
         # N107-note1 — a truncated scan proves nothing about the accounts it did not see: keep their open

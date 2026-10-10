@@ -176,15 +176,30 @@ case "${1:-backup}" in
     echo "-- 1/5 entering maintenance mode: stopping API + all workers (no writes during restore)"
     docker compose stop ${APP_SERVICES}
 
-    echo "-- 2/5 validating archive (dry run — no data touched)"
-    if ! docker compose exec -T "${MONGO_SVC}" sh -c "mongorestore ${MONGO_AUTH} --archive --gzip --dryRun" < "${PLAIN}"; then
+    # M119-4 — never restore admin.* (system.users / system.roles): on a fresh host the users already come from
+    # deploy/mongo-init.js + the same secrets/, and replacing admin.system.users mid-restore invalidates the
+    # restore session itself → every later index build fails "Unauthorized" and the restore dies at the end.
+    RESTORE_NS_EXCLUDE="${RESTORE_NS_EXCLUDE:---nsExclude admin.* --nsExclude config.* --nsExclude local.*}"
+    echo "-- 2/5 validating archive (dry run — no data touched; admin/config/local excluded)"
+    if ! docker compose exec -T "${MONGO_SVC}" sh -c "mongorestore ${MONGO_AUTH} --archive --gzip ${RESTORE_NS_EXCLUDE} --dryRun" < "${PLAIN}"; then
       echo "ERROR: archive failed validation — NOT restoring. Stack left stopped;"
       echo "       restart with: docker compose up -d"
       exit 1
     fi
 
-    echo "-- 3/5 restoring (drop + replace)"
-    docker compose exec -T "${MONGO_SVC}" sh -c "mongorestore ${MONGO_AUTH} --archive --gzip --drop" < "${PLAIN}"
+    echo "-- 3/5 restoring data + indexes (drop + replace; users/roles come from mongo-init + secrets/)"
+    if ! docker compose exec -T "${MONGO_SVC}" sh -c "mongorestore ${MONGO_AUTH} --archive --gzip ${RESTORE_NS_EXCLUDE} --drop" < "${PLAIN}"; then
+      echo "ERROR: mongorestore failed — data may be PARTIAL. Stack left stopped; inspect: docker compose logs ${MONGO_SVC} --tail 100"
+      echo "       then re-run this restore (it drops and replaces every collection) or roll back to the previous archive"
+      exit 1
+    fi
+    echo "-- 3a/5 app user round trip on the restored database"
+    if docker compose exec -T "${MONGO_SVC}" sh -c 'mongosh --quiet -u "$MONGO_APP_USER" -p "$(cat /run/secrets/mongo_app_password)" --authenticationDatabase "$DB_NAME" "$DB_NAME" --eval "print(db.getCollectionNames().length)"' >/dev/null 2>&1; then
+      echo "   app user (mongo-init.js + secrets/mongo_app_password) authenticates against the restored data"
+    else
+      echo "!! the app user cannot authenticate after the restore — secrets/mongo_app_password on this host must equal the"
+      echo "   source host's (restore the secrets archive first: step 3b) or re-run deploy/mongo-init.js against this volume"
+    fi
     echo "-- 3b/5 secrets/ (N99-4): restoring missing secret files from the matching encrypted archive"
     _restore_secrets "${FILE}"
 
