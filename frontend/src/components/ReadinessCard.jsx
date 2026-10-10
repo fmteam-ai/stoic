@@ -115,6 +115,15 @@ export const ReadinessCard = () => {
                     )}
                 </div>
             )}
+            {checks.deploy_source && checks.deploy_source.source === "build-fallback" && (
+                <div className="border border-[#FFB020]/40 bg-[#FFB020]/5 px-3 py-2 mt-3" data-testid="readiness-deploy-source-fallback">
+                    <div className="font-mono text-[9px] tracking-widest text-[#FFB020]">IMAGE SOURCE · REGISTRY FALLBACK</div>
+                    <div className="font-mono text-xs text-[#E4E4E7] mt-0.5">{checks.deploy_source.detail}</div>
+                    {checks.deploy_source.fix && (
+                        <code className="block font-mono text-[11px] text-[#00FF41] mt-1" data-testid="readiness-deploy-source-fix">{checks.deploy_source.fix}</code>
+                    )}
+                </div>
+            )}
             {checks.key_ages && checks.key_ages.due && checks.key_ages.due.length > 0 && (
                 <div className="border border-[#FFB020]/40 bg-[#FFB020]/5 px-3 py-2 mt-3" data-testid="readiness-key-ages">
                     <div className="font-mono text-[9px] tracking-widest text-[#FFB020]">KEY / CERTIFICATE ROTATION DUE</div>

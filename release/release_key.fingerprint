@@ -6,4 +6,4 @@
 # deploy/preflight.sh refuses to pin a fetched key whose fingerprint differs or whose status is revoked; update this
 # file only with a signed key rotation (docs/RELEASE_KEY_ROTATION.md — deploy/signer/rotate_fly_signer_key.sh prints the line).
 stoic-release-ed25519-v2 SHA256:d01efc8d4288cd5266218e65b20ef93e415d5696f15b5d9b456ea560c0bb8620 current created=2026-10-10
-stoic-release-ed25519-v1 SHA256:4c214d393287aac3983178b671e76a35a29d6f0b5e6c815729cc84afaa404d3d transition created=2026-10-08
+stoic-release-ed25519-v1 SHA256:4c214d393287aac3983178b671e76a35a29d6f0b5e6c815729cc84afaa404d3d revoked created=2026-10-08
