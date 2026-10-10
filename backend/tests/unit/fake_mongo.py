@@ -158,6 +158,19 @@ class FakeCollection:
                 n += 1
         return _Res(matched_count=n, modified_count=n)
 
+    async def delete_many(self, q):
+        keep = [r for r in self.rows if not _match(r, q)]
+        n = len(self.rows) - len(keep)
+        self.rows[:] = keep
+        return _Res(deleted_count=n)
+
+    async def delete_one(self, q):
+        for i, r in enumerate(self.rows):
+            if _match(r, q):
+                del self.rows[i]
+                return _Res(deleted_count=1)
+        return _Res(deleted_count=0)
+
     async def create_index(self, *a, **kw):
         self.indexes.append((a, kw))
         return "idx"

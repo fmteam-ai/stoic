@@ -71,7 +71,7 @@ jobs:
           RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
           RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
           RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
-          RELEASE_SIGNER_KEY_ID: stoic-release-ed25519-v1
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID || 'stoic-release-ed25519-v1' }}   # S-1 — follows the rotated key id
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
           STOIC_INSTALLATION_ID: ${{ inputs.installation_id }}
           IN_INSTALLATION_ID: ${{ inputs.installation_id }}

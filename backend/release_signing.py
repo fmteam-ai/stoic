@@ -386,13 +386,77 @@ def public_key_b64(purpose: str = "ea-release") -> str:
     return base64.b64encode(pub).decode()
 
 
-def revoked_key_ids() -> set:
-    return {k.strip() for k in (os.environ.get("RELEASE_REVOKED_KEY_IDS") or "").split(",") if k.strip()}
+def _csv(env, name: str) -> list:
+    return [k.strip() for k in (env.get(name) or "").split(",") if k.strip()]
+
+
+def revoked_key_ids(env=None) -> set:
+    env = env if env is not None else os.environ
+    return set(_csv(env, "RELEASE_REVOKED_KEY_IDS"))
+
+
+def transition_key_ids(env=None) -> list:
+    """S-1 — RELEASE_ACCEPTED_KEY_IDS: previous release key ids still accepted during a rotation (never revoked ones)."""
+    env = env if env is not None else os.environ
+    cur, rev = key_id(env), revoked_key_ids(env)
+    return [k for k in _csv(env, "RELEASE_ACCEPTED_KEY_IDS") if k != cur and k not in rev]
+
+
+def transition_public_keys(env=None) -> dict:
+    """RELEASE_TRANSITION_PUBLIC_KEYS='<key_id>=<b64>[,<key_id>=<b64>]' — public keys of the transition key ids."""
+    env = env if env is not None else os.environ
+    out = {}
+    for item in _csv(env, "RELEASE_TRANSITION_PUBLIC_KEYS"):
+        kid, _, pub = item.partition("=")
+        if kid.strip() and _b64_key_ok(pub.strip()):
+            out[kid.strip()] = pub.strip()
+    return out
+
+
+def accepted_release_key_ids(env=None) -> set:
+    env = env if env is not None else os.environ
+    return {key_id(env)} | set(transition_key_ids(env))
+
+
+def release_public_key_for(kid, env=None) -> str | None:
+    """Public key that must verify a release signature carrying `kid`: the pinned current key (None ⇒ the
+    verifier's default — the local key in local mode), or the transition key's pinned public key. An
+    unknown/revoked key id yields an unusable value so verification FAILS closed."""
+    env = env if env is not None else os.environ
+    if kid == key_id(env):
+        return (env.get("RELEASE_PUBLIC_KEY_B64") or "").strip() or None
+    if kid in transition_key_ids(env):
+        return transition_public_keys(env).get(kid) or "revoked-or-unknown"
+    return "revoked-or-unknown"
+
+
+def release_key_rotation_status(env=None) -> dict:
+    """Readiness view of S-1: a rotation is FINISHED only when no transition key is accepted any more."""
+    env = env if env is not None else os.environ
+    cur, trans, rev = key_id(env), transition_key_ids(env), sorted(revoked_key_ids(env))
+    pubs = transition_public_keys(env)
+    missing = [k for k in trans if k not in pubs]
+    problems = []
+    if cur in rev:
+        problems.append(f"current release key id {cur} is listed in RELEASE_REVOKED_KEY_IDS — nothing can verify")
+    if missing:
+        problems.append("RELEASE_ACCEPTED_KEY_IDS without a public key in RELEASE_TRANSITION_PUBLIC_KEYS: " + ", ".join(missing))
+    warning = None
+    if trans:
+        warning = (f"release key rotation in progress — {', '.join(trans)} still accepted next to {cur}; after every host "
+                   "re-pinned and the EA record / policies were re-signed, move them to RELEASE_REVOKED_KEY_IDS")
+    return {"current_key_id": cur, "transition_key_ids": trans, "revoked_key_ids": rev,
+            "in_transition": bool(trans), "ok": not problems, "problems": problems or None, "warning": warning}
 
 
 def key_id_accepted(kid, purpose: str = "ea-release") -> bool:
-    """A14-7 — a signature only counts under the CURRENT, un-revoked key id for its purpose."""
-    return bool(kid) and kid == key_id(purpose=purpose) and kid not in revoked_key_ids()
+    """A14-7 — a signature only counts under the CURRENT, un-revoked key id for its purpose (S-1: release
+    purposes also accept the transition key ids while a rotation is in progress)."""
+    if not kid or kid in revoked_key_ids():
+        return False
+    if purpose in RELEASE_PURPOSES:
+        return kid in accepted_release_key_ids()
+    return kid == key_id(purpose=purpose)
 
 
 def verify_hex(data: bytes, signature_hex: str,

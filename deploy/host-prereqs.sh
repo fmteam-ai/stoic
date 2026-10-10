@@ -79,34 +79,41 @@ else
     fi
   fi
   PROP=$(findmnt -no PROPAGATION "${DROOT}" 2>/dev/null || echo "?")
-  case "${PROP}" in
-    *slave*) note PASS "${DROOT} propagation is '${PROP}' (slave)" ;;
-    *)
+  ODIR="${STOIC_OVERLAY_DIR:-${DROOT}/overlay2}"
+  OPROP=$(findmnt -no PROPAGATION "${ODIR}" 2>/dev/null || echo "?")   # M117-7 — want unbindable (VirtFS rbind copies)
+  NEED_FIX=0
+  case "${PROP}" in *slave*) ;; *) NEED_FIX=1 ;; esac
+  case "${OPROP}" in *unbindable*) ;; *) [ -d "${ODIR}" ] && NEED_FIX=1 ;; esac
+  if [ "${NEED_FIX}" = 0 ]; then note PASS "${DROOT} propagation is '${PROP}' (slave) · overlay2 is unbindable"
+  else
+      WHAT="${DROOT} propagation is '${PROP}'"; [ "${NEED_FIX}" = 1 ] && case "${PROP}" in *slave*) WHAT="${DROOT}/overlay2 propagation is '${OPROP}' (want unbindable — cPanel VirtFS rbind copies)";; esac
       if [ "${CHECK}" = 1 ]; then
-        note FIX "${DROOT} propagation is '${PROP}' → would make it slave (one dockerd restart, ~20 s)"; HARD_FAIL=1
+        note FIX "${WHAT} → would fix (one dockerd restart, ~20 s)"; HARD_FAIL=1
       elif ! docker info >/dev/null 2>&1; then
-        note WARN "dockerd not running — ${DROOT} will become slave at the next docker start (ExecStartPre)"
+        note WARN "dockerd not running — ${DROOT} becomes slave / overlay2 unbindable at the next docker start (ExecStartPre)"
       else
-        echo "!! ${DROOT} propagation is '${PROP}' — making it a slave mount requires ONE dockerd restart: every container stops for ~20 s (API offline)."
+        echo "!! ${WHAT} — fixing it requires ONE dockerd restart: every container stops for ~20 s (API offline)."
         if [ "${YES}" != 1 ]; then
-          if [ -t 0 ]; then read -r -p "   proceed now? [y/N] " ans; [ "${ans}" = y ] || [ "${ans}" = Y ] || { note FAIL "docker root propagation left '${PROP}' (operator declined) — re-run with --yes"; HARD_FAIL=1; }
-          else note FAIL "docker root propagation is '${PROP}' and no terminal to confirm — re-run with --yes"; HARD_FAIL=1; fi
+          if [ -t 0 ]; then read -r -p "   proceed now? [y/N] " ans; [ "${ans}" = y ] || [ "${ans}" = Y ] || { note FAIL "docker root propagation left as is (operator declined) — re-run with --yes"; HARD_FAIL=1; }
+          else note FAIL "docker root propagation needs a fix and no terminal to confirm — re-run with --yes"; HARD_FAIL=1; fi
         fi
         if [ "${HARD_FAIL}" = 0 ]; then
-          log "stopping docker (${PROP} → slave)"
+          log "stopping docker (${PROP} → slave · overlay2 → unbindable)"
           systemctl stop docker docker.socket 2>/dev/null || true
           "${SLAVE_BIN}" "${DROOT}" || true
           systemctl reset-failed docker docker.socket 2>/dev/null || true
           systemctl start docker
           for _ in $(seq 1 45); do docker info >/dev/null 2>&1 && break; sleep 2; done
           PROP=$(findmnt -no PROPAGATION "${DROOT}" 2>/dev/null || echo "?")
-          case "${PROP}" in
-            *slave*) log "${DROOT} propagation is now '${PROP}'"; note FIX "${DROOT} made a slave mount (dockerd restarted once)" ;;
-            *) note FAIL "${DROOT} propagation is still '${PROP}' after the restart — run: systemctl stop docker && ${SLAVE_BIN} ${DROOT} && systemctl start docker"; HARD_FAIL=1 ;;
+          OPROP=$(findmnt -no PROPAGATION "${ODIR}" 2>/dev/null || echo "?")
+          [ -d "${ODIR}" ] || OPROP=unbindable
+          case "${PROP}:${OPROP}" in
+            *slave*:*unbindable*) log "${DROOT} propagation is now '${PROP}', overlay2 '${OPROP}'"; note FIX "${DROOT} slave · overlay2 unbindable (dockerd restarted once)" ;;
+            *) note FAIL "${DROOT} propagation '${PROP}' / overlay2 '${OPROP}' after the restart — run: systemctl stop docker && ${SLAVE_BIN} ${DROOT} && systemctl start docker"; HARD_FAIL=1 ;;
           esac
         fi
-      fi ;;
-  esac
+      fi
+  fi
 fi
 
 # ---------------------------------------------------------------- (c) MountFlags=slave drop-ins for leaking units

@@ -180,6 +180,8 @@ async def delete_crypto_account(account_id: str, user=Depends(get_current_user))
     db = get_db()
     acc = await _load_user_account(db, user, account_id)
     await db.accounts.delete_one({"_id": acc["_id"]})
+    from account_cleanup import cleanup_deleted_account
+    await cleanup_deleted_account(db, str(acc["_id"]))   # M119-5
     return {"ok": True, "deleted_id": str(acc["_id"])}
 
 

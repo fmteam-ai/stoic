@@ -26,6 +26,12 @@ host_prereqs_missing() {   # 0 = something missing (prints what), 1 = all presen
     droot=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker)
     prop=$(findmnt -no PROPAGATION "${droot}" 2>/dev/null || echo "?")
     case "${prop}" in *slave*) ;; *) echo "   docker root ${droot} propagation '${prop}' (want slave)"; missing=1 ;; esac
+    # M117-7 — overlay2 must be UNBINDABLE: a cPanel VirtFS `rbind /var/lib` copies live overlay mounts (→ rm EBUSY)
+    odir="${STOIC_OVERLAY_DIR:-${droot}/overlay2}"
+    if [ -d "${odir}" ]; then
+      oprop=$(findmnt -no PROPAGATION "${odir}" 2>/dev/null || echo "?")
+      case "${oprop}" in *unbindable*) ;; *) echo "   docker overlay2 ${odir} propagation '${oprop}' (want unbindable — VirtFS rbind copies)"; missing=1 ;; esac
+    fi
   fi
   # M117-1 — the signed host-profile refresh timer is a prerequisite too: without it the profile expires 24 h after
   # every update (live: blocks trading daily). Checked on EVERY update so hosts that already have (a)+(b) get it.
@@ -85,16 +91,35 @@ clean_leftovers() {   # detach orphan copies, then rm the leftovers — containe
   # shellcheck disable=SC2086
   docker rm -f ${ids} >/dev/null 2>&1 || true
   list=$(leftover_containers)
-  [ -z "${list// /}" ] && echo "   leftovers removed" || { echo "!! still present after rm -f:"; printf '%s\n' "${list}" | sed 's/^/   /'; return 1; }
+  if [ -n "${list// /}" ]; then
+    # M117-5 — "unlinkat …/merged: device or resource busy": the dead container's overlay is STILL MOUNTED in the
+    # host namespace because dockerd's umount hit EBUSY (cPanel scanners/php-fpm/dovecot holding files inside the
+    # rootfs). Nothing runs in a dead container ⇒ lazy-unmount its merged dir, show the holders, retry rm once.
+    printf '%s\n' "${list}" | awk '{print $1}' | while read -r id; do
+      [ -n "${id}" ] || continue
+      err=$(docker rm -f "${id}" 2>&1 >/dev/null | tail -1 || true)
+      [ -n "${err}" ] && echo "   ${id:0:12}: ${err#Error response from daemon: }"
+      m=$(docker inspect --format '{{.GraphDriver.Data.MergedDir}}' "${id}" 2>/dev/null || true)
+      if [ -n "${m}" ] && [ "$(id -u)" = 0 ] && mountpoint -q "${m}" 2>/dev/null; then
+        command -v fuser >/dev/null 2>&1 && { fuser -vm "${m}" 2>&1 | awk 'NR>1 && NR<=7 {print "      holder: "$0}' || true; }
+        repair_journal leftover_umount "id=${id} merged=${m}" 2>/dev/null || true
+        umount -l "${m}" 2>/dev/null && echo "   ${id:0:12}: lazily unmounted ${m}"
+        docker rm -f "${id}" >/dev/null 2>&1 && echo "   ${id:0:12}: removed after unmount"
+      fi
+    done
+    list=$(leftover_containers)
+  fi
+  [ -z "${list// /}" ] && echo "   leftovers removed" || { echo "!! still present after rm -f (exclude /var/lib/docker from imunify360/clamd/lfd/maldet, or restart the holder service shown above, then re-run):"; printf '%s\n' "${list}" | sed 's/^/   /'; return 1; }
 }
 
 reboot_recipe() {
   echo "ERROR: container recreate still fails with overlay EBUSY after one cleanup+retry — reboot required:"
   echo '   docker update --restart=no $(docker ps -aq)'
   echo '   reboot'
-  echo '   docker ps -aq | xargs -r docker rm -f'
-  echo '   docker compose up -d'
-  echo "   then a clean deploy/update.sh <ref> (or deploy/restart.sh --env-changed) lifts TRADING PAUSED"
+  echo "   # after the reboot (images are already built — the update RESUMES at the restart step, M119-3):"
+  echo "   cd $(pwd) && sudo bash deploy/update.sh ${STOIC_UPDATE_REF:-<ref>}"
+  echo "   (volumes and data are untouched; deploy/doctor.sh → 'docker mount propagation' shows which host processes hold the mounts;"
+  echo "    on cPanel hosts the permanent fix is deploy/move-docker-root.sh /srv/docker — M119-2)"
   echo "   (volumes and data are untouched; deploy/doctor.sh → 'docker mount propagation' shows which host processes hold the mounts)"
 }
 
@@ -146,6 +171,30 @@ clear_deploy_jam_marker() {   # after a CLEAN recreate
   return 0
 }
 
+# ---------------------------------------------------------------- M119-2 — cPanel VirtFS vs docker root under /var/lib
+# VirtFS rbinds /var/lib into every jailshell; the bind copies of live container rootfs mounts make `docker rm`
+# fail with EBUSY on every recreate (the recurring deploy jam). The only clean fix is a docker root OUTSIDE
+# /var/lib — deploy/move-docker-root.sh. The update REFUSES until it is done (PREFLIGHT_YES=1 runs the move).
+virtfs_docker_root_gate() {
+  local vdir="${STOIC_VIRTFS_DIR:-/home/virtfs}" droot target="${STOIC_DOCKER_ROOT_TARGET:-/srv/docker}" jailed=0
+  command -v docker >/dev/null 2>&1 || return 0
+  [ -d "${vdir}" ] && [ -n "$(ls -A "${vdir}" 2>/dev/null)" ] && jailed=1
+  [ "${jailed}" = 1 ] || grep -qs 'jailshell' /etc/passwd && jailed=1
+  [ "${jailed}" = 1 ] || return 0
+  droot=$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || echo /var/lib/docker); droot="${droot:-/var/lib/docker}"
+  case "${droot}" in /var/lib/*) ;; *) echo "   cPanel VirtFS present — docker root ${droot} is outside /var/lib (ok)"; return 0 ;; esac
+  echo "!! cPanel VirtFS (${vdir} / jailshell users) rbinds /var/lib into every jail — with the docker root at ${droot} every"
+  echo "   container recreate can jam on EBUSY. The docker root must move out of /var/lib before this update continues."
+  if [ "${PREFLIGHT_YES}" = 1 ] && [ "${PREFLIGHT_NO_HOST_CHANGES}" != 1 ]; then
+    echo "-- preflight: moving the docker root to ${target} (deploy/move-docker-root.sh — every container stops for the move)"
+    bash deploy/move-docker-root.sh "${target}" --yes || return 1
+    return 0
+  fi
+  echo "   fix (one-off, ~1 min, containers stop during the move):  sudo bash deploy/move-docker-root.sh ${target} --yes"
+  echo "   then re-run: sudo bash deploy/update.sh ${STOIC_UPDATE_REF:-<ref>}   (or PREFLIGHT_YES=1 to let update.sh do the move)"
+  return 1
+}
+
 # ---------------------------------------------------------------- CI release public key pin
 key_fingerprint() {   # key_fingerprint <b64>  → SHA256:<64 hex>  (fails on anything but a 32-byte key)
   printf '%s' "$1" | python3 -c 'import base64,hashlib,sys; k=base64.b64decode(sys.stdin.read().strip()); assert len(k)==32; print("SHA256:"+hashlib.sha256(k).hexdigest())' 2>/dev/null
@@ -154,14 +203,27 @@ RELEASE_KEY_FINGERPRINT_FILE="${RELEASE_KEY_FINGERPRINT_FILE:-release/release_ke
 expected_release_fingerprint() {   # expected_release_fingerprint <key_id> → committed SHA256:… for that key id (empty = none committed)
   awk -v k="$1" '$1 == k {print $2}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
 }
+release_key_status() {   # release_key_status <key_id> → current|transition|revoked (S-1; empty = no status column / unknown id)
+  awk -v k="$1" '$1 == k {print $3}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
+}
+current_release_key_id() {   # the key id the repo marks `current` (empty when the file has no status column)
+  awk '$3 == "current" {print $1}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
+}
 
 ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFLIGHT_YES)
-  local cur url kid want sidecar body key fp exp
+  local cur url kid want sidecar body key fp exp st repo_cur
   cur=$( { grep -E '^RELEASE_PUBLIC_KEY_B64=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   want=$( { grep -E '^RELEASE_SIGNER_KEY_ID=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'"); want="${want:-stoic-release-ed25519-v1}"
   url=$( { grep -E '^RELEASE_SIGNER_PUBLIC_URL=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
   url="${RELEASE_SIGNER_PUBLIC_URL:-${url:-https://stoic-signer.fly.dev}}"
   exp=$(expected_release_fingerprint "${want}")
+  st=$(release_key_status "${want}"); repo_cur=$(current_release_key_id)
+  # S-1 — the repo says which key id is current: a host still on a revoked/transition id must re-pin (docs/RELEASE_KEY_ROTATION.md)
+  case "${st}" in
+    revoked) echo "!! release key: RELEASE_SIGNER_KEY_ID=${want} is REVOKED in ${RELEASE_KEY_FINGERPRINT_FILE} — re-pin to ${repo_cur:-the current key}: sudo bash deploy/rotate-release-pin.sh ${repo_cur:-<key_id>}" ;;
+    transition) echo "!! release key: RELEASE_SIGNER_KEY_ID=${want} is a TRANSITION key — the current CI key is ${repo_cur}; re-pin: sudo bash deploy/rotate-release-pin.sh ${repo_cur}" ;;
+    *) [ -n "${repo_cur}" ] && [ "${repo_cur}" != "${want}" ] && echo "!! release key: repo marks ${repo_cur} current but RELEASE_SIGNER_KEY_ID=${want} — re-pin: sudo bash deploy/rotate-release-pin.sh ${repo_cur}" ;;
+  esac
   if [ -n "${cur}" ]; then
     # M114-3 — an existing pin is checked against the committed fingerprint and the live signer; drift WARNS (never silently rewritten)
     fp=$(key_fingerprint "${cur}" || echo "invalid")
@@ -187,6 +249,7 @@ ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFL
   fi
   # audit #15 P3 — no trust-on-first-use: every pinnable key id must be fingerprinted in the repo
   [ -n "${exp}" ] || { echo "!! release key: no committed fingerprint for ${want} in ${RELEASE_KEY_FINGERPRINT_FILE} — NOT pinning (add the fingerprint to the repo via a signed release first)"; return 0; }
+  [ "${st}" = revoked ] && { echo "!! release key: ${want} is REVOKED in ${RELEASE_KEY_FINGERPRINT_FILE} — NOT pinning"; return 0; }
   sidecar=$(cat secrets/signer_public_key 2>/dev/null || true)
   [ -n "${sidecar}" ] && [ "${key}" = "${sidecar}" ] && { echo "!! release key: ${url} returned the LOCAL runtime sidecar key — refusing to pin it as the CI release key (N102-5)"; return 0; }
   echo "   key_id      ${kid}"

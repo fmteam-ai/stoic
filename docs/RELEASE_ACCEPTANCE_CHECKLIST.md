@@ -134,3 +134,8 @@ Financial-marketing/compliance items remain governed by `trust_stats.legal_revie
 | P2-3 keep-alive | bounded default 75 s (cap 300), overridable/measured. | Address 520/OOM via container limits + metrics. |
 | P2-5 marquee clones | decorative clones have no semantic descendants; removed under `prefers-reduced-motion` (verified: 0 semantic nodes in clones, 0 clones reduced-motion). | axe + NVDA/VoiceOver pass. |
 | P2-6 copy | "RISK-CONTROLLED AUTOMATED TRADING", no fixed model/provider claim, no "quant fund"/"steady wealth". | Legal sign-off. |
+
+## Release discipline (M119-7)
+- Tag only after `make staging-acceptance EXPECT=approved` passes on a clean AlmaLinux 9 / Ubuntu 24.04 VM with the production install path (`/opt/stoic`), using the exact commit to be tagged.
+- Never tag while a review finding marked P0/P1 is open: `scripts/check_open_findings.py` gates `release.yml`; an open P0/P1 needs a written `tag_waiver` in `docs/open_findings.json` (demo-only tags), closed or re-waived before the first real-money tag.
+- Tags are never moved or deleted; a bad tag gets a successor and a "DO NOT DEPLOY" note.

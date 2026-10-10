@@ -68,22 +68,62 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "deploying ${TAG} @ ${SHA}"
 
+      - name: Zero-touch publish configured? (opt-in — skip cleanly when the DEPLOY_* secrets are absent)
+        id: cfg
+        env:
+          HAS_HOST: ${{ secrets.DEPLOY_HOST != '' }}
+          HAS_USER: ${{ secrets.DEPLOY_USER != '' }}
+          HAS_KEY: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+          HAS_PATH: ${{ secrets.DEPLOY_PATH != '' }}
+          TAG: ${{ steps.ref.outputs.tag }}
+        run: |
+          if [ "${HAS_HOST}${HAS_USER}${HAS_KEY}${HAS_PATH}" = "truetruetruetrue" ]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::zero-touch publish not configured (DEPLOY_HOST/DEPLOY_USER/DEPLOY_SSH_KEY/DEPLOY_PATH secrets missing) — publish manually: deploy/update.sh ${TAG}"
+          fi
+
       - name: Prepare SSH
+        if: steps.cfg.outputs.enabled == 'true'
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -p "${{ secrets.DEPLOY_PORT || 22 }}" -H "${{ secrets.DEPLOY_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Publish on server (deploy/update.sh)
+      - name: Publish on server (deploy/update.sh — tag ref; onboarding policy from the host's .env; stops on a jam)
+        if: steps.cfg.outputs.enabled == 'true'
+        id: publish
+        env:
+          REF: ${{ steps.ref.outputs.tag || steps.ref.outputs.sha }}
+          PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+          TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
-              "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-              "cd '${{ secrets.DEPLOY_PATH }}' && git fetch --all --tags --prune && deploy/update.sh ${{ steps.ref.outputs.sha }}"
+          set -o pipefail
+          # M119-5 — the host decides the readiness policy (STOIC_READINESS_POLICY in ./.env); PREFLIGHT_YES applies host
+          # prerequisites non-interactively; a jam (exit 1 + deploy/state/update-jam) stops the workflow with the recipe.
+          ssh -i ~/.ssh/deploy_key -p "${PORT}" "${TARGET}"               "cd '${DEPLOY_PATH}' && git fetch --all --tags --prune && PREFLIGHT_YES=1 STOIC_READINESS_POLICY=\$(grep -E '^STOIC_READINESS_POLICY=' .env | cut -d= -f2- | tr -d '\"' || true) bash deploy/update.sh '${REF}'"               2>&1 | tee publish.log
+          rc=${PIPESTATUS[0]}
+          if grep -q 'update-jammed-ebusy\|reboot required' publish.log; then
+            echo "::error::deploy JAMMED on the host (overlay EBUSY) — follow the printed reboot recipe, then re-run deploy/update.sh ${REF} (resumes). Not retrying automatically."
+            echo "jammed=true" >> "$GITHUB_OUTPUT"
+          fi
+          exit "${rc}"
 
-      - name: Report
-        if: always()
+      - name: Report (releases.log tail + container status → job summary)
+        if: always() && steps.cfg.outputs.enabled == 'true'
+        env:
+          PORT: ${{ secrets.DEPLOY_PORT || 22 }}
+          TARGET: ${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          OUTCOME: ${{ steps.publish.outcome }}
+          JAMMED: ${{ steps.publish.outputs.jammed }}
         run: |
-          ssh -i ~/.ssh/deploy_key -p "${{ secrets.DEPLOY_PORT || 22 }}" \
-              "${{ secrets.DEPLOY_USER }}@${{ secrets.DEPLOY_HOST }}" \
-              "cd '${{ secrets.DEPLOY_PATH }}' && tail -3 deploy/releases.log && docker compose ps --format '{{.Name}}\t{{.Status}}'" || true
+          {
+            echo "## deploy-production → ${TARGET#*@}: ${OUTCOME}${JAMMED:+ (JAMMED — reboot recipe in the publish log)}"
+            echo '```'
+            ssh -i ~/.ssh/deploy_key -p "${PORT}" "${TARGET}"               "cd '${DEPLOY_PATH}' && tail -3 deploy/releases.log && docker compose ps --format '{{.Name}}\t{{.Status}}'" 2>&1 || echo "(report ssh failed)"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"

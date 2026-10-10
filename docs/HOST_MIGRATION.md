@@ -87,6 +87,19 @@ few seconds and heartbeat to the new host, which the wizard detects.
 3. Keep the old server stopped for a few days as a rollback, then destroy it.
 4. Update GitHub Actions secrets (`DEPLOY_HOST`) if you use tag-triggered publishing.
 
+## Offline path — source API down ("lift-and-shift", M119-6)
+The wizard needs a healthy source API. When the old stack cannot come up (jammed Docker, broken host), use
+`deploy/migrate-offline.sh` — the data travels only in the encrypted backup archive, volumes are never copied:
+
+| Host | Command | Does |
+|---|---|---|
+| source | `deploy/migrate-offline.sh backup` | starts **only** the mongo container if needed, `deploy/backup.sh backup` (mongo dump + encrypted `secrets/`) |
+| source | `deploy/migrate-offline.sh push root@NEW [/opt/stoic]` | `rsync -aHAX --delete` of the install dir (code, `.env`, `backend/.env`, `secrets/`, `backups/`, `deploy/state`) + `BACKUP_PASSPHRASE_FILE` (0600); refuses when the target dir already runs a stack |
+| target | `sudo bash deploy/migrate-offline.sh restore --yes` | host prereqs → build images → mongo on a **fresh** volume (`mongo-init.js` creates root + app users from the rsynced `secrets/`) → `deploy/backup.sh restore` (data + indexes; `admin.*` excluded — M119-4) → guarded `compose up` → `/api/health`, workers, `doctor.sh --quiet` → cutover reminder |
+
+`--dry-run` prints every command. Then follow **Cutover with Cloudflare** above; keep the old stack stopped until
+the fallback window closes. If the old sidecar key doubled as the CI release key, rotate (`docs/RELEASE_KEY_ROTATION.md`).
+
 ## Rollback after cutover
 Point DNS back to the old IP and on the old host run `docker compose up -d`. Trades that
 happened on the new host in between are NOT on the old host — export them first

@@ -419,6 +419,8 @@ Limit: root on the host can read the anchor key and re-sign — the signature st
 and config drift, not a determined administrator. Signing failure is non-fatal (profile recorded
 unsigned, warning printed).
 
+**overlay2 unbindable (M117-7)** — on cPanel hosts, VirtFS `rbind`s `/var/lib` into every jailshell; a bind copy of a live container rootfs makes `docker rm` fail with EBUSY on recreate even when the Docker root is already `slave`. `host-prereqs.sh` therefore also makes `/var/lib/docker/overlay2` **unbindable** (one dockerd restart, applied at ExecStartPre); `doctor.sh` / `host-prereqs.sh --check` report `want unbindable` until it is. Manual: `systemctl stop docker && /usr/local/sbin/stoic-docker-root-slave /var/lib/docker && systemctl start docker`.
+
 **Refresh timer (A19-P1-04 / A20-P1-03 / M117-1)** — `host-prereqs.sh` installs `stoic-host-profile.timer`, which
 runs `deploy/host-profile-refresh.sh` **every 6 h (+ ≤10 min jitter)** and writes the signed
 `deploy/state/host_profile.json`; the containers read it on every readiness check through the read-only
@@ -578,3 +580,49 @@ pushes from the reconciliation worker stay unconfigured — prefer the vault.
 silences re-raises and the Telegram push of that alert for 6 h (`ACK_SUPPRESS_S`). Acks made with the
 machine `METRICS_TOKEN` (deploy scripts, scrapers) and system auto-resolves never suppress — a leaked
 scraper token cannot mute a critical condition.
+
+## Smooth, repeatable updates (main119)
+
+**Sidecar key ≠ CI release key (M119-1).** If `RELEASE_PUBLIC_KEY_B64` equals `secrets/signer_public_key`, this host
+holds the CI release *private* key. `deploy/update.sh` now **refuses** (it never deletes the pin) and prints the fix:
+`sudo bash deploy/rotate-runtime-key.sh` — new sidecar key, `BUNDLE_PUBLIC_KEY_B64` re-pinned, `BUNDLE_SIGNER_KEY_ID`
+bumped (`…-v2`), `RELEASE_PUBLIC_KEY_B64` untouched, signer + backend + workers restarted. The previous private key is
+kept 0600 as `secrets/signer_ed25519_key.prev-<ts>`; `doctor.sh` reports **"CI release private key present on this
+host"** until it is shredded (rotate the CI signer first: docs/RELEASE_SIGNER.md).
+
+**cPanel VirtFS ⇒ docker root outside /var/lib (M119-2).** VirtFS `rbind`s `/var/lib` into every jailshell; the bind
+copies of live container rootfs mounts make `docker rm` fail with EBUSY on every recreate. `preflight` detects
+`/home/virtfs` (or `jailshell` users) with the docker root under `/var/lib` and **refuses the update** until
+`sudo bash deploy/move-docker-root.sh /srv/docker --yes` has run (`PREFLIGHT_YES=1` lets `update.sh` do it): stop
+docker → same-filesystem rename or `rsync -aHAX` → `/etc/docker/daemon.json` `data-root` → systemd drop-in →
+start → volumes + images verified identical (rollback recipe printed on mismatch; the old tree is kept as
+`<old>.moved-<ts>` after a copy). The overlay2-unbindable guard (M117-7) stays as defence in depth.
+
+**Resume after a jam (M119-3).** A recreate that jams writes `deploy/state/update-jam`. Re-running
+`deploy/update.sh <same ref>` with `HEAD == ref` skips backup/fetch/checkout/build and resumes at the restart +
+verification step (clears TRADING PAUSED). The printed reboot recipe is exactly that.
+
+**Worker health = leader lease (M118-5).** Each worker records `<name> <holder>` in `/tmp/stoic-worker-identity`;
+the compose healthcheck (`python -m workers.base --health`) is healthy only when `worker_leases[name]` is held by
+that holder and not expired. `update.sh` fails (rollback) when a worker stays unhealthy for 60 s; `doctor.sh`
+prints the reason and the log command.
+
+### Zero-touch publish from GitHub (deploy-production.yml) — the five secrets
+The workflow runs after a green **Release** run and is a no-op (notice only) until all secrets exist. Repository →
+Settings → Secrets and variables → Actions → *New repository secret*:
+1. `DEPLOY_HOST` — the server's DNS name or IP (e.g. `ded5552.example.net`).
+2. `DEPLOY_USER` — the SSH user that owns the checkout (root, or a user with passwordless `sudo` for `deploy/update.sh`).
+3. `DEPLOY_SSH_KEY` — a dedicated **private** key (`ssh-keygen -t ed25519 -f stoic-deploy -N ""`); put `stoic-deploy.pub`
+   in the server's `~/.ssh/authorized_keys` (optionally restricted: `command="cd /opt/stoic && …"`); paste the private key.
+4. `DEPLOY_PATH` — the install directory (`/opt/stoic`).
+5. `DEPLOY_PORT` — optional, SSH port (default 22).
+The run reads `STOIC_READINESS_POLICY` from the host's `./.env` (so an onboarding host stays close-only), applies host
+prerequisites non-interactively, **stops on a jam** with the reboot recipe (no automatic retry) and posts
+`releases.log` + `docker compose ps` to the job summary.
+
+### Release discipline (M119-7)
+A tag is created only after `make staging-acceptance` passed on a **clean AlmaLinux 9 / Ubuntu 24.04 VM with the same
+install path** (`/opt/stoic`), and never while a review finding marked **P0/P1** is open: `release.yml` runs
+`scripts/check_open_findings.py` first and refuses the tag unless every open P0/P1 in `docs/open_findings.json`
+carries a written `tag_waiver` (printed in the run log and the release summary). Waivers are for demo-only tags; they
+must be closed or re-waived in writing before the first real-money tag.

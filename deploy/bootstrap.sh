@@ -211,7 +211,9 @@ if [ "${MEM_GB}" -ge 4 ]; then pass "memory: ${MEM_GB} GB"; elif [ "${MEM_GB}" -
 if [ "${DISK_GB}" -ge 20 ]; then pass "disk: ${DISK_GB} GB free on /"; elif [ "${DISK_GB}" -ge 12 ]; then warnc "disk: ${DISK_GB} GB free — 20 GB recommended (images + Mongo + backups)"; else failc "disk: ${DISK_GB} GB free — need at least 12 GB"; fi
 [ "${SWAP_GB}" -ge 1 ] || [ "${MEM_GB}" -ge 8 ] && pass "swap/memory headroom ok" || warnc "no swap and < 8 GB RAM — consider a 2 GB swapfile"
 
-if timedatectl show 2>/dev/null | grep -q "NTPSynchronized=yes"; then pass "clock synchronised (NTP)"; else warnc "clock not NTP-synchronised — TLS/JWT/TOTP need a correct clock (enable chronyd)"; fi
+if timedatectl show 2>/dev/null | grep -q "NTPSynchronized=yes"; then pass "clock synchronised (NTP)"
+elif [ "$(systemd-detect-virt 2>/dev/null || true)" = openvz ] || [ -d /proc/vz ]; then pass "clock: host-managed (OpenVZ container — chronyd cannot run here; the node keeps the clock)"
+else warnc "clock not NTP-synchronised — TLS/JWT/TOTP need a correct clock (enable chronyd)"; fi
 if command -v getenforce >/dev/null; then pass "selinux: $(getenforce) (secrets/ will be labelled container_file_t)"; fi
 if [ -f /proc/sys/fs/may_detach_mounts ]; then
   if [ "$(cat /proc/sys/fs/may_detach_mounts)" = 1 ]; then pass "kernel: fs.may_detach_mounts=1 (containers can be removed even when cPanel/CageFS or httpd hold their overlay mounts)"

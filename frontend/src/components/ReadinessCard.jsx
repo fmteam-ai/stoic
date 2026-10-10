@@ -103,6 +103,18 @@ export const ReadinessCard = () => {
                     )}
                 </div>
             )}
+            {checks.release_key_rotation && (checks.release_key_rotation.in_transition || !checks.release_key_rotation.ok) && (
+                <div className={`border px-3 py-2 mt-3 ${checks.release_key_rotation.ok ? "border-[#FFB020]/40 bg-[#FFB020]/5" : "border-[#FF3B30]/40 bg-[#FF3B30]/5"}`}
+                    data-testid="readiness-release-key-rotation">
+                    <div className={`font-mono text-[9px] tracking-widest ${checks.release_key_rotation.ok ? "text-[#FFB020]" : "text-[#FF3B30]"}`}>
+                        RELEASE KEY ROTATION · {checks.release_key_rotation.ok ? "IN TRANSITION" : "MISCONFIGURED"}
+                    </div>
+                    <div className="font-mono text-xs text-[#E4E4E7] mt-0.5">{checks.release_key_rotation.detail}</div>
+                    {checks.release_key_rotation.fix && (
+                        <code className="block font-mono text-[11px] text-[#00FF41] mt-1" data-testid="readiness-release-key-rotation-fix">{checks.release_key_rotation.fix}</code>
+                    )}
+                </div>
+            )}
             {checks.host_suitability && checks.host_suitability.shared_web_host && (
                 <div className={`border px-3 py-2 mt-3 ${checks.host_suitability.ok ? "border-[#FFB020]/40 bg-[#FFB020]/5" : "border-[#FF3B30]/40 bg-[#FF3B30]/5"}`}
                     data-testid="readiness-host-suitability">

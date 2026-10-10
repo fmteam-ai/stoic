@@ -5,6 +5,7 @@ import hmac
 import os
 import subprocess
 import textwrap
+from datetime import datetime, timezone
 
 import pytest
 
@@ -91,7 +92,7 @@ def test_committed_fingerprint_matches_live_format():
 
 def test_m114_7_host_profile_signature(monkeypatch):
     import host_profile as hp
-    key = "k" * 32; at = "2026-10-08T20:00:00Z"
+    key = "k" * 32; at = datetime.now(timezone.utc).replace(microsecond=0).strftime("%Y-%m-%dT%H:%M:%SZ")   # fresh: the profile expires after 24 h
     sig = hmac.new(hp.derive_host_profile_key(key), hp.canonical_payload("shared-web-host", "cPanel/WHM httpd", at), hashlib.sha256).hexdigest()   # M115-3 derived key, audit #15 canonical
     for k, v in {"STOIC_HOST_PROFILE": "shared-web-host", "STOIC_HOST_MARKERS": '"cPanel/WHM httpd"', "STOIC_HOST_DETECTED_AT": at,
                  "STOIC_HOST_PROFILE_SIG": sig, "LEDGER_ANCHOR_KEY": key}.items():

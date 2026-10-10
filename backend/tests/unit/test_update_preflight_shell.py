@@ -142,7 +142,7 @@ def test_ebusy_twice_stops_with_reboot_recipe(world):
     assert "RC=2" in r.stdout, r.stdout + r.stderr
     assert (world["state"] / "up_calls").read_text().strip() == "2"          # exactly ONE retry
     assert "reboot required" in r.stdout and "docker update --restart=no $(docker ps -aq)" in r.stdout
-    assert "docker ps -aq | xargs -r docker rm -f" in r.stdout and "docker compose up -d" in r.stdout
+    assert "sudo bash deploy/update.sh" in r.stdout and "RESUMES at the restart step" in r.stdout   # M119-3 recipe: resume, not rm/up by hand
 
 
 def test_scripts_never_remove_volumes():

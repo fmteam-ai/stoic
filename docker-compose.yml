@@ -56,6 +56,18 @@ x-app-common: &app-common
     signer:
       condition: service_healthy
 
+# M118-5 — workers serve no HTTP, so the image's /api/health HEALTHCHECK can never pass for them (every worker showed
+# "unhealthy" after the 120 s start period). Their health is the LEADER LEASE: worker_leases[name] held by this
+# process and not expired (python -m workers.base --health).
+x-worker-common: &worker-common
+  <<: *app-common
+  healthcheck:
+    test: ["CMD", "python", "-m", "workers.base", "--health"]
+    interval: 15s
+    timeout: 5s
+    retries: 3
+    start_period: 120s
+
 services:
   mongo:
     image: mongo:7
@@ -132,23 +144,23 @@ services:
       - "127.0.0.1:8001:8001"
 
   worker-trading:
-    <<: *app-common
+    <<: *worker-common
     command: ["python", "-m", "workers.trading"]
 
   worker-protection:
-    <<: *app-common
+    <<: *worker-common
     command: ["python", "-m", "workers.protection"]
 
   worker-reconciliation:
-    <<: *app-common
+    <<: *worker-common
     command: ["python", "-m", "workers.reconciliation"]
 
   worker-analytics:
-    <<: *app-common
+    <<: *worker-common
     command: ["python", "-m", "workers.analytics"]
 
   worker-security:
-    <<: *app-common
+    <<: *worker-common
     command: ["python", "-m", "workers.security"]
     # S14 — the security Telegram bot token as a Docker secret is mounted ONLY into this worker.
     # Operator default: set SECURITY_AGENT_TELEGRAM_BOT_TOKEN / _CHAT_ID on Admin → Integrations instead
@@ -170,11 +182,11 @@ services:
       - security_telegram_token
 
   worker-model:
-    <<: *app-common
+    <<: *worker-common
     command: ["python", "-m", "workers.model"]
 
   worker-tuning:
-    <<: *app-common
+    <<: *worker-common
     command: ["python", "-m", "workers.tuning"]
 
   frontend:

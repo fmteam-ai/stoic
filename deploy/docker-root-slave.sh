@@ -19,8 +19,28 @@
 # (no-op when already slave). Run it with dockerd STOPPED when the bind must be redone.
 set -u
 ROOT="${1:-/var/lib/docker}"
+
+# M117-7 — slave propagation stops FUTURE propagation, but a fresh `mount --rbind /var/lib …` (cPanel VirtFS
+# jailshell, every jailed login/cron) still COPIES every overlay mount that exists at that moment, and the copy
+# makes `docker rm` fail "unlinkat …/merged: device or resource busy". rbind skips UNBINDABLE mounts and their
+# children, so the overlay2 tree is made unbindable. Docker never bind-mounts FROM overlay2 (volumes/ and
+# containers/ are untouched), and overlay mounts are created as children — unaffected. Applied only while no
+# overlay is mounted (dockerd stopped = ExecStartPre): a bind over a dir with live submounts would hide them.
+overlay_unbindable() {
+  d="${STOIC_OVERLAY_DIR:-${ROOT}/overlay2}"
+  [ -d "${d}" ] || return 0
+  case "$(findmnt -no PROPAGATION "${d}" 2>/dev/null)" in *unbindable*) return 0 ;; esac
+  if findmnt -rn -t overlay -o TARGET 2>/dev/null | grep -q "^${d}/"; then
+    echo "docker-root-slave: ${d} not yet unbindable — applied at the next dockerd restart (overlay mounts are live now)"
+    return 0
+  fi
+  mountpoint -q "${d}" || mount --bind "${d}" "${d}" || return 1
+  mount --make-unbindable "${d}" || return 1
+  echo "docker-root-slave: ${d} is now unbindable (rbind copies by cPanel VirtFS jails skip the container rootfs mounts)"
+}
+
 case "$(findmnt -no PROPAGATION "${ROOT}" 2>/dev/null)" in
-  *slave*) exit 0 ;;
+  *slave*) overlay_unbindable; exit 0 ;;
 esac
 if mountpoint -q "${ROOT}"; then
   SRC=$(findmnt -no SOURCE "${ROOT}" 2>/dev/null || echo "?")
@@ -33,6 +53,7 @@ if mountpoint -q "${ROOT}"; then
       mount --bind "${ROOT}" "${ROOT}" || exit 1
       mount --make-slave "${ROOT}" || exit 1
       echo "docker-root-slave: ${ROOT} propagation is now $(findmnt -no PROPAGATION "${ROOT}")"
+      overlay_unbindable
       exit 0 ;;
   esac
 fi
@@ -44,3 +65,4 @@ else
 fi
 mount --make-slave "${ROOT}" || exit 1
 echo "docker-root-slave: ${ROOT} propagation is now $(findmnt -no PROPAGATION "${ROOT}")"
+overlay_unbindable

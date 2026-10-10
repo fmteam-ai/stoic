@@ -3,25 +3,29 @@
     "id": "P1-07-r9",
     "severity": "P1",
     "title": "Transport mTLS at a client-cert-verifying ingress for agent endpoints (pinned secondary identifier only today)",
-    "owner": "infrastructure"
+    "owner": "infrastructure",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P1-09-r10",
     "severity": "P1",
     "title": "Authoritative CI-signed rc_lock for the promoted commit (developer snapshot only until a tagged release run)",
-    "owner": "release-ci"
+    "owner": "release-ci",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P0-03-r10",
     "severity": "P1",
     "title": "Broker-side reconciliation of the six live account IDs + two-admin 6/3/3 inventory approval",
-    "owner": "operations"
+    "owner": "operations",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P1-04-r13",
     "severity": "P1",
-    "title": "Signed operational acceptance run on the exact promoted image (6/3/3 inventory, broker truth within SLA, zero UNKNOWN executions, EA-count agreement, Safety Blocks dominance, Bot Health caps, performance reconciliation) \u2014 authority stays BLOCKED/CLOSE_ONLY and ML advisory-only until it passes",
-    "owner": "operations"
+    "title": "Signed operational acceptance run on the exact promoted image (6/3/3 inventory, broker truth within SLA, zero UNKNOWN executions, EA-count agreement, Safety Blocks dominance, Bot Health caps, performance reconciliation) — authority stays BLOCKED/CLOSE_ONLY and ML advisory-only until it passes",
+    "owner": "operations",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "AI-GOV",
@@ -39,13 +43,15 @@
     "id": "P1-04-r14",
     "severity": "P1",
     "title": "Release package not release-ready: one staged tree for one peeled commit, model manifest signed by the trusted external key, test manifest/RC lock/release summary regenerated from that tree, images built from it, evidence extracted+compared, final image digests in an external signed provenance statement. Cannot be produced from the preview (needs the tagged release workflow + external signer).",
-    "owner": "release-engineering"
+    "owner": "release-engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P1-07-r14",
     "severity": "P1",
     "title": "Publication order: build+scan by digest first, keep images quarantined/private, run signer canary and all final gates, THEN attach the release tag/alias; consumers deploy only from signed provenance, never a mutable tag. Workflow reordering pending in release.yml.",
-    "owner": "release-engineering"
+    "owner": "release-engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P2-02-r14",
@@ -68,20 +74,23 @@
   {
     "id": "P1-05-r15",
     "severity": "P1",
-    "title": "Authoritative release artifact: tagged workflow with the external signer on one staged tree \u2192 model manifest verifies against the pinned trusted key, strict RC lock, authoritative image digests, signed provenance; deployed build endpoint verified against that evidence. Cannot be produced from the preview.",
-    "owner": "release-engineering"
+    "title": "Authoritative release artifact: tagged workflow with the external signer on one staged tree → model manifest verifies against the pinned trusted key, strict RC lock, authoritative image digests, signed provenance; deployed build endpoint verified against that evidence. Cannot be produced from the preview.",
+    "owner": "release-engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P1-06-r15",
     "severity": "P1",
     "title": "Publication order: images pushed to GHCR under a tag before signer canary / final scans / attestation. Required: build+scan by digest in quarantine, attest, canary, THEN publish the deployable tag once; admission requires signed provenance.",
-    "owner": "release-engineering"
+    "owner": "release-engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P1-07-r15",
     "severity": "P1",
     "title": "Live 6/3/3, broker truth and zero-UNKNOWN closure are unproven on production: authority stays BLOCKED/CLOSE_ONLY and performance publication withheld until a signed pre-promotion + production-reconciliation evidence bundle from the exact deployed digest passes the final gate.",
-    "owner": "operations"
+    "owner": "operations",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P2-05-r15",
@@ -93,13 +102,15 @@
     "id": "P1-03-r16",
     "severity": "P1",
     "title": "Authoritative release identities: BUILD_SHA, RC-lock commit, model-manifest code_commit, image digests, attestation and EA EX5 hash must all bind to ONE peeled tagged commit produced by the tagged workflow (developer-snapshot evidence is not authoritative).",
-    "owner": "release-engineering"
+    "owner": "release-engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P1-05-r16",
     "severity": "P1",
     "title": "Live capital-safety acceptance on the exact promoted digest: 6 identity-bound accounts, exactly 3 LIVE enabled + their 3 bots, no orphan/duplicate bots, EA fresh counts agree across inventory/readiness/status/accounts/broker sessions, reconciliation age in SLA, position truth FRESH and matching, zero UNKNOWN/aged executions, Safety Blocks/Bot Health/Start Trader/readiness/authority agree, all performance periods reconcile to signed statements with full coverage.",
-    "owner": "operations"
+    "owner": "operations",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P2-01-r16",
@@ -122,26 +133,29 @@
   {
     "id": "P2-04-r16",
     "severity": "P2",
-    "title": "Agent transport identity: ingress mTLS with client-certificate verification, rotation/expiry monitoring, revocation and certificate\u2192immutable agent record mapping.",
+    "title": "Agent transport identity: ingress mTLS with client-certificate verification, rotation/expiry monitoring, revocation and certificate→immutable agent record mapping.",
     "owner": "infrastructure"
   },
   {
     "id": "P1-02-r17",
     "severity": "P1",
     "title": "Authoritative single-commit release: BUILD_SHA, RC lock, model manifest, test manifest, SBOMs, both image digests, EA source + compiled EX5 (hash recorded, signed), signer identity, attestation and deployed /api/health all bound to one peeled tagged commit; verify offline, deploy by digest pair from release-admission.json.",
-    "owner": "release-engineering"
+    "owner": "release-engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P1-03-r17",
     "severity": "P1",
     "title": "Live capital-safety acceptance on the promoted digest in one canonical input version (6 identity-bound accounts, exactly 3 LIVE enabled + their 3 bots, no orphan/null-account bots, EA counts agree everywhere, reconciliation age in SLA, position truth FRESH + matching, zero UNKNOWN/aged executions, Safety Blocks / Bot Health caps / Start Trader / readiness / authority agree, every performance period reconciles to signed statements with full coverage).",
-    "owner": "operations"
+    "owner": "operations",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P0-01-r17-infra",
     "severity": "P0",
-    "title": "Production MongoDB must run as a replica set (transactions) \u2014 fenced NL effects fail closed without it; EA v1.57 must be compiled, hash-recorded and rolled to every terminal so close_idem_key/close_fence are enforced at the destination.",
-    "owner": "operations"
+    "title": "Production MongoDB must run as a replica set (transactions) — fenced NL effects fail closed without it; EA v1.57 must be compiled, hash-recorded and rolled to every terminal so close_idem_key/close_fence are enforced at the destination.",
+    "owner": "operations",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P2-06-r17",
@@ -152,38 +166,42 @@
   {
     "id": "P2-07-r17",
     "severity": "P2",
-    "title": "Ingress mTLS for agent transport: client-certificate verification, certificate\u2192agent binding, expiry/rotation monitoring, revocation, fail closed when identity cannot be established.",
+    "title": "Ingress mTLS for agent transport: client-certificate verification, certificate→agent binding, expiry/rotation monitoring, revocation, fail closed when identity cannot be established.",
     "owner": "infrastructure"
   },
   {
     "id": "P1-03-r18",
     "severity": "P1",
-    "title": "Live capital-safety acceptance pack (AT-P1-03..06) on the promoted digest in one canonical input version \u2014 6/3/3 identity-bound inventory, EA counts agree everywhere, reconciliation in SLA, position truth FRESH+matching, zero UNKNOWN executions, blocker dominance across Start Trader/Safety Blocks/Bot Health/readiness/authority, performance reconciled to signed statements. Authority stays BLOCKED/CLOSE_ONLY until proved.",
-    "owner": "operations"
+    "title": "Live capital-safety acceptance pack (AT-P1-03..06) on the promoted digest in one canonical input version — 6/3/3 identity-bound inventory, EA counts agree everywhere, reconciliation in SLA, position truth FRESH+matching, zero UNKNOWN executions, blocker dominance across Start Trader/Safety Blocks/Bot Health/readiness/authority, performance reconciled to signed statements. Authority stays BLOCKED/CLOSE_ONLY until proved.",
+    "owner": "operations",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P1-04-r18",
     "severity": "P1",
-    "title": "Authoritative release (AT-P1-07): one peeled tagged commit binds BUILD_SHA, manifests, strict RC lock, SBOMs, both digests, EA MQ5 + compiled EX5 hash/signature (v1.57 \u2014 currently unrecorded/unsigned, verify_ea_release fails closed), signer identity, admission pair and deployed /api/health.",
-    "owner": "release-engineering"
+    "title": "Authoritative release (AT-P1-07): one peeled tagged commit binds BUILD_SHA, manifests, strict RC lock, SBOMs, both digests, EA MQ5 + compiled EX5 hash/signature (v1.57 — currently unrecorded/unsigned, verify_ea_release fails closed), signer identity, admission pair and deployed /api/health.",
+    "owner": "release-engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P0-02-r18-handshake",
     "severity": "P1",
-    "title": "Terminal handshake must PROVE the deployed EX5 hash + capability set (EA reports ea_binary_sha256; server pins ea_binary_sha256_expected from the verified release) \u2014 live_gate() already refuses a mismatch; the EA-side reporting and server pinning must be wired and rolled out.",
-    "owner": "engineering"
+    "title": "Terminal handshake must PROVE the deployed EX5 hash + capability set (EA reports ea_binary_sha256; server pins ea_binary_sha256_expected from the verified release) — live_gate() already refuses a mismatch; the EA-side reporting and server pinning must be wired and rolled out.",
+    "owner": "engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "SEC-002-r19",
     "severity": "P3",
-    "title": "Cloudflare edge duplicates security headers on /api/* (two HSTS max-ages, doubled Referrer-Policy / X-Content-Type-Options). Scope the Transform Rule to non-/api paths or use Set-static (overwrite) and align the dashboard HSTS toggle to 12 months \u2014 docs/CLOUDFLARE_EDGE.md \u00a78.",
+    "title": "Cloudflare edge duplicates security headers on /api/* (two HSTS max-ages, doubled Referrer-Policy / X-Content-Type-Options). Scope the Transform Rule to non-/api paths or use Set-static (overwrite) and align the dashboard HSTS toggle to 12 months — docs/CLOUDFLARE_EDGE.md §8.",
     "owner": "operations"
   },
   {
     "id": "P1-01-r20-ea-proof",
     "severity": "P1",
     "title": "Terminal-side binary proof: the EA must report its EX5 hash (and capability bitmap / build commit) on the heartbeat handshake, nonce-bound. MQL5 sandboxing prevents an EA from hashing its own EX5, so the proof must come from a signed installer/agent step or an operator-attested install record bound to the terminal identity; until then live authority stays CLOSE_ONLY (EA_BINARY_PROOF_MISSING).",
-    "owner": "engineering"
+    "owner": "engineering",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "P2-01-r20-close-writers",
@@ -225,7 +243,8 @@
     "id": "OPS-r24-signer-deferred",
     "severity": "P1",
     "title": "Production runs with RELEASE_SIGNER deferred (nothing signed; live exposure CLOSE_ONLY via RELEASE_SIGNER_DEFERRED gate). Provision the external signer (deploy/signer/init_fly_signer.sh (first time) / flyctl deploy (redeploy)), set RELEASE_SIGNER=external + URL/ALLOWED_HOSTS/TOKEN/KEY_ID/PUBLIC_KEY in Secrets, then set RELEASE_SIGNER_DEFERRED=false.",
-    "owner": "operator"
+    "owner": "operator",
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
   },
   {
     "id": "OPS-r24-provenance-source-digest",
