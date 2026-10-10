@@ -269,6 +269,12 @@ async def release_readiness(request: Request):
         "severity": "block" if not _rot["ok"] else ("warn" if _rot["in_transition"] else "ok"),
         "detail": (_rot["problems"][0] if _rot["problems"] else _rot["warning"]),
         "fix": None if _rot["ok"] and not _rot["in_transition"] else "docs/RELEASE_KEY_ROTATION.md"}
+    # M120-2 — key / certificate ages (advisory WARN; the host writes deploy/state/key_ages.json)
+    from key_ages import key_ages
+    _ka = key_ages()
+    checks["key_ages"] = {**_ka, "severity": "warn" if _ka["due"] else "ok",
+                          "detail": _ka["warning"] if _ka["due"] else (None if _ka["available"] else "no key_ages.json yet (written by deploy/update.sh / stoic-host-profile.timer)"),
+                          "fix": "; ".join(it["fix"] for it in _ka["items"] if it.get("fix")) or None}
     # host suitability (M114-7) — the installer/update preflight records a SIGNED host profile
     # (deploy/preflight.sh record_host_profile → host_profile.py verifies it at read time): a shared
     # web/mail host (cPanel/WHM, Plesk, DirectAdmin, httpd/exim/dovecot) blocks LIVE trading, warns in

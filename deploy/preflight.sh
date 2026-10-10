@@ -27,8 +27,9 @@ host_prereqs_missing() {   # 0 = something missing (prints what), 1 = all presen
     prop=$(findmnt -no PROPAGATION "${droot}" 2>/dev/null || echo "?")
     case "${prop}" in *slave*) ;; *) echo "   docker root ${droot} propagation '${prop}' (want slave)"; missing=1 ;; esac
     # M117-7 — overlay2 must be UNBINDABLE: a cPanel VirtFS `rbind /var/lib` copies live overlay mounts (→ rm EBUSY)
+    # M120-1 — only where VirtFS exists (cPanel); dedicated hosts keep Docker's default overlay2 propagation
     odir="${STOIC_OVERLAY_DIR:-${droot}/overlay2}"
-    if [ -d "${odir}" ]; then
+    if [ -d "${odir}" ] && virtfs_host; then
       oprop=$(findmnt -no PROPAGATION "${odir}" 2>/dev/null || echo "?")
       case "${oprop}" in *unbindable*) ;; *) echo "   docker overlay2 ${odir} propagation '${oprop}' (want unbindable — VirtFS rbind copies)"; missing=1 ;; esac
     fi
@@ -120,7 +121,6 @@ reboot_recipe() {
   echo "   cd $(pwd) && sudo bash deploy/update.sh ${STOIC_UPDATE_REF:-<ref>}"
   echo "   (volumes and data are untouched; deploy/doctor.sh → 'docker mount propagation' shows which host processes hold the mounts;"
   echo "    on cPanel hosts the permanent fix is deploy/move-docker-root.sh /srv/docker — M119-2)"
-  echo "   (volumes and data are untouched; deploy/doctor.sh → 'docker mount propagation' shows which host processes hold the mounts)"
 }
 
 compose_up_guarded() {   # compose_up_guarded [extra compose-up args…]
@@ -207,7 +207,7 @@ release_key_status() {   # release_key_status <key_id> → current|transition|re
   awk -v k="$1" '$1 == k {print $3}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
 }
 current_release_key_id() {   # the key id the repo marks `current` (empty when the file has no status column)
-  awk '$3 == "current" {print $1}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
+  awk '$1 !~ /^#/ && $3 == "current" {print $1}' "${RELEASE_KEY_FINGERPRINT_FILE}" 2>/dev/null | head -1
 }
 
 ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFLIGHT_YES)
@@ -266,6 +266,10 @@ ensure_release_public_key_pin() {   # ensure_release_public_key_pin  (uses PREFL
 }
 
 # ---------------------------------------------------------------- shared web host detection
+virtfs_host() {   # M120-1 — cPanel VirtFS present (jailshell rbind copies of /var/lib) · STOIC_WANT_OVERLAY_UNBINDABLE=1 forces
+  [ "${STOIC_WANT_OVERLAY_UNBINDABLE:-}" = 1 ] || [ -d /home/virtfs ] || [ -d /usr/local/cpanel ]
+}
+
 shared_web_host_markers() {   # prints the markers found (empty = dedicated host)
   local m=""
   [ -d /usr/local/cpanel ] || [ -x /scripts/rebuildhttpdconf ] && m="${m} cPanel/WHM"
@@ -294,6 +298,42 @@ write_host_profile_file() {   # write_host_profile_file <profile> <markers> <det
   return 0
 }
 
+write_key_ages_file() {   # M120-2 — deploy/state/key_ages.json: release key created=, runtime key mtime, Origin CA notAfter (advisory, unsigned)
+  local dir="${STOIC_HOST_PROFILE_DIR:-deploy/state}" kid cert_end=""
+  kid=$( { grep -E '^RELEASE_SIGNER_KEY_ID=' backend/.env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+  kid="${kid:-$(current_release_key_id)}"; kid="${kid:-stoic-release-ed25519-v1}"
+  [ -f secrets/origin_cert.pem ] && cert_end=$(openssl x509 -enddate -noout -in secrets/origin_cert.pem 2>/dev/null | cut -d= -f2-)
+  mkdir -p "${dir}" 2>/dev/null || { echo "!! key ages: cannot create ${dir}" >&2; return 1; }
+  python3 - "${RELEASE_KEY_FINGERPRINT_FILE}" "${kid}" secrets/signer_ed25519_key secrets/origin_cert.pem "${cert_end}" "${dir}/key_ages.json" <<'PY' || { echo "!! key ages: ${dir}/key_ages.json not written" >&2; return 1; }
+import json, os, sys
+from datetime import datetime
+fp_file, kid, rk, cert, cert_end, out = sys.argv[1:7]
+created = None
+try:
+    for line in open(fp_file):
+        parts = line.split()
+        if parts and parts[0] == kid:
+            created = next((p.split("=", 1)[1] for p in parts[2:] if p.startswith("created=")), None)
+except OSError:
+    pass
+iso = lambda ts: datetime.utcfromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+not_after = None
+if cert_end.strip():
+    try:
+        not_after = datetime.strptime(" ".join(cert_end.split()), "%b %d %H:%M:%S %Y %Z").strftime("%Y-%m-%dT%H:%M:%SZ")
+    except ValueError:
+        not_after = None
+doc = {"schema": 1, "generated_at": iso(datetime.utcnow().timestamp()),
+       "release_key": {"key_id": kid, "created": created},
+       "runtime_key": {"path": rk, "created": iso(os.path.getmtime(rk)) if os.path.exists(rk) else None},
+       "origin_cert": {"path": cert, "present": os.path.exists(cert), "not_after": not_after}}
+tmp = out + ".tmp"
+json.dump(doc, open(tmp, "w"), sort_keys=True)
+os.chmod(tmp, 0o644)
+os.replace(tmp, out)
+PY
+}
+
 record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedicated + markers + detected_at + HMAC (M114-7)
   local markers profile at key sig
   markers=$(shared_web_host_markers)
@@ -312,6 +352,7 @@ record_host_profile() {   # backend/.env STOIC_HOST_PROFILE=shared-web-host|dedi
   sig=""
   if [ -n "${key}" ]; then sig=$(host_profile_sig "${key}" "${profile}" "${markers}" "${at}") || sig=""; fi
   write_host_profile_file "${profile}" "${markers}" "${at}" "${sig}" || echo "!! host: deploy/state/host_profile.json not written (see error above) — readiness reports the profile unverified until deploy/host-profile-refresh.sh succeeds"   # A19-P1-04 — the file the containers read (ro mount)
+  write_key_ages_file || true   # M120-2 — advisory key/cert ages (readiness warns at 180 d / 30 d)
   if [ -n "${sig}" ]; then set_kv backend/.env STOIC_HOST_PROFILE_SIG "${sig}"
   else
     set_kv backend/.env STOIC_HOST_PROFILE_SIG ""

@@ -29,9 +29,10 @@ inconsistent (current id revoked, transition id without public key). `verify_ea_
    It prints the fingerprint lines, the GitHub secrets and the server commands below.
 2. **Repo** — replace the lines in `release/release_key.fingerprint`:
    ```
-   stoic-release-ed25519-v2 SHA256:<new fp> current
-   stoic-release-ed25519-v1 SHA256:4c214d393287aac3983178b671e76a35a29d6f0b5e6c815729cc84afaa404d3d transition
+   stoic-release-ed25519-v2 SHA256:<new fp> current created=<ceremony date YYYY-MM-DD>
+   stoic-release-ed25519-v1 SHA256:4c214d393287aac3983178b671e76a35a29d6f0b5e6c815729cc84afaa404d3d transition created=2026-10-08
    ```
+   (`created=` feeds the 180-day key-age reminder — readiness `key_ages` + ops alert `key_rotation_due`, M120-2.)
    `.github/workflows/policy-migration.yml` follows the `RELEASE_SIGNER_KEY_ID` secret (falls back to `v1` only when the secret is unset).
 3. **GitHub secrets** `RELEASE_SIGNER_KEY_ID=stoic-release-ed25519-v2`, `RELEASE_PUBLIC_KEY_B64=<new>`,
    `RELEASE_SIGNER_TOKEN=<new>` (unless `--keep-token`).

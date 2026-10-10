@@ -27,6 +27,7 @@ EVALUATOR_KINDS = (
     "vps_terminal_restart_loop",   # Phase 2 VPS Agent: restart budget exhausted without a fresh EA heartbeat
     "vps_agent_degraded",          # P2-01: the agent cannot persist its restart ledger — automatic restarts suspended
     "host_profile_refresh_overdue", "host_profile_unverified",   # A20-P1-03: signed host profile >12 h old / expired
+    "key_rotation_due",            # M120-2: release/runtime key > 180 d, Origin CA cert < 30 d
     "vps_agent_offline")           # A17-8: an agent that manages terminals has not polled for 5 min (reboot without auto-logon)
 
 
@@ -305,6 +306,20 @@ async def evaluate_ops_alerts(db) -> int:
                 {"kind": {"$in": ["host_profile_refresh_overdue", "host_profile_unverified"]}, "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
         except Exception as e2:  # noqa: BLE001
             logger.warning("host profile keep-open failed: %s", type(e2).__name__)
+
+    # 5f · M120-2 — key / certificate ages (release key, runtime key > 180 d; Origin CA cert < 30 d)
+    try:
+        import key_age_alerts
+        _ka_active, _ka_raised = await key_age_alerts.evaluate(db, now, raise_alert=raise_alert)
+        active |= _ka_active
+        raised += _ka_raised
+    except Exception as e:  # noqa: BLE001
+        logger.warning("key age alert evaluation failed: %s", type(e).__name__)
+        try:
+            active |= {a["dedup_key"] async for a in db.ops_alerts.find(
+                {"kind": "key_rotation_due", "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("key age keep-open failed: %s", type(e2).__name__)
 
     # 5b · paired VPS terminal silent since the installer ran (WebRequest / EA attach / AutoTrading) —
     #      ops alert + security Telegram push, recovery announced when the first heartbeat lands

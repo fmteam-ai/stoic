@@ -301,7 +301,7 @@ ensure_installation_id || exit 1   # N104-3/N105-4 — host identity for signed 
 set_kv backend/.env RELEASE_SIGNER external
 set_kv backend/.env RELEASE_SIGNER_URL https://signer:9443
 set_kv backend/.env RELEASE_SIGNER_ALLOWED_HOSTS signer
-set_kv backend/.env RELEASE_SIGNER_KEY_ID stoic-release-ed25519-v1
+set_kv backend/.env RELEASE_SIGNER_KEY_ID "$(current_release_key_id)"   # S-1 — the key the repo marks current (release/release_key.fingerprint)
 set_kv backend/.env RELEASE_SIGNER_TIMEOUT 10
 set_kv backend/.env BUNDLE_SIGNER_KEY_ID stoic-bundle-ed25519-v1
 set_kv backend/.env BUNDLE_PUBLIC_KEY_B64 "${SIGNER_PUB_B64}"

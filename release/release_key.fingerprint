@@ -1,7 +1,9 @@
 # CI release signer public-key fingerprints (M114-3 / S-1) — one line per key id:
-#   <key_id> SHA256:<hex of the raw 32-byte Ed25519 key> <status>
+#   <key_id> SHA256:<hex of the raw 32-byte Ed25519 key> <status> [created=YYYY-MM-DD]
 # status: current (the key CI signs with), transition (previous key, signatures still accepted while hosts re-pin),
 #         revoked (never accepted — add the id to RELEASE_REVOKED_KEY_IDS on every host).
+# created= feeds the key-age reminder (readiness/ops alert WARN after 180 days — M120-2).
 # deploy/preflight.sh refuses to pin a fetched key whose fingerprint differs or whose status is revoked; update this
 # file only with a signed key rotation (docs/RELEASE_KEY_ROTATION.md — deploy/signer/rotate_fly_signer_key.sh prints the line).
-stoic-release-ed25519-v1 SHA256:4c214d393287aac3983178b671e76a35a29d6f0b5e6c815729cc84afaa404d3d current
+stoic-release-ed25519-v2 SHA256:d01efc8d4288cd5266218e65b20ef93e415d5696f15b5d9b456ea560c0bb8620 current created=2026-10-10
+stoic-release-ed25519-v1 SHA256:4c214d393287aac3983178b671e76a35a29d6f0b5e6c815729cc84afaa404d3d transition created=2026-10-08
