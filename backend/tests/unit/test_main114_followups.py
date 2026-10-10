@@ -87,7 +87,8 @@ def test_m114_3_fetched_key_must_match_committed_fingerprint(world, tmp_path):  
 
 def test_committed_fingerprint_matches_live_format():
     lines = [l.split() for l in open(os.path.join(ROOT, "release", "release_key.fingerprint")) if l.strip() and not l.startswith("#")]
-    assert lines and lines[0][0] == "stoic-release-ed25519-v1" and lines[0][1].startswith("SHA256:") and len(lines[0][1]) == 7 + 64
+    assert lines and all(l[0].startswith("stoic-release-ed25519-v") and l[1].startswith("SHA256:") and len(l[1]) == 7 + 64 for l in lines)
+    assert [l[0] for l in lines if l[2] == "current"] == ["stoic-release-ed25519-v2"]      # S-1 — exactly one current key
 
 
 def test_m114_7_host_profile_signature(monkeypatch):

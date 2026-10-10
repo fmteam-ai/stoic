@@ -130,9 +130,9 @@ def test_write_key_ages_file_shell(tmp_path):
 def test_fingerprint_file_has_created_column_and_status_parsing_ignores_it():
     lines = [ln.split() for ln in open(os.path.join(ROOT, "release", "release_key.fingerprint")) if ln.strip() and not ln.startswith("#")]
     assert lines and all(len(p) == 4 and p[2] in ("current", "transition", "revoked") and p[3].startswith("created=") for p in lines)
-    r = subprocess.run(["bash", "-c", ". deploy/lib.sh; . deploy/preflight.sh; release_key_status stoic-release-ed25519-v1; current_release_key_id; expected_release_fingerprint stoic-release-ed25519-v1"],
+    r = subprocess.run(["bash", "-c", ". deploy/lib.sh; . deploy/preflight.sh; release_key_status stoic-release-ed25519-v1; current_release_key_id; expected_release_fingerprint stoic-release-ed25519-v2"],
                        cwd=ROOT, capture_output=True, text=True)
-    assert r.stdout.split() == ["current", "stoic-release-ed25519-v1", "SHA256:4c214d393287aac3983178b671e76a35a29d6f0b5e6c815729cc84afaa404d3d"]
+    assert r.stdout.split() == ["transition", "stoic-release-ed25519-v2", "SHA256:d01efc8d4288cd5266218e65b20ef93e415d5696f15b5d9b456ea560c0bb8620"]
 
 
 def test_reboot_recipe_has_no_duplicate_line():
