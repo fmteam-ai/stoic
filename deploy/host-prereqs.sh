@@ -80,11 +80,16 @@ else
   fi
   PROP=$(findmnt -no PROPAGATION "${DROOT}" 2>/dev/null || echo "?")
   ODIR="${STOIC_OVERLAY_DIR:-${DROOT}/overlay2}"
+  # M120-1 — overlay2 unbindable ONLY on cPanel/VirtFS hosts (jailshell rbind copies); dedicated hosts keep the default
+  WANT_UNB=0; { [ "${STOIC_WANT_OVERLAY_UNBINDABLE:-}" = 1 ] || [ -d /home/virtfs ] || [ -d /usr/local/cpanel ]; } && WANT_UNB=1
   OPROP=$(findmnt -no PROPAGATION "${ODIR}" 2>/dev/null || echo "?")   # M117-7 — want unbindable (VirtFS rbind copies)
+  [ "${WANT_UNB}" = 1 ] || OPROP=unbindable
   NEED_FIX=0
   case "${PROP}" in *slave*) ;; *) NEED_FIX=1 ;; esac
   case "${OPROP}" in *unbindable*) ;; *) [ -d "${ODIR}" ] && NEED_FIX=1 ;; esac
-  if [ "${NEED_FIX}" = 0 ]; then note PASS "${DROOT} propagation is '${PROP}' (slave) · overlay2 is unbindable"
+  if [ "${NEED_FIX}" = 0 ]; then
+    if [ "${WANT_UNB}" = 1 ]; then note PASS "${DROOT} propagation is '${PROP}' (slave) · overlay2 is unbindable"
+    else note PASS "${DROOT} propagation is '${PROP}' (slave) · no VirtFS on this host — overlay2 keeps Docker's default propagation (M120-1)"; fi
   else
       WHAT="${DROOT} propagation is '${PROP}'"; [ "${NEED_FIX}" = 1 ] && case "${PROP}" in *slave*) WHAT="${DROOT}/overlay2 propagation is '${OPROP}' (want unbindable — cPanel VirtFS rbind copies)";; esac
       if [ "${CHECK}" = 1 ]; then
@@ -106,7 +111,7 @@ else
           for _ in $(seq 1 45); do docker info >/dev/null 2>&1 && break; sleep 2; done
           PROP=$(findmnt -no PROPAGATION "${DROOT}" 2>/dev/null || echo "?")
           OPROP=$(findmnt -no PROPAGATION "${ODIR}" 2>/dev/null || echo "?")
-          [ -d "${ODIR}" ] || OPROP=unbindable
+          [ -d "${ODIR}" ] && [ "${WANT_UNB}" = 1 ] || OPROP=unbindable
           case "${PROP}:${OPROP}" in
             *slave*:*unbindable*) log "${DROOT} propagation is now '${PROP}', overlay2 '${OPROP}'"; note FIX "${DROOT} slave · overlay2 unbindable (dockerd restarted once)" ;;
             *) note FAIL "${DROOT} propagation '${PROP}' / overlay2 '${OPROP}' after the restart — run: systemctl stop docker && ${SLAVE_BIN} ${DROOT} && systemctl start docker"; HARD_FAIL=1 ;;

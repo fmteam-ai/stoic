@@ -29,6 +29,10 @@ ROOT="${1:-/var/lib/docker}"
 overlay_unbindable() {
   d="${STOIC_OVERLAY_DIR:-${ROOT}/overlay2}"
   [ -d "${d}" ] || return 0
+  # M120-1 — only cPanel/VirtFS hosts need it; a dedicated host keeps Docker's default overlay2 propagation
+  if [ "${STOIC_WANT_OVERLAY_UNBINDABLE:-}" != 1 ] && [ ! -d /home/virtfs ] && [ ! -d /usr/local/cpanel ]; then
+    return 0
+  fi
   case "$(findmnt -no PROPAGATION "${d}" 2>/dev/null)" in *unbindable*) return 0 ;; esac
   if findmnt -rn -t overlay -o TARGET 2>/dev/null | grep -q "^${d}/"; then
     echo "docker-root-slave: ${d} not yet unbindable — applied at the next dockerd restart (overlay mounts are live now)"

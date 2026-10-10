@@ -33,7 +33,23 @@ def _overlay_world(world, oprop="slave"):   # noqa: F811
     odir = world["tmp"] / "overlay2"; odir.mkdir(exist_ok=True)
     (world["state"] / "prop").write_text("slave"); (world["state"] / "oprop").write_text(oprop)
     (world["state"] / "mdm").write_text("1\n")
-    return {"STOIC_OVERLAY_DIR": str(odir)}
+    return {"STOIC_OVERLAY_DIR": str(odir), "STOIC_WANT_OVERLAY_UNBINDABLE": "1"}   # M120-1 — these tests model a cPanel/VirtFS host
+
+
+def test_dedicated_host_skips_overlay_unbindable(world):   # noqa: F811  (M120-1)
+    env = _overlay_world(world); env.pop("STOIC_WANT_OVERLAY_UNBINDABLE")
+    r = _run(world, "host_prereqs_missing; echo RC=$?", env)
+    assert "RC=1" in r.stdout and "unbindable" not in r.stdout, r.stdout + r.stderr
+    (world["etc"] / "99-stoic-docker.conf").write_text("fs.may_detach_mounts = 1\n")
+    (world["etc"] / "docker.service.d").mkdir(parents=True, exist_ok=True)
+    shutil.copy(os.path.join(ROOT, "deploy", "docker-root-slave.sh"), world["etc"] / "stoic-docker-root-slave")
+    os.chmod(world["etc"] / "stoic-docker-root-slave", 0o755)
+    (world["etc"] / "docker.service.d" / "10-stoic-private-root.conf").write_text("x")
+    r = _run(world, "bash deploy/host-prereqs.sh --check; echo RC=$?", env)
+    assert "RC=0" in r.stdout and "no VirtFS on this host" in r.stdout, r.stdout + r.stderr
+    r = subprocess.run(["sh", os.path.join(ROOT, "deploy", "docker-root-slave.sh"), "/var/lib/docker"],
+                       env=world["env"] | {"STUB_STATE": str(world["state"]), "STOIC_OVERLAY_DIR": env["STOIC_OVERLAY_DIR"]}, capture_output=True, text=True)
+    assert r.returncode == 0 and "make-unbindable" not in _calls(world)
 
 
 def test_host_prereqs_missing_reports_bindable_overlay2(world):   # noqa: F811
@@ -70,12 +86,12 @@ def test_docker_root_slave_defers_unbindable_while_overlays_are_live(world):   #
     odir = env["STOIC_OVERLAY_DIR"]
     root = "/var/lib/docker"
     (world["state"] / "live_overlays").write_text(f"{odir}/abc/merged\n")
-    r = subprocess.run(["sh", os.path.join(ROOT, "deploy", "docker-root-slave.sh"), root], env=world["env"] | {"STUB_STATE": str(world["state"]), "STOIC_OVERLAY_DIR": odir},
+    r = subprocess.run(["sh", os.path.join(ROOT, "deploy", "docker-root-slave.sh"), root], env=world["env"] | {"STUB_STATE": str(world["state"]), "STOIC_OVERLAY_DIR": odir, "STOIC_WANT_OVERLAY_UNBINDABLE": "1"},
                        capture_output=True, text=True)
     assert r.returncode == 0 and "applied at the next dockerd restart" in r.stdout, r.stdout + r.stderr
     assert "make-unbindable" not in _calls(world)
     (world["state"] / "live_overlays").write_text("")
-    r = subprocess.run(["sh", os.path.join(ROOT, "deploy", "docker-root-slave.sh"), root], env=world["env"] | {"STUB_STATE": str(world["state"]), "STOIC_OVERLAY_DIR": odir},
+    r = subprocess.run(["sh", os.path.join(ROOT, "deploy", "docker-root-slave.sh"), root], env=world["env"] | {"STUB_STATE": str(world["state"]), "STOIC_OVERLAY_DIR": odir, "STOIC_WANT_OVERLAY_UNBINDABLE": "1"},
                        capture_output=True, text=True)
     assert r.returncode == 0 and "is now unbindable" in r.stdout, r.stdout + r.stderr
     assert "mount --make-unbindable" in _calls(world) and (world["state"] / "oprop").read_text().strip() == "unbindable"

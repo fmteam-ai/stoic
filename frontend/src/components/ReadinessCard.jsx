@@ -115,6 +115,15 @@ export const ReadinessCard = () => {
                     )}
                 </div>
             )}
+            {checks.key_ages && checks.key_ages.due && checks.key_ages.due.length > 0 && (
+                <div className="border border-[#FFB020]/40 bg-[#FFB020]/5 px-3 py-2 mt-3" data-testid="readiness-key-ages">
+                    <div className="font-mono text-[9px] tracking-widest text-[#FFB020]">KEY / CERTIFICATE ROTATION DUE</div>
+                    <div className="font-mono text-xs text-[#E4E4E7] mt-0.5">{checks.key_ages.detail}</div>
+                    {checks.key_ages.fix && (
+                        <code className="block font-mono text-[11px] text-[#00FF41] mt-1" data-testid="readiness-key-ages-fix">{checks.key_ages.fix}</code>
+                    )}
+                </div>
+            )}
             {checks.host_suitability && checks.host_suitability.shared_web_host && (
                 <div className={`border px-3 py-2 mt-3 ${checks.host_suitability.ok ? "border-[#FFB020]/40 bg-[#FFB020]/5" : "border-[#FF3B30]/40 bg-[#FF3B30]/5"}`}
                     data-testid="readiness-host-suitability">

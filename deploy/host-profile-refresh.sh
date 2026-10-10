@@ -18,3 +18,4 @@ if ! write_host_profile_file "${profile}" "${markers}" "${at}" "${sig}"; then
   exit 1
 fi
 echo "host-profile-refresh: ${profile}${markers:+ (${markers})} at ${at} $( [ -n "${sig}" ] && echo signed || echo UNSIGNED)"
+write_key_ages_file || echo "host-profile-refresh: key_ages.json not refreshed (advisory — readiness key-age check shows stale data)" >&2   # M120-2

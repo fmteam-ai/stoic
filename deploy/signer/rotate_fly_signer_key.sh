@@ -82,8 +82,8 @@ echo "   signer OK — ${NEW_ID} ${NEW_FP}"
 cat <<EOF
 
 ========= 1. repo — release/release_key.fingerprint (commit on main, then tag) =========
-${NEW_ID} ${NEW_FP} current
-${CUR_ID} ${OLD_FP} transition        # → change to 'revoked' once every host re-pinned and the EA record is re-signed
+${NEW_ID} ${NEW_FP} current created=$(date -u +%Y-%m-%d)
+${CUR_ID} ${OLD_FP} transition        # → change to 'revoked' once every host re-pinned and the EA record is re-signed (keep its created=)
 
 ========= 2. GitHub → Settings → Secrets and variables → Actions =========
 RELEASE_SIGNER_KEY_ID=${NEW_ID}
