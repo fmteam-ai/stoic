@@ -470,8 +470,8 @@ ensure_cosign() {
 # ref is an attested release and the pull verifies; otherwise (or on a GHCR outage) build on the host.
 # registry: pull only — never build (strict). build: always build locally (never pull).
 deploy_mode() {
-  local v
-  v=$( { grep -E '^DEPLOY_MODE=' .env 2>/dev/null || true; } | cut -d= -f2- | tr -d "\"'")
+  local v="${DEPLOY_MODE_OVERRIDE:-}"   # process-local override (update.sh rollback of a --reprovision forces a build)
+  [ -n "${v}" ] || v=$( { grep -E '^DEPLOY_MODE=' .env 2>/dev/null || true; } | cut -d= -f2- | tr -d "\"'")
   case "${v}" in registry) echo registry;; build) echo build;; *) echo auto;; esac
 }
 
@@ -501,10 +501,10 @@ record_deploy_source() {   # record_deploy_source <source> <reason>
   mkdir -p deploy/state 2>/dev/null || return 0
   python3 - "$1" "$2" "${GIT_SHA:-}" "${STOIC_BACKEND_IMAGE:-}" "$(deploy_mode)" deploy/state/deploy_source.json <<'PY' || true
 import json, os, sys
-from datetime import datetime
+from datetime import datetime, timezone
 src, reason, sha, img, mode, out = sys.argv[1:7]
 doc = {"source": src, "reason": reason or None, "commit": sha or None, "backend_image": img or None, "deploy_mode": mode,
-       "at": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")}
+       "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
 json.dump(doc, open(out + ".tmp", "w"), sort_keys=True); os.chmod(out + ".tmp", 0o644); os.replace(out + ".tmp", out)
 PY
 }
@@ -552,9 +552,16 @@ verify_attestation() {
   rm -f release/attestation.current.json release/attestation.current.bundle deploy/state/release/attestation.current.json   # never reuse another commit's truth
   if ! attestation_required; then
     # A18 Part 3 — auto mode still LOOKS for the signed release: if it is there, the authoritative lock is adopted
-    # and the images can be pulled by digest; if not, this stays a developer/on-host build (no gate).
+    # and the images can be pulled by digest; if not, this stays a developer/on-host build (no gate) — EXCEPT
+    # M121-1: a v* tag whose Release workflow has not finished is refused (building it on the host now would
+    # publish an unattested copy of a release that is about to be attested); STOIC_ALLOW_UNATTESTED=1 overrides.
     if [ "$(deploy_mode)" = "auto" ]; then
       if _verify_attestation_core; then return 0; fi
+      if [ "${ATTESTATION_FETCH_STATE:-}" = "not-finished" ] && [ "${STOIC_ALLOW_UNATTESTED:-0}" != 1 ]; then
+        echo "!! Release workflow for ${ATTESTATION_TAG:-this tag} not finished — re-run deploy/update.sh ${ATTESTATION_TAG:-<tag>} when it is green"
+        echo "   (override, builds an UNATTESTED copy on this host: deploy/update.sh ${ATTESTATION_TAG:-<tag>} --allow-unattested)"
+        return 1
+      fi
       echo "   attestation gate: not required — signed release not available for $(git rev-parse --short "${GIT_SHA}") (see above) → developer lock + on-host build"
       return 0
     fi
@@ -564,18 +571,29 @@ verify_attestation() {
 }
 
 _verify_attestation_core() {
-  local repo tag dest=release/attestation
+  local repo tag dest=release/attestation rc
+  ATTESTATION_FETCH_STATE=""; ATTESTATION_TAG=""
   repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${repo}" ] || repo=$(_repo_slug)
   tag=$(git tag --points-at "${GIT_SHA}" | grep -E '^v[0-9]' | head -1 || true)
   if [ -z "${tag}" ]; then
+    ATTESTATION_FETCH_STATE="untagged"
     echo "!! attestation gate: ${GIT_SHA} carries no v* release tag — production deploys only tagged, attested releases"
     return 1
   fi
+  ATTESTATION_TAG="${tag}"
   echo "-- attestation gate: ${tag} @ ${GIT_SHA} (repo ${repo})"
   rm -rf "${dest}"
   # GITHUB_TOKEN from ./.env is exported for private-repo asset downloads
+  rc=0
   GITHUB_TOKEN="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2-)}" \
-    python3 scripts/release_attestation.py fetch --repo "${repo}" --tag "${tag}" --dest "${dest}" || return 1
+    python3 scripts/release_attestation.py fetch --repo "${repo}" --tag "${tag}" --dest "${dest}" || rc=$?
+  case "${rc}" in
+    0) ;;
+    5) ATTESTATION_FETCH_STATE="not-finished"
+       echo "!! Release workflow for ${tag} not finished — its signed assets are not published yet; re-run when the Release workflow is green"; return 1 ;;
+    6) ATTESTATION_FETCH_STATE="forbidden"; return 1 ;;
+    *) ATTESTATION_FETCH_STATE="unreachable"; return 1 ;;
+  esac
   ensure_cosign || { echo "!! cosign unavailable — cannot verify the release signature"; return 1; }
   # audit P2-2 — identity pinned to the EXACT release workflow at THIS tag
   # (not any workflow in the repo); the Rekor bundle is kept for offline DR verification.

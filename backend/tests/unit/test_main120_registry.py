@@ -264,6 +264,67 @@ def test_frontend_uses_same_origin_backend_url(tmp_path):
     assert lock["signer_key_id"] == "stoic-release-ed25519-v2"
 
 
+def test_release_not_finished_refuses_tag_in_auto_mode_unless_overridden(tmp_path):
+    # the fetch wrapper fails with the "not finished" code 5 (no release / asset missing) or the outage code 3
+    root, env = _world(tmp_path, env_lines=("APP_ENV=production", "GITHUB_REPO=x/y", "ATTESTATION_REQUIRED=false"), attested=False)
+    wrapper = root / "scripts" / "release_attestation.py"
+    wrapper.write_text(wrapper.read_text().replace('print("fetch failed: https://api.github.com/... <urlopen error>", file=sys.stderr); sys.exit(3)',
+                                                   'print("fetch failed", file=sys.stderr); sys.exit(int(os.environ.get("STUB_FETCH_RC", "3")))'))
+    r = _run(root, dict(env, STUB_FETCH_RC="5"), "verify_attestation; echo VA=$?; echo STATE=$ATTESTATION_FETCH_STATE")
+    assert "VA=1" in r.stdout and "STATE=not-finished" in r.stdout, r.stdout + r.stderr
+    assert "Release workflow for v9.9.9 not finished" in r.stdout and "--allow-unattested" in r.stdout
+    r = _run(root, dict(env, STUB_FETCH_RC="5", STOIC_ALLOW_UNATTESTED="1"), "verify_attestation; echo VA=$?")
+    assert "VA=0" in r.stdout and "developer lock + on-host build" in r.stdout                 # explicit override
+    r = _run(root, dict(env, STUB_FETCH_RC="3"), "verify_attestation; echo VA=$?; echo STATE=$ATTESTATION_FETCH_STATE")
+    assert "VA=0" in r.stdout and "STATE=unreachable" in r.stdout                               # outage never blocks
+    r = _run(root, dict(env, STUB_FETCH_RC="5"), "sed -i 's/^ATTESTATION_REQUIRED=false$//' .env; verify_attestation; echo VA=$?")
+    assert "VA=1" in r.stdout and "not finished" in r.stdout                                    # required mode: same clear message
+
+
+def test_release_attestation_fetch_exit_codes(monkeypatch, tmp_path):
+    import importlib, urllib.error
+    sys.path.insert(0, os.path.join(ROOT, "scripts"))
+    ra = importlib.import_module("release_attestation")
+
+    class A:
+        repo, tag, dest = "x/y", "v9.9.9", str(tmp_path / "d")
+
+    def http(code):
+        def _gh(url, accept):
+            raise urllib.error.HTTPError(url, code, "x", {}, None)
+        return _gh
+    monkeypatch.setattr(ra, "_gh", http(404)); assert ra.cmd_fetch(A()) == 5
+    monkeypatch.setattr(ra, "_gh", http(403)); assert ra.cmd_fetch(A()) == 6
+    monkeypatch.setattr(ra, "_gh", http(502)); assert ra.cmd_fetch(A()) == 3
+    monkeypatch.setattr(ra, "_gh", lambda u, a: (_ for _ in ()).throw(urllib.error.URLError("down"))); assert ra.cmd_fetch(A()) == 3
+    monkeypatch.setattr(ra, "_gh", lambda u, a: json.dumps({"assets": []}).encode()); assert ra.cmd_fetch(A()) == 5   # release exists, no assets yet
+
+
+def test_update_reprovision_flag_and_nothing_to_publish_hint(tmp_path):
+    root, env = _world(tmp_path, env_lines=("APP_ENV=production", "GITHUB_REPO=x/y", "ATTESTATION_REQUIRED=false",
+                                            f"BACKUP_PASSPHRASE_FILE={tmp_path}/pass"), attested=False)
+    (tmp_path / "pass").write_text("p\n"); (root / "secrets").mkdir()
+    (root / "deploy" / "backup.sh").write_text("#!/usr/bin/env bash\necho backup-stub\n")
+    wrapper = root / "scripts" / "release_attestation.py"
+    wrapper.write_text(wrapper.read_text().replace('sys.exit(3)', 'sys.exit(5)'))
+    git = (tmp_path / "bin" / "git"); git.write_text(git.read_text().replace('"rev-parse HEAD") cat backend/BUILD_SHA ;;',
+                                                                             '"rev-parse HEAD") cat backend/BUILD_SHA ;;\n  "rev-parse v9.9.9^{commit}") cat backend/BUILD_SHA ;;\n  "status --porcelain") exit 0 ;;'))
+    r = subprocess.run(["bash", "deploy/update.sh", "v9.9.9", "--yes"], cwd=root, env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0 and "nothing to publish" in r.stdout and "--reprovision" in r.stdout, r.stdout + r.stderr
+    r = subprocess.run(["bash", "deploy/update.sh", "v9.9.9", "--yes", "--reprovision"], cwd=root, env=env, capture_output=True, text=True, timeout=120)
+    assert "== reprovisioning" in r.stdout and "backup-stub" in r.stdout, r.stdout + r.stderr
+    assert "Release workflow for v9.9.9 not finished" in r.stdout and "release refused before build" in r.stdout and r.returncode == 1
+    up = open(os.path.join(ROOT, "deploy", "update.sh")).read()
+    assert 'if [ "${REPROVISION}" = 1 ]; then' in up and "DEPLOY_MODE_OVERRIDE=build provision_images || true" in up        # rollback of a reprovision = on-host build
+
+
+def test_key_ages_generated_at_is_utc_and_fingerprint_in_image():
+    pre = open(os.path.join(ROOT, "deploy", "preflight.sh")).read()
+    assert "iso(time.time())" in pre and "utcnow().timestamp()" not in pre
+    assert "COPY release/release_key.fingerprint /app/release/release_key.fingerprint" in open(os.path.join(ROOT, "Dockerfile.backend")).read()
+    assert "datetime.utcnow()" not in open(os.path.join(ROOT, "deploy", "lib.sh")).read()
+
+
 def test_rollback_and_doctor_wiring():
     rb = open(os.path.join(ROOT, "deploy", "rollback.sh")).read()
     assert 'elif [ "$(deploy_mode)" = "auto" ]' in rb and "adopt_release_lock ||" in rb and "provision_images ||" in rb

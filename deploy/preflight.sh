@@ -305,7 +305,7 @@ write_key_ages_file() {   # M120-2 — deploy/state/key_ages.json: release key c
   [ -f secrets/origin_cert.pem ] && cert_end=$(openssl x509 -enddate -noout -in secrets/origin_cert.pem 2>/dev/null | cut -d= -f2-)
   mkdir -p "${dir}" 2>/dev/null || { echo "!! key ages: cannot create ${dir}" >&2; return 1; }
   python3 - "${RELEASE_KEY_FINGERPRINT_FILE}" "${kid}" secrets/signer_ed25519_key secrets/origin_cert.pem "${cert_end}" "${dir}/key_ages.json" <<'PY' || { echo "!! key ages: ${dir}/key_ages.json not written" >&2; return 1; }
-import json, os, sys
+import json, os, sys, time
 from datetime import datetime
 fp_file, kid, rk, cert, cert_end, out = sys.argv[1:7]
 created = None
@@ -323,7 +323,7 @@ if cert_end.strip():
         not_after = datetime.strptime(" ".join(cert_end.split()), "%b %d %H:%M:%S %Y %Z").strftime("%Y-%m-%dT%H:%M:%SZ")
     except ValueError:
         not_after = None
-doc = {"schema": 1, "generated_at": iso(datetime.utcnow().timestamp()),
+doc = {"schema": 1, "generated_at": iso(time.time()),   # M121-2 — epoch seconds, never the local-offset variant
        "release_key": {"key_id": kid, "created": created},
        "runtime_key": {"path": rk, "created": iso(os.path.getmtime(rk)) if os.path.exists(rk) else None},
        "origin_cert": {"path": cert, "present": os.path.exists(cert), "not_after": not_after}}

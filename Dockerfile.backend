@@ -34,6 +34,7 @@ COPY backend/ ./
 # RC dependency lock, release hashes — without them the gates report "unavailable".
 COPY scripts/verify_ea_release.py /app/scripts/verify_ea_release.py
 COPY release/rc_lock.json /app/release/rc_lock.json
+COPY release/release_key.fingerprint /app/release/release_key.fingerprint
 COPY docs/RELEASE_HASHES.json /app/docs/RELEASE_HASHES.json
 # signed EX5 release record (glob keeps the build valid before the first sanctioned compile)
 COPY release/ea_release.jso[n] /app/release/

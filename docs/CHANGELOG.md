@@ -2,6 +2,11 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.14 — main121 review fixes (no strategy/risk change)
+- **M121-1 (P2)** `update.sh`: a v* tag whose GitHub Release has no signed assets yet is **refused** with "Release workflow for vX not finished — re-run when green" instead of being built on the host (override: `--allow-unattested`); a GitHub outage still falls back to the on-host build. `release_attestation.py fetch` exit codes: 3 unreachable · 5 not finished · 6 forbidden. New `deploy/update.sh <tag> --reprovision`: HEAD already is the tag → re-run attestation gate, lock adoption, registry pull (or build), restart and verification with the same backup/hold/rollback; a failing reprovision rolls back to an on-host build of the same commit. "nothing to publish" now prints the `--reprovision` hint.
+- **M121-2 (P3)** `key_ages.json` `generated_at` was written with the host's UTC offset (`utcnow().timestamp()`); now epoch-based UTC. Same fix in `deploy_source.json`.
+- **M121-3 (P3)** `Dockerfile.backend` copies `release/release_key.fingerprint`, so `release_signing.KEY_ID` in containers follows the repo's `current` line instead of the fallback.
+
 ## v1.60.13 — main120 review fixes (no strategy/risk change)
 - **M120-4 (P2)** `InfraWizard` bootstrap command and `StatusPage` use `BACKEND_URL` from `lib/api.js` (`REACT_APP_BACKEND_URL || window.location.origin`) — on the VPS the build has no `REACT_APP_BACKEND_URL`, so the PowerShell `iwr` line rendered a relative URL.
 - **M120-1 (P3)** `deploy/state/key_ages.json` and `release/ledger-anchors.jsonl` untracked + ignored (host/preview state; `deploy/state/deploy_source.json`, `deploy/state/release/` ignored too).
