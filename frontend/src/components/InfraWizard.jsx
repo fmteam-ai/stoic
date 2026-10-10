@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import api, { formatApiError } from "@/lib/api";
+import api, { formatApiError, BACKEND_URL } from "@/lib/api";
 import { toast } from "sonner";
 
 const STEPS = ["path", "provider", "broker", "recommend", "review"];
@@ -116,7 +116,7 @@ export function AddVpsWizard({ onDone }) {
                     <div className="mt-2">
                         <div className="font-mono text-[9px] text-[#FFD700] mb-1">ONE-TIME BOOTSTRAP TOKEN ({result.bootstrap.expires_in_min} min, single use) — run on the VPS as Administrator:</div>
                         <pre className="font-mono text-[9px] text-[#A1A1AA] bg-black border border-[#141414] p-2 overflow-x-auto whitespace-pre-wrap" data-testid="bootstrap-command">
-{`powershell -c "iwr '${process.env.REACT_APP_BACKEND_URL}/api/infra/agent/bootstrap/installer?token=${result.bootstrap.token}' -OutFile stoic-agent.ps1; ./stoic-agent.ps1"`}
+{`powershell -c "iwr '${BACKEND_URL}/api/infra/agent/bootstrap/installer?token=${result.bootstrap.token}' -OutFile stoic-agent.ps1; ./stoic-agent.ps1"`}
                         </pre>
                     </div>
                 )}

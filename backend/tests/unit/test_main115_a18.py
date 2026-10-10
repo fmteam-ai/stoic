@@ -155,7 +155,8 @@ def test_verify_ea_release_check_is_offline_and_fingerprint_bound(monkeypatch):
     with pytest.raises(SystemExit) as ei:
         ver.resolve_public_key(A())
     assert "does not match the committed" in str(ei.value)
-    A.public_key = "1NgD7Rq2/8Fa31kwU2N18krBt3d5zPkwmg60MUW0Gkc="
+    A.public_key = "1NgD7Rq2/8Fa31kwU2N18krBt3d5zPkwmg60MUW0Gkc="         # the v1 key — its fingerprint line is still committed (revoked)
+    monkeypatch.setenv("RELEASE_SIGNER_KEY_ID", "stoic-release-ed25519-v1")
     assert ver.resolve_public_key(A()) == A.public_key and os.environ["RELEASE_PUBLIC_KEY_B64"] == A.public_key
 
 

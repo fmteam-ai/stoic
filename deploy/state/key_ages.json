@@ -1,1 +1,0 @@
-{"generated_at": "2026-10-10T17:36:25Z", "origin_cert": {"not_after": null, "path": "secrets/origin_cert.pem", "present": false}, "release_key": {"created": "2026-10-08", "key_id": "stoic-release-ed25519-v1"}, "runtime_key": {"created": null, "path": "secrets/signer_ed25519_key"}, "schema": 1}

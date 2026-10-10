@@ -203,6 +203,18 @@ def check_entry(ea: dict) -> list:
 
 FINGERPRINT_FILE = os.path.join(ROOT, "release", "release_key.fingerprint")
 
+def _default_key_id() -> str:
+    """S-1 — without RELEASE_SIGNER_KEY_ID the repo's `current` fingerprint line decides (never a hard-coded id)."""
+    try:
+        for line in open(FINGERPRINT_FILE):
+            parts = line.split()
+            if len(parts) >= 3 and not parts[0].startswith("#") and parts[2] == "current":
+                return parts[0]
+    except OSError:
+        pass
+    return "stoic-release-ed25519-v2"
+
+
 
 def committed_fingerprint(key_id: str) -> str:
     """P0-01 / M114-3 — the repo (not the network) says which CI key is trusted: `<key_id> SHA256:<hex>`."""
@@ -229,7 +241,7 @@ def resolve_public_key(args) -> str | None:
     """P0-01 — `--check` is OFFLINE: the key comes from RELEASE_PUBLIC_KEY_B64, or from --public-key whose
     fingerprint must equal the committed release/release_key.fingerprint; otherwise it fails with the exact fix.
     Never the runtime/bundle key (release_signing refuses release purposes without the pin)."""
-    key_id = os.environ.get("RELEASE_SIGNER_KEY_ID") or "stoic-release-ed25519-v1"
+    key_id = os.environ.get("RELEASE_SIGNER_KEY_ID") or _default_key_id()
     expected = committed_fingerprint(key_id)
     given = getattr(args, "public_key", None)
     if given:
@@ -258,7 +270,7 @@ def check(args):
                          "scripts/capture_release_hashes.py first")
     from release_signing import _mode
     if resolve_public_key(args) is None and _mode(os.environ) != "local":
-        exp = committed_fingerprint(os.environ.get("RELEASE_SIGNER_KEY_ID") or "stoic-release-ed25519-v1")
+        exp = committed_fingerprint(os.environ.get("RELEASE_SIGNER_KEY_ID") or _default_key_id())
         raise SystemExit("FAIL: no release public key for --check — set RELEASE_PUBLIC_KEY_B64 or pass "
                          f"--public-key <b64> (its fingerprint must be {exp or 'the committed one'}; "
                          "release/release_key.fingerprint). The runtime/bundle key is never used for ea-release.")

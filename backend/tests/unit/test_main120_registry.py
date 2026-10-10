@@ -235,6 +235,35 @@ def test_update_reads_policy_and_hold_from_dotenv(tmp_path):
     assert "remove the line once Admin" in src and "unset STOIC_READINESS_POLICY" in open(os.path.join(ROOT, "deploy", "lib.sh")).read()
 
 
+def test_compose_up_no_build_after_registry_pull_and_truth_folder_cleared(tmp_path):
+    root, env = _world(tmp_path, fetch_ok=False)
+    r = _run(root, env, "provision_images >/dev/null; images_from_registry; echo IFR=$?; compose_up 2>/dev/null; echo CU=$?")
+    assert "IFR=0" in r.stdout, r.stdout + r.stderr
+    assert any("compose" in ln and "up" in ln and "--no-build" in ln for ln in _log(env).splitlines())   # M120-2: auto mode after a pull
+    # a build (fallback) must not pass --no-build
+    (tmp_path / "docker.log").unlink()
+    r = _run(root, dict(env, STUB_PULL_RC="1"), "provision_images >/dev/null; images_from_registry; echo IFR=$?; compose_up 2>/dev/null; echo CU=$?")
+    assert "IFR=1" in r.stdout and not any("--no-build" in ln for ln in _log(env).splitlines() if " up" in ln)
+    # tidy: the host truth folder never keeps the previous release's attestation after verify_attestation of an untagged build
+    pub = root / "deploy" / "state" / "release"; pub.mkdir(parents=True, exist_ok=True)
+    (pub / "attestation.current.json").write_text('{"commit": "old"}')
+    r = _run(root, env, "verify_attestation; echo VA=$?")
+    assert "VA=1" in r.stdout and not (pub / "attestation.current.json").exists()
+
+
+def test_frontend_uses_same_origin_backend_url(tmp_path):
+    for f, needle in (("components/InfraWizard.jsx", "iwr '${BACKEND_URL}/api/infra/agent/bootstrap/installer"),
+                      ("pages/StatusPage.jsx", "const API = `${BACKEND_URL}/api`")):
+        s = open(os.path.join(ROOT, "frontend", "src", f)).read()
+        assert needle in s and 'BACKEND_URL } from "@/lib/api"' in s and "process.env.REACT_APP_BACKEND_URL}" not in s, f
+    gi = open(os.path.join(ROOT, ".gitignore")).read()
+    assert "release/ledger-anchors.jsonl" in gi and "deploy/state/key_ages.json" in gi and "deploy/state/release/" in gi
+    tracked = subprocess.run(["git", "-C", ROOT, "ls-files", "release/ledger-anchors.jsonl", "deploy/state/key_ages.json"], capture_output=True, text=True).stdout
+    assert tracked.strip() == ""
+    lock = json.load(open(os.path.join(ROOT, "release", "rc_lock.json")))
+    assert lock["signer_key_id"] == "stoic-release-ed25519-v2"
+
+
 def test_rollback_and_doctor_wiring():
     rb = open(os.path.join(ROOT, "deploy", "rollback.sh")).read()
     assert 'elif [ "$(deploy_mode)" = "auto" ]' in rb and "adopt_release_lock ||" in rb and "provision_images ||" in rb

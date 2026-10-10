@@ -491,6 +491,10 @@ registry_available() {
   python3 scripts/release_attestation.py verify --file release/attestation.current.json --sha "${GIT_SHA}" --require-images >/dev/null 2>&1
 }
 
+images_from_registry() {   # the last provision_images pulled the attested digests (deploy/state/deploy_source.json)
+  [ "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1])).get("source",""))' deploy/state/deploy_source.json 2>/dev/null)" = registry ]
+}
+
 # deploy/state/deploy_source.json — what the running stack was provisioned from (registry | build | build-fallback);
 # the backend shows it in release readiness (ro mount /app/state).
 record_deploy_source() {   # record_deploy_source <source> <reason>
@@ -545,7 +549,7 @@ verify_release_provenance() {
 
 verify_attestation() {
   resolve_git_sha || return 1
-  rm -f release/attestation.current.json release/attestation.current.bundle   # never reuse another commit's truth
+  rm -f release/attestation.current.json release/attestation.current.bundle deploy/state/release/attestation.current.json   # never reuse another commit's truth
   if ! attestation_required; then
     # A18 Part 3 — auto mode still LOOKS for the signed release: if it is there, the authoritative lock is adopted
     # and the images can be pulled by digest; if not, this stays a developer/on-host build (no gate).
@@ -974,7 +978,8 @@ compose_up() {
   reap_zombies || return 1
   detach_project_copies
   local flags="-d --remove-orphans" attempt pass_started
-  [ "$(deploy_mode)" = "registry" ] && flags="${flags} --no-build"
+  # M120-2 — never rebuild over pulled digests: strict registry mode, or auto mode after a successful registry pull
+  { [ "$(deploy_mode)" = "registry" ] || images_from_registry; } && flags="${flags} --no-build"
   for attempt in 1 2 3 4 5 6; do
     pass_started=$(date -u +%s)
     docker compose up ${flags} "$@" && return 0

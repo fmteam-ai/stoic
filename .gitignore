@@ -190,4 +190,9 @@ deploy/cloudflare/Caddyfile
 /.env.example
 /backend/.env.example
 deploy/state/host_profile.json
+deploy/state/key_ages.json
+deploy/state/deploy_source.json
+deploy/state/release/
+# M120-1 — repair-chain anchors are host/preview state (grow every session), never release content
+release/ledger-anchors.jsonl
 deploy/state/*.tmp
