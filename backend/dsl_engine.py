@@ -271,61 +271,91 @@ def _entry_side(rules, feat, params):
     return None
 
 
+def make_ctx(dsl: dict, intraday: bool = True, cost_bps: float = 2.0) -> dict:
+    """Everything step() needs, resolved once."""
+    ex = exits_of(dsl)
+    return {"params": dsl.get("params") or {}, "rules": split_rules(dsl, intraday)["rules"],
+            "tp": ex.get("take_profit_pct"), "sl": ex.get("stop_loss_pct"),
+            "be": ex.get("breakeven_after_pct"), "trail": ex.get("trail_pct"),
+            "cost": cost_bps / 10_000}
+
+
+def new_state() -> dict:
+    return {"pos": None, "pending": None}
+
+
+def step(state: dict, b: dict, feat: dict, ctx: dict, allow_entry: bool = True):
+    """Advance one CLOSED bar. Mutates `state`; returns a closed trade or None.
+
+    Shared by the backtester and the live shadow runner so both apply
+    exactly the same fills, exits and stop ratchets. `state` is plain JSON
+    (safe to persist between bars).
+    """
+    tp, sl, be, trail, cost = ctx["tp"], ctx["sl"], ctx["be"], ctx["trail"], ctx["cost"]
+    trade = None
+    if state["pending"] and state["pos"] is None:              # fill at this bar's open
+        d = 1 if state["pending"] == "BUY" else -1
+        state["pos"] = {"side": state["pending"], "entry": b["o"], "entry_ts": b["ts"], "n": 0,
+                        "best": b["o"], "stop": None, "stop_kind": None}
+        if sl:
+            state["pos"]["stop"], state["pos"]["stop_kind"] = b["o"] * (1 - d * sl / 100), "stop_loss"
+        state["pending"] = None
+    pos = state["pos"]
+    if pos:
+        pos["n"] += 1
+        d = 1 if pos["side"] == "BUY" else -1
+        target = pos["entry"] * (1 + d * tp / 100) if tp else None
+        hit_stop = pos["stop"] is not None and (b["l"] <= pos["stop"] if d > 0 else b["h"] >= pos["stop"])
+        hit_tgt = target is not None and (b["h"] >= target if d > 0 else b["l"] <= target)
+        exit_px = reason = None
+        if hit_stop:
+            gap = b["o"] < pos["stop"] if d > 0 else b["o"] > pos["stop"]
+            exit_px, reason = (b["o"] if gap else pos["stop"]), pos["stop_kind"]
+        elif hit_tgt:
+            gap = b["o"] > target if d > 0 else b["o"] < target
+            exit_px, reason = (b["o"] if gap else target), "take_profit"
+        if exit_px is not None:
+            gross = d * (exit_px / pos["entry"] - 1)
+            trade = {"side": pos["side"], "entry_ts": pos["entry_ts"], "exit_ts": b["ts"],
+                     "entry": pos["entry"], "exit": exit_px, "bars": pos["n"],
+                     "reason": reason, "return_pct": (gross - 2 * cost) * 100}
+            state["pos"] = None
+        else:                                             # ratchet stops after the bar
+            pos["best"] = max(pos["best"], b["c"]) if d > 0 else min(pos["best"], b["c"])
+            fav = d * (pos["best"] / pos["entry"] - 1) * 100
+            cands = [(pos["stop"], pos["stop_kind"])] if pos["stop"] is not None else []
+            if be and fav >= be:
+                cands.append((pos["entry"], "breakeven"))
+            if trail:
+                cands.append((pos["best"] * (1 - d * trail / 100), "trailing_stop"))
+            if cands:
+                best = max(cands, key=lambda c: d * c[0])         # tightest stop wins
+                if best[0] != pos["stop"]:
+                    pos["stop"], pos["stop_kind"] = best
+    if state["pos"] is None and state["pending"] is None and allow_entry:
+        state["pending"] = _entry_side(ctx["rules"], feat, ctx["params"])
+    return trade
+
+
+def mark_open(state: dict, last_close: float, ctx: dict):
+    pos = state.get("pos")
+    if not pos:
+        return None
+    d = 1 if pos["side"] == "BUY" else -1
+    return {"side": pos["side"], "entry": pos["entry"], "entry_ts": pos["entry_ts"], "mark": last_close,
+            "stop": pos["stop"], "return_pct": (d * (last_close / pos["entry"] - 1) - ctx["cost"]) * 100}
+
+
 def simulate(dsl: dict, bars: list, intraday: bool = True, cost_bps: float = 2.0) -> dict:
     """Run the rule tree over normalized bars. Pure; no I/O."""
-    params = dsl.get("params") or {}
-    rules = split_rules(dsl, intraday)["rules"]
-    ex = exits_of(dsl)
-    tp, sl = ex.get("take_profit_pct"), ex.get("stop_loss_pct")
-    be, trail = ex.get("breakeven_after_pct"), ex.get("trail_pct")
-    cost = cost_bps / 10_000
+    ctx = make_ctx(dsl, intraday, cost_bps)
     feats = feature_series(bars, intraday)
-    trades, pos, pending = [], None, None
+    state, trades = new_state(), []
     for i, b in enumerate(bars):
-        if pending and pos is None:                       # fill at this bar's open
-            pos = {"side": pending, "entry": b["o"], "i": i, "best": b["o"], "stop": None, "stop_kind": None}
-            d = 1 if pending == "BUY" else -1
-            if sl:
-                pos["stop"], pos["stop_kind"] = pos["entry"] * (1 - d * sl / 100), "stop_loss"
-            pending = None
-        if pos:
-            d = 1 if pos["side"] == "BUY" else -1
-            target = pos["entry"] * (1 + d * tp / 100) if tp else None
-            hit_stop = pos["stop"] is not None and (b["l"] <= pos["stop"] if d > 0 else b["h"] >= pos["stop"])
-            hit_tgt = target is not None and (b["h"] >= target if d > 0 else b["l"] <= target)
-            exit_px = reason = None
-            if hit_stop:
-                gap = b["o"] < pos["stop"] if d > 0 else b["o"] > pos["stop"]
-                exit_px, reason = (b["o"] if gap else pos["stop"]), pos["stop_kind"]
-            elif hit_tgt:
-                gap = b["o"] > target if d > 0 else b["o"] < target
-                exit_px, reason = (b["o"] if gap else target), "take_profit"
-            if exit_px is not None:
-                gross = d * (exit_px / pos["entry"] - 1)
-                trades.append({"side": pos["side"], "entry_ts": bars[pos["i"]]["ts"], "exit_ts": b["ts"],
-                               "entry": pos["entry"], "exit": exit_px, "bars": i - pos["i"] + 1,
-                               "reason": reason, "return_pct": (gross - 2 * cost) * 100})
-                pos = None
-            else:                                         # ratchet stops after the bar
-                pos["best"] = max(pos["best"], b["c"]) if d > 0 else min(pos["best"], b["c"])
-                fav = d * (pos["best"] / pos["entry"] - 1) * 100
-                cands = [(pos["stop"], pos["stop_kind"])] if pos["stop"] is not None else []
-                if be and fav >= be:
-                    cands.append((pos["entry"], "breakeven"))
-                if trail:
-                    cands.append((pos["best"] * (1 - d * trail / 100), "trailing_stop"))
-                if cands:
-                    best = max(cands, key=lambda c: d * c[0])         # tightest stop wins
-                    if best[0] != pos["stop"]:
-                        pos["stop"], pos["stop_kind"] = best
-        if pos is None and pending is None and i < len(bars) - 1:
-            pending = _entry_side(rules, feats[i], params)
-    open_at_end = None
-    if pos:
-        last = bars[-1]
-        d = 1 if pos["side"] == "BUY" else -1
-        open_at_end = {"side": pos["side"], "entry": pos["entry"], "mark": last["c"],
-                       "return_pct": (d * (last["c"] / pos["entry"] - 1) - cost) * 100}
+        t = step(state, b, feats[i], ctx, allow_entry=i < len(bars) - 1)
+        if t:
+            trades.append(t)
+    open_at_end = mark_open(state, bars[-1]["c"], ctx) if bars else None
     return {**_metrics(trades, bars), "trades": trades[-200:], "open_at_end": open_at_end}
 
 
