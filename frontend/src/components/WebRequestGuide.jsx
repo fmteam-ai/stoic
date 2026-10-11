@@ -6,16 +6,16 @@ import { toast } from "sonner";
  *  it. So: one guided dialog, a Copy URL button, and a live check — the step turns green on the next heartbeat
  *  (the install-progress poll already runs every 4 s). Shown when the heartbeat step is blocked/warn for a
  *  WebRequest reason. */
-export function WebRequestGuide({ accountId, url, step }) {
+export function WebRequestGuide({ accountId, url, step, force = false }) {
     const [copied, setCopied] = useState(false);
     const reason = `${step?.detail || ""} ${step?.hint || ""}`;
-    const relevant = step && step.status !== "done" && /WebRequest|4014|blocks the address|No request/i.test(reason) && !/REJECTED/i.test(step.detail || "");
+    const relevant = force || (step && step.status !== "done" && /WebRequest|4014|blocks the address|No request/i.test(reason) && !/REJECTED/i.test(step.detail || ""));
     if (!relevant || !url) return null;
     const copy = async () => {
         try { await navigator.clipboard.writeText(url); setCopied(true); toast.success("URL copied — paste it into MT5"); }
         catch { toast.error("Copy failed — select the URL and press Ctrl+C"); }
     };
-    const live = step.status === "done";
+    const live = step?.status === "done";
     return (
         <div className="mt-3 border border-[#FFB000]/40 bg-[#FFB000]/5 p-3" data-testid={`webrequest-guide-${accountId}`}>
             <div className="text-sm text-white font-medium mb-1">One MT5 setting only you can change</div>

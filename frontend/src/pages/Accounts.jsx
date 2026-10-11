@@ -5,6 +5,7 @@ import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 import { AddAccountWizard } from "@/components/AddAccountWizard";
 import { EditAccountDialog } from "@/components/EditAccountDialog";
+import { StatusFixDialog } from "@/components/StatusFixDialog";
 import { StatusLine } from "@/components/StatusLine";
 import { VpsOfferButton } from "@/components/VpsOffer";
 import { InstallProgressChip } from "@/components/InstallProgressPanel";
@@ -355,6 +356,7 @@ export default function Accounts() {
     // iter-137 · Multi-account management — patch metadata (group / trading toggle)
     const [overviewKey, setOverviewKey] = useState(0);
     const [editAccount, setEditAccount] = useState(null);     // M123-4 — Edit button on the account card
+    const [statusFix, setStatusFix] = useState(null);         // U15 — { account, fix } opened from the StatusLine fix button
     const patchAccount = async (id, payload, okMsg) => {
         try {
             await api.patch(`/accounts/${id}`, payload);
@@ -413,6 +415,8 @@ export default function Accounts() {
                     onCreated={() => load()} onAdvanced={() => { setShowWizard(false); setShowForm(true); }} />
                 <EditAccountDialog account={editAccount} open={!!editAccount} onClose={() => setEditAccount(null)}
                     onSaved={() => { load(); setOverviewKey(k => k + 1); }} />
+                {statusFix && <StatusFixDialog account={statusFix.account} fix={statusFix.fix} onClose={() => setStatusFix(null)}
+                    onDone={() => { load(); setOverviewKey(k => k + 1); }} />}
 
                 {/* Multi-account portfolio overview (iter-137) */}
                 <MultiAccountOverview refreshKey={overviewKey} />
@@ -581,10 +585,9 @@ export default function Accounts() {
                                     className={`border ${a.id === focusId ? "border-[#FFD700] shadow-[0_0_0_1px_#FFD700]" : "border-[#1F1F1F]"} bg-[#0A0A0A] p-5`}
                                     data-testid={`account-row-${a.account_number}`}>
                                     <StatusLine account={a} onFix={(fix) => {
-                                        // U15 — one fix button: route to the one thing that fixes this state
+                                        // U15 — one fix button: Start acts inline, everything else opens its dialog on the card
                                         if (fix.action === "start") patchAccount(a.id, { trading_enabled: true }, "Trading started");
-                                        else if (fix.action === "adopt_server") api.post(`/accounts/${a.id}/adopt-reported-server`).then(load).catch(e => toast.error(formatApiError(e)));
-                                        else document.querySelector(`[data-testid="repair-btn-${a.id}"], [data-testid="quick-install-generate-${a.id}"], [data-testid="quick-trust-btn-${a.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                                        else setStatusFix({ account: a, fix });
                                     }} />
                                     {a.broker_account_mismatch && (() => {
                                         // M122-P2.3 — same login, different server NAME is a registration typo, not a wrong terminal

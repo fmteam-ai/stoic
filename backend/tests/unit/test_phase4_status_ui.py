@@ -82,6 +82,17 @@ def test_u15_one_line_one_fix(monkeypatch):
     for tid in ("status-line-", "status-line-fix-", "status-line-why-", "status-line-internals-", "status-line-label-"):
         assert tid in fe, tid
     assert "<StatusLine account={a} onFix=" in _read("frontend", "src", "pages", "Accounts.jsx")
+    # every fix opens its dialog ON the card (Start acts inline)
+    acc_fe = _read("frontend", "src", "pages", "Accounts.jsx")
+    assert "else setStatusFix({ account: a, fix })" in acc_fe and "<StatusFixDialog account={statusFix.account} fix={statusFix.fix}" in acc_fe
+    dlg = _read("frontend", "src", "components", "StatusFixDialog.jsx")
+    for action in ("install", "repair", "trust", "adopt_server", "webrequest", "operator", "wait"):
+        assert f"{action}:" in dlg or f'"{action}"' in dlg, action
+    for tid in ("fix-dialog-command-", "fix-dialog-copy-", "fix-dialog-cmd-", 'testid="fix-dialog-trust"', 'testid="fix-dialog-adopt"', "fix-dialog-info-"):
+        assert tid in dlg, tid
+    assert '"/setup/pairing-token", { account_id: account.id, repair }' in dlg and "/trust-terminal" in dlg and "/adopt-reported-server" in dlg
+    assert "<WebRequestGuide accountId={account.id} url={url} force />" in dlg
+    assert "force = false" in _read("frontend", "src", "components", "WebRequestGuide.jsx")
 
 
 def test_o5_no_data_findings_are_info_and_hidden_by_default():
