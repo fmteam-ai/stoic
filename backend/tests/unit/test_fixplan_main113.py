@@ -34,9 +34,10 @@ def test_n113_1_paper_accounts_skip_login_and_server_rules_but_keep_ini_safety()
         AccountCreate(**base, account_number="SAND[1]")                       # section syntax still refused
     with pytest.raises(ValidationError):
         AccountCreate(**{**base, "label": "a=b"}, account_number="1001")
-    # non-paper keeps the A17-1 rules
+    # non-paper keeps the A17-1 login rule; U1 (Phase 4) made the server OPTIONAL (adopted from the EA's first heartbeat)
+    assert AccountCreate(label="x", broker="IC Markets", server="", account_number="52012345", mode="live").server == ""
     with pytest.raises(ValidationError):
-        AccountCreate(label="x", broker="IC Markets", server="", account_number="52012345", mode="live")
+        AccountCreate(label="x", broker="IC Markets", server="bad;name", account_number="52012345", mode="live")
     with pytest.raises(ValidationError):
         AccountCreate(label="x", broker="IC Markets", server="ICMarketsSC-Demo", account_number="SANDBOX-1", mode="live")
     ok = AccountCreate(label="x", broker="IC Markets", server="ICMarketsSC-Demo", account_number="52012345", mode="live")
