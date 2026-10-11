@@ -338,3 +338,56 @@ async def crypto_exchanges(refresh: bool = False, user=Depends(get_current_user)
             for eid, meta in EXCHANGES.items()
         ],
     }
+
+
+# ============================== FUNDING CARRY (SHADOW) ==============================
+# Hedged spot-long / perp-short carry. Public market data + paper book only:
+# none of these routes touch API keys or place orders.
+from crypto_bridge import funding_carry as fc  # noqa: E402
+
+
+class FundingCarryRequest(BaseModel):
+    exchange_id: Literal["binance", "okx"] = "binance"
+    bases: list[str] = Field(default_factory=lambda: list(fc.DEFAULT_UNIVERSE), min_length=1, max_length=10)
+    config: dict = Field(default_factory=dict)
+
+    def normalized_bases(self) -> list[str]:
+        import re
+        out = []
+        for b in self.bases:
+            b = b.strip().upper()
+            if not re.fullmatch(r"[A-Z0-9]{2,10}", b):
+                raise HTTPException(status_code=422, detail={"code": "invalid_base", "base": b[:12]})
+            if b not in out:
+                out.append(b)
+        return out
+
+
+def _public_scan(res: dict) -> dict:
+    return {k: v for k, v in res.items() if k != "snapshots"}
+
+
+@router.post("/funding-carry/scan")
+async def funding_carry_scan(payload: FundingCarryRequest, user=Depends(get_current_user)):
+    """Rank funding-carry opportunities (net of fees, persistence and basis checks)."""
+    _ = user
+    cfg = fc.CarryConfig.from_dict(payload.config)
+    return _public_scan(await fc.scan(payload.exchange_id, payload.normalized_bases(), cfg))
+
+
+@router.post("/funding-carry/shadow/cycle")
+async def funding_carry_shadow_cycle(payload: FundingCarryRequest, user=Depends(get_current_user)):
+    """Run one paper-trading step of the caller's shadow carry book."""
+    cfg = fc.CarryConfig.from_dict(payload.config)
+    res = await fc.scan(payload.exchange_id, payload.normalized_bases(), cfg)
+    out = await fc.run_shadow_cycle(get_db(), user["id"], res, cfg)
+    return {**out, "errors": res["errors"]}
+
+
+@router.get("/funding-carry/shadow")
+async def funding_carry_shadow(user=Depends(get_current_user)):
+    db = get_db()
+    rows = await db[fc.COLLECTION].find({"user_id": user["id"]}).sort("opened_ts", -1).to_list(200)
+    for r in rows:
+        r["id"] = str(r.pop("_id"))
+    return {"mode": "shadow", "summary": await fc.shadow_summary(db, user["id"]), "positions": rows}
