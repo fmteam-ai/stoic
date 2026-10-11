@@ -101,7 +101,10 @@ def test_protected_targets_never_blocked_and_cap_switches_to_alert_only():
         seed(db, "B2", f"ip:7.7.7.{i}", "high", {"ip": f"7.7.7.{i}", "requests": 40})
     run(actions.sweep(db, c))
     st = [a["status"] for a in db.security_actions.rows]
-    assert st[:4] == ["refused_protected"] * 4 and st[4:].count("done") == 2 and st[4:].count("refused_cap") == 2
+    # O1 (Phase 1) — the Cloudflare range is reclassified (proxy misconfiguration), the other three stay refused_protected
+    assert sorted(st[:4]) == sorted(["refused_protected"] * 3 + ["reclassified_proxy_misconfiguration"])
+    assert st[4:].count("done") == 2 and st[4:].count("refused_cap") == 2
+    assert any(f["check_id"] == "proxy_misconfiguration" and f["severity"] == "high" for f in db.security_findings.rows)
     assert db.auth_sessions.rows == [] and not any(a["action"] == "revoke_sessions" and a["status"] == "done" for a in db.security_actions.rows)
     assert len(db.security_blocks.rows) == 2 and all(b["value"].startswith("7.7.7.") for b in db.security_blocks.rows)
     kinds = {r["check_id"] for r in db.security_findings.rows}

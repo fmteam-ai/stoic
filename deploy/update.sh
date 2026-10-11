@@ -70,6 +70,20 @@ else
 
   echo "== STOIC update: $(git rev-parse --short HEAD) -> ${REF} =="
 
+  # O3 (Phase 1) — a release tag is checked BEFORE the backup: exists on origin + Release workflow green.
+  # (Previously the attestation gate refused an unfinished Release only after backup + checkout.)
+  if printf '%s' "${REF}" | grep -qE '^v[0-9]' && [ "${STOIC_ALLOW_UNATTESTED:-0}" != 1 ]; then
+    _repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${_repo}" ] || _repo=$(_repo_slug)
+    _rc=0
+    GITHUB_TOKEN="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2-)}" \
+      python3 scripts/release_precheck.py --repo "${_repo}" --tag "${REF}" || _rc=$?
+    case "${_rc}" in
+      0) ;;
+      4) echo "   release check: continuing — the attestation gate verifies the signed artefacts after checkout" ;;
+      *) echo "   nothing was changed on this host (no backup, no checkout). Override for an on-host build: deploy/update.sh ${REF} --allow-unattested"; exit 1 ;;
+    esac
+  fi
+
   echo "-- pre-update backup"
   ensure_backup_passphrase || exit 1    # N101-6 — never reach backup.sh without a passphrase for secrets/
   deploy/backup.sh backup

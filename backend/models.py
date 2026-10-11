@@ -101,7 +101,7 @@ class SymbolOut(BaseModel):
 class AccountCreate(BaseModel):
     label: str = Field(max_length=120)
     broker: str = Field(max_length=120)
-    server: str = Field(max_length=64)
+    server: str = Field(default="", max_length=64)   # U1 — optional; adopted from the EA
     account_number: str = Field(max_length=12)
 
     # A17-1 — these values end up in file names (account-<login>), ini lines (Server=) and shell output
@@ -121,9 +121,9 @@ class AccountCreate(BaseModel):
             return self
         if not _re.fullmatch(r"[0-9]{4,12}", self.account_number):
             raise ValueError("account_number must be the 4–12 digit MT5 login")
-        if not _re.fullmatch(r"[A-Za-z0-9 ._-]{1,64}", self.server):
+        if self.server and not _re.fullmatch(r"[A-Za-z0-9 ._-]{1,64}", self.server):
             raise ValueError("server may only contain letters, digits, space, '.', '_' and '-' (max 64)")
-        return self
+        return self        # U1 (Phase 4) — server may be empty: the EA's first heartbeat fills it (U2 auto-adopt)
     # What kind of MT5 account is it? (technical/trading type)
     account_type: Literal["microcent", "cent", "standard", "demo"] = "microcent"
     # What role does the account play inside PAMM? Separate question —

@@ -21,7 +21,7 @@ def _read(*rel):
 
 def test_ea_1_61_server_url_autoload_and_self_check():
     mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
-    assert '#define EA_CLIENT_VERSION "1.63"' in mq5 and '#property version   "1.63"' in mq5
+    assert '#define EA_CLIENT_VERSION "1.64"' in mq5 and '#property version   "1.64"' in mq5
     assert "preview.emergentagent.com" not in mq5.split("string ResolveServerUrl")[0].split("input string ServerUrl")[1].split("\n")[0]
     assert 'input string ServerUrl              = "https://stoicaibot.com"' in mq5
     assert 'FileIsExist("STOIC-Server.txt")' in mq5 and "g_server_url = ResolveServerUrl();" in mq5
@@ -35,10 +35,10 @@ def test_ea_1_61_server_url_autoload_and_self_check():
     assert init.index("g_server_url = ResolveServerUrl();") < init.index("SendHeartbeat();")
     # version surfaces
     import ea_capabilities as ec
-    assert ec.latest_ea_version() == "1.63"                                     # N111-6 — derived from the MQ5
+    assert ec.latest_ea_version() == "1.64"                                     # N111-6 — derived from the MQ5
     assert '"ea_latest_version": latest_ea_version()' in _read("backend", "routes", "setup_routes.py")
     assert 'LATEST_EA = latest_ea_version()' in _read("backend", "routes", "bot_routes.py")
-    assert 'LATEST_EA_VERSION = "1.63"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
+    assert 'LATEST_EA_VERSION = "1.64"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
     import demo_readiness as dr
     assert "1.60" in dr.DEMO_ACCEPTED_EA                   # a 1.60 terminal stays accepted during the demo
 
@@ -78,7 +78,7 @@ def test_install_progress_turns_flags_into_the_exact_fix():
 
 def test_installer_v1_5_zero_touch_files_and_restart():
     ps = _read("backend", "static", "STOIC-Installer.ps1")
-    assert '$InstallerVersion = "1.8"' in ps
+    assert re.search(r'\$InstallerVersion = "1\.(9|[1-9][0-9])"', ps)   # ≥ 1.9 (bumped per release)
     assert "SecurityProtocolType]::Tls12" in ps
     assert "function Get-StoicRunningTerminal" in ps and "Get-Process terminal64" in ps
     assert "STOIC-Server.txt" in ps and "ServerUrl=$" not in ps and "stoic.set" in ps     # N110-2 — preset carries no ServerUrl
@@ -101,7 +101,7 @@ def test_pairing_code_lasts_an_hour_and_ui_says_new_code():
     assert sr.PAIRING_TTL_MINUTES == 60
     panel = _read("frontend", "src", "components", "QuickInstallPanel.jsx")
     assert "NEW CODE" in panel and "REGENERATE TOKEN" not in panel
-    assert "Nothing to type in the EA inputs" in panel
+    assert "nothing to click" in panel and "drag EmergentTradingBridge onto any chart yourself" in panel
     assert re.search(r"ServerUrl set to this server", _read("backend", "install_progress.py")) is None
 
 
@@ -168,7 +168,7 @@ def test_installer_hash_pin_in_one_liner_and_endpoint():
     assert "TrimStart([char]0xFEFF)" in cmd                             # served file carries a UTF-8 BOM
     assert '@api_router.get("/setup/installer.sha256")' in _read("backend", "server.py")
     sr = _read("backend", "routes", "setup_routes.py")
-    assert '"installer_sha256": sha' in sr and '"install_command": install_command(base, token, sha)' in sr
+    assert '"installer_sha256": sha' in sr and '"install_command": install_command(base, token, sha, login=account.get("account_number")' in sr
     panel = _read("frontend", "src", "components", "QuickInstallPanel.jsx")
     assert "pin?.install_command" in panel and "quick-install-hash-pin" in panel
 

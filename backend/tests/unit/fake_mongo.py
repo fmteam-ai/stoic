@@ -48,6 +48,8 @@ def _match(doc, q):
                     return False
                 if op == "$regex" and not re.search(arg, str(cur or "")):
                     return False
+        elif isinstance(cur, list) and not isinstance(v, (list, dict)) and v in cur:
+            continue                                       # Mongo array-contains semantics
         elif cur != v:
             return False
     return True
@@ -140,6 +142,15 @@ class FakeCollection:
             self._apply(d, upd)
             d.setdefault("_id", ObjectId())
             self.rows.append(d)
+        return _Res(matched_count=0, modified_count=0)
+
+    async def replace_one(self, q, doc, upsert=False):
+        for i, r in enumerate(self.rows):
+            if _match(r, q):
+                self.rows[i] = dict(doc)
+                return _Res(matched_count=1, modified_count=1)
+        if upsert:
+            self.rows.append(dict(doc))
         return _Res(matched_count=0, modified_count=0)
 
     async def find_one_and_update(self, q, upd, projection=None, return_document=None, **kw):

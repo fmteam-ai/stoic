@@ -228,6 +228,13 @@ hdr "configuration"
 if [ -f .stoic-installed ]; then ok "installer: LOCKED since $(grep '^installed_at=' .stoic-installed | cut -d= -f2-) ($(grep '^mode=' .stoic-installed | cut -d= -f2-)$(lsattr .stoic-installed 2>/dev/null | grep -q '^....i' && echo ', immutable'))"
 elif [ "$(envval backend/.env APP_ENV)" = production ]; then warn "installer: not locked — a re-run of bootstrap/install.sh would rebuild the stack (finish an install via deploy/bootstrap.sh to lock it)"; fi
 for f in .env backend/.env; do [ -f "$f" ] && ok "$f present" || fail "$f missing (run deploy/install.sh)"; done
+# O2 (Phase 1) — Cloudflare overlay active ⇒ the backend MUST read CF-Connecting-IP, else every user shares the
+# edge IP (rate limits, lockouts and the security agent all misfire on Cloudflare addresses)
+if [ "$(envval .env CLOUDFLARE_MODE)" = true ] || echo "$(envval .env COMPOSE_FILE)" | grep -q cloudflare; then
+  [ "$(envval backend/.env TRUST_CF_CONNECTING_IP | tr 'A-Z' 'a-z')" = true ] \
+    && ok "cloudflare client IP: TRUST_CF_CONNECTING_IP=true" \
+    || fail "cloudflare overlay active but TRUST_CF_CONNECTING_IP is not true in backend/.env — every client shares the Cloudflare IP; set it and restart the backend"
+fi
 if [ -d secrets ]; then
   for s in mongo_url mongo_keyfile jwt_secret key_vault_master metrics_token order_auth_secret ledger_anchor_key bridge_token_hash_key signer_token signer_ed25519_key signer_cert.pem signer_cert_key.pem; do
     [ -s "secrets/$s" ] || fail "secrets/$s missing or empty"; done

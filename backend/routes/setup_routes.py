@@ -57,11 +57,13 @@ PAIRING_PREV_TOKEN_GRACE_H = 24   # R-3 — previous EA token survives a pairing
 
 
 PAIRING_TTL_MINUTES = 60   # Easy-Connect P1.3 — one hour (still single-use); 15 min expired while users were still in RDP
+CMD_HANDLE_TTL_MINUTES = 10  # SEC-019-001 — opaque .cmd download handle (owner-session-bound) lives 10 min
 
 
 # ─────────────── Models ───────────────
 class PairingTokenRequest(BaseModel):
     account_id: str = Field(min_length=1)
+    repair: bool = False     # U17 — Repair: the one-liner carries -Repair (files rewritten, EA re-attached, MT5 restarted)
 
 
 class DeviceKey(BaseModel):
@@ -93,6 +95,9 @@ async def issue_pairing_token(
     — paste the latest into PowerShell, no stale-token confusion).
     """
     db = get_db()
+    # SEC-019-P3 — defense-in-depth cap on token issuance (each issue only replaces the prior token)
+    await rate_limit(db, "pairing_token_issue", f"user:{user['id']}", 10, 900,
+                     "Too many pairing tokens issued — wait a few minutes", request=request)
     oid = parse_object_id(payload.account_id, "Account")
     account = await db.accounts.find_one({"_id": oid})
     if not account:
@@ -107,9 +112,12 @@ async def issue_pairing_token(
         )
 
     token = secrets.token_urlsafe(24)
-    expires_at = (
-        datetime.now(timezone.utc) + timedelta(minutes=PAIRING_TTL_MINUTES)
-    ).isoformat()
+    now = datetime.now(timezone.utc)
+    expires_at = (now + timedelta(minutes=PAIRING_TTL_MINUTES)).isoformat()
+    repair = bool(getattr(payload, "repair", False))
+    # SEC-019-001 — the .cmd download never carries the pairing token in its URL: an opaque, short-lived handle
+    # (bound to this user, resolved server-side) is what the browser navigates to.
+    download_handle = secrets.token_urlsafe(18)
 
     # Invalidate any prior outstanding token for this account.
     await db.pairing_tokens.delete_many({"account_id": payload.account_id,
@@ -118,8 +126,12 @@ async def issue_pairing_token(
         "token": token,
         "account_id": payload.account_id,
         "user_id": user["id"],
-        "issued_at": datetime.now(timezone.utc).isoformat(),
+        "issued_at": now.isoformat(),
         "expires_at": expires_at,
+        "repair": repair,
+        "mt5_login": account.get("account_number"),
+        "download_handle": download_handle,
+        "download_handle_expires_at": (now + timedelta(minutes=CMD_HANDLE_TTL_MINUTES)).isoformat(),
     })
 
     from connect_service import _base_url, install_command, installer_sha256
@@ -132,8 +144,54 @@ async def issue_pairing_token(
         "account_label": account.get("label"),
         "broker": account.get("broker"),
         "installer_sha256": sha,
-        "install_command": install_command(base, token, sha) if base else None,
+        "install_command": install_command(base, token, sha, login=account.get("account_number"),
+                                           repair=repair) if base else None,
+        "repair": repair,
+        "mt5_login": account.get("account_number"),
+        "cmd_download_path": f"/api/setup/installer.cmd?d={download_handle}",
+        "cmd_download_ttl_minutes": CMD_HANDLE_TTL_MINUTES,
     }
+
+
+@router.get("/setup/installer.cmd")
+async def installer_cmd(request: Request, d: str = "", user=Depends(get_current_user)):
+    """U7 — double-clickable launcher (no Authenticode certificate available → the .cmd runs the sha256-pinned
+    one-liner in Windows PowerShell with -ExecutionPolicy Bypass for THIS process only). Served per pairing with
+    token, login and repair flag baked into the FILE BODY. SEC-019-001: the URL carries only an opaque 10-minute
+    download handle, the session cookie must belong to the account owner, and the response is no-store/no-referrer
+    — a CDN/proxy/history log of this URL yields nothing redeemable."""
+    import re
+    from connect_service import _base_url, install_command, installer_sha256
+    from fastapi.responses import Response
+    db = get_db()
+    base = _base_url(request)
+    if not base or not d or not re.match(r"^[A-Za-z0-9_-]{16,64}$", d):
+        raise HTTPException(status_code=400, detail="download handle required")
+    pairing = await db.pairing_tokens.find_one({"download_handle": d, "consumed_at": {"$exists": False}})
+    if not pairing or pairing.get("user_id") != user["id"]:
+        raise HTTPException(status_code=404, detail={"code": "download_handle_unknown",
+                                                     "message": "This download link is no longer valid — generate a new line."})
+    try:
+        h_exp = datetime.fromisoformat(str(pairing.get("download_handle_expires_at")).replace("Z", "+00:00"))
+    except Exception:
+        h_exp = None
+    if h_exp is None or h_exp < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail={"code": "download_handle_expired",
+                                                     "message": "This download link expired — generate a new line."})
+    cmd = install_command(base, pairing["token"], installer_sha256(), login=pairing.get("mt5_login") or None,
+                          repair=bool(pairing.get("repair")))
+    # cmd.exe quoting: the whole PowerShell command goes in one double-quoted -Command argument; inner double
+    # quotes are escaped for PowerShell as \" (cmd passes them through)
+    escaped = cmd.replace('"', '\\"')
+    lines = ["@echo off", "title STOIC Setup",
+             "echo STOIC Setup - this window installs the STOIC bridge into your MetaTrader 5 and closes when done.",
+             "echo (Windows SmartScreen may ask once: choose Run. The script is hash-pinned to the STOIC server.)",
+             'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' + escaped + '"',
+             "echo.", "pause"]
+    body = "\r\n".join(lines) + "\r\n"
+    return Response(content=body, media_type="application/x-bat",
+                    headers={"Content-Disposition": "attachment; filename=STOIC-Setup.cmd", "Cache-Control": "no-store",
+                             "Referrer-Policy": "no-referrer"})
 
 
 # ─────────────── Claim a pairing token (UNauth'd) ───────────────

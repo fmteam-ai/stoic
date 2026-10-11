@@ -122,7 +122,9 @@ def test_rules_evaluate_each_rule_and_protected_list():
     p = rules.evaluate(ev("A1", f"A1:account:{admin}", {"account": admin, "failures": 99, "ips": ["1", "2", "3"]}), c)
     assert p[0]["blocked_by"] == "protected_target"
     assert rules.evaluate(ev("A1", "A1:ip:203.0.113.7", {"ip": "203.0.113.7", "failures": 99}), c)[0]["blocked_by"] == "protected_target"
-    assert rules.evaluate(ev("A1", "A1:ip:104.16.1.1", {"ip": "104.16.1.1", "failures": 99}), c)[0]["blocked_by"] == "protected_target"
+    # O1 (Phase 1) — a Cloudflare edge IP is a proxy misconfiguration, never a block proposal / CRITICAL escalation
+    cf = rules.evaluate(ev("A1", "A1:ip:104.16.1.1", {"ip": "104.16.1.1", "failures": 99}), c)[0]
+    assert cf["blocked_by"] == "cloudflare_edge" and cf["action"] == "none" and cf["reclassified"] == "proxy_misconfiguration"
     assert rules.evaluate(ev("A1", "A1:ip:127.0.0.1", {"ip": "127.0.0.1", "failures": 99}), c)[0]["blocked_by"] == "protected_target"
     assert "blocked_by" not in rules.evaluate(ev("A1", "A1:ip:9.9.9.9", {"ip": "9.9.9.9", "failures": 99}), c)[0]
     assert all(r["action"] not in rules.FORBIDDEN_ACTIONS for r in rules.RULES.values())

@@ -33,7 +33,7 @@ def test_domain_prefix_makes_purposes_mutually_unverifiable():
         assert not rs.verify_hex(b"payload", sig, purpose="model-manifest")
         with pytest.raises(ValueError):
             rs.sign_hex(b"x", purpose="made-up")
-    assert rs.RELEASE_PURPOSES == {"ea-release", "model-manifest", "policy-migration"} and "acceptance-bundle" in rs.API_PURPOSES
+    assert rs.RELEASE_PURPOSES == {"ea-release", "model-manifest", "policy-migration", "policy-rules"} and "acceptance-bundle" in rs.API_PURPOSES
 
 
 def test_api_uses_bundle_token_for_runtime_purposes_and_release_token_only_for_release():

@@ -53,6 +53,8 @@ def _world(tmp_path, env_lines=("APP_ENV=production", "GITHUB_REPO=x/y"), attest
     (root / "scripts").mkdir()
     for s in ("release_attestation.py", "verify_admission.py", "release_consistency_check.py"):
         shutil.copy(os.path.join(ROOT, "scripts", s), root / "scripts" / s)
+    # O3 (Phase 1) — the pre-backup release check is network-bound; the fixture world answers "ok"
+    (root / "scripts" / "release_precheck.py").write_text("import sys\nprint('   release check: stub ok')\nsys.exit(0)\n")
     (root / "release").mkdir(); (root / "backend").mkdir(); (root / "docs").mkdir(); (root / "deploy" / "state").mkdir()
     (root / "backend" / "BUILD_SHA").write_text(SHA + "\n")
     (root / ".env").write_text("\n".join(env_lines) + "\n")

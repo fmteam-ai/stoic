@@ -14,7 +14,7 @@ Contract (matches backend/release_signing.py::_external_sign):
   GET  /healthz    → {"status": "ok"}   (unauthenticated liveness for the platform)
 
 Env:
-  SIGNER_TOKEN               release token — CI only (ea-release, model-manifest, policy-migration)
+  SIGNER_TOKEN               release token — CI only (ea-release, model-manifest, policy-migration, policy-rules)
   SIGNER_TOKEN_BUNDLE        runtime token — the trading API (acceptance-bundle, artifact-manifest, …).
                              Missing ⇒ RELEASE-ONLY mode: runtime purposes are refused (403). There is
                              no "one token signs everything" fallback (N101-5).
@@ -66,13 +66,14 @@ PURPOSES = {
     "ea-release":        b"stoic:ea-release:v1\0",
     "model-manifest":    b"stoic:model-manifest:v1\0",
     "policy-migration":  b"stoic:policy-migration:v1\0",
+    "policy-rules":      b"stoic:policy-rules:v1\0",
     "acceptance-bundle": b"stoic:acceptance-bundle:v1\0",
     "artifact-manifest": b"stoic:artifact-manifest:v1\0",
     "audit-anchor":      b"stoic:audit-anchor:v1\0",
     "differentiation":   b"stoic:differentiation:v1\0",
     "canary":            b"stoic:canary:v1\0",
 }
-RELEASE_PURPOSES = {"ea-release", "model-manifest", "policy-migration"}
+RELEASE_PURPOSES = {"ea-release", "model-manifest", "policy-migration", "policy-rules"}
 _key = Ed25519PrivateKey.from_private_bytes(base64.b64decode(_secret("ED25519_SIGNING_KEY_B64")))
 
 app = FastAPI(title="STOIC Release Signer", docs_url=None, redoc_url=None)

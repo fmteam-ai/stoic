@@ -283,16 +283,23 @@
 //|         transport errors; (3) one canonical host: the compiled    |
 //|         default ServerUrl is https://stoicaibot.com — the same    |
 //|         host the installer and the dashboard WebRequest line use. |
+//| v1.64 — Phase 1 (simple onboarding): (1) U8 every ServerUrl      |
+//|         default ever compiled (www host, preview hosts) is       |
+//|         treated as "default" — MT5 keeps old inputs when an EA is|
+//|         re-attached, so an old www URL no longer overrides the   |
+//|         installer's STOIC-Server.txt / https://stoicaibot.com;   |
+//|         (2) U18 HTTP 410 account_deleted stops the EA (no more   |
+//|         401 storms from a removed account).                      |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.63"
+#property version   "1.64"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.63"
+#define EA_CLIENT_VERSION "1.64"
 
 input string ServerUrl              = "https://stoicaibot.com";  // auto-loaded from MQL5\Files\STOIC-Server.txt (installer) when left at default
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -536,11 +543,25 @@ string ResolveBridgeToken() {
 #define SERVER_URL_DEFAULT "https://stoicaibot.com"
 string g_server_url = SERVER_URL_DEFAULT;
 bool   g_webrequest_ok = true;   // false after a 4014 until a request succeeds (reported in heartbeats)
+// U8 (v1.64) — every compiled default that ever shipped. MT5 remembers the inputs of the previous EA on a
+// chart; after an update the old default came back as an "override" and beat the installer's drop file.
+bool IsLegacyDefaultUrl(string u) {
+   string t = u; StringTrimLeft(t); StringTrimRight(t);
+   while (StringLen(t) > 0 && StringGetCharacter(t, StringLen(t) - 1) == '/') t = StringSubstr(t, 0, StringLen(t) - 1);
+   if (t == SERVER_URL_DEFAULT) return true;
+   if (t == "https://www.stoicaibot.com") return true;
+   if (t == "https://your-app.preview.emergentagent.com") return true;
+   if (StringFind(t, "https://") == 0 && StringFind(t, ".preview.emergentagent.com") > 0) return true;   // any preview host
+   return false;
+}
+
 string ResolveServerUrl() {
    string input_trim = ServerUrl;
    StringTrimLeft(input_trim); StringTrimRight(input_trim);
+   if (StringLen(input_trim) > 0 && input_trim != SERVER_URL_DEFAULT && IsLegacyDefaultUrl(input_trim))
+      Print("STOIC: ServerUrl input '", input_trim, "' is an old compiled default — treating it as default (STOIC-Server.txt / ", SERVER_URL_DEFAULT, ").");
    // N110-2 — the https rule applies to BOTH paths: an inputs-dialog override that is not https is ignored
-   if (StringLen(input_trim) > 0 && input_trim != SERVER_URL_DEFAULT) {
+   if (StringLen(input_trim) > 0 && !IsLegacyDefaultUrl(input_trim)) {
       if (StringFind(input_trim, "https://") == 0) {
          Print("STOIC: using ServerUrl from EA inputs dialog.");
          return input_trim;
@@ -1148,6 +1169,8 @@ string JsonStringField(string body, string key) {
    return StringSubstr(body, q1 + 1, q2 - q1 - 1);
 }
 
+bool g_account_deleted = false;   // U18 (v1.64) — set on HTTP 410 account_deleted; no further requests are sent
+
 void LogHttpRejected(string url, int status, string body) {
    if (status == _last_http_err_status && TimeCurrent() - _last_http_err_at < 60) return;
    _last_http_err_at = TimeCurrent();
@@ -1169,6 +1192,7 @@ void LogHttpRejected(string url, int status, string body) {
 }
 
 string HttpPost(string url, string body) {
+   if (g_account_deleted) return "";
    char post[]; char result[]; string headers;
    StringToCharArray(body, post, 0, StringLen(body), CP_UTF8);
    string req_headers = "Content-Type: application/json\r\n";
@@ -1185,6 +1209,15 @@ string HttpPost(string url, string body) {
       return "";
    }
    string answer = CharArrayToString(result, 0, ArraySize(result), CP_UTF8);
+   if (res == 410 && StringFind(answer, "account_deleted") >= 0) {
+      // U18 — the account was removed on the dashboard: stop polling for good, say so once, leave the chart.
+      g_account_deleted = true;
+      Print("STOIC: this account was REMOVED on the STOIC dashboard (HTTP 410) — EA stopping. Remove it from the chart; re-add the account on the dashboard to use it again.");
+      Comment("STOIC: account removed on the dashboard — EA stopped (HTTP 410). Remove the EA from this chart.");
+      EventKillTimer();
+      ExpertRemove();
+      return "";
+   }
    if (res < 200 || res >= 300) LogHttpRejected(url, res, answer);
    return answer;
 }

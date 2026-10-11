@@ -44,22 +44,7 @@ class AccountUpdate(BaseModel):
     server: str | None = None
 
 
-SERVER_NAME_RE = r"^[A-Za-z0-9][A-Za-z0-9 ._-]{1,63}$"   # MT5 server names: "OnEquity-Server", "ICMarketsSC-Demo02", "VTMarkets-Live 2"
-
-
-def _server_change_doc(acc: dict, new_server: str, *, source: str, by: str) -> dict:
-    """M122-P2 — one Mongo update for both the manual edit and 'use the server the EA reports': server /
-    broker_server / expected_identity.broker_server move together, the verified chain is cleared so the next
-    heartbeat re-verifies against the new name, and the mismatch flag no longer blocks trust-terminal."""
-    now = datetime.now(timezone.utc).isoformat()
-    exp = dict(acc.get("expected_identity") or {})
-    exp["broker_server"] = new_server
-    return {
-        "$set": {"server": new_server, "broker_server": new_server, "expected_identity": exp,
-                 "broker_account_mismatch": False, "broker_account_mismatch_reason": None,
-                 "server_changed": {"from": acc.get("server"), "to": new_server, "at": now, "source": source, "by": by}},
-        "$unset": {"verified_identity": ""},
-    }
+from server_adopt import SERVER_NAME_RE, server_change_doc as _server_change_doc  # noqa: E402 — U2 shares the update with auto-adopt
 
 
 def _ea_reported_server(acc: dict) -> str | None:
@@ -72,14 +57,17 @@ def _iso_days_ago(days: int) -> str:
 
 
 def _serialize(doc: dict) -> dict:
-    doc["id"] = str(doc.pop("_id"))
     # audit v4 P0-2 — server-owned environment classification, separate
     # from connection state and telemetry freshness.
+    # M123-3 — computed BEFORE `_id` is popped: attestation_identity() binds the digest to the account id, so
+    # an empty id voided every attestation here while Admin → Account Environments (raw doc) showed it valid.
     from broker_env import attestation_state, attested_environment, broker_environment
     doc["environment"] = broker_environment(doc)
-    doc["environment_attested"] = attested_environment(doc) != "LIVE"
+    doc["environment_effective"] = attested_environment(doc)
+    doc["environment_attested"] = doc["environment_effective"] != "LIVE"
     doc["environment_attestation_state"] = attestation_state(doc)
     doc.pop("environment_attestation", None)
+    doc["id"] = str(doc.pop("_id"))
     doc.pop("position_mode_override", None)   # audit A6 SEC-001 — admin-only (who/when/why); owner sees mode+source only
     creds = doc.pop("creds", {}) or {}
     doc["has_investor_password"] = bool(creds.get("investor"))
@@ -498,6 +486,9 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
     if new_server is not None:
         if acc.get("mode") == "paper":
             raise HTTPException(status_code=400, detail="Paper accounts have no broker server")
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail={"code": "admin_only",
+                                                         "message": "The server name is adopted from the EA automatically; only an admin may edit it by hand"})
         from step_up import audit_event, require_step_up
         await require_step_up(db, user, request, "account_server_edit")
         if new_server != (acc.get("server") or ""):
@@ -512,6 +503,21 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
         await db.accounts.update_one({"_id": oid}, {"$set": updates})
     doc = await db.accounts.find_one({"_id": oid})
     return _serialize(doc)
+
+
+@router.get("/{account_id}/status-line")
+async def account_status_line(account_id: str, user=Depends(get_current_user)):
+    """U15 (Phase 4) — one line, one fix button; internals behind "Why?"."""
+    import rules_policy as rp
+    import status_line
+    db = get_db()
+    oid = parse_object_id(account_id, "Account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    cfg = await db.bot_configs.find_one({"account_id": account_id}, {"active": 1})
+    rules = await rp.active(db)
+    return status_line.derive(acc, bot_active=bool((cfg or {}).get("active")), rules_active=bool(rules and not rules.get("expired")))
 
 
 @router.post("/{account_id}/adopt-reported-server")
@@ -721,6 +727,14 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
     }
     result = await db.accounts.insert_one(doc)
     doc["_id"] = result.inserted_id
+    # U11 (Phase 1) — exactly one bot, bound to this account, default profile, inactive until Start
+    from bot_inventory import ensure_account_bot
+    await ensure_account_bot(db, user["id"], str(doc["_id"]))
+    try:
+        import rules_policy as _rp
+        await _rp.sync_admission(db, doc)       # Phase 3 — admission state from the moment the account exists
+    except Exception as _sw:  # noqa: BLE001
+        logging.getLogger("accounts").warning("admission sync at creation failed: %s", _sw)
     out = _serialize(doc)
     if not is_paper:
         # A10-5 — the plaintext is shown exactly ONCE here (hash only in the DB); afterwards
@@ -760,16 +774,22 @@ async def delete_account(account_id: str, force: bool = False,
                     "Pass ?force=true to override."
                 ),
             )
+    # U18 (Phase 1) — tombstone BEFORE the row goes: the EA on the VPS keeps polling with the old token; the
+    # bridge answers 410 account_deleted (EA 1.64 stops itself) and the security agent files ONE info finding
+    # instead of a CRITICAL token-guessing storm.
+    _doomed = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
+                                         {"bridge_token_hash": 1, "bridge_token_prev_hash": 1, "bridge_token_retired_hashes": 1,
+                                          "label": 1, "account_number": 1, "broker": 1})
+    if _doomed:
+        from account_tombstones import write_tombstone
+        await write_tombstone(db, _doomed, deleted_by=user["id"])
     result = await db.accounts.delete_one(
         {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
     )
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Account not found")
-    # Clean up the per-account bot_config override (if any) — the user's
-    # default profile is preserved.
-    await db.bot_configs.delete_one(
-        {"user_id": user["id"], "account_id": account_id}
-    )
+    # U11 — every bot config bound to the account goes with it (one bot per account, never an orphan)
+    await db.bot_configs.delete_many({"account_id": account_id})
     # M119-5 — pairing tokens + open alerts go with the account (an orphan token kept VPS PAIRING SILENT firing)
     from account_cleanup import cleanup_deleted_account
     cleanup = await cleanup_deleted_account(db, account_id)

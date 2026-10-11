@@ -43,7 +43,8 @@ def test_active_null_account_bot_is_blocking(monkeypatch):
 def test_seed_default_profile_shape_matches_projection_rule():
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     seed = open(os.path.join(root, "seed.py")).read()
-    assert '"account_id": None' in seed and '"active": False' in seed
+    # U11 (Phase 1) — seed no longer creates the account-less default profile; it deletes orphans instead
+    assert 'delete_orphan_bot_configs(db, reason="startup-migration")' in seed and '"account_id": None,\n            "risk_level"' not in seed
     src = open(os.path.join(root, "inventory_projection.py")).read()
     assert 'raw_bots["null_account_active"] += bool(b.get("active"))' in src
     assert 'if raw_bots["null_account_active"] > 0:' in src

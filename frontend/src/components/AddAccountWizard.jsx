@@ -62,7 +62,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
     const policyUnknown = policy.state !== "known";
     const realBlocked = f.mode === "live" && f.environment === "real" && (demoPolicy || policyUnknown);
     const canNext = step === 0
-        ? (f.mode === "paper" ? !!f.account_number : !!(brokerName && f.server && f.account_number) && !realBlocked)
+        ? (f.mode === "paper" ? !!f.account_number : !!(brokerName && f.account_number) && !realBlocked)   // U1 — server filled by the EA
         : true;
     const canCreate = f.mode === "paper" || f.consent;   // A17-13 — explicit Algo-Trading consent for MT5 terminals
 
@@ -150,9 +150,10 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                     </select>
                                     {f.broker === "__other" && <input className={`${INPUT} mt-1`} placeholder="Broker name" onChange={e => set("broker_other", e.target.value)} data-testid="wizard-broker-other" />}
                                 </Field>
-                                <Field id="wz-server" label="SERVER">
-                                    {servers.length > 0 && !f.server_custom
-                                        ? <select id="wz-server" value={f.server} onChange={e => { if (e.target.value === "__custom") { set("server_custom", true); set("server", ""); } else set("server", e.target.value); }} className={INPUT} data-testid="wizard-server-select">
+                                <div className="text-[11px] text-[#71717A]" data-testid="wizard-server-auto-note">MT5 server: filled automatically from the EA's first heartbeat — nothing to type. <button type="button" className="underline text-[#A1A1AA]" onClick={() => set("server_custom", !f.server_custom)} data-testid="wizard-server-toggle">{f.server_custom ? "hide" : "type it anyway"}</button></div>
+                                {f.server_custom && <Field id="wz-server" label="SERVER (optional)">
+                                    {servers.length > 0 && !f.server_typed
+                                        ? <select id="wz-server" value={f.server} onChange={e => { if (e.target.value === "__custom") { set("server_typed", true); set("server", ""); } else set("server", e.target.value); }} className={INPUT} data-testid="wizard-server-select">
                                             {servers.map(s => <option key={s} value={s}>{s}</option>)}
                                             <option value="__custom">Other — type the exact MT5 server name</option>
                                           </select>
@@ -174,7 +175,7 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                     {suggest.server === f.server && f.server && suggest.known && (
                                         <div className="text-[11px] text-[#00FF41] mt-1" data-testid="wizard-server-known">Known MT5 server name ✓</div>
                                     )}
-                                </Field>
+                                </Field>}
                             </div>
                         )}
                         <div className="grid sm:grid-cols-2 gap-3">

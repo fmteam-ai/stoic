@@ -333,8 +333,14 @@ if [ "${MODE}" = "--production" ] || [ "${MODE}" = "--behind-proxy" ]; then
   # N-R1 — the Caddy → nginx hops live on docker networks; the backend skips them when it
   # walks X-Forwarded-For so every user keeps their own IP (rate limits, lockouts, blocks).
   grep -q "^TRUSTED_PROXY_CIDRS=." backend/.env || set_kv backend/.env TRUSTED_PROXY_CIDRS "172.16.0.0/12,10.0.0.0/8,192.168.0.0/16,127.0.0.0/8,::1/128,fd00::/8"
-  # R-8 — behind Cloudflare the real client IP only arrives in CF-Connecting-IP
-  grep -q "^TRUST_CF_CONNECTING_IP=." backend/.env || echo "   NOTE: if ${DOMAIN} is proxied by Cloudflare set TRUST_CF_CONNECTING_IP=true in backend/.env (else every user shares the Cloudflare IP)"
+  # R-8 / O2 (Phase 1) — behind Cloudflare the real client IP only arrives in CF-Connecting-IP: the installer
+  # sets the flag itself when the Cloudflare overlay is chosen (doctor.sh / update.sh fail readiness otherwise)
+  if [ "${CLOUDFLARE}" = 1 ]; then
+    set_kv backend/.env TRUST_CF_CONNECTING_IP true
+    echo "   TRUST_CF_CONNECTING_IP=true (Cloudflare overlay: client IPs come from CF-Connecting-IP)"
+  else
+    grep -q "^TRUST_CF_CONNECTING_IP=." backend/.env || echo "   NOTE: if ${DOMAIN} is proxied by Cloudflare set TRUST_CF_CONNECTING_IP=true in backend/.env (else every user shares the Cloudflare IP)"
+  fi
 else
   grep -q "^APP_ENV=production" backend/.env && {
     echo "ERROR: backend/.env says APP_ENV=production but you ran --dev."

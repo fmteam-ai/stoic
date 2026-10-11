@@ -40,10 +40,27 @@ def _config_filter(user_id: str, account_id: Optional[str]) -> dict:
     }
 
 
+async def _resolve_account_scope(db, user_id: str, account_id: Optional[str]) -> Optional[str]:
+    """U11 (Phase 1) — the bot is bound to an account; there is no account-less profile any more. The
+    "default scope" (no account_id) resolves to the user's only account, else the connected one, else the
+    first; None only when the user has no account at all (read-only virtual defaults)."""
+    if account_id:
+        return account_id
+    owned = await db.accounts.find({"user_id": user_id}, {"_id": 1, "status": 1}).to_list(length=50)
+    if not owned:
+        return None
+    if len(owned) == 1:
+        return str(owned[0]["_id"])
+    connected = [a for a in owned if a.get("status") == "connected"]
+    return str((connected or owned)[0]["_id"])
+
+
 async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = None) -> dict:
-    cfg = await db.bot_configs.find_one(_config_filter(user_id, account_id))
-    if cfg:
-        return cfg
+    account_id = await _resolve_account_scope(db, user_id, account_id)
+    if account_id:
+        cfg = await db.bot_configs.find_one(_config_filter(user_id, account_id))
+        if cfg:
+            return cfg
     new_cfg = {
         "user_id": user_id,
         "account_id": account_id,  # None = default profile
@@ -87,6 +104,11 @@ async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = No
         "max_lot_size": 0.0,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
+    if account_id is None:
+        # no account yet → virtual defaults, never persisted (U11: no account-less configs)
+        new_cfg["_id"] = None
+        new_cfg["virtual"] = True
+        return new_cfg
     result = await db.bot_configs.insert_one(new_cfg)
     new_cfg["_id"] = result.inserted_id
     return new_cfg
@@ -94,7 +116,8 @@ async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = No
 
 def _serialize(cfg: dict) -> dict:
     return {
-        "id": str(cfg["_id"]),
+        "id": str(cfg["_id"]) if cfg.get("_id") is not None else None,
+        "virtual": bool(cfg.get("virtual")),
         "user_id": cfg["user_id"],
         "account_id": cfg.get("account_id"),
         "risk_level": cfg.get("risk_level", "medium"),
@@ -895,7 +918,7 @@ async def update_config(payload: BotConfigUpdate,
 
     # Ensure the target doc exists, then PATCH atomically (correction #4:
     # config change + immutable version + pointer + audit as one unit).
-    await _get_or_create_config(db, user["id"], account_id)
+    account_id = (await _get_or_create_config(db, user["id"], account_id)).get("account_id")   # U11 — resolved scope
     from config_promotion import apply_config_change
     await apply_config_change(db, user["id"], account_id, update,
                               label="post-update", source="config_update")
@@ -1024,7 +1047,7 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
         from routes.panic_routes import PLATFORM_LOCK_MATCH
         await release_panic_locks(db, {**lock_q, "$nor": [PLATFORM_LOCK_MATCH]},
                                   actor=user["id"], via="bot_start")
-    await _get_or_create_config(db, user["id"], account_id)
+    account_id = (await _get_or_create_config(db, user["id"], account_id)).get("account_id")   # U11 — resolved scope
     # CRITICAL: re-enabling a bot must clear the panic/circuit-breaker trip
     # markers, otherwise the UI keeps showing "PANIC LOCK" forever even
     # though `active=True` (iter-91 bug). The bot health doctor treats any
@@ -1042,6 +1065,7 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
 @router.post("/stop")
 async def stop_bot(account_id: Optional[str] = None, user=Depends(get_current_user)):
     db = get_db()
+    account_id = await _resolve_account_scope(db, user["id"], account_id)   # U11
     await db.bot_configs.update_one(
         _config_filter(user["id"], account_id),
         {"$set": {"active": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
@@ -1159,7 +1183,7 @@ async def apply_strategy_preset(key: str, account_id: Optional[str] = None,
         preset_label = builtin["label"]
         overlay_config = builtin["config"]
 
-    await _get_or_create_config(db, user["id"], account_id)
+    account_id = (await _get_or_create_config(db, user["id"], account_id)).get("account_id")   # U11 — resolved scope
     overlay = {**overlay_config, "active_preset": key,
                "updated_at": datetime.now(timezone.utc).isoformat()}
     await db.bot_configs.update_one(

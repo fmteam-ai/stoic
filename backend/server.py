@@ -944,6 +944,11 @@ async def on_startup():
         from modules.pamm.models import ensure_pamm_setup
         await ensure_pamm_setup(get_db())
         await seed_admin()
+        try:
+            import rules_policy as _rp
+            await _rp.load_from_repo(get_db())                 # Phase 3 (U13) — signed policy files load without a release
+        except Exception:  # noqa: BLE001
+            logger.exception("rules policy load from policies/ failed")
         # round-9 P1-04 — production must not serve an auth control it cannot verify.
         from turnstile_gate import is_enabled as _ts_enabled, production_config_violation
         _ts_violation = production_config_violation(await _ts_enabled(get_db()))

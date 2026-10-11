@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import api from "@/lib/api";
 import { CheckCircle2, Circle, Loader2, AlertTriangle, XOctagon, Copy, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
+import { WebRequestGuide } from "@/components/WebRequestGuide";
 
 /**
  * Installer progress — five derived steps for one account's VPS terminal
@@ -116,6 +117,7 @@ export function InstallProgressPanel({ accountId }) {
                     )}
                 </div>
             )}
+            <WebRequestGuide accountId={accountId} url={p.webrequest_url} step={p.steps.find((s) => s.id === "heartbeat")} />
             {p.webrequest_url && (
                 <div className="mt-2 flex items-center gap-2 font-mono text-[11px] text-[#71717A]">
                     WebRequest URL: <code className="text-[#FFD700] select-all" data-testid={`install-webrequest-url-${accountId}`}>{p.webrequest_url}</code>
