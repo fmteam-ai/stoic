@@ -4,8 +4,25 @@
   "ea": {
     "version": "1.63",
     "mq5_sha256": "0bcfe224b55daeee49902869817633042ff80c977e5c97026144f278748e8e34",
-    "ex5_sha256": null,
-    "ex5_note": "compiled ONLY by the release.yml MetaEditor gate on a real Windows runner \u2014 pending CI"
+    "ex5_sha256": "b36d32d5443cc23b5d4a404ab9a0aa310d9552de54e27052b794e5b3619938e1",
+    "ex5_note": null,
+    "previous": null,
+    "compile_log": {
+      "errors": 0,
+      "warnings": 0,
+      "log_sha256": "78e58c3d1f34faea6a7ab859af1c191567cda31089212dbe416b2f26239f7083"
+    },
+    "metaeditor_version": null,
+    "windows_build": "10.0.26100",
+    "mt5_build": null,
+    "source_commit": "b9dec7bc42c3e2356d47e366271488cbef4a00cf",
+    "compiled_by": "github-actions",
+    "verified_at": "2026-10-11T16:53:32.798772+00:00",
+    "signature": {
+      "key_id": "stoic-release-ed25519-v2",
+      "sig_hex": "fbd90736b6fa9dde751fe657fd9eec67e32ec9bae59595fe385a535e046507f2afc984a0c7a7a90058174f61536a8c1039c2e02e694f10f79606a2e486de150e",
+      "signed_at": "2026-10-11T16:53:33.307947+00:00"
+    }
   },
   "host_agent": {
     "source_hash": "73d3cc94b3660ebda18aeb9a338ed4fe584dab9c2113e93afa44138383022dc5",
