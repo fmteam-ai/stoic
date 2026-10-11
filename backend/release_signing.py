@@ -26,20 +26,22 @@ from app_env import removable_secret
 
 logger = logging.getLogger("release_signing")
 
-def _repo_current_release_key_id() -> str | None:
-    """S-1 — the key id the repo marks `current` in release/release_key.fingerprint (checkout or image copy)."""
+def _repo_release_key_status() -> dict:
+    """S-1 — {key_id: status} from release/release_key.fingerprint (checkout or image copy); {} when unreadable."""
     here = os.path.dirname(os.path.abspath(__file__))
     for p in (os.path.join(here, "..", "release", "release_key.fingerprint"), os.path.join(here, "release", "release_key.fingerprint"),
               "/app/release/release_key.fingerprint", "release/release_key.fingerprint"):
         try:
             with open(p) as f:
-                for line in f:
-                    parts = line.split()
-                    if len(parts) >= 3 and not parts[0].startswith("#") and parts[2] == "current":
-                        return parts[0]
+                rows = [ln.split() for ln in f if ln.strip() and not ln.lstrip().startswith("#")]
         except OSError:
             continue
-    return None
+        return {r[0]: r[2] for r in rows if len(r) >= 3}
+    return {}
+
+
+def _repo_current_release_key_id() -> str | None:
+    return next((k for k, st in _repo_release_key_status().items() if st == "current"), None)
 
 
 KEY_ID = _repo_current_release_key_id() or "stoic-release-ed25519-v2"   # CI release key: EA records, model manifests, policy migrations
@@ -408,8 +410,10 @@ def _csv(env, name: str) -> list:
 
 
 def revoked_key_ids(env=None) -> set:
+    """RELEASE_REVOKED_KEY_IDS ∪ every key id the repo marks `revoked` (audit #18 SEC-001: the committed status is
+    enforced even on a host whose operator has not finished `rotate-release-pin.sh --revoke`)."""
     env = env if env is not None else os.environ
-    return set(_csv(env, "RELEASE_REVOKED_KEY_IDS"))
+    return set(_csv(env, "RELEASE_REVOKED_KEY_IDS")) | {k for k, st in _repo_release_key_status().items() if st == "revoked"}
 
 
 def transition_key_ids(env=None) -> list:

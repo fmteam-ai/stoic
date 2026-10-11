@@ -3,6 +3,7 @@
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
 ## v1.60.15 — main124 review fix (no strategy/risk change)
+- **Security audit #18** (`docs/SECURITY_AUDIT_18.md`, scope v1.60.10 → v1.60.15): PASS, two P3 hardening items fixed — SEC-001 the committed `revoked` status in `release/release_key.fingerprint` is enforced by `release_signing.revoked_key_ids()` even before an operator runs `rotate-release-pin.sh --revoke`; SEC-002 `policy-migration.yml` no longer falls back to the revoked v1 key id (unset secret ⇒ repo's `current` line).
 - **M124-1 (P1)** `verify_stack_images` compared every backend container with the pinned registry image, which is wrong for on-host builds (compose builds one image per service — `stoic-worker-trading`, `stoic-worker-security`, … with distinct ids) → every fallback / `--allow-unattested` / untagged / `DEPLOY_MODE=build` / rollback deploy would have failed with a false MIXED STACK. Now: registry deploys compare with the pinned digest (read from the environment or `./.env`, so a jam-resume process is correct too); builds compare each container with the image compose built for that service (`<project>-<service>` or its explicit `image:`). Tests cover both modes incl. distinct per-service ids and the `.env` fallback.
 
 ## v1.60.14 — main121 review fixes (no strategy/risk change)
