@@ -28,7 +28,9 @@ STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_cr
                    # fix plan D2 — S1 passkey enrolment, S6 forced promotion, S11 VPS destructive ops
                    "passkey_enrol", "admin_promote", "vps_destroy",
                    # SEC-001 (main99) — trusting a terminal mints the verified identity chain
-                   "terminal_trust"}
+                   "terminal_trust",
+                   # M122-P2 — correcting the broker server name resets the verified chain
+                   "account_server_edit"}
 
 
 def _hash_token(token: str) -> str:

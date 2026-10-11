@@ -272,18 +272,29 @@
 //| v1.62 — N110-2/N110-8: the https-only rule covers the ServerUrl   |
 //|         INPUT as well as STOIC-Server.txt; an unreadable drop     |
 //|         file falls back to the default URL (never an empty one).  |
+//| v1.63 — M122 onboarding fixes: (1) every drop-file reader strips  |
+//|         a leading UTF-8 BOM (Windows PowerShell 5.1 wrote one;    |
+//|         the EA then sent the '#' comment line as the token → 401  |
+//|         on every heartbeat) and validates the shape of the token  |
+//|         (32-128 of A-Za-z0-9_-), installation id (inst_ + 12 hex) |
+//|         and proof hash (64 hex) — malformed files are reported,   |
+//|         never sent; (2) HttpPost prints non-2xx answers (status + |
+//|         server error code, 1 line/min per status) instead of only |
+//|         transport errors; (3) one canonical host: the compiled    |
+//|         default ServerUrl is https://stoicaibot.com — the same    |
+//|         host the installer and the dashboard WebRequest line use. |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.62"
+#property version   "1.63"
 #property strict
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.62"
+#define EA_CLIENT_VERSION "1.63"
 
-input string ServerUrl              = "https://www.stoicaibot.com";  // auto-loaded from MQL5\Files\STOIC-Server.txt (installer) when left at default
+input string ServerUrl              = "https://stoicaibot.com";  // auto-loaded from MQL5\Files\STOIC-Server.txt (installer) when left at default
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
 input string InstallationId         = "";  // v1.55 — issued by pairing claim; auto-loaded from STOIC-Installation.txt when blank
 input string TrackedSymbols         = "XAUUSD,BTCUSD";  // comma list — spreads sent on heartbeat
@@ -374,23 +385,80 @@ string EffectiveInstallation = "";
 // recorded for THIS installation AND the signed release hash.
 string EffectiveProofHash = "";
 
+// v1.63 (M122-P1) — Windows PowerShell 5.1 `Set-Content -Encoding UTF8` writes a UTF-8 BOM. Opened with
+// FILE_ANSI the three BOM bytes become up to three non-ASCII characters in front of the first line
+// ("ï»¿# STOIC …"), the '#' comment test failed and the comment line was sent as the token (401 on
+// every heartbeat). Every STOIC drop file is pure ASCII, so a leading U+FEFF or any leading
+// characters >= 0x80 (at most three) are BOM residue, never content.
+string StripBom(string s) {
+   if (StringLen(s) > 0 && StringGetCharacter(s, 0) == 0xFEFF) s = StringSubstr(s, 1);
+   int n = 0;
+   while (n < 3 && n < StringLen(s) && StringGetCharacter(s, n) >= 0x80) n++;
+   if (n > 0) s = StringSubstr(s, n);
+   return s;
+}
+
+// First non-blank, non-comment line of a drop file (BOM-tolerant). "" when none.
+string ReadDropFileValue(string file_name) {
+   int fh = FileOpen(file_name, FILE_READ | FILE_TXT | FILE_ANSI);
+   if (fh == INVALID_HANDLE) {
+      Print("STOIC: WARNING — ", file_name, " exists but FileOpen failed (", GetLastError(), ").");
+      return "";
+   }
+   string value = "";
+   while (!FileIsEnding(fh)) {
+      string line = StripBom(FileReadString(fh));
+      StringTrimLeft(line); StringTrimRight(line);
+      if (StringLen(line) == 0) continue;
+      if (StringGetCharacter(line, 0) == '#') continue;
+      value = line;
+      break;
+   }
+   FileClose(fh);
+   return value;
+}
+
+// Token shape: 32-128 characters of A-Za-z0-9_- (secrets.token_urlsafe output; range, not an exact
+// length, so a future token format does not brick every EA).
+bool IsTokenShape(string t) {
+   int n = StringLen(t);
+   if (n < 32 || n > 128) return false;
+   for (int i = 0; i < n; i++) {
+      ushort c = StringGetCharacter(t, i);
+      bool ok = (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_' || c == '-';
+      if (!ok) return false;
+   }
+   return true;
+}
+
+// Installation id shape: ^inst_[0-9a-f]{12}$
+bool IsInstallationShape(string s) {
+   if (StringLen(s) != 17 || StringFind(s, "inst_") != 0) return false;
+   for (int i = 5; i < 17; i++) {
+      ushort c = StringGetCharacter(s, i);
+      if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+   }
+   return true;
+}
+
+// Proof hash shape: 64 lowercase hex characters.
+bool IsHex64(string s) {
+   if (StringLen(s) != 64) return false;
+   for (int i = 0; i < 64; i++) {
+      ushort c = StringGetCharacter(s, i);
+      if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
+   }
+   return true;
+}
+
 string ResolveProofHash() {
    if (!FileIsExist("STOIC-Proof.txt")) {
       Print("STOIC: no STOIC-Proof.txt in MQL5\\Files - binary proof absent (re-run the STOIC installer). Live activation stays blocked.");
       return "";
    }
-   int fh = FileOpen("STOIC-Proof.txt", FILE_READ | FILE_TXT | FILE_ANSI);
-   if (fh == INVALID_HANDLE) return "";
-   string h = "";
-   while (!FileIsEnding(fh)) {
-      string line = FileReadString(fh);
-      StringTrimLeft(line); StringTrimRight(line);
-      if (StringLen(line) == 0 || StringGetCharacter(line, 0) == '#') continue;
-      h = line; break;
-   }
-   FileClose(fh);
+   string h = ReadDropFileValue("STOIC-Proof.txt");
    StringToLower(h);
-   if (StringLen(h) != 64) { Print("STOIC: STOIC-Proof.txt malformed - ignoring."); return ""; }
+   if (!IsHex64(h)) { Print("STOIC: STOIC-Proof.txt malformed (expected 64 hex characters) - ignoring."); return ""; }
    Print("STOIC: binary proof loaded (", StringSubstr(h, 0, 12), "...).");
    return h;
 }
@@ -402,6 +470,10 @@ string ResolveInstallationId() {
    StringTrimLeft(input_trim);
    StringTrimRight(input_trim);
    if (StringLen(input_trim) > 0) {
+      if (!IsInstallationShape(input_trim)) {
+         Print("STOIC: installation id in EA inputs malformed (expected inst_ + 12 hex) — ignoring it. Heartbeats will be UNVERIFIED.");
+         return "";
+      }
       Print("STOIC: using installation id from EA inputs dialog.");
       return input_trim;
    }
@@ -409,23 +481,13 @@ string ResolveInstallationId() {
       Print("STOIC: WARNING — no InstallationId in EA inputs AND no STOIC-Installation.txt in MQL5\\Files. Heartbeats will be UNVERIFIED (telemetry only, no live trading). Pair this terminal from the STOIC dashboard.");
       return "";
    }
-   int fh = FileOpen("STOIC-Installation.txt", FILE_READ | FILE_TXT | FILE_ANSI);
-   if (fh == INVALID_HANDLE) {
-      Print("STOIC: WARNING — STOIC-Installation.txt exists but FileOpen failed (", GetLastError(), ").");
+   string inst = ReadDropFileValue("STOIC-Installation.txt");
+   if (StringLen(inst) == 0) return "";
+   if (!IsInstallationShape(inst)) {
+      Print("STOIC: installation file malformed — STOIC-Installation.txt does not carry an installation id (inst_ + 12 hex). Re-run the STOIC installer (v1.8+). Heartbeats will be UNVERIFIED.");
       return "";
    }
-   string inst = "";
-   while (!FileIsEnding(fh)) {
-      string line = FileReadString(fh);
-      StringTrimLeft(line); StringTrimRight(line);
-      if (StringLen(line) == 0) continue;
-      if (StringGetCharacter(line, 0) == '#') continue;
-      inst = line;
-      break;
-   }
-   FileClose(fh);
-   if (StringLen(inst) > 0)
-      Print("STOIC: installation id auto-loaded from MQL5\\Files\\STOIC-Installation.txt.");
+   Print("STOIC: installation id auto-loaded from MQL5\\Files\\STOIC-Installation.txt.");
    return inst;
 }
 
@@ -439,6 +501,10 @@ string ResolveBridgeToken() {
    bool input_usable = (StringLen(input_trim) > 0
                         && input_trim != "PASTE_YOUR_BRIDGE_TOKEN_HERE");
    if (input_usable) {
+      if (!IsTokenShape(input_trim)) {
+         Print("STOIC: token in EA inputs malformed (expected 32-128 characters of A-Za-z0-9_-) — not sending it. Paste the token exactly as shown on the dashboard.");
+         return "";
+      }
       Print("STOIC: using bridge token from EA inputs dialog.");
       return input_trim;
    }
@@ -448,24 +514,15 @@ string ResolveBridgeToken() {
       Print("STOIC: WARNING — no token in EA inputs AND no STOIC-Token.txt found in MQL5\\Files. Heartbeats will be rejected. Either paste BridgeToken in inputs, or run the PowerShell auto-installer from the dashboard.");
       return "";
    }
-   int fh = FileOpen("STOIC-Token.txt", FILE_READ | FILE_TXT | FILE_ANSI);
-   if (fh == INVALID_HANDLE) {
-      Print("STOIC: WARNING — STOIC-Token.txt exists but FileOpen failed (", GetLastError(), ").");
-      return "";
-   }
-   string token = "";
-   while (!FileIsEnding(fh)) {
-      string line = FileReadString(fh);
-      StringTrimLeft(line); StringTrimRight(line);
-      // Skip blank lines and comment lines written by the installer.
-      if (StringLen(line) == 0) continue;
-      if (StringGetCharacter(line, 0) == '#') continue;
-      token = line;
-      break;  // first non-comment, non-blank line is the token
-   }
-   FileClose(fh);
+   string token = ReadDropFileValue("STOIC-Token.txt");
    if (StringLen(token) == 0) {
       Print("STOIC: WARNING — STOIC-Token.txt is empty or comments-only.");
+      return "";
+   }
+   if (!IsTokenShape(token)) {
+      // never send garbage: a 401 storm tells the operator nothing, this line does
+      Print("STOIC: token file malformed — STOIC-Token.txt does not carry a bridge token (got ", StringLen(token),
+            " characters, expected 32-128 of A-Za-z0-9_-). Re-run the STOIC installer (v1.8+) or rewrite the file without a BOM. Heartbeats NOT sent.");
       return "";
    }
    Print("STOIC: bridge token auto-loaded from MQL5\\Files\\STOIC-Token.txt (length=", StringLen(token), ").");
@@ -476,7 +533,7 @@ string ResolveBridgeToken() {
 // Installer v1.5 — server URL auto-load: STOIC-Installer.ps1 writes MQL5\Files\STOIC-Server.txt
 // (the host the pairing token was redeemed at). The file wins while the ServerUrl input is at its
 // compiled default; an operator who explicitly changed the input keeps that value.
-#define SERVER_URL_DEFAULT "https://www.stoicaibot.com"
+#define SERVER_URL_DEFAULT "https://stoicaibot.com"
 string g_server_url = SERVER_URL_DEFAULT;
 bool   g_webrequest_ok = true;   // false after a 4014 until a request succeeds (reported in heartbeats)
 string ResolveServerUrl() {
@@ -498,9 +555,10 @@ string ResolveServerUrl() {
    }
    string url = "";
    while (!FileIsEnding(fh)) {
-      string line = FileReadString(fh);
+      string line = StripBom(FileReadString(fh));          // v1.63 — same BOM rule as every other drop file
       StringTrimLeft(line); StringTrimRight(line);
-      int p = StringFind(line, "https://");          // BOM/comment tolerant: first line carrying an https URL
+      if (StringLen(line) == 0 || StringGetCharacter(line, 0) == '#') continue;
+      int p = StringFind(line, "https://");          // comment tolerant: first line carrying an https URL
       if (p < 0) continue;
       url = StringSubstr(line, p);
       break;
@@ -1075,6 +1133,41 @@ void SendTicks() {
 }
 
 //+------------------------------------------------------------------+
+// v1.63 (M122-P2) — a non-2xx HTTP answer used to be silent: the operator saw "heartbeats arriving" on the
+// server and nothing in the Experts tab. One line per minute per status: endpoint, status, server error code.
+datetime _last_http_err_at     = 0;
+int      _last_http_err_status = 0;
+
+string JsonStringField(string body, string key) {
+   int p = StringFind(body, "\"" + key + "\"");
+   if (p < 0) return "";
+   int q1 = StringFind(body, "\"", p + StringLen(key) + 2);   // opening quote of the value (after the colon)
+   if (q1 < 0) return "";
+   int q2 = StringFind(body, "\"", q1 + 1);
+   if (q2 < 0) return "";
+   return StringSubstr(body, q1 + 1, q2 - q1 - 1);
+}
+
+void LogHttpRejected(string url, int status, string body) {
+   if (status == _last_http_err_status && TimeCurrent() - _last_http_err_at < 60) return;
+   _last_http_err_at = TimeCurrent();
+   _last_http_err_status = status;
+   string endpoint = url;
+   int p = StringFind(url, "/api/bridge/");
+   if (p >= 0) endpoint = StringSubstr(url, p + 12);
+   string code = JsonStringField(body, "code");
+   if (StringLen(code) == 0) code = JsonStringField(body, "detail");
+   if (StringLen(code) == 0) code = JsonStringField(body, "error");
+   if (StringLen(code) > 80) code = StringSubstr(code, 0, 80);
+   if (status == 401 && (StringLen(code) == 0 || code == "Invalid bridge token")) code = "invalid_bridge_token";
+   string hint = "";
+   if (status == 401) hint = " — the server does not accept this bridge token: re-run the STOIC installer (v1.8+) or check MQL5\\Files\\STOIC-Token.txt";
+   else if (status == 403) hint = " — refused by the server (suspended / blocked)";
+   else if (status == 429) hint = " — rate limited";
+   else if (status >= 500) hint = " — server error, retrying on the next poll";
+   Print("STOIC: ", endpoint, " rejected HTTP ", status, " ", code, hint);
+}
+
 string HttpPost(string url, string body) {
    char post[]; char result[]; string headers;
    StringToCharArray(body, post, 0, StringLen(body), CP_UTF8);
@@ -1091,7 +1184,9 @@ string HttpPost(string url, string body) {
       }
       return "";
    }
-   return CharArrayToString(result, 0, ArraySize(result), CP_UTF8);
+   string answer = CharArrayToString(result, 0, ArraySize(result), CP_UTF8);
+   if (res < 200 || res >= 300) LogHttpRejected(url, res, answer);
+   return answer;
 }
 
 // Pip size lookup (must mirror backend pip_utils.PIP_SIZE for XAU/BTC/JPY)

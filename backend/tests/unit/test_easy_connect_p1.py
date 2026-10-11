@@ -21,9 +21,9 @@ def _read(*rel):
 
 def test_ea_1_61_server_url_autoload_and_self_check():
     mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
-    assert '#define EA_CLIENT_VERSION "1.62"' in mq5 and '#property version   "1.62"' in mq5
+    assert '#define EA_CLIENT_VERSION "1.63"' in mq5 and '#property version   "1.63"' in mq5
     assert "preview.emergentagent.com" not in mq5.split("string ResolveServerUrl")[0].split("input string ServerUrl")[1].split("\n")[0]
-    assert 'input string ServerUrl              = "https://www.stoicaibot.com"' in mq5
+    assert 'input string ServerUrl              = "https://stoicaibot.com"' in mq5
     assert 'FileIsExist("STOIC-Server.txt")' in mq5 and "g_server_url = ResolveServerUrl();" in mq5
     assert 'ServerUrl + "' not in mq5                      # every request goes through the resolved URL
     assert mq5.count('g_server_url + "/api/bridge/') >= 20
@@ -35,10 +35,10 @@ def test_ea_1_61_server_url_autoload_and_self_check():
     assert init.index("g_server_url = ResolveServerUrl();") < init.index("SendHeartbeat();")
     # version surfaces
     import ea_capabilities as ec
-    assert ec.latest_ea_version() == "1.62"                                     # N111-6 — derived from the MQ5
+    assert ec.latest_ea_version() == "1.63"                                     # N111-6 — derived from the MQ5
     assert '"ea_latest_version": latest_ea_version()' in _read("backend", "routes", "setup_routes.py")
     assert 'LATEST_EA = latest_ea_version()' in _read("backend", "routes", "bot_routes.py")
-    assert 'LATEST_EA_VERSION = "1.62"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
+    assert 'LATEST_EA_VERSION = "1.63"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
     import demo_readiness as dr
     assert "1.60" in dr.DEMO_ACCEPTED_EA                   # a 1.60 terminal stays accepted during the demo
 
@@ -78,7 +78,7 @@ def test_install_progress_turns_flags_into_the_exact_fix():
 
 def test_installer_v1_5_zero_touch_files_and_restart():
     ps = _read("backend", "static", "STOIC-Installer.ps1")
-    assert '$InstallerVersion = "1.7"' in ps
+    assert '$InstallerVersion = "1.8"' in ps
     assert "SecurityProtocolType]::Tls12" in ps
     assert "function Get-StoicRunningTerminal" in ps and "Get-Process terminal64" in ps
     assert "STOIC-Server.txt" in ps and "ServerUrl=$" not in ps and "stoic.set" in ps     # N110-2 — preset carries no ServerUrl

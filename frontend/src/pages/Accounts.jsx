@@ -14,7 +14,7 @@ import MultiAccountOverview from "@/components/MultiAccountOverview";
 // Used in the download URL so the filename changes per release (e.g.
 // `EmergentTradingBridge_v1.35.mq5`) — defeats aggressive browser caching
 // of the prior .mq5, which otherwise re-downloads stale source.
-const LATEST_EA_VERSION = "1.62";
+const LATEST_EA_VERSION = "1.63";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning, ShieldCheck } from "lucide-react";
 const Warning = AlertTriangle;
@@ -575,20 +575,26 @@ export default function Accounts() {
                                 <div key={a.id} id={`account-${a.id}`}
                                     className={`border ${a.id === focusId ? "border-[#FFD700] shadow-[0_0_0_1px_#FFD700]" : "border-[#1F1F1F]"} bg-[#0A0A0A] p-5`}
                                     data-testid={`account-row-${a.account_number}`}>
-                                    {a.broker_account_mismatch && (
+                                    {a.broker_account_mismatch && (() => {
+                                        // M122-P2.3 — same login, different server NAME is a registration typo, not a wrong terminal
+                                        const serverMismatch = /broker server mismatch/i.test(a.broker_account_mismatch_reason || "");
+                                        return (
                                         <div className="mb-4 border border-[#FFB000]/40 bg-[#FFB000]/10 px-3 py-2 flex items-start gap-2"
                                             data-testid={`broker-mismatch-${a.account_number}`}>
                                             <Warning className="w-4 h-4 text-[#FFB000] mt-0.5 shrink-0" />
                                             <div className="font-mono text-[11px] text-[#FFB000] leading-relaxed">
-                                                <span className="tracking-widest">WRONG MT5 TERMINAL · </span>
+                                                <span className="tracking-widest">{serverMismatch ? "BROKER SERVER MISMATCH · " : "WRONG MT5 TERMINAL · "}</span>
                                                 {a.broker_account_mismatch_reason ||
                                                     `EA is logged into MT5 account ${a.broker_account_id_reported}, but this STOIC account is configured for ${a.account_number}.`}
-                                                <div className="text-[#A1A1AA] tracking-normal mt-1">
-                                                    Run this EA on a DIFFERENT MT5 instance (or remove the duplicate). Two EAs attached to the same terminal will mirror the same balance.
+                                                <div className="text-[#A1A1AA] tracking-normal mt-1" data-testid={`broker-mismatch-hint-${a.account_number}`}>
+                                                    {serverMismatch
+                                                        ? "The EA sits on the right MT5 login but reports a different server name than this account is registered on. Fix the name under Quick Install ('Use the server the EA reports' or edit it) — re-pairing does not change it."
+                                                        : "Run this EA on a DIFFERENT MT5 instance (or remove the duplicate). Two EAs attached to the same terminal will mirror the same balance."}
                                                 </div>
                                             </div>
                                         </div>
-                                    )}
+                                        );
+                                    })()}
                                     <div className="flex items-start justify-between gap-3 flex-wrap">
                                         <div className="space-y-1">
                                             <div className="flex items-center gap-3 flex-wrap">

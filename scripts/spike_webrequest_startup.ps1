@@ -6,7 +6,7 @@
 #   1. copy a broker terminal folder (the one with terminal64.exe) to e.g. C:\stoic-spike\MT5
 #   2. start it once with  terminal64.exe /portable , log in to a DEMO account, let STOIC-Installer.ps1 run
 #      against it (-TerminalPath C:\stoic-spike\MT5 -NoRestart) so STOIC-Server.txt / stoic.set / stoic-start.ini exist
-#   3. .\spike_webrequest_startup.ps1 -PortableCopy C:\stoic-spike\MT5 -ServerUrl https://www.stoicaibot.com `
+#   3. .\spike_webrequest_startup.ps1 -PortableCopy C:\stoic-spike\MT5 -ServerUrl https://stoicaibot.com `
 #          [-GoldenConfig "<data folder of a terminal where the URL IS allowed>\config"]
 #
 # Protocol (verdict = Experts log lines written AFTER each start, never older lines):

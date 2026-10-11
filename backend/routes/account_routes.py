@@ -36,10 +36,34 @@ class ImportPositionsRequest(BaseModel):
 
 
 class AccountUpdate(BaseModel):
-    """iter-137 · Multi-account management — editable metadata."""
+    """iter-137 · Multi-account management — editable metadata.
+    M122-P2 · `server` — the broker server NAME (step-up MFA, audited; resets the verified chain)."""
     label: str | None = None
     group: str | None = None
     trading_enabled: bool | None = None
+    server: str | None = None
+
+
+SERVER_NAME_RE = r"^[A-Za-z0-9][A-Za-z0-9 ._-]{1,63}$"   # MT5 server names: "OnEquity-Server", "ICMarketsSC-Demo02", "VTMarkets-Live 2"
+
+
+def _server_change_doc(acc: dict, new_server: str, *, source: str, by: str) -> dict:
+    """M122-P2 — one Mongo update for both the manual edit and 'use the server the EA reports': server /
+    broker_server / expected_identity.broker_server move together, the verified chain is cleared so the next
+    heartbeat re-verifies against the new name, and the mismatch flag no longer blocks trust-terminal."""
+    now = datetime.now(timezone.utc).isoformat()
+    exp = dict(acc.get("expected_identity") or {})
+    exp["broker_server"] = new_server
+    return {
+        "$set": {"server": new_server, "broker_server": new_server, "expected_identity": exp,
+                 "broker_account_mismatch": False, "broker_account_mismatch_reason": None,
+                 "server_changed": {"from": acc.get("server"), "to": new_server, "at": now, "source": source, "by": by}},
+        "$unset": {"verified_identity": ""},
+    }
+
+
+def _ea_reported_server(acc: dict) -> str | None:
+    return ((acc.get("ea_identity") or {}).get("broker_server")) or None
 
 
 def _iso_days_ago(days: int) -> str:
@@ -444,9 +468,12 @@ async def broker_comparison(days: int = 30, user=Depends(get_current_user)):
 
 
 @router.patch("/{account_id}")
-async def update_account(account_id: str, payload: AccountUpdate,
+async def update_account(account_id: str, payload: AccountUpdate, request: Request,
                          user=Depends(get_current_user)):
-    """iter-137 · Update account metadata: label, group, trading_enabled."""
+    """iter-137 · Update account metadata: label, group, trading_enabled.
+    M122-P2 · `server` (broker server name) — step-up MFA, audited, resets verified_identity so the chain
+    re-verifies; a wrong name typed at creation no longer forces delete + re-pair."""
+    import re as _re
     updates = {}
     if payload.label is not None:
         if not payload.label.strip():
@@ -456,17 +483,98 @@ async def update_account(account_id: str, payload: AccountUpdate,
         updates["group"] = payload.group.strip()
     if payload.trading_enabled is not None:
         updates["trading_enabled"] = payload.trading_enabled
-    if not updates:
+    new_server = payload.server.strip() if payload.server is not None else None
+    if payload.server is not None and not _re.match(SERVER_NAME_RE, new_server or ""):
+        raise HTTPException(status_code=400, detail={
+            "code": "invalid_server_name",
+            "message": "Server must be the exact MT5 server name (2-64 characters: letters, digits, space, '.', '_', '-')"})
+    if not updates and new_server is None:
         raise HTTPException(status_code=400, detail="Nothing to update")
     db = get_db()
-    result = await db.accounts.update_one(
-        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
-        {"$set": updates},
-    )
-    if result.matched_count == 0:
+    oid = parse_object_id(account_id, "Account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
-    doc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")})
+    if new_server is not None:
+        if acc.get("mode") == "paper":
+            raise HTTPException(status_code=400, detail="Paper accounts have no broker server")
+        from step_up import audit_event, require_step_up
+        await require_step_up(db, user, request, "account_server_edit")
+        if new_server != (acc.get("server") or ""):
+            change = _server_change_doc(acc, new_server, source="owner_edit", by=user["id"])
+            change["$set"].update(updates)
+            await db.accounts.update_one({"_id": oid}, change)
+            await audit_event(db, user["id"], "account_server_edited",
+                              {"account_id": account_id, "from": acc.get("server"), "to": new_server,
+                               "ea_reported": _ea_reported_server(acc)}, request)
+            updates = {}
+    if updates:
+        await db.accounts.update_one({"_id": oid}, {"$set": updates})
+    doc = await db.accounts.find_one({"_id": oid})
     return _serialize(doc)
+
+
+@router.post("/{account_id}/adopt-reported-server")
+async def adopt_reported_server(account_id: str, request: Request, user=Depends(get_current_user)):
+    """M122-P2 — the token-authenticated EA reports a different server NAME for the SAME MT5 login
+    (e.g. registered 'OnEquity-Demo', MT5 says 'OnEquity-Server'). Adopt what the EA reports: step-up MFA,
+    audited, verified chain reset so the next heartbeat verifies against the adopted name."""
+    db = get_db()
+    oid = parse_object_id(account_id, "Account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    if acc.get("mode") == "paper":
+        raise HTTPException(status_code=400, detail="Paper accounts have no broker server")
+    reported = _ea_reported_server(acc)
+    if not reported:
+        raise HTTPException(status_code=409, detail={"code": "no_reported_server",
+                                                     "message": "The EA has not reported a broker server yet — wait for a heartbeat"})
+    configured_login = str(acc.get("account_number") or "").strip()
+    reported_login = acc.get("broker_account_id_reported")
+    if reported_login is None or str(reported_login).strip() != configured_login:
+        raise HTTPException(status_code=409, detail={
+            "code": "login_differs",
+            "message": f"The EA reports MT5 login {reported_login}, this account is #{configured_login} — "
+                       "only the server of the SAME login can be adopted"})
+    from broker_servers import servers_match
+    if servers_match(acc.get("server"), reported):
+        return {"ok": True, "unchanged": True, "server": acc.get("server")}
+    from step_up import audit_event, require_step_up
+    await require_step_up(db, user, request, "account_server_edit")
+    await db.accounts.update_one({"_id": oid}, _server_change_doc(acc, reported, source="ea_reported", by=user["id"]))
+    await audit_event(db, user["id"], "account_server_adopted_from_ea",
+                      {"account_id": account_id, "from": acc.get("server"), "to": reported,
+                       "mt5_login": configured_login}, request)
+    return {"ok": True, "server": reported, "previous": acc.get("server")}
+
+
+@router.get("/server-suggest")
+async def server_suggest(server: str = "", broker: str = "", user=Depends(get_current_user)):
+    """M122-P2 — Add-account form helper: is this server name known to the broker registry (presets +
+    alias groups + broker_profiles)? Returns the known names for the broker so the exact MT5 name can be picked."""
+    _ = user
+    from broker_servers import ALIAS_GROUPS, normalize_server
+    db = get_db()
+    want = normalize_server(server)
+    known: list[str] = []
+    for p in BROKER_PRESETS:
+        if not broker or normalize_server(p["broker"]) == normalize_server(broker):
+            known.extend(p.get("servers") or [])
+    async for prof in db.broker_profiles.find({}, {"server_names": 1, "broker": 1}).limit(200):
+        if not broker or normalize_server(prof.get("broker")) == normalize_server(broker):
+            known.extend(prof.get("server_names") or [])
+    norm_known = {normalize_server(k) for k in known}
+    for grp in ALIAS_GROUPS:
+        if want and want in grp:
+            norm_known |= grp
+    is_known = bool(want) and want in norm_known
+    stem = want.split("-")[0] if want else ""
+    suggestions = sorted({k for k in known if not want or normalize_server(k).startswith(stem)}, key=str.lower)[:12]
+    return {"server": server, "known": is_known, "suggestions": suggestions,
+            "hint": None if (is_known or not want) else (
+                "Not in our registry — use the EXACT name MT5 shows (File → Login to Trade Account → Server, "
+                "or the Journal line 'authorized on <Server>'). You can correct it later from Quick Install.")}
 
 
 @router.get("/broker-presets")

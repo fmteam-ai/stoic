@@ -147,6 +147,28 @@ function Get-StoicWebRequestHost {
     return $u.Scheme + "://" + $u.Authority
 }
 
+function Write-StoicDropFile {
+    # M122-P1 — every MQL5\Files\STOIC-*.txt is written WITHOUT a byte-order mark. `Set-Content -Encoding UTF8` on
+    # Windows PowerShell 5.1 writes a UTF-8 BOM; the EA opens the file with FILE_ANSI, the first line became
+    # "ï»¿# STOIC …", the '#' comment test failed and the comment line was sent as the token (401 on every
+    # heartbeat). pwsh 7 (CI) writes no BOM, which is why CI never saw it. Comment lines first, value last, CRLF.
+    param([Parameter(Mandatory = $true)][string]$Path,
+          [Parameter(Mandatory = $true)][string[]]$Comments,
+          [Parameter(Mandatory = $true)][string]$Value)
+    $lines = @()
+    foreach ($c in $Comments) { $lines += ("# " + $c) }
+    $lines += $Value
+    $text = ($lines -join "`r`n") + "`r`n"
+    [IO.File]::WriteAllText($Path, $text, (New-Object System.Text.UTF8Encoding($false)))
+}
+
+function Test-StoicDropFileNoBom {
+    # $true when the file does NOT start with EF BB BF (exercised by scripts/test_installer_dropfiles.ps1 under 5.1)
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $b = [IO.File]::ReadAllBytes($Path)
+    return -not ($b.Length -ge 3 -and $b[0] -eq 0xEF -and $b[1] -eq 0xBB -and $b[2] -eq 0xBF)
+}
+
 function Get-StoicTerminals {
     # every MT5 data folder (32-hex id under %APPDATA%\MetaQuotes\Terminal) + portable-mode installs
     param([string]$Root = (Join-Path $env:APPDATA "MetaQuotes\Terminal"),
@@ -379,7 +401,7 @@ function Install-Stoic {
         [string]$TerminalLogin = ""
     )
 
-    $InstallerVersion = "1.7"
+    $InstallerVersion = "1.8"
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $ServerUrl = $ServerUrl.TrimEnd('/')
     # N110-2 — the bridge token travels to this host: https only, no exceptions
@@ -491,22 +513,19 @@ function Install-Stoic {
         $destMq5 = Join-Path $expertsDir "EmergentTradingBridge.mq5"
         Copy-Item -Path $tmpMq5 -Destination $destMq5 -Force
 
-        # Write bridge token (EA picks up from MQL5\Files at attach time)
+        # Write bridge token (EA picks up from MQL5\Files at attach time) — M122-P1: no BOM, ever
         if (-not (Test-Path $filesDir)) { New-Item -ItemType Directory -Path $filesDir -Force | Out-Null }
+        $stamp = Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz'
         $tokenFile = Join-Path $filesDir "STOIC-Token.txt"
-        @"
-# STOIC bridge token — keep this file confidential.
-# Account: $broker #$accountNumber ($accountLabel)
-# Generated: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
-$bridgeToken
-"@ | Set-Content -Path $tokenFile -Encoding UTF8 -NoNewline:$false
+        Write-StoicDropFile -Path $tokenFile -Value $bridgeToken -Comments @(
+            "STOIC bridge token — keep this file confidential.",
+            "Account: $broker #$accountNumber ($accountLabel)",
+            "Generated: $stamp (installer v$InstallerVersion)")
 
         # v1.5 — server URL drop file: the EA auto-loads it, no inputs dialog edit needed
-        @"
-# STOIC server URL — the EA reads this when its ServerUrl input is left at default.
-# Generated: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
-$eaServerUrl
-"@ | Set-Content -Path (Join-Path $filesDir "STOIC-Server.txt") -Encoding UTF8 -NoNewline:$false
+        Write-StoicDropFile -Path (Join-Path $filesDir "STOIC-Server.txt") -Value $eaServerUrl -Comments @(
+            "STOIC server URL — the EA reads this when its ServerUrl input is left at default.",
+            "Generated: $stamp")
 
         # v1.5 — EA preset + MT5 startup config: terminal64.exe /config:<ini> opens a chart with the EA
         # attached and Algo Trading allowed, so nobody drags the EA or edits inputs.
@@ -536,12 +555,9 @@ Period=$ChartPeriod
         # v1.55 — write the installation identity (EA sends it on every
         # heartbeat; the server rejects lease renewal without it).
         if ($installationId) {
-            $instFile = Join-Path $filesDir "STOIC-Installation.txt"
-            @"
-# STOIC installation id — proves WHICH EA install is talking.
-# Generated: $(Get-Date -Format 'yyyy-MM-ddTHH:mm:sszzz')
-$installationId
-"@ | Set-Content -Path $instFile -Encoding UTF8 -NoNewline:$false
+            Write-StoicDropFile -Path (Join-Path $filesDir "STOIC-Installation.txt") -Value $installationId -Comments @(
+                "STOIC installation id — proves WHICH EA install is talking.",
+                "Generated: $stamp")
         }
 
         # Compile via MetaEditor CLI (if found) — produces .ex5

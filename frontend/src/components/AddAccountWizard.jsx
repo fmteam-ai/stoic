@@ -32,6 +32,19 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
     // P2-02 — the policy is loading | known | unknown; real money is disabled unless it is KNOWN to allow it
     const [policy, setPolicy] = useState({ state: "loading", demoOnly: false });
     const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+    // M122-P2.3 — debounce-check the server name against the broker registry (GET /accounts/server-suggest)
+    const [suggest, setSuggest] = useState({ server: "", known: true, suggestions: [], hint: null });
+    useEffect(() => {
+        if (!open || f.mode !== "live" || !f.server) { setSuggest({ server: "", known: true, suggestions: [], hint: null }); return; }
+        const want = f.server;
+        const bn = f.broker === "__other" ? (f.broker_other || "") : f.broker;
+        const t = setTimeout(() => {
+            api.get("/accounts/server-suggest", { params: { server: want, broker: bn } })
+                .then(r => setSuggest({ ...r.data, server: want }))
+                .catch(() => setSuggest({ server: want, known: true, suggestions: [], hint: null }));
+        }, 350);
+        return () => clearTimeout(t);
+    }, [open, f.server, f.broker, f.broker_other, f.mode]);
     const vpsOffer = useVpsOffer();
     useEffect(() => {
         if (!open) return;
@@ -138,11 +151,29 @@ export function AddAccountWizard({ open, onClose, pairedHosts = [], onCreated, o
                                     {f.broker === "__other" && <input className={`${INPUT} mt-1`} placeholder="Broker name" onChange={e => set("broker_other", e.target.value)} data-testid="wizard-broker-other" />}
                                 </Field>
                                 <Field id="wz-server" label="SERVER">
-                                    {servers.length > 0
-                                        ? <select id="wz-server" value={f.server} onChange={e => set("server", e.target.value)} className={INPUT} data-testid="wizard-server-select">
+                                    {servers.length > 0 && !f.server_custom
+                                        ? <select id="wz-server" value={f.server} onChange={e => { if (e.target.value === "__custom") { set("server_custom", true); set("server", ""); } else set("server", e.target.value); }} className={INPUT} data-testid="wizard-server-select">
                                             {servers.map(s => <option key={s} value={s}>{s}</option>)}
+                                            <option value="__custom">Other — type the exact MT5 server name</option>
                                           </select>
-                                        : <input id="wz-server" value={f.server} onChange={e => set("server", e.target.value)} placeholder="e.g. RoboForex-ECN" className={INPUT} data-testid="wizard-server-input" />}
+                                        : <input id="wz-server" value={f.server} onChange={e => set("server", e.target.value)} placeholder="exact MT5 server name, e.g. OnEquity-Server" className={INPUT} data-testid="wizard-server-input" />}
+                                    {/* M122-P2.3 — validate the typed name against the broker registry; a typo here used to block the account for good */}
+                                    {suggest.server === f.server && f.server && !suggest.known && (
+                                        <div className="text-[11px] text-[#FFB000] mt-1" data-testid="wizard-server-hint">
+                                            {suggest.hint}
+                                            {suggest.suggestions?.length > 0 && (
+                                                <div className="mt-1 flex flex-wrap gap-1">
+                                                    {suggest.suggestions.map(s => (
+                                                        <button key={s} type="button" onClick={() => set("server", s)} data-testid={`wizard-server-suggestion-${s}`}
+                                                            className="px-1.5 py-0.5 border border-[#FFB000]/40 text-[#FFD700] font-mono hover:bg-[#FFB000]/10">{s}</button>
+                                                    ))}
+                                                </div>
+                                            )}
+                                        </div>
+                                    )}
+                                    {suggest.server === f.server && f.server && suggest.known && (
+                                        <div className="text-[11px] text-[#00FF41] mt-1" data-testid="wizard-server-known">Known MT5 server name ✓</div>
+                                    )}
                                 </Field>
                             </div>
                         )}

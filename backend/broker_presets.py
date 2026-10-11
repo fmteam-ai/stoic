@@ -59,6 +59,6 @@ BROKER_PRESETS = [
     {"broker": "Vantage", "servers": ["VantageInternational-Live", "VantageInternational-Live 2", "VantageInternational-Demo"], "account_types": ["standard", "demo"]},
     {"broker": "VT Markets", "servers": ["VTMarkets-Live", "VTMarkets-Live 2", "VTMarkets-Demo"], "account_types": ["standard", "demo"]},
     {"broker": "STARTRADER", "servers": ["StarTrader-Live", "StarTrader-Demo"], "account_types": ["standard", "demo"]},
-    {"broker": "OnEquity", "servers": ["OnEquity-Live", "OnEquity-Demo"], "account_types": ["standard", "demo"]},
+    {"broker": "OnEquity", "servers": ["OnEquity-Server", "OnEquity-Live", "OnEquity-Demo"], "account_types": ["standard", "demo"]},   # M122 — MT5 reports "OnEquity-Server" (demo #1083440)
     {"broker": "Tauro Markets", "servers": ["TauroMarkets-Live", "TauroMarkets-Demo"], "account_types": ["standard", "demo"]},
 ]
