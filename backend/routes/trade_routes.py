@@ -317,6 +317,19 @@ async def list_trade_decisions(limit: int = 100, symbol: str = None,
     return {"decisions": rows, "stage_counts": stages}
 
 
+@router.get("/predictions")
+async def prediction_track_record(symbol: str = "XAUUSD", limit: int = 20,
+                                  user=Depends(get_current_user)):
+    """"Show previous predictions": recent BUY/SELL decisions scored against the
+    candles that followed (TP first / SL first / expired), plus calibration —
+    hit rate per confidence and per Monte-Carlo probability bucket."""
+    import re as _re
+    if not _re.fullmatch(r"[A-Za-z0-9._-]{2,20}", symbol or ""):
+        raise HTTPException(status_code=422, detail="invalid symbol")
+    from prediction_track import track_record
+    return await track_record(get_db(), user["id"], symbol, limit=limit)
+
+
 @router.get("/stats")
 async def trade_stats(account_id: Optional[str] = None,
                       user=Depends(get_current_user)):
