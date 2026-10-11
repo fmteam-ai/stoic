@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Post-redeploy live probe for stoicaibot.com (read-only, unauthenticated).
 
-    python scripts/live_probe.py [--base https://www.stoicaibot.com] [--expect-sha <commit>]
+    python scripts/live_probe.py [--base https://stoicaibot.com] [--expect-sha <commit>]
 
 PASS only when the live API serves the audited build: /api/health 200 with
 build_sha (== --expect-sha when given), app_env=production, env_sig present;
@@ -31,7 +31,7 @@ def _get(base, path):
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--base", default="https://www.stoicaibot.com")
+    ap.add_argument("--base", default="https://stoicaibot.com")
     ap.add_argument("--expect-sha")
     a = ap.parse_args()
     base = a.base.rstrip("/")

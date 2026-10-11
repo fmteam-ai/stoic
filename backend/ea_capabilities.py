@@ -39,7 +39,7 @@ def latest_ea_version() -> str:
         mtime = os.path.getmtime(_MQ5_PATH)
         if _latest_cache.get("mtime") != mtime:
             with open(_MQ5_PATH, encoding="utf-8-sig", errors="replace") as fh:
-                head = fh.read(20000)
+                head = fh.read(60000)     # M122 — the changelog header grew past 20k characters (1.63); the property sits after it
             m = re.search(r'#property\s+version\s+"(\d+(?:\.\d+)*)"', head)
             _latest_cache.update(mtime=mtime, version=m.group(1) if m else "")
         return _latest_cache.get("version") or ""

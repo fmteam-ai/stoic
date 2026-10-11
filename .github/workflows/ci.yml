@@ -289,6 +289,16 @@ jobs:
       - name: Installer behavioural tests (N104-1 — URL building, terminal choice before the token)
         shell: pwsh
         run: ./scripts/test_installer.ps1
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"
+      - name: Drop-file encoding gate under Windows PowerShell 5.1 (M122-P1 — no BOM; parsed with the EA's exact reader)
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw "expected Windows PowerShell 5.1, got $($PSVersionTable.PSVersion)" }
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts\test_installer_dropfiles.ps1
+          if ($LASTEXITCODE -ne 0) { throw "drop-file encoding gate failed under Windows PowerShell 5.1 (exit $LASTEXITCODE)" }
       - name: Install MetaTrader 5 (silent)
         shell: pwsh
         run: |

@@ -1,5 +1,8 @@
 # STOIC — Roadmap
 
+- **P0 (operator)** M122 release: Save to GitHub → CI green → `ea-release` re-signs EA 1.63 under v2 (EX5 hash lands in release/ea_release.json + docs/RELEASE_HASHES.json) → tag v1.60.16 → Release workflow → `deploy/update.sh`. Then re-run installer v1.8 (or install the 1.63 EX5) on the OnEquity demo terminal. See docs/M122_ONBOARDING_FIXES.md.
+- **P1** Demo accounts for the `inventory` / `canonical_decision` readiness gates (user-side configuration).
+
 - **A13 Audit Fix List** (PDF uploaded by user): ~~Part 1~~ DONE · ~~Part 2~~ DONE · ~~main97 review N97-1..11 + Q-1 + Q-2~~ DONE 2026-06 · ~~P1-05~~ · ~~Part 3~~ · ~~main98 review (Part 1 + N98-3/4/5/7/8/9/10 + Q-2)~~ DONE 2026-06. ~~N98-6 EA 1.60 ACCOUNT_TRADE_MODE~~ DONE 2026-06 · ~~main99 review (Phases 1-4 + SEC-001/002)~~ DONE 2026-06. Audit list complete · ~~ea-release signed 1.60~~ DONE 2026-10-06 — remaining: ~~main100 review~~ DONE 2026-10-06 (N100-11 signer separation + scalp row migration open) · tagged release v1.60.3 → update.sh, roll 1.60 to demo terminals, inventory approval, PASS bundle, 4-week demo.
 - **User ops**: rotate Telegram bot token (appeared in chat); SECURITY_AGENT_PROTECTED_IPS + enforce mode (SA4, currently observe); production env needs BRIDGE_TOKEN_HASH_KEY (boot refuses without it since A13-2).
 

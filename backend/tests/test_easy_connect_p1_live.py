@@ -100,7 +100,7 @@ def test_ea_script_1_61_autoload_and_self_check():
         assert "string ResolveServerUrl" in body
         assert "ea_self_check" in body
         assert 'ServerUrl + "' not in body
-        assert 'input string ServerUrl              = "https://www.stoicaibot.com"' in body
+        assert 'input string ServerUrl              = "https://stoicaibot.com"' in body
 
 
 # ─────────────── Installer ───────────────

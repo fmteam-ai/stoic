@@ -20,6 +20,8 @@ via PowerShell auto-installer, and full broker-terminal data integrity
 - Production domain: stoicaibot.com.
 
 ## Current EA version
+**v1.63** (M122, 2026-10-11: BOM-tolerant drop-file readers + token/installation/proof shape validation, non-2xx HTTP logging,
+canonical default host https://stoicaibot.com; installer v1.8 writes STOIC-*.txt without BOM). Previous identity-gate notes (v1.55):
 **v1.55** — single source: EA `#property version` + `EA_CLIENT_VERSION` (tests derive via
 `tests/ea_version.py::current_ea_version`). Synced in: `routes/bot_routes.py` /
 `routes/diagnostic_routes.py` (`LATEST_EA`), `routes/setup_routes.py` (`ea_latest_version`),

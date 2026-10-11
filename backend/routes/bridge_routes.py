@@ -46,6 +46,7 @@ async def _account_by_token(token: str) -> dict:
     if acc and bt.is_suspended(acc, token):
         # SA4 R5 — token seen from two places: suspended until the owner re-pairs
         # (rotation issues a new token, which is not the suspended one).
+        logger.info("bridge 401 reason=suspended account=%s", acc["_id"])     # M122-P2.4 — the access log alone says only "401"
         raise HTTPException(status_code=401, detail={
             "code": "bridge_token_suspended",
             "message": "Bridge token suspended by the security agent — rotate the token and re-pair the EA."})
@@ -82,14 +83,52 @@ async def _account_by_token(token: str) -> dict:
         from security_agent.events import emit_throttled as _sa_emit_t
         # S2 — a rotated (retired) token is an old EA, not an attacker; S15 — one event per IP per 10 s
         retired = await bt.is_retired(db, token)
+        _owner = None
         if retired:
             _owner = await db.accounts.find_one({"$or": [{"bridge_token_retired_hashes": bt.token_hash(token)},
                                                          {"bridge_token_prev_hash": bt.token_hash(token)}]}, {"_id": 1, "label": 1})
             if _owner:
                 await bt.alert_legacy_token_use(db, _owner, "retired")
+        # M122-P2.4 — reason + account (when known) at INFO; the token itself never (prefix only, like the event)
+        logger.info("bridge 401 reason=%s account=%s token_len=%d token_prefix=%s",
+                    "retired" if retired else "unknown", _owner["_id"] if _owner else "-", len(str(token)), str(token)[:4])
         await _sa_emit_t(db, "bridge_invalid_token", {"token_prefix": str(token)[:4], "retired": retired}, window_s=10)
-        raise HTTPException(status_code=401, detail="Invalid bridge token")
+        raise HTTPException(status_code=401, detail={
+            "code": "bridge_token_retired" if retired else "invalid_bridge_token",
+            "message": "Invalid bridge token"})
     return acc
+
+
+_REJECT_WRITTEN: dict = {}     # account_number -> monotonic of the last bridge_rejected write (1/30 s)
+
+
+def _rejection_code(exc: HTTPException) -> str:
+    d = exc.detail
+    if isinstance(d, dict) and d.get("code"):
+        return str(d["code"])
+    return "invalid_bridge_token"
+
+
+async def _record_heartbeat_rejection(db, payload, exc: HTTPException) -> None:
+    """M122-P2.1 — a 401 heartbeat is still a heartbeat: the EA IS attached and WebRequest IS allowed, the
+    token is what the server refuses. The payload carries the MT5 login the EA sits on, so the owner's
+    account row(s) for that login get a `bridge_rejected` mark and Install Progress can say so instead of
+    "the WebRequest URL is missing". No secret material is stored; throttled to one write per login per 30 s."""
+    import time as _t
+    login = getattr(payload, "account_login", None)
+    if login is None:
+        return
+    key = str(login).strip()
+    if _t.monotonic() - _REJECT_WRITTEN.get(key, -1e9) < 30:
+        return
+    _REJECT_WRITTEN[key] = _t.monotonic()
+    if len(_REJECT_WRITTEN) > 5000:
+        _REJECT_WRITTEN.clear()
+    from security_agent.events import request_ip as _sa_ip
+    mark = {"at": datetime.now(timezone.utc).isoformat(), "reason": _rejection_code(exc),
+            "token_len": len(str(payload.bridge_token or "")), "ea_version": getattr(payload, "ea_version", None),
+            "broker_server": getattr(payload, "broker_server", None), "ip": _sa_ip.get()}
+    await db.accounts.update_many({"account_number": key, "mode": {"$ne": "paper"}}, {"$set": {"bridge_rejected": mark}})
 
 
 _HB_IP_WRITTEN: dict = {}     # (ip, account_id) -> monotonic of the last hb_valid_ips write (M1 throttle)
@@ -196,7 +235,18 @@ async def _trade_mode_contradiction(db, acc: dict, hb_trade_mode: str, now_iso: 
 @router.post("/heartbeat")
 async def heartbeat(payload: BridgeHeartbeat):
     db = get_db()
-    acc = await _account_by_token(payload.bridge_token)
+    try:
+        acc = await _account_by_token(payload.bridge_token)
+    except HTTPException as _rej:
+        if _rej.status_code == 401:
+            try:
+                await _record_heartbeat_rejection(db, payload, _rej)
+            except Exception as _sw:  # noqa: BLE001 — diagnostics must never change the 401
+                record_swallow("bridge", "hb_rejection_mark", _sw)
+        raise
+    if acc.get("bridge_rejected"):
+        # the token is accepted again (installer re-run / file fixed): clear the Install-Progress mark
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"bridge_rejected": ""}})
     try:
         await record_heartbeat_sighting(db, acc, payload)
     except Exception as _sw:  # noqa: BLE001 — telemetry must never break the heartbeat

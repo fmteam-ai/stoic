@@ -9,6 +9,28 @@ HEARTBEAT_FRESH_S = 120          # EA heartbeats every few seconds; 2 min withou
 FIRST_HEARTBEAT_GRACE_S = 120    # after pairing, the operator still has to attach the EA
 SELF_CHECK_MAX_AGE_S = 15 * 60   # N110-8 — EA self-check flags older than this are ignored (stale hint)
 MIN_INSTALLER_VERSION = "1.3"    # N104-1 — older installers failed the EA download
+BRIDGE_REJECTED_FRESH_S = 180    # M122-P2.1 — a 401 heartbeat mark older than this no longer describes the terminal
+BOM_INSTALLER_VERSION = "1.8"    # M122-P1 — first installer that writes STOIC-*.txt without a UTF-8 BOM
+BOM_EA_VERSION = "1.63"          # M122-P1 — first EA that strips the BOM and refuses a malformed token file
+ISSUED_TOKEN_LEN = 43            # len(secrets.token_urlsafe(32)) — auth.generate_bridge_token
+
+
+def _rejection_hint(rej: dict) -> str:
+    reason = str(rej.get("reason") or "invalid_bridge_token")
+    if reason == "bridge_token_suspended":
+        return ("The security agent suspended this bridge token (seen from two places). Rotate the token "
+                "(Quick Install → Rotate) and re-run the installer on the ONE terminal that should trade this account")
+    if reason == "bridge_token_retired":
+        return ("An EA is still sending a token that was rotated away. Re-run the installer (v" + BOM_INSTALLER_VERSION
+                + "+) on this terminal so MQL5\\Files\\STOIC-Token.txt carries the current token, then re-attach the EA")
+    hint = ("The server receives every heartbeat but does not know the token the EA sends — WebRequest is NOT the problem. "
+            "Most likely cause: an installer older than v" + BOM_INSTALLER_VERSION + " wrote MQL5\\Files\\STOIC-Token.txt with a "
+            "UTF-8 BOM and an EA older than " + BOM_EA_VERSION + " read the '#' comment line as the token")
+    tl = rej.get("token_len")
+    if isinstance(tl, int) and tl > 0 and tl != ISSUED_TOKEN_LEN:
+        hint += f" (the rejected token is {tl} characters long; a token issued by this server is {ISSUED_TOKEN_LEN})"
+    return hint + (". Fix: re-run the installer (v" + BOM_INSTALLER_VERSION + "+) on this terminal, or rewrite STOIC-Token.txt "
+                   "without BOM, then re-attach the EA. If the token was rotated on the dashboard, the file must carry the NEW one")
 
 
 def _iso(v) -> datetime | None:
@@ -150,7 +172,18 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
     sc_age = _age_s(now, sc.get("at"))
     if sc_age is None or sc_age > SELF_CHECK_MAX_AGE_S:
         sc = {}
-    if hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing and sc.get("autotrading") is False:
+    # M122-P2.1 — 401 heartbeats ARE arriving: the EA is attached and WebRequest is allowed, the token is refused
+    rej = account.get("bridge_rejected") or {}
+    rej_age = _age_s(now, rej.get("at"))
+    rej_fresh = (rej_age is not None and rej_age <= BRIDGE_REJECTED_FRESH_S
+                 and (hb_age is None or (_iso(rej.get("at")) or now) > (_iso(account.get("last_heartbeat")) or now)))
+    if rej_fresh:
+        steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "blocked",
+                           f"Heartbeats arriving but REJECTED: invalid bridge token (401) — last {_fmt_age(rej_age)}"
+                           + (f" · EA {rej.get('ea_version')}" if rej.get("ea_version") else "")
+                           + (f" · token length {rej.get('token_len')}" if rej.get("token_len") else ""),
+                           _rejection_hint(rej)))
+    elif hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing and sc.get("autotrading") is False:
         steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "warn",
                            f"heartbeating, last {_fmt_age(hb_age)}{tail} — but AutoTrading is OFF",
                            "In MT5 click the AutoTrading button (top toolbar) so it turns green — the EA cannot place or close trades until then"))
@@ -185,8 +218,17 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
         steps.append(_step("identity", "Terminal identity verified", "done",
                            f"installation {(account.get('verified_identity') or {}).get('installation_id') or ident.get('installation_id') or ''} bound to this account".strip()))
     elif ident and ident.get("reason"):
-        steps.append(_step("identity", "Terminal identity verified", "blocked", str(ident.get("reason")),
-                           "Re-pair this terminal with a fresh token (Quick Install) or trust it from Trusted Terminals"))
+        reason = str(ident.get("reason"))
+        if "broker server mismatch" in reason:
+            # M122-P2 — same login, different server NAME: a registration typo, not a wrong terminal. Re-pairing
+            # does not help (the installer does not touch the server name); editing the account does.
+            steps.append(_step("identity", "Terminal identity verified", "blocked", reason,
+                               "The EA sits on the right MT5 login but reports a different server name than this account is "
+                               "registered on. In Quick Install use 'Use the server the EA reports' (or edit the server by hand) — "
+                               "no re-pair needed; the chain re-verifies on the next heartbeat"))
+        else:
+            steps.append(_step("identity", "Terminal identity verified", "blocked", reason,
+                               "Re-pair this terminal with a fresh token (Quick Install) or trust it from Trusted Terminals"))
     elif account.get("broker_account_mismatch"):
         steps.append(_step("identity", "Terminal identity verified", "blocked",
                            "the EA is logged into a different broker account than this row",
@@ -208,5 +250,6 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
         state, headline = "not_started", "Generate a pairing token to begin"
     return {"account_id": str(account.get("_id") or account.get("id") or ""), "state": state, "headline": headline,
             "steps": steps, "webrequest_url": url, "generated_at": now.isoformat(),
+            "bridge_rejected": rej if rej_fresh else None,   # M122-P2.1 — 401 heartbeats from this login (no secret material)
             "vps_terminal": account.get("vps_terminal") or None,   # Phase 2 VPS Agent: agent-managed terminal state
             "done": sum(1 for s in statuses if s == "done"), "total": len(steps)}

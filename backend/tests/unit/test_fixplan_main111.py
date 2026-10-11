@@ -147,7 +147,7 @@ def test_n111_5_spike_timestamp_pattern_and_backup_order():
     sp = _read("scripts", "spike_webrequest_startup.ps1")
     m = re.search(r"\[regex\]::Match\(\$line, '(.+?)'\)", sp)
     pat = m.group(1)
-    line = "CS\t0\t10:15:02.123\tExperts\tSTOIC Bridge EA v1.62 started"
+    line = "CS\t0\t10:15:02.123\tExperts\tSTOIC Bridge EA v1.63 started"
     assert re.search(pat, line).groups() == ("10", "15", "02", "123")
     assert "'WebRequest error 4014|4014'" not in sp and "-match 'WebRequest error 4014'" in sp
     assert sp.index("Copy-Item $cfg $backup -Recurse -Force") < sp.index("0 baseline")
@@ -156,7 +156,7 @@ def test_n111_5_spike_timestamp_pattern_and_backup_order():
 # ── N111-6 ────────────────────────────────────────────────────────────────────────────────────────
 def test_n111_6_latest_version_is_derived(monkeypatch, tmp_path):
     import ea_capabilities as ec
-    assert ec.latest_ea_version() == "1.62"
+    assert ec.latest_ea_version() == "1.63"
     assert '"ea_latest_version": latest_ea_version()' in _read("backend", "routes", "setup_routes.py")
     assert 'LATEST_EA = "' not in _read("backend", "routes", "bot_routes.py")
     assert 'LATEST_EA = "' not in _read("backend", "routes", "diagnostic_routes.py")
