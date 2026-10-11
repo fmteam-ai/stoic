@@ -107,7 +107,7 @@ def test_p1_reader_is_host_python_39_compatible():
 # ── P1 · installer writer ────────────────────────────────────────────────────────────────────────────
 def test_p1_installer_writes_drop_files_without_bom():
     ps = _read("backend", "static", "STOIC-Installer.ps1")
-    assert '$InstallerVersion = "1.8"' in ps
+    assert re.search(r'\$InstallerVersion = "1\.(9|[1-9][0-9])"', ps)   # ≥ 1.9 (bumped per release)
     assert "function Write-StoicDropFile" in ps and "New-Object System.Text.UTF8Encoding($false)" in ps
     assert "[IO.File]::WriteAllText($Path, $text, (New-Object System.Text.UTF8Encoding($false)))" in ps
     body = ps[ps.index("function Install-Stoic"):]

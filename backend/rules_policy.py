@@ -1,0 +1,238 @@
+"""Phase 3 (U12 U13 U14) — rules-based signed policy + automatic admission.
+
+Instead of a signed list of account ids (one GitHub workflow + release + two approvals per account), the
+operator signs RULES once: demo_only, max_accounts_per_user, allowed_brokers, risk caps, expiry. v2 signature
+(purpose "policy-rules") and installation-id binding stay. Accounts that satisfy the rules are ADMITTED
+automatically (audited with the evidence); real-money accounts wait for ONE in-app operator approval
+(step-up: password + authenticator). Policies load from `policies/*.json` at startup or by admin upload —
+no release. Fail closed: anything unevaluable → not admitted."""
+from __future__ import annotations
+
+import json
+import logging
+import os
+import re
+from datetime import datetime, timedelta, timezone
+
+from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
+
+SCHEMA = "stoic.policy-rules/v1"
+PURPOSE = "policy-rules"
+STATE_ID = "rules_policy"
+POLICIES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "policies")
+BODY_FIELDS = ("schema", "installation_id", "environment", "policy_version", "demo_only", "max_accounts_per_user",
+               "allowed_brokers", "risk_caps", "reason", "issuer", "issued_at", "expires_at", "nonce")
+VERSION_RE = r"^[A-Za-z0-9._-]{1,64}$"
+SYSTEM_ACTOR = "system:rules"
+
+
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def body(pol: dict) -> bytes:
+    b = {k: pol.get(k) for k in BODY_FIELDS}
+    b["demo_only"] = bool(b.get("demo_only"))
+    b["allowed_brokers"] = sorted(str(x).strip().lower() for x in (b.get("allowed_brokers") or []))
+    b["risk_caps"] = {k: b["risk_caps"][k] for k in sorted(b.get("risk_caps") or {})}
+    return json.dumps(b, sort_keys=True, separators=(",", ":")).encode()
+
+
+def problems(pol: dict, *, now: datetime | None = None) -> list:
+    from inventory_projection import (DEMO_POLICY_MAX_DAYS, POLICY_MAX_DAYS, environment_label, installation_id)
+    from release_signing import verify_hex
+    now = now or _now()
+    errs = []
+    if pol.get("schema") != SCHEMA:
+        errs.append(f"schema must be {SCHEMA}")
+    if not re.match(VERSION_RE, str(pol.get("policy_version") or "")):
+        errs.append("policy_version invalid")
+    want = installation_id()
+    if want and pol.get("installation_id") != want:
+        errs.append("installation_id does not name this installation")
+    if pol.get("environment") != environment_label():
+        errs.append(f"environment must be {environment_label()}")
+    cap = pol.get("max_accounts_per_user")
+    if not isinstance(cap, int) or cap < 1 or cap > 50:
+        errs.append("max_accounts_per_user must be 1..50")
+    if not isinstance(pol.get("allowed_brokers"), list) or not pol.get("allowed_brokers"):
+        errs.append("allowed_brokers must be a non-empty list ('*' = any registry broker)")
+    rc = pol.get("risk_caps") or {}
+    for k in ("max_risk_pct", "max_daily_loss_pct"):
+        v = rc.get(k)
+        if v is not None and not (isinstance(v, (int, float)) and 0 < v <= 100):
+            errs.append(f"risk_caps.{k} must be 0 < x <= 100")
+    try:
+        issued = datetime.fromisoformat(str(pol.get("issued_at")).replace("Z", "+00:00"))
+        exp = datetime.fromisoformat(str(pol.get("expires_at")).replace("Z", "+00:00"))
+        days = (exp - issued).total_seconds() / 86400
+        limit = DEMO_POLICY_MAX_DAYS if pol.get("demo_only") else POLICY_MAX_DAYS
+        if days <= 0 or days > limit:
+            errs.append(f"expires_at must be within 1..{limit} days of issued_at")
+        if exp <= now:
+            errs.append("policy already expired")
+    except (TypeError, ValueError):
+        errs.append("issued_at/expires_at must be ISO-8601")
+    if not pol.get("nonce") or not pol.get("issuer") or not str(pol.get("reason") or "").strip():
+        errs.append("nonce, issuer and reason are required")
+    sig = pol.get("signature_hex")
+    if not sig:
+        errs.append("signature_hex missing")
+    elif not errs and not verify_hex(body(pol), str(sig), purpose=PURPOSE):
+        errs.append("signature does not verify under the release key")
+    return errs
+
+
+async def active(db) -> dict | None:
+    pol = await db.platform_state.find_one({"_id": STATE_ID})
+    if not pol:
+        return None
+    try:
+        if datetime.fromisoformat(str(pol["expires_at"]).replace("Z", "+00:00")) <= _now():
+            return {**pol, "expired": True}
+    except (KeyError, ValueError):
+        return None
+    return pol
+
+
+async def activate(db, pol: dict, *, actor: str, source: str) -> dict:
+    """Verify, replay-check the nonce, store as the ONE active rules policy, audit. Raises 422 on problems."""
+    errs = problems(pol)
+    if errs:
+        raise HTTPException(status_code=422, detail={"code": "rules_policy_invalid", "problems": errs})
+    if await db.policy_migration_nonces.find_one({"_id": str(pol["nonce"])}):
+        raise HTTPException(status_code=409, detail={"code": "rules_policy_replayed"})
+    await db.policy_migration_nonces.insert_one({"_id": str(pol["nonce"]), "at": _now().isoformat(), "kind": "rules"})
+    doc = {k: pol.get(k) for k in BODY_FIELDS}
+    doc.update({"_id": STATE_ID, "signature_hex": pol["signature_hex"], "activated_at": _now().isoformat(),
+                "activated_by": actor, "source": source})
+    prev = await db.platform_state.find_one({"_id": STATE_ID}, {"policy_version": 1})
+    await db.platform_state.replace_one({"_id": STATE_ID}, doc, upsert=True)
+    from audit_chain import append_chained
+    await append_chained(db, {"actor_email": actor, "action": "rules_policy_activated", "target_kind": "platform",
+                              "target_id": STATE_ID, "reason": str(pol.get("reason")), "at": doc["activated_at"],
+                              "meta": {"policy_version": pol["policy_version"], "previous": (prev or {}).get("policy_version"),
+                                       "demo_only": bool(pol.get("demo_only")), "max_accounts_per_user": pol["max_accounts_per_user"],
+                                       "allowed_brokers": pol["allowed_brokers"], "risk_caps": pol.get("risk_caps") or {},
+                                       "expires_at": pol["expires_at"], "source": source}})
+    logger.info("rules policy %s activated (%s)", pol["policy_version"], source)
+    return doc
+
+
+async def load_from_repo(db) -> dict | None:
+    """U13 — startup: the newest valid policy file under policies/ that is not yet active becomes active
+    (no release needed: the file is signed, the server only verifies). Invalid files are logged, never applied."""
+    if not os.path.isdir(POLICIES_DIR):
+        return None
+    cur = await db.platform_state.find_one({"_id": STATE_ID}, {"policy_version": 1, "issued_at": 1})
+    best = None
+    for name in sorted(os.listdir(POLICIES_DIR)):
+        if not name.endswith(".json"):
+            continue
+        try:
+            pol = json.load(open(os.path.join(POLICIES_DIR, name), encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            logger.warning("rules policy file %s unreadable: %s", name, e)
+            continue
+        if problems(pol):
+            logger.info("rules policy file %s skipped: %s", name, problems(pol)[:2])
+            continue
+        if best is None or str(pol.get("issued_at")) > str(best.get("issued_at")):
+            best = pol
+    if not best or (cur and str(cur.get("issued_at") or "") >= str(best.get("issued_at"))):
+        return None
+    if await db.policy_migration_nonces.find_one({"_id": str(best["nonce"])}):
+        return None
+    return await activate(db, best, actor="system:policies-dir", source="repo")
+
+
+# ── admission ─────────────────────────────────────────────────────────────────────────────────────────
+def broker_allowed(pol: dict, broker: str) -> bool:
+    allowed = {str(x).strip().lower() for x in (pol.get("allowed_brokers") or [])}
+    b = str(broker or "").strip().lower()
+    if "*" in allowed:
+        from broker_presets import BROKER_PRESETS
+        return b in {p["broker"].lower() for p in BROKER_PRESETS} or b in allowed
+    return b in allowed
+
+
+def evaluate_admission(acc: dict, pol: dict, *, user_account_count: int, bot_cfg: dict | None = None) -> dict:
+    """Pure. {'state': admitted|pending_operator|blocked, 'reason', 'checks'} — fail closed."""
+    from broker_env import attested_environment, broker_reports_real
+    if pol.get("expired"):
+        return {"state": "blocked", "reason": "rules policy expired — operator must activate a new one", "checks": {}}
+    env = attested_environment(acc)
+    checks = {
+        "broker_allowed": broker_allowed(pol, acc.get("broker")),
+        "within_account_cap": user_account_count <= int(pol.get("max_accounts_per_user") or 0),
+        "demo_attested": env == "DEMO",
+        "not_real_money_reported": not broker_reports_real(acc),
+    }
+    rc = pol.get("risk_caps") or {}
+    if bot_cfg is not None and rc.get("max_risk_pct") is not None:
+        checks["risk_within_cap"] = float(bot_cfg.get("risk_per_trade_pct") or bot_cfg.get("risk_pct") or 0) <= float(rc["max_risk_pct"])
+    if not checks["broker_allowed"]:
+        return {"state": "blocked", "reason": f"broker {acc.get('broker')} is not in the policy's allowed brokers", "checks": checks}
+    if not checks["within_account_cap"]:
+        return {"state": "blocked", "reason": f"more than {pol.get('max_accounts_per_user')} account(s) for this user", "checks": checks}
+    if checks.get("risk_within_cap") is False:
+        return {"state": "blocked", "reason": f"risk per trade above the policy cap {rc.get('max_risk_pct')}%", "checks": checks}
+    if env == "DEMO" and checks["not_real_money_reported"]:
+        return {"state": "admitted", "reason": "demo account within the rules — admitted automatically", "checks": checks}
+    if pol.get("demo_only"):
+        return {"state": "blocked", "reason": "demo-only policy — this account is not an attested DEMO account", "checks": checks}
+    return {"state": "pending_operator", "reason": "real money needs one operator approval (password + authenticator)", "checks": checks}
+
+
+async def sync_admission(db, acc: dict) -> dict | None:
+    """Heartbeat / creation hook: compute, persist on change, audit. Operator approvals are never overwritten
+    while their conditions hold; a broker-reported real mode on an auto-admitted demo account revokes it."""
+    pol = await active(db)
+    if not pol:
+        return None
+    n = await db.accounts.count_documents({"user_id": acc.get("user_id"), "mode": {"$ne": "paper"}})
+    cfg = await db.bot_configs.find_one({"account_id": str(acc["_id"])}, {"risk_per_trade_pct": 1, "risk_pct": 1})
+    d = evaluate_admission(acc, pol, user_account_count=n, bot_cfg=cfg)
+    cur = acc.get("admission") or {}
+    if cur.get("state") == "admitted" and cur.get("by") not in (SYSTEM_ACTOR, None) and d["state"] == "pending_operator":
+        return cur                                                     # operator-approved real-money account stays admitted
+    if cur.get("state") == d["state"] and cur.get("policy_version") == pol.get("policy_version"):
+        return cur
+    now = _now().isoformat()
+    new = {"state": d["state"], "reason": d["reason"], "by": SYSTEM_ACTOR, "at": now,
+           "policy_version": pol.get("policy_version"), "checks": d["checks"]}
+    await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"admission": new}})
+    acc["admission"] = new
+    from audit_chain import append_chained
+    await append_chained(db, {"actor_email": SYSTEM_ACTOR, "action": f"account_admission_{d['state']}", "target_kind": "account",
+                              "target_id": str(acc["_id"]), "reason": d["reason"], "at": now,
+                              "meta": {"policy_version": pol.get("policy_version"), "checks": d["checks"], "previous": cur.get("state")}})
+    return new
+
+
+async def operator_approve(db, acc: dict, *, approver_email: str) -> dict:
+    """Real money: ONE in-app approval (caller enforced step-up). Refused for demo-only policies."""
+    pol = await active(db)
+    if not pol or pol.get("expired"):
+        raise HTTPException(status_code=409, detail={"code": "no_active_rules_policy"})
+    if pol.get("demo_only"):
+        raise HTTPException(status_code=409, detail={"code": "demo_only_policy", "message": "the active policy admits demo accounts only"})
+    n = await db.accounts.count_documents({"user_id": acc.get("user_id"), "mode": {"$ne": "paper"}})
+    d = evaluate_admission(acc, pol, user_account_count=n)
+    if d["state"] == "blocked":
+        raise HTTPException(status_code=409, detail={"code": "admission_blocked", "message": d["reason"]})
+    now = _now().isoformat()
+    new = {"state": "admitted", "reason": "real-money account approved by the operator", "by": approver_email, "at": now,
+           "policy_version": pol.get("policy_version"), "checks": d["checks"]}
+    await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"admission": new}})
+    from audit_chain import append_chained
+    await append_chained(db, {"actor_email": approver_email, "action": "account_admission_operator_approved", "target_kind": "account",
+                              "target_id": str(acc["_id"]), "reason": new["reason"], "at": now,
+                              "meta": {"policy_version": pol.get("policy_version"), "checks": d["checks"]}})
+    return new
+
+
+def days(n: int) -> timedelta:
+    return timedelta(days=n)

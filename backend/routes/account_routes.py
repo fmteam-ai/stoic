@@ -505,6 +505,21 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
     return _serialize(doc)
 
 
+@router.get("/{account_id}/status-line")
+async def account_status_line(account_id: str, user=Depends(get_current_user)):
+    """U15 (Phase 4) — one line, one fix button; internals behind "Why?"."""
+    import rules_policy as rp
+    import status_line
+    db = get_db()
+    oid = parse_object_id(account_id, "Account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    cfg = await db.bot_configs.find_one({"account_id": account_id}, {"active": 1})
+    rules = await rp.active(db)
+    return status_line.derive(acc, bot_active=bool((cfg or {}).get("active")), rules_active=bool(rules and not rules.get("expired")))
+
+
 @router.post("/{account_id}/adopt-reported-server")
 async def adopt_reported_server(account_id: str, request: Request, user=Depends(get_current_user)):
     """M122-P2 — the token-authenticated EA reports a different server NAME for the SAME MT5 login
@@ -715,6 +730,11 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
     # U11 (Phase 1) — exactly one bot, bound to this account, default profile, inactive until Start
     from bot_inventory import ensure_account_bot
     await ensure_account_bot(db, user["id"], str(doc["_id"]))
+    try:
+        import rules_policy as _rp
+        await _rp.sync_admission(db, doc)       # Phase 3 — admission state from the moment the account exists
+    except Exception as _sw:  # noqa: BLE001
+        logging.getLogger("accounts").warning("admission sync at creation failed: %s", _sw)
     out = _serialize(doc)
     if not is_paper:
         # A10-5 — the plaintext is shown exactly ONCE here (hash only in the DB); afterwards

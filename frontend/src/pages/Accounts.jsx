@@ -5,6 +5,7 @@ import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 import { AddAccountWizard } from "@/components/AddAccountWizard";
 import { EditAccountDialog } from "@/components/EditAccountDialog";
+import { StatusLine } from "@/components/StatusLine";
 import { VpsOfferButton } from "@/components/VpsOffer";
 import { InstallProgressChip } from "@/components/InstallProgressPanel";
 import { TrustedTerminals } from "@/components/TrustedTerminals";
@@ -579,6 +580,12 @@ export default function Accounts() {
                                 <div key={a.id} id={`account-${a.id}`}
                                     className={`border ${a.id === focusId ? "border-[#FFD700] shadow-[0_0_0_1px_#FFD700]" : "border-[#1F1F1F]"} bg-[#0A0A0A] p-5`}
                                     data-testid={`account-row-${a.account_number}`}>
+                                    <StatusLine account={a} onFix={(fix) => {
+                                        // U15 — one fix button: route to the one thing that fixes this state
+                                        if (fix.action === "start") patchAccount(a.id, { trading_enabled: true }, "Trading started");
+                                        else if (fix.action === "adopt_server") api.post(`/accounts/${a.id}/adopt-reported-server`).then(load).catch(e => toast.error(formatApiError(e)));
+                                        else document.querySelector(`[data-testid="repair-btn-${a.id}"], [data-testid="quick-install-generate-${a.id}"], [data-testid="quick-trust-btn-${a.id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+                                    }} />
                                     {a.broker_account_mismatch && (() => {
                                         // M122-P2.3 — same login, different server NAME is a registration typo, not a wrong terminal
                                         const serverMismatch = /broker server mismatch/i.test(a.broker_account_mismatch_reason || "");

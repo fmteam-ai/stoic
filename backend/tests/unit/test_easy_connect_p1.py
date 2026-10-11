@@ -78,7 +78,7 @@ def test_install_progress_turns_flags_into_the_exact_fix():
 
 def test_installer_v1_5_zero_touch_files_and_restart():
     ps = _read("backend", "static", "STOIC-Installer.ps1")
-    assert '$InstallerVersion = "1.8"' in ps
+    assert re.search(r'\$InstallerVersion = "1\.(9|[1-9][0-9])"', ps)   # ≥ 1.9 (bumped per release)
     assert "SecurityProtocolType]::Tls12" in ps
     assert "function Get-StoicRunningTerminal" in ps and "Get-Process terminal64" in ps
     assert "STOIC-Server.txt" in ps and "ServerUrl=$" not in ps and "stoic.set" in ps     # N110-2 — preset carries no ServerUrl
@@ -101,7 +101,7 @@ def test_pairing_code_lasts_an_hour_and_ui_says_new_code():
     assert sr.PAIRING_TTL_MINUTES == 60
     panel = _read("frontend", "src", "components", "QuickInstallPanel.jsx")
     assert "NEW CODE" in panel and "REGENERATE TOKEN" not in panel
-    assert "Nothing to type in the EA inputs" in panel
+    assert "nothing to click" in panel and "drag EmergentTradingBridge onto any chart yourself" in panel
     assert re.search(r"ServerUrl set to this server", _read("backend", "install_progress.py")) is None
 
 
@@ -168,7 +168,7 @@ def test_installer_hash_pin_in_one_liner_and_endpoint():
     assert "TrimStart([char]0xFEFF)" in cmd                             # served file carries a UTF-8 BOM
     assert '@api_router.get("/setup/installer.sha256")' in _read("backend", "server.py")
     sr = _read("backend", "routes", "setup_routes.py")
-    assert '"installer_sha256": sha' in sr and '"install_command": install_command(base, token, sha)' in sr
+    assert '"installer_sha256": sha' in sr and '"install_command": install_command(base, token, sha, login=account.get("account_number")' in sr
     panel = _read("frontend", "src", "components", "QuickInstallPanel.jsx")
     assert "pin?.install_command" in panel and "quick-install-hash-pin" in panel
 

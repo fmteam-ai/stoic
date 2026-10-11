@@ -59,7 +59,7 @@ async def list_findings(status: str | None = None, severity: str | None = None, 
     if status:
         q["status"] = {"$in": status.split(",")}
     else:
-        q["status"] = {"$in": ["open", "contained", "acknowledged"]}
+        q["status"] = {"$in": ["open", "contained", "acknowledged"]}      # O5 — `info` (no-data) findings only on request
     if severity:
         q["severity"] = {"$in": severity.split(",")}
     if area:

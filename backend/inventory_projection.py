@@ -133,7 +133,32 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
     if raw_bots["null_account_active"] > 0:
         violations.append(f"{raw_bots['null_account_active']} ACTIVE bot configuration(s) with no account id")
     structural = list(violations)
-    if exp:
+    # Phase 3 (U12/U14) — an active RULES policy replaces the fixed-count expectation: violations are rule
+    # breaches (enabled account not admitted, demo-only breached, per-user cap), never "ids differ from the set"
+    import rules_policy as _rp
+    rules = await _rp.active(db)
+    if rules:
+        counts["rules_policy"] = rules.get("policy_version")
+        if rules.get("expired"):
+            violations.append(f"rules policy {rules.get('policy_version')} expired {str(rules.get('expires_at'))[:10]} — activate a new signed policy")
+        by_user: dict = {}
+        for a in docs:
+            if a.get("mode") != "paper":
+                by_user[a.get("user_id")] = by_user.get(a.get("user_id"), 0) + 1
+        over = [u for u, n in by_user.items() if n > int(rules.get("max_accounts_per_user") or 0)]
+        if over:
+            violations.append(f"{len(over)} user(s) above the policy cap of {rules.get('max_accounts_per_user')} account(s)")
+        not_admitted = [a.get("label") or str(a["_id"]) for a in docs
+                        if a.get("trading_enabled") and a.get("mode") != "paper" and (a.get("admission") or {}).get("state") != "admitted"]
+        if not_admitted:
+            violations.append("enabled account(s) not admitted by the rules policy: " + ", ".join(not_admitted[:3]))
+        if rules.get("demo_only"):
+            from broker_env import attested_environment as _ae
+            not_demo = [a.get("label") or str(a["_id"]) for a in docs
+                        if a.get("trading_enabled") and a.get("mode") != "paper" and _ae(a) != "DEMO"]
+            if not_demo:
+                violations.append("demo-only policy but enabled account(s) not attested DEMO: " + ", ".join(not_demo[:3]))
+    if exp and not rules:
         expiry = policy_expiry(exp)
         if expiry["expired"]:
             violations.append(f"signed policy {exp.get('policy_version')} expired {expiry['expires_at'][:10]} — inventory close-only until a new signed policy is approved")   # A16-4
@@ -164,6 +189,18 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
                 violations.append("enabled account ids differ from the approved set")
     h = inventory_hash(rows)
     approved = await db.inventory_config_events.find_one({"approved": True}, sort=[("at", -1)])
+    if rules and not rules.get("expired") and not blocking_violations(violations) and (not approved or approved.get("inventory_hash") != h):
+        # U14 — under a rules policy the inventory approval is automatic once every enabled account is admitted:
+        # the configuration event is recorded (audited) by the system, no propose/confirm round
+        ids_now = sorted(r["account_id"] for r in rows if r["enabled"])
+        approved = {"inventory_hash": h, "approved": True, "actor": _rp.SYSTEM_ACTOR, "at": _now(),
+                    "note": f"auto-approved under rules policy {rules.get('policy_version')}", "account_ids": ids_now,
+                    "approval_mode": "rules_policy", "policy_version": rules.get("policy_version")}
+        await db.inventory_config_events.insert_one(dict(approved))
+        from audit_chain import append_chained
+        await append_chained(db, {"actor_email": _rp.SYSTEM_ACTOR, "action": "inventory_config_auto_approved", "target_kind": "platform",
+                                  "target_id": "inventory", "reason": approved["note"], "at": approved["at"],
+                                  "meta": {"inventory_hash": h, "account_ids": ids_now, "policy_version": rules.get("policy_version")}})
     unapproved_change = bool(approved) and approved.get("inventory_hash") != h
     if unapproved_change:
         violations.append(V_UNAPPROVED_CHANGE)

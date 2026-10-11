@@ -290,3 +290,54 @@ async def set_platform_ep(payload: dict, request: Request,
     return await set_platform_level(db, level,
                                     str(payload.get("reason") or ""),
                                     user["id"])
+
+
+# ── Phase 3 — rules-based signed policy (U12 U13 U14) ────────────────────────────────────────────────
+async def _admin(user=Depends(get_current_user)):
+    if not _admin_ok(user):
+        raise HTTPException(status_code=403, detail="admin + enrolled 2FA required")
+    return user
+
+
+@router.get("/policy")
+async def rules_policy_active(user=Depends(_admin)):
+    _ = user
+    import rules_policy as rp
+    pol = await rp.active(get_db())
+    if not pol:
+        return {"active": None, "schema": rp.SCHEMA}
+    return {"active": {k: pol.get(k) for k in rp.BODY_FIELDS + ("activated_at", "activated_by", "source", "expired")}, "schema": rp.SCHEMA}
+
+
+@router.post("/policy/upload")
+async def rules_policy_upload(payload: dict, request: Request, user=Depends(_admin)):
+    """U13 — activate a signed rules policy WITHOUT a release: admin + step-up; the server only verifies
+    (release key v2, installation id, environment, expiry, nonce replay)."""
+    import rules_policy as rp
+    from step_up import audit_event, require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    pol = payload.get("policy") if isinstance(payload.get("policy"), dict) else payload
+    doc = await rp.activate(db, pol, actor=user["email"], source="upload")
+    await audit_event(db, user["id"], "rules_policy_uploaded", {"policy_version": doc["policy_version"]}, request)
+    return {"ok": True, "policy_version": doc["policy_version"], "expires_at": doc["expires_at"]}
+
+
+@router.post("/admission/{account_id}/approve")
+async def admission_approve(account_id: str, request: Request, user=Depends(_admin)):
+    """Real money needs a human: ONE in-app approval with password + authenticator (step-up), audited."""
+    import rules_policy as rp
+    from bson import ObjectId
+    from step_up import audit_event, require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    try:
+        acc = await db.accounts.find_one({"_id": ObjectId(account_id)})
+    except Exception:  # noqa: BLE001
+        acc = None
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    new = await rp.operator_approve(db, acc, approver_email=user["email"])
+    await audit_event(db, user["id"], "account_admission_operator_approved", {"account_id": account_id}, request)
+    return {"ok": True, "admission": new}
+

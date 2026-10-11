@@ -50,14 +50,17 @@ async def open_or_update(db, finding: dict, *, retention_days: int = 180) -> dic
     """One record per dedup_key while open: repeats bump occurrences / last_seen (and
     raise severity if the new one is worse). Returns {id, created: bool}."""
     now = _now()
-    cur = await db.security_findings.find_one({"dedup_key": finding["dedup_key"], "status": {"$in": list(OPEN_STATES)}})
+    cur = await db.security_findings.find_one({"dedup_key": finding["dedup_key"], "status": {"$in": list(OPEN_STATES) + ["info"]}})
     if cur:
         sets = {"last_seen": now, "what_happened": finding["what_happened"], "evidence": finding["evidence"]}
         if SEVERITIES.index(finding["severity"]) > SEVERITIES.index(cur.get("severity", "low")):
             sets["severity"] = finding["severity"]
         await db.security_findings.update_one({"_id": cur["_id"]}, {"$set": sets, "$inc": {"occurrences": 1}})
         return {"id": str(cur["_id"]), "created": False}
-    doc = {**finding, "status": "open", "action_taken": "none — alert only", "fixed": "no",
+    # O5 (Phase 4) — a check that merely lacks input (no scan stored, no counters yet) is not an issue:
+    # it is filed as `info` (not an OPEN state, hidden from the ops console by default) and never re-bumped
+    informational = bool((finding.get("evidence") or {}).get("no_data")) and finding.get("severity") == "low"
+    doc = {**finding, "status": "info" if informational else "open", "action_taken": "none — alert only", "fixed": "no",
            "first_seen": now, "last_seen": now, "occurrences": 1, "resolved_at": None, "resolved_by": None,
            "expires_at": datetime.now(timezone.utc) + timedelta(days=retention_days)}
     res = await db.security_findings.insert_one(doc)

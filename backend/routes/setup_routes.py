@@ -62,6 +62,7 @@ PAIRING_TTL_MINUTES = 60   # Easy-Connect P1.3 — one hour (still single-use); 
 # ─────────────── Models ───────────────
 class PairingTokenRequest(BaseModel):
     account_id: str = Field(min_length=1)
+    repair: bool = False     # U17 — Repair: the one-liner carries -Repair (files rewritten, EA re-attached, MT5 restarted)
 
 
 class DeviceKey(BaseModel):
@@ -132,8 +133,35 @@ async def issue_pairing_token(
         "account_label": account.get("label"),
         "broker": account.get("broker"),
         "installer_sha256": sha,
-        "install_command": install_command(base, token, sha) if base else None,
+        "install_command": install_command(base, token, sha, login=account.get("account_number"),
+                                           repair=bool(getattr(payload, "repair", False))) if base else None,
+        "repair": bool(getattr(payload, "repair", False)),
+        "mt5_login": account.get("account_number"),
     }
+
+
+@router.get("/setup/installer.cmd")
+async def installer_cmd(request: Request, token: str = "", login: str = "", repair: int = 0):
+    """U7 — double-clickable launcher (no Authenticode certificate available → the .cmd runs the sha256-pinned
+    one-liner in Windows PowerShell with -ExecutionPolicy Bypass for THIS process only). Served per pairing so
+    the token, login and repair flag are baked in; the token is the single-use 15-minute pairing token."""
+    from connect_service import _base_url, install_command, installer_sha256
+    from fastapi.responses import Response
+    base = _base_url(request)
+    if not base or not token or not __import__("re").match(r"^[A-Za-z0-9_-]{16,128}$", token):
+        raise HTTPException(status_code=400, detail="pairing token required")
+    cmd = install_command(base, token, installer_sha256(), login=login or None, repair=bool(repair))
+    # cmd.exe quoting: the whole PowerShell command goes in one double-quoted -Command argument; inner double
+    # quotes are escaped for PowerShell as \" (cmd passes them through)
+    escaped = cmd.replace('"', '\\"')
+    lines = ["@echo off", "title STOIC Setup",
+             "echo STOIC Setup - this window installs the STOIC bridge into your MetaTrader 5 and closes when done.",
+             "echo (Windows SmartScreen may ask once: choose Run. The script is hash-pinned to the STOIC server.)",
+             'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' + escaped + '"',
+             "echo.", "pause"]
+    body = "\r\n".join(lines) + "\r\n"
+    return Response(content=body, media_type="application/x-bat",
+                    headers={"Content-Disposition": "attachment; filename=STOIC-Setup.cmd", "Cache-Control": "no-store"})
 
 
 # ─────────────── Claim a pairing token (UNauth'd) ───────────────

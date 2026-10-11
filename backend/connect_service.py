@@ -60,17 +60,25 @@ def installer_sha256() -> str:
     return _INSTALLER_HASH["sha256"]
 
 
-def install_command(base_url: str, token: str, sha256: str | None = None) -> str:
+def install_command(base_url: str, token: str, sha256: str | None = None, *, login: str | None = None,
+                    repair: bool = False) -> str:
     """Easy-Connect hash pin: the one-liner downloads the installer, verifies its SHA-256 against the value
-    pinned at issue time and refuses to run on a mismatch (PowerShell 5.1 and 7)."""
+    pinned at issue time and refuses to run on a mismatch (PowerShell 5.1 and 7).
+    Phase 2 — `-Login <mt5 login>` lets the installer pick the terminal by itself (U4); `-Repair` rewrites the
+    drop files, re-attaches the EA and restarts MT5 without questions (U17)."""
     sha256 = sha256 or installer_sha256()
+    extra = ""
+    if login and str(login).strip().isdigit():
+        extra += f' -Login {str(login).strip()}'
+    if repair:
+        extra += " -Repair"
     # N110-5 — TLS 1.2 BEFORE the first download (Server 2012 R2/2016 default .NET would fail the iwr)
     return (f'[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; '
             f'$r=iwr "{base_url}/api/setup/installer.ps1" -UseBasicParsing; '
             f'$h=(Get-FileHash -InputStream $r.RawContentStream -Algorithm SHA256).Hash; '
             f'if($h -ne "{sha256}"){{throw "STOIC installer hash mismatch ($h) - do not run"}}; '
             f'iex ([Text.Encoding]::UTF8.GetString($r.RawContentStream.ToArray()).TrimStart([char]0xFEFF)); '
-            f'Install-Stoic -Token "{token}" -ServerUrl "{base_url}"')
+            f'Install-Stoic -Token "{token}" -ServerUrl "{base_url}"{extra}')
 
 
 async def start_connect(db, user: dict, payload: dict, request=None) -> dict:
@@ -96,7 +104,7 @@ async def start_connect(db, user: dict, payload: dict, request=None) -> dict:
     return {"account_id": str(account_id),
             "pairing_token": pairing["token"],
             "pairing_expires_at": pairing["expires_at"],
-            "install_command": install_command(base, pairing["token"]),
+            "install_command": install_command(base, pairing["token"], login=acc_payload.account_number),
             "next": "Run the install command in PowerShell on the Windows "
                     "machine/VPS where MT5 runs, then poll the status "
                     "endpoint — STOIC handles the EA, certificates and "

@@ -729,8 +729,12 @@ async def heartbeat(payload: BridgeHeartbeat):
         _fresh = {**acc, **set_doc}
         for _k in unset_doc:
             _fresh.pop(_k, None)
-        await auto_attest.apply(db, _fresh)
-    except Exception as _sw:  # noqa: BLE001 — attestation is derived state; the heartbeat must still land
+        _res = await auto_attest.apply(db, _fresh)
+        if _res == "granted":
+            _fresh = await db.accounts.find_one({"_id": acc["_id"]}) or _fresh
+        import rules_policy as _rp
+        await _rp.sync_admission(db, _fresh)                 # Phase 3 — admitted automatically under the rules policy
+    except Exception as _sw:  # noqa: BLE001 — attestation/admission are derived state; the heartbeat must still land
         record_swallow("bridge", "auto_attest", _sw)
 
     # EA-deployment machine + execution-owner lease renewal (iter-114).

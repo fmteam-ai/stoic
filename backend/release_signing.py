@@ -55,13 +55,14 @@ PURPOSES = {
     "ea-release":        b"stoic:ea-release:v1\0",        # CI only (release token)
     "model-manifest":    b"stoic:model-manifest:v1\0",    # CI only (release token)
     "policy-migration":  b"stoic:policy-migration:v1\0",  # operator/CI (release token) — inventory policy transitions
+    "policy-rules":      b"stoic:policy-rules:v1\0",      # operator/CI (release token) — Phase 3 rules-based policy
     "acceptance-bundle": b"stoic:acceptance-bundle:v1\0", # API (bundle token)
     "artifact-manifest": b"stoic:artifact-manifest:v1\0", # API (bundle token) — N101-5 EA/agent artifact manifests
     "audit-anchor":      b"stoic:audit-anchor:v1\0",      # API
     "differentiation":   b"stoic:differentiation:v1\0",   # API
     "canary":            b"stoic:canary:v1\0",            # API (chaos drill round-trip)
 }
-RELEASE_PURPOSES = {"ea-release", "model-manifest", "policy-migration"}
+RELEASE_PURPOSES = {"ea-release", "model-manifest", "policy-migration", "policy-rules"}
 API_PURPOSES = set(PURPOSES) - RELEASE_PURPOSES   # what a running trading API may ask the signer for
 
 

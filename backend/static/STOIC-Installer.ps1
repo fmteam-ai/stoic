@@ -19,7 +19,8 @@
 #   4. Copies it into the terminal's MQL5\Experts\ folder, writes the bridge token into
 #      MQL5\Files\STOIC-Token.txt (the EA reads it on attach if no token is hard-coded)
 #      and installs / compiles the .ex5.
-#   5. Prints the ONE manual step: allow the STOIC URL for WebRequest in MT5
+#   5. Prints the ONE manual step: allow the STOIC URL for WebRequest in MT5 (MetaQuotes keeps that list
+#      encrypted — no config file or startup ini can set it; the dashboard shows the guided fix + live check)
 #      (Tools → Options → Expert Advisors). Writing it into terminal.ini is ineffective —
 #      MT5 keeps that setting elsewhere and a running terminal overwrites the file (N104-4).
 #
@@ -295,7 +296,7 @@ function Get-StoicChartSymbol {
 
 function Resolve-StoicTerminal {
     # ONE terminal: explicit path / id, the only one found, or the operator's choice. $null = nothing chosen.
-    param([string]$TerminalPath, [string]$TerminalId,
+    param([string]$TerminalPath, [string]$TerminalId, [string]$ExpectedLogin = "",
           [string]$Root = (Join-Path $env:APPDATA "MetaQuotes\Terminal"),
           [string[]]$PortableRoots = @("C:\Program Files", "C:\Program Files (x86)", "$env:LOCALAPPDATA\Programs"),
           [scriptblock]$Prompt = { Read-Host "    terminal number (or re-run with -TerminalPath / -TerminalId)" },
@@ -322,7 +323,25 @@ function Resolve-StoicTerminal {
         Write-Host "    Install MT5 from your broker first, then re-run (or pass -TerminalPath)." -ForegroundColor DarkGray
         return $null
     }
-    if ($found.Count -eq 1) { return $found[0] }
+    if ($found.Count -eq 1) {
+        if ($ExpectedLogin) {
+            $only = Get-StoicTerminalLogin $found[0].FullName
+            if ($only -and "$only" -ne "$ExpectedLogin") {
+                Write-Host "    ! the only terminal found is logged in as #$only, this pairing is for #$ExpectedLogin — log MT5 into #$ExpectedLogin first (continuing: the server checks the login on every heartbeat)" -ForegroundColor Yellow
+            }
+        }
+        return $found[0]
+    }
+    # Phase 2 (U4) — pick the terminal by the MT5 login the pairing belongs to; ask only when none/several match
+    if ($ExpectedLogin) {
+        $byLogin = @($found | Where-Object { (Get-StoicTerminalLogin $_.FullName) -eq "$ExpectedLogin" })
+        if ($byLogin.Count -eq 1) {
+            Write-Host "    ✓ terminal chosen by login #$ExpectedLogin : $($byLogin[0].FullName)" -ForegroundColor Green
+            return $byLogin[0]
+        }
+        if ($byLogin.Count -gt 1) { Write-Host "    $($byLogin.Count) terminals are logged into #$ExpectedLogin — choose below" -ForegroundColor Yellow }
+        else { Write-Host "    no terminal journal shows login #$ExpectedLogin — choose below (log MT5 into that account first)" -ForegroundColor Yellow }
+    }
     # v1.5 — several terminals: the one that is RUNNING is the one the operator is looking at.
     # N110-4 — but it may be logged into ANOTHER account than the pairing code's: show path + login, ask.
     $running = Get-StoicRunningTerminal -Candidates $found
@@ -398,10 +417,15 @@ function Install-Stoic {
         [string]$ChartPeriod = "M15",
         [switch]$NoRestart,
         # Phase 2 VPS Agent — the clone's journal is empty; the agent knows which login this terminal is FOR
-        [string]$TerminalLogin = ""
+        [string]$TerminalLogin = "",
+        # Phase 2 (U4) — the MT5 login the pairing belongs to: the terminal whose journal shows it is chosen
+        # by itself; a prompt only when none or several match
+        [string]$Login = "",
+        # Phase 2 (U17) — Repair: rewrite the drop files, re-attach the EA, restart MT5 — no questions
+        [switch]$Repair
     )
 
-    $InstallerVersion = "1.8"
+    $InstallerVersion = "1.9"
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $ServerUrl = $ServerUrl.TrimEnd('/')
     # N110-2 — the bridge token travels to this host: https only, no exceptions
@@ -417,7 +441,7 @@ function Install-Stoic {
 
     # ── 1. Choose the MT5 terminal — BEFORE the one-time token is spent (N104-1/N104-4) ──
     Write-Host "[1/5] Locating the MetaTrader 5 terminal ..." -ForegroundColor Cyan
-    $terminal = Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId
+    $terminal = Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId -ExpectedLogin $Login
     if (-not $terminal) { return }
     $terminals = @($terminal)
     $terminalLogin = $(if ($TerminalLogin) { $TerminalLogin } else { Get-StoicTerminalLogin $terminal.FullName })
@@ -672,6 +696,14 @@ Period=$ChartPeriod
     if (-not $NoRestart -and $installedTerminals.Count -gt 0) {
         $exe = Get-StoicTerminalExe $terminal.FullName
         if ($exe) {
+            $exeDirNow = Split-Path $exe -Parent
+            $isRunning = @(Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object { try { (Split-Path $_.Path -Parent).TrimEnd('\') -ieq $exeDirNow.TrimEnd('\') } catch { $false } }).Count -gt 0
+            if (-not $isRunning -or $Repair) {
+                # Phase 2 (U6/U17) — MT5 not running: just start it with the EA attached (nothing is at stake);
+                # Repair: the operator asked for exactly this — no questions
+                Write-Host ("    " + $(if ($Repair) { "Repair:" } else { "MT5 is not running:" }) + " starting MetaTrader 5 with the EA on a $chartSymbol chart, Algo Trading ON.") -ForegroundColor White
+                Restart-StoicTerminal -Exe $exe -DataFolder $terminal.FullName -StartupIni (Join-Path $terminal.FullName "stoic-start.ini")
+            } else {
             # N110-3 — opt-in restart (default N) with the consequences spelled out first
             Write-Host "    MT5 can be restarted now so the EA attaches itself to a $chartSymbol chart." -ForegroundColor White
             Write-Host "    ⚠ While MT5 restarts, open positions stay open at the broker but are UNMANAGED (no stops moved, no closes)." -ForegroundColor Yellow
@@ -680,6 +712,7 @@ Period=$ChartPeriod
             $answer = Read-Host "    Restart MetaTrader 5 now? [y/N]"
             if ($answer -match '^[Yy]') { Restart-StoicTerminal -Exe $exe -DataFolder $terminal.FullName -StartupIni (Join-Path $terminal.FullName "stoic-start.ini") }
             else { Write-Host "    Not restarting. Later: `"$exe`" /config:`"$(Join-Path $terminal.FullName 'stoic-start.ini')`"  — or drag the EA onto a chart." -ForegroundColor DarkGray }
+            }
         } else {
             Write-Host "    (terminal64.exe not found for this data folder — attach the EA by hand, see below)" -ForegroundColor DarkGray
         }

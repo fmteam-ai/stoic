@@ -818,6 +818,7 @@ def _env_row(a: dict) -> dict:
     att = a.get("environment_attestation") or {}
     proof = demo_proof(a)
     return {"account_id": str(a["_id"]), "user_id": a.get("user_id"), "label": a.get("label"),
+            "admission": a.get("admission"),                       # Phase 3 — rules-policy admission state
             "broker": a.get("broker"), "server": a.get("broker_server") or a.get("server"),
             "account_number": a.get("account_number"), "account_type": a.get("account_type"),
             "declared": broker_environment(a), "effective": attested_environment(a),
@@ -1085,3 +1086,42 @@ async def admin_email_template_send(template_id: str, payload: dict, user=Depend
     if not res.get("ok"):
         raise HTTPException(status_code=503, detail={"code": "email_send_failed", "message": str(res.get("error"))})
     return res
+
+
+# ── Phase 4 — "Deploy latest release" (one click → deploy-production.yml workflow_dispatch) ─────────────
+@router.post("/admin/deploy/latest")
+async def deploy_latest_release(request: Request, user=Depends(get_current_user)):
+    """Admin + step-up. Resolves the newest v* release tag on GitHub and dispatches `deploy-production.yml`
+    with it (the workflow itself re-verifies tag → SHA → signed release assets, backs up and rolls back).
+    Needs GITHUB_DISPATCH_TOKEN (fine-grained PAT, Actions: read/write on the repo) in backend/.env."""
+    import json as _json
+    import os
+    import urllib.error
+    import urllib.request
+    from auth import require_admin
+    from step_up import audit_event, require_step_up
+    require_admin(user)
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    token = (os.environ.get("GITHUB_DISPATCH_TOKEN") or "").strip()
+    repo = (os.environ.get("GITHUB_REPO") or "").strip()
+    if not token or not repo:
+        raise HTTPException(status_code=503, detail={"code": "deploy_button_not_configured",
+                                                     "message": "set GITHUB_DISPATCH_TOKEN (fine-grained PAT, Actions read/write) and GITHUB_REPO in backend/.env"})
+    hdr = {"Accept": "application/vnd.github+json", "Authorization": f"Bearer {token}", "User-Agent": "stoic-deploy-button",
+           "Content-Type": "application/json"}
+    try:
+        with urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/latest", headers=hdr), timeout=20) as r:
+            tag = _json.loads(r.read().decode())["tag_name"]
+        body = _json.dumps({"ref": "main", "inputs": {"ref": tag}}).encode()
+        with urllib.request.urlopen(urllib.request.Request(f"https://api.github.com/repos/{repo}/actions/workflows/deploy-production.yml/dispatches",
+                                                           data=body, headers=hdr, method="POST"), timeout=20) as r:
+            ok = r.status in (201, 204)
+    except urllib.error.HTTPError as e:
+        raise HTTPException(status_code=502, detail={"code": "github_error", "status": e.code, "message": e.read().decode()[:300]})
+    except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
+        raise HTTPException(status_code=502, detail={"code": "github_unreachable", "message": str(e)[:200]})
+    await audit_event(db, user["id"], "deploy_latest_release_dispatched", {"tag": tag, "repo": repo, "ok": ok}, request)
+    return {"ok": ok, "tag": tag, "workflow": "deploy-production.yml",
+            "watch": f"https://github.com/{repo}/actions/workflows/deploy-production.yml"}
+
