@@ -2,6 +2,10 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## Unreleased — M122 + Simple Onboarding Phases 1–4 (EA v1.64, installer v1.9)
+- **Security audit #19** (`docs/SECURITY_AUDIT_19.md`, scope M122 + onboarding Phases 1–4): CONDITIONAL PASS → both items fixed — SEC-001 (P2) the `.cmd` installer download no longer carries the pairing token in its URL: `pairing-token` issues an opaque 10-min owner-bound download handle (`cmd_download_path`), `GET /setup/installer.cmd?d=…` requires the owner's session, bakes token/login/repair into the file body only and answers `no-store` + `Referrer-Policy: no-referrer`; SEC-002 (P3) `POST /setup/pairing-token` rate-limited 10 / user / 15 min.
+- Status line fix buttons open their dialog on the account card (`StatusFixDialog.jsx`: connect/repair line, trust terminal, adopt reported server, WebRequest guide).
+
 ## v1.60.15 — main124 review fix (no strategy/risk change)
 - **Security audit #18** (`docs/SECURITY_AUDIT_18.md`, scope v1.60.10 → v1.60.15): PASS, two P3 hardening items fixed — SEC-001 the committed `revoked` status in `release/release_key.fingerprint` is enforced by `release_signing.revoked_key_ids()` even before an operator runs `rotate-release-pin.sh --revoke`; SEC-002 `policy-migration.yml` no longer falls back to the revoked v1 key id (unset secret ⇒ repo's `current` line).
 - **M124-1 (P1)** `verify_stack_images` compared every backend container with the pinned registry image, which is wrong for on-host builds (compose builds one image per service — `stoic-worker-trading`, `stoic-worker-security`, … with distinct ids) → every fallback / `--allow-unattested` / untagged / `DEPLOY_MODE=build` / rollback deploy would have failed with a false MIXED STACK. Now: registry deploys compare with the pinned digest (read from the environment or `./.env`, so a jam-resume process is correct too); builds compare each container with the image compose built for that service (`<project>-<service>` or its explicit `image:`). Tests cover both modes incl. distinct per-service ids and the `.env` fallback.

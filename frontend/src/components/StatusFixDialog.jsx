@@ -33,7 +33,7 @@ function CommandBlock({ account, repair }) {
     useEffect(generate, [account.id, repair]);
     if (err) return <div className="text-xs text-[#FF3B30] font-mono" data-testid={`fix-dialog-error-${account.id}`}>{err} <button onClick={generate} className="underline ml-1">retry</button></div>;
     if (!line) return <div className="text-xs text-[#71717A] font-mono flex items-center gap-1" data-testid={`fix-dialog-generating-${account.id}`}><Loader2 className="w-3 h-3 animate-spin" /> generating a hash-pinned one-liner…</div>;
-    const cmdUrl = `${backendBase}/api/setup/installer.cmd?token=${encodeURIComponent(line.token)}&login=${encodeURIComponent(line.mt5_login || "")}&repair=${repair ? 1 : 0}`;
+    const cmdUrl = line.cmd_download_path ? `${backendBase}${line.cmd_download_path}` : null;
     return (
         <div className="space-y-2">
             <div className="flex items-start gap-2">
@@ -43,7 +43,7 @@ function CommandBlock({ account, repair }) {
             </div>
             <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono text-[#71717A]">
                 <span>Paste in PowerShell on the MT5 host · valid {repair ? "15" : "60"} min</span>
-                <a href={cmdUrl} data-testid={`fix-dialog-cmd-${account.id}`} className="text-[#FFD700] underline flex items-center gap-1"><Download className="w-3 h-3" /> or download STOIC-Setup.cmd</a>
+                {cmdUrl && <a href={cmdUrl} data-testid={`fix-dialog-cmd-${account.id}`} className="text-[#FFD700] underline flex items-center gap-1"><Download className="w-3 h-3" /> or download STOIC-Setup.cmd (link valid 10 min)</a>}
                 <button onClick={generate} data-testid={`fix-dialog-regenerate-${account.id}`} className="flex items-center gap-1 hover:text-white"><RefreshCw className="w-3 h-3" /> new line</button>
             </div>
             {line.installer_sha256 && <div className="text-[10px] font-mono text-[#52525B]" data-testid={`fix-dialog-hash-${account.id}`}>INSTALLER SHA-256 {line.installer_sha256.slice(0, 16)}…{line.installer_sha256.slice(-8)} — verified before it runs</div>}

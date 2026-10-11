@@ -58,32 +58,56 @@ def test_u6_mt5_started_without_prompt_when_not_running_or_repair():
 
 
 def test_u7_double_clickable_launcher_served_per_pairing():
+    """SEC-019-001 — the .cmd is resolved from an opaque, owner-bound, 10-min download handle; the pairing token
+    lives only in the file body (never in the URL)."""
     import asyncio
+    from datetime import datetime, timedelta, timezone
     from fastapi import HTTPException
     import routes.setup_routes as sr
+    from tests.unit.fake_mongo import FakeDb
 
     class _Req:
         headers = {"host": "stoicaibot.com", "x-forwarded-proto": "https"}
         url = type("U", (), {"scheme": "https", "hostname": "stoicaibot.com"})()
     import connect_service as cs
-    orig_base, orig_sha = cs._base_url, cs.installer_sha256
+    orig_base, orig_sha, orig_db = cs._base_url, cs.installer_sha256, sr.get_db
     cs._base_url = lambda r=None: "https://stoicaibot.com"
     cs.installer_sha256 = lambda: "b" * 64
+    db = FakeDb()
+    sr.get_db = lambda: db
+    now = datetime.now(timezone.utc)
+    owner, stranger = {"id": "u1"}, {"id": "u2"}
+    tok = "tok_abcdefghijklmnop"
+    db.pairing_tokens.rows.append({"token": tok, "account_id": "a1", "user_id": "u1", "mt5_login": "1083440", "repair": False,
+                                   "download_handle": "h_" + "a" * 20, "download_handle_expires_at": (now + timedelta(minutes=10)).isoformat()})
+    db.pairing_tokens.rows.append({"token": tok + "r", "account_id": "a2", "user_id": "u1", "mt5_login": "1083440", "repair": True,
+                                   "download_handle": "h_" + "b" * 20, "download_handle_expires_at": (now + timedelta(minutes=10)).isoformat()})
+    db.pairing_tokens.rows.append({"token": tok + "x", "account_id": "a3", "user_id": "u1", "mt5_login": "1", "repair": False,
+                                   "download_handle": "h_" + "c" * 20, "download_handle_expires_at": (now - timedelta(minutes=1)).isoformat()})
     try:
-        resp = asyncio.run(sr.installer_cmd(_Req(), token="tok_abcdefghijklmnop", login="1083440", repair=0))
+        resp = asyncio.run(sr.installer_cmd(_Req(), d="h_" + "a" * 20, user=owner))
         body = resp.body.decode()
         assert body.startswith("@echo off\r\n") and "STOIC-Setup.cmd" in resp.headers["content-disposition"]
+        assert resp.headers["cache-control"] == "no-store" and resp.headers["referrer-policy"] == "no-referrer"
         assert 'powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "' in body
         assert 'Install-Stoic -Token \\"tok_abcdefghijklmnop\\" -ServerUrl \\"https://stoicaibot.com\\" -Login 1083440"' in body
         assert ("b" * 64) in body and body.rstrip().endswith("pause")
-        rep = asyncio.run(sr.installer_cmd(_Req(), token="tok_abcdefghijklmnop", login="1083440", repair=1)).body.decode()
+        rep = asyncio.run(sr.installer_cmd(_Req(), d="h_" + "b" * 20, user=owner)).body.decode()
         assert "-Login 1083440 -Repair" in rep
-        with pytest.raises(HTTPException):
-            asyncio.run(sr.installer_cmd(_Req(), token="bad token!", login="", repair=0))
+        for d, who, code in (("bad handle!", owner, 400), ("h_" + "z" * 20, owner, 404), ("h_" + "a" * 20, stranger, 404), ("h_" + "c" * 20, owner, 410)):
+            with pytest.raises(HTTPException) as ei:
+                asyncio.run(sr.installer_cmd(_Req(), d=d, user=who))
+            assert ei.value.status_code == code, d
     finally:
-        cs._base_url, cs.installer_sha256 = orig_base, orig_sha
-    qi = _read("frontend", "src", "components", "QuickInstallPanel.jsx")
-    assert "/api/setup/installer.cmd?token=" in qi and "quick-install-cmd-link-" in qi
+        cs._base_url, cs.installer_sha256, sr.get_db = orig_base, orig_sha, orig_db
+    src = _read("backend", "routes", "setup_routes.py")
+    assert "user=Depends(get_current_user)" in src.split('@router.get("/setup/installer.cmd")')[1].split("\n")[1]
+    assert '"cmd_download_path": f"/api/setup/installer.cmd?d={download_handle}"' in src
+    assert 'rate_limit(db, "pairing_token_issue", f"user:{user[\'id\']}", 10, 900' in src
+    for rel in (("frontend", "src", "components", "QuickInstallPanel.jsx"), ("frontend", "src", "components", "StatusFixDialog.jsx")):
+        fe = _read(*rel)
+        assert "installer.cmd?token=" not in fe and "cmd_download_path" in fe, rel
+    assert "quick-install-cmd-link-" in _read("frontend", "src", "components", "QuickInstallPanel.jsx")
 
 
 def test_u17_repair_button_one_line():

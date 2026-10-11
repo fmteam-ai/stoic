@@ -71,20 +71,21 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
         try {
             const { data } = await api.post("/setup/pairing-token", { account_id: accountId, repair });
             if (repair) {
-                setRepairLine({ command: data.install_command, expires_at: data.expires_at, token: data.token, login: data.mt5_login });
+                setRepairLine({ command: data.install_command, expires_at: data.expires_at, cmdPath: data.cmd_download_path });
                 toast.success("Repair line ready — run it on the MT5 host");
                 return;
             }
             setToken(data.token);
             setExpiresAt(data.expires_at);
-            setPin({ install_command: data.install_command, installer_sha256: data.installer_sha256, token: data.token, login: data.mt5_login });
+            setPin({ install_command: data.install_command, installer_sha256: data.installer_sha256, cmdPath: data.cmd_download_path });
             setPairedAt(null);
             setPairedHost(null);
         } catch (e) {
             toast.error(formatApiError(e));
         } finally { setGenerating(false); }
     };
-    const setupCmdUrl = (tok, login, repair) => `${backendBase}/api/setup/installer.cmd?token=${encodeURIComponent(tok)}&login=${encodeURIComponent(login || "")}&repair=${repair ? 1 : 0}`;
+    // SEC-019-001 — the download URL carries an opaque owner-bound handle, never the pairing token
+    const setupCmdUrl = (cmdPath) => `${backendBase}${cmdPath}`;
     const repairSection = (
         <div className="mt-3 border border-[#1F1F1F] p-3" data-testid={`repair-section-${accountId}`}>
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -100,7 +101,7 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                         <code className="flex-1 text-[10px] font-mono text-[#FFD700] bg-black border border-[#1F1F1F] p-2 break-all select-all" data-testid={`repair-line-${accountId}`}>{repairLine.command}</code>
                         <button onClick={() => copy(repairLine.command, "Repair line")} data-testid={`repair-copy-${accountId}`} className="p-1.5 border border-[#1F1F1F] hover:border-[#FFD700] text-[#A1A1AA] hover:text-[#FFD700]" title="Copy"><Copy className="w-3.5 h-3.5" /></button>
                     </div>
-                    <div className="mt-1 text-[11px] font-mono text-[#71717A]">Paste in PowerShell on the MT5 host (valid 15 min) · or <a className="text-[#FFD700] underline" href={setupCmdUrl(repairLine.token, repairLine.login, true)} data-testid={`repair-cmd-${accountId}`}>download STOIC-Setup.cmd</a> and double-click it there.</div>
+                    <div className="mt-1 text-[11px] font-mono text-[#71717A]">Paste in PowerShell on the MT5 host (valid 15 min){repairLine.cmdPath && <> · or <a className="text-[#FFD700] underline" href={setupCmdUrl(repairLine.cmdPath)} data-testid={`repair-cmd-${accountId}`}>download STOIC-Setup.cmd</a> and double-click it there (link valid 10 min)</>}.</div>
                 </div>
             )}
         </div>
@@ -259,9 +260,9 @@ export function QuickInstallPanel({ accountId, accountLabel, account, onTrusted 
                     )}
                     <div className="text-xs text-[#A1A1AA] space-y-1.5">
                         <div><strong className="text-white">Step 2 —</strong> On the VPS, with MT5 <strong>open and logged in</strong>, open <strong>PowerShell as Administrator</strong> and paste. <span className="text-[#52525B]">No VPS yet?</span> <VpsOfferButton compact testid="quick-install-vps-offer-link" className="align-middle ml-1" />
-                            {pin?.token && (
+                            {pin?.cmdPath && (
                                 <span className="block mt-1" data-testid="quick-install-cmd-download">
-                                    Prefer no typing? <a className="text-[#FFD700] underline" href={setupCmdUrl(pin.token, pin.login, false)} data-testid={`quick-install-cmd-link-${accountId}`}>Download STOIC-Setup.cmd</a> and double-click it on the MT5 host (same hash-pinned command; SmartScreen may ask once — choose Run).
+                                    Prefer no typing? <a className="text-[#FFD700] underline" href={setupCmdUrl(pin.cmdPath)} data-testid={`quick-install-cmd-link-${accountId}`}>Download STOIC-Setup.cmd</a> and double-click it on the MT5 host (same hash-pinned command; link valid 10 min; SmartScreen may ask once — choose Run).
                                 </span>
                             )}
                             <span className="block text-[#52525B]" data-testid="quick-install-terminalid-hint">The installer picks the MT5 that is logged into <code className="text-[#FFD700]">#{account?.account_number}</code> by itself (it asks only when none or several match). It deploys the EA, the server URL, your bridge token and the .ex5 — <strong className="text-[#00FF41]">~60 seconds</strong>. Advanced: <code className="text-[#FFD700]">-TerminalId &lt;32-hex folder&gt;</code>, <code className="text-[#FFD700]">-ChartSymbol EURUSD</code>.</span>
