@@ -448,32 +448,49 @@ verify_running_sha() {
 # M121-5 — every running app container must run THE provisioned image: a service missing from the registry overlay
 # (or a stale container) would keep an old locally built image forever under --no-build. Records per-service image
 # ids/digests in deploy/state/deploy_source.json ("containers", "mixed") for readiness; fails on a mixed stack.
-app_services() {   # "<service> <backend|frontend>" for every service built from Dockerfile.backend / Dockerfile.frontend
+app_services() {   # "<service> <backend|frontend> <image ref compose runs for it>" for every Dockerfile.backend/.frontend service
   docker compose config --format json 2>/dev/null | python3 -c '
 import json, sys
-cfg = json.load(sys.stdin)
+cfg = json.load(sys.stdin); project = cfg.get("name") or "stoic"
 for name, svc in sorted((cfg.get("services") or {}).items()):
     df = ((svc.get("build") or {}).get("dockerfile") or "")
-    if df.endswith("Dockerfile.backend"): print(name, "backend")
-    elif df.endswith("Dockerfile.frontend"): print(name, "frontend")
+    kind = "backend" if df.endswith("Dockerfile.backend") else "frontend" if df.endswith("Dockerfile.frontend") else None
+    if kind: print(name, kind, svc.get("image") or "%s-%s" % (project, name))   # compose default image name = <project>-<service>
 ' 2>/dev/null
 }
 
+_provisioned_image() {   # _provisioned_image backend|frontend → pinned registry ref (env, else ./.env — a jam-resume process has no export)
+  local var="STOIC_BACKEND_IMAGE"; [ "$1" = frontend ] && var="STOIC_FRONTEND_IMAGE"
+  local v="${!var:-}"
+  [ -n "${v}" ] || v=$( { grep -E "^${var}=" .env 2>/dev/null || true; } | head -1 | cut -d= -f2- | tr -d "\"'")
+  printf '%s' "${v}"
+}
+
 verify_stack_images() {
-  local want_be want_fe svc kind cid img want bad=0 rows="" repo
-  want_be=$(docker inspect --format '{{.Id}}' "${STOIC_BACKEND_IMAGE:-stoic-backend}" 2>/dev/null || true)
-  want_fe=$(docker inspect --format '{{.Id}}' "${STOIC_FRONTEND_IMAGE:-stoic-frontend}" 2>/dev/null || true)
-  while read -r svc kind; do
+  local svc kind ref cid img want bad=0 rows="" repo mode="build" want_be="" want_fe=""
+  # registry deploy: every backend-kind container must run THE pinned digest (one image for all services);
+  # on-host build (fallback / --allow-unattested / untagged / DEPLOY_MODE=build / rollback): compose builds ONE IMAGE
+  # PER SERVICE (<project>-<service>, distinct ids) → each container is compared with the image built for THAT service
+  if images_from_registry; then
+    mode="registry"
+    want_be=$(docker inspect --format '{{.Id}}' "$(_provisioned_image backend)" 2>/dev/null || true)
+    want_fe=$(docker inspect --format '{{.Id}}' "$(_provisioned_image frontend)" 2>/dev/null || true)
+  fi
+  while read -r svc kind ref; do
     [ -n "${svc}" ] || continue
     cid=$(docker compose ps -q "${svc}" 2>/dev/null | head -1)
     [ -n "${cid}" ] || continue                     # not running here (profile / scaled to 0)
     img=$(docker inspect --format '{{.Image}}' "${cid}" 2>/dev/null || true)
     repo=$(docker inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "${img}" 2>/dev/null || true)
-    [ "${kind}" = backend ] && want="${want_be}" || want="${want_fe}"
+    if [ "${mode}" = registry ]; then
+      [ "${kind}" = backend ] && want="${want_be}" || want="${want_fe}"
+    else
+      want=$(docker inspect --format '{{.Id}}' "${ref}" 2>/dev/null || true)
+    fi
     rows="${rows}${svc}|${kind}|${img}|${repo}|$( [ -n "${want}" ] && [ "${img}" = "${want}" ] && echo ok || echo MISMATCH)
 "
     if [ -z "${want}" ] || [ "${img}" != "${want}" ]; then
-      echo "!! ${svc} runs image ${img:-none} (${repo:-local build}) — expected ${want:-unknown} (${kind} image provisioned this deploy)"; bad=1
+      echo "!! ${svc} runs image ${img:-none} (${repo:-local build}) — expected ${want:-unknown} ($( [ "${mode}" = registry ] && echo "${kind} digest pinned this deploy" || echo "image compose built for ${svc}: ${ref}"))"; bad=1
     fi
   done < <(app_services)
   record_deploy_source_containers "${rows}" "${bad}"
@@ -481,7 +498,7 @@ verify_stack_images() {
     echo "!! MIXED STACK: at least one app container does not run the provisioned image (a service missing from docker-compose.registry.yml, or a stale container) — failing the deploy verification"
     return 1
   fi
-  echo "   stack images verified: every app container runs the provisioned backend/frontend image"
+  echo "   stack images verified (${mode}): every app container runs the image provisioned for it"
 }
 
 record_deploy_source_containers() {   # record_deploy_source_containers <rows svc|kind|image|repo_digest|status …> <mixed 0|1>

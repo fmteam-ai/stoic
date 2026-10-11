@@ -50,7 +50,17 @@ def _stub(bin_dir, name, body):
 
 
 # ---------------------------------------------------------------- S-1 · release_signing
+def test_repo_revoked_status_is_enforced_without_env(monkeypatch):
+    # audit #18 SEC-001 — the committed `revoked` column counts even when the host never ran --revoke
+    monkeypatch.delenv("RELEASE_REVOKED_KEY_IDS", raising=False)
+    monkeypatch.setenv("RELEASE_SIGNER", "external"); monkeypatch.setenv("RELEASE_SIGNER_KEY_ID", V2)
+    monkeypatch.setenv("RELEASE_ACCEPTED_KEY_IDS", V1); monkeypatch.setenv("RELEASE_TRANSITION_PUBLIC_KEYS", f"{V1}={_keypair()[1]}")
+    assert V1 in rs.revoked_key_ids() and not rs.key_id_accepted(V1) and rs.transition_key_ids() == []
+    assert rs.release_key_rotation_status()["in_transition"] is False
+
+
 def test_transition_and_revoked_release_key_ids(monkeypatch):
+    monkeypatch.setattr(rs, "_repo_release_key_status", lambda: {})      # a repo that has not revoked v1 yet
     k1, pub1 = _keypair(); k2, pub2 = _keypair()
     env = {"RELEASE_SIGNER": "external", "RELEASE_SIGNER_KEY_ID": V2, "RELEASE_PUBLIC_KEY_B64": pub2,
            "RELEASE_ACCEPTED_KEY_IDS": f"{V1}", "RELEASE_TRANSITION_PUBLIC_KEYS": f"{V1}={pub1}"}
@@ -84,6 +94,7 @@ def test_verify_ea_release_check_entry_honours_transition_and_revocation(monkeyp
     sys.path.insert(0, os.path.join(ROOT, "scripts"))
     import verify_ea_release as vr
     monkeypatch.setattr(vr, "MQ5", str(tmp_path / "missing.mq5"))
+    monkeypatch.setattr(rs, "_repo_release_key_status", lambda: {})
     k1, pub1 = _keypair(); _k2, pub2 = _keypair()
     monkeypatch.setenv("RELEASE_SIGNER", "external"); monkeypatch.setenv("RELEASE_SIGNER_KEY_ID", V2)
     monkeypatch.setenv("RELEASE_PUBLIC_KEY_B64", pub2); monkeypatch.setenv("RELEASE_ACCEPTED_KEY_IDS", V1)

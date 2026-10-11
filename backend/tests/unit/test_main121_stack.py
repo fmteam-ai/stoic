@@ -48,19 +48,23 @@ def test_every_built_service_is_pinned_in_the_registry_overlay():
 
 
 DOCKER_STUB = r'''#!/usr/bin/env bash
+# STUB_MODE=registry: all backend containers run BE_ID, frontend FE_ID; STUB_MODE=build: each service runs the image
+# compose built for it (stoic-<svc>, distinct ids). STUB_STALE=<svc> makes that container run OLD_ID.
 echo "docker $*" >> "$STUB_LOG"
+idof() { printf 'sha256:%s' "$(printf '%s' "$1" | sha256sum | cut -c1-64)"; }
+expected() { svc="$1"; if [ "${STUB_MODE:-registry}" = build ]; then idof "stoic-$svc"; elif [ "$svc" = frontend ]; then echo "__FE__"; else echo "__BE__"; fi; }
 case "$*" in
   "compose config --format json") cat "$STUB_CFG" ;;
   "compose ps -q "*) svc="${@: -1}"; [ "$svc" = worker-model ] && exit 0; echo "cid-$svc" ;;
   "inspect --format {{.Image}} cid-"*) svc="${@: -1}"; svc="${svc#cid-}"
-      if [ "$svc" = frontend ]; then echo "'"$FE_ID"'"; elif [ "$svc" = "${STUB_STALE:-none}" ]; then echo "'"$OLD_ID"'"; else echo "'"$BE_ID"'"; fi ;;
-  "inspect --format {{.Id}} "*) img="${@: -1}"; case "$img" in *frontend*) echo "'"$FE_ID"'" ;; *) echo "'"$BE_ID"'" ;; esac ;;
+      if [ "$svc" = "${STUB_STALE:-none}" ]; then echo "__OLD__"; else expected "$svc"; fi ;;
+  "inspect --format {{.Id}} "*) img="${@: -1}"
+      case "$img" in *@sha256:*frontend*|*stoic-frontend@*) echo "__FE__" ;; *@sha256:*) echo "__BE__" ;; stoic-*) idof "$img" ;; *) exit 1 ;; esac ;;
   "inspect --format {{if .RepoDigests}}{{index .RepoDigests 0}}{{end}} "*) img="${@: -1}"
-      case "$img" in "'"$FE_ID"'") echo "'"$FE_DIGEST"'" ;; "'"$BE_ID"'") echo "'"$BE_DIGEST"'" ;; *) echo "" ;; esac ;;
+      case "$img" in "__FE__") echo "__FED__" ;; "__BE__") echo "__BED__" ;; *) echo "" ;; esac ;;
   *) exit 0 ;;
 esac
-'''.replace("'\"$FE_ID\"'", FE_ID).replace("'\"$BE_ID\"'", BE_ID).replace("'\"$OLD_ID\"'", OLD_ID) \
-   .replace("'\"$FE_DIGEST\"'", FE_DIGEST).replace("'\"$BE_DIGEST\"'", BE_DIGEST)
+'''.replace("__FE__", FE_ID).replace("__BE__", BE_ID).replace("__OLD__", OLD_ID).replace("__FED__", FE_DIGEST).replace("__BED__", BE_DIGEST)
 
 
 def _world(tmp_path):
@@ -87,7 +91,7 @@ def test_verify_stack_images_passes_uniform_stack_and_records_containers(tmp_pat
     root, env = _world(tmp_path)
     r = _run(root, env, "app_services; verify_stack_images; echo RC=$?")
     assert "worker-security backend" in r.stdout and "frontend frontend" in r.stdout and "mongo" not in r.stdout.split("RC=")[0].replace("mongo:7", "")
-    assert "RC=0" in r.stdout and "stack images verified" in r.stdout, r.stdout + r.stderr
+    assert "RC=0" in r.stdout and "stack images verified (registry)" in r.stdout, r.stdout + r.stderr
     d = json.loads((root / "deploy" / "state" / "deploy_source.json").read_text())
     assert d["mixed"] is False and d["source"] == "registry"
     assert d["containers"]["worker-security"] == {"kind": "backend", "image_id": BE_ID, "repo_digest": BE_DIGEST, "status": "ok"}
@@ -103,6 +107,38 @@ def test_verify_stack_images_fails_mixed_stack(tmp_path):
     assert d["mixed"] is True and d["containers"]["worker-security"]["status"] == "MISMATCH" and d["containers"]["backend"]["status"] == "ok"
     up = open(os.path.join(ROOT, "deploy", "update.sh")).read(); rb = open(os.path.join(ROOT, "deploy", "rollback.sh")).read()
     assert "verify_stack_images || rollback" in up and "verify_stack_images ||" in rb
+
+
+def test_verify_stack_images_build_mode_per_service_images(tmp_path):
+    # on-host build: compose builds one image per service (stoic-worker-trading, stoic-worker-security, … distinct ids)
+    root, env = _world(tmp_path)
+    (root / "deploy" / "state" / "deploy_source.json").write_text(json.dumps({"source": "build-fallback", "reason": "GitHub unreachable"}))
+    env = dict(env, STUB_MODE="build"); env.pop("STOIC_BACKEND_IMAGE"); env.pop("STOIC_FRONTEND_IMAGE")
+    r = _run(root, env, "app_services | head -3; verify_stack_images; echo RC=$?")
+    assert "backend backend stoic-backend" in r.stdout and "RC=0" in r.stdout and "stack images verified (build)" in r.stdout, r.stdout + r.stderr
+    d = json.loads((root / "deploy" / "state" / "deploy_source.json").read_text())
+    ids = {c["image_id"] for c in d["containers"].values() if c["kind"] == "backend"}
+    assert len(ids) >= 6 and d["mixed"] is False and all(c["status"] == "ok" and c["repo_digest"] is None for c in d["containers"].values())
+    # a container NOT recreated by this build (old image) is still caught in build mode
+    r = _run(root, dict(env, STUB_STALE="worker-security"), "verify_stack_images; echo RC=$?")
+    assert "RC=1" in r.stdout and "image compose built for worker-security: stoic-worker-security" in r.stdout and "MIXED STACK" in r.stdout
+    # a service with an explicit image: in compose is compared with that ref
+    cfg = json.loads((tmp_path / "cfg.json").read_text()); cfg["services"]["worker-tuning"]["image"] = "stoic-worker-tuning"; cfg["name"] = "stoic"
+    (tmp_path / "cfg.json").write_text(json.dumps(cfg))
+    r = _run(root, env, "app_services | grep worker-tuning")
+    assert r.stdout.strip() == "worker-tuning backend stoic-worker-tuning"
+
+
+def test_registry_check_reads_pinned_image_from_dotenv_when_not_exported(tmp_path):
+    # jam-resume process (STOIC_UPDATE_RESUME): pull_attested_images did not run here → no export; ./.env has the pin
+    root, env = _world(tmp_path)
+    env.pop("STOIC_BACKEND_IMAGE"); env.pop("STOIC_FRONTEND_IMAGE")
+    (root / ".env").write_text(f"APP_ENV=production\nSTOIC_BACKEND_IMAGE={BE_DIGEST}\nSTOIC_FRONTEND_IMAGE={FE_DIGEST}\n")
+    r = _run(root, env, "_provisioned_image backend; echo; verify_stack_images; echo RC=$?")
+    assert r.stdout.startswith(BE_DIGEST) and "RC=0" in r.stdout and "stack images verified (registry)" in r.stdout, r.stdout + r.stderr
+    (root / ".env").write_text("APP_ENV=production\n")            # no pin anywhere → every container flagged, never a silent pass
+    r = _run(root, env, "verify_stack_images; echo RC=$?")
+    assert "RC=1" in r.stdout and "expected unknown" in r.stdout
 
 
 def test_readiness_fails_on_mixed_stack(tmp_path, monkeypatch):

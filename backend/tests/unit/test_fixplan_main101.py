@@ -230,7 +230,7 @@ def test_n101_5_separate_key_ids_and_pins_for_release_and_bundle_keys():
     assert rs._pinned_pub(env, "ea-release") == "R" * 44 and rs._pinned_pub(env, "audit-anchor") == "B" * 44
     single = {"RELEASE_SIGNER_KEY_ID": "k", "RELEASE_PUBLIC_KEY_B64": "R" * 44}     # single-key install falls back
     assert rs.key_id(single, "acceptance-bundle") == "k" and rs._pinned_pub(single, "acceptance-bundle") == "R" * 44
-    with patch.dict(os.environ, env):
+    with patch.dict(os.environ, env), patch.object(rs, "_repo_release_key_status", lambda: {}):   # audit #18: v1 is repo-revoked now
         assert rs.key_id_accepted("stoic-release-ed25519-v1") and not rs.key_id_accepted("stoic-bundle-ed25519-v1")
         assert rs.key_id_accepted("stoic-bundle-ed25519-v1", purpose="acceptance-bundle")
     # an external signer answering with the wrong key id for the purpose is refused
