@@ -1,23 +1,23 @@
 {
-  "version": "1.63",
-  "mq5_sha256": "0bcfe224b55daeee49902869817633042ff80c977e5c97026144f278748e8e34",
-  "ex5_sha256": "b36d32d5443cc23b5d4a404ab9a0aa310d9552de54e27052b794e5b3619938e1",
+  "version": "1.64",
+  "mq5_sha256": "04913597961de896b4c603e640f0dc3f7e61d6100adc650e2656c59feba5aac5",
+  "ex5_sha256": "b05ed82175b928e6b9a5948a7a7af9052a5d98700410cb8466cd31176cfaf469",
   "ex5_note": null,
   "previous": null,
   "compile_log": {
     "errors": 0,
     "warnings": 0,
-    "log_sha256": "78e58c3d1f34faea6a7ab859af1c191567cda31089212dbe416b2f26239f7083"
+    "log_sha256": "9b75ca869de9d661cb7c418b5bbe9e46b7ce346d699b88659e7bf6b5ada173eb"
   },
   "metaeditor_version": null,
   "windows_build": "10.0.26100",
   "mt5_build": null,
-  "source_commit": "b9dec7bc42c3e2356d47e366271488cbef4a00cf",
+  "source_commit": "af3b229251dcdacb972289052746ba43b0c0c2e0",
   "compiled_by": "github-actions",
-  "verified_at": "2026-10-11T16:53:32.798772+00:00",
+  "verified_at": "2026-10-11T23:09:38.354871+00:00",
   "signature": {
     "key_id": "stoic-release-ed25519-v2",
-    "sig_hex": "fbd90736b6fa9dde751fe657fd9eec67e32ec9bae59595fe385a535e046507f2afc984a0c7a7a90058174f61536a8c1039c2e02e694f10f79606a2e486de150e",
-    "signed_at": "2026-10-11T16:53:33.307947+00:00"
+    "sig_hex": "af2da92a258a1bd4501b5431a1bea86c2197f7b1fa341a7e6dd096be3c0ea06758decc86489d56c7a8ae9ffb9d25fb358d86bdd94a85cf4686342cd4b557b10d",
+    "signed_at": "2026-10-11T23:09:38.850413+00:00"
   }
 }
