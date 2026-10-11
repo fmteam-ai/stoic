@@ -1,4 +1,6 @@
-# Registry image deploys (opt-in: DEPLOY_MODE=registry in ./.env).
+# Registry image deploys (DEPLOY_MODE auto/registry — default since v1.60.12).
+# EVERY service built from Dockerfile.backend / Dockerfile.frontend must be pinned here (CI test
+# test_main121_stack.py) — a service left out keeps running the last locally built image forever (--no-build).
 #
 # The server does NOT rebuild. deploy/lib.sh::pull_attested_images reads the
 # backend/frontend digests from the cosign-verified release attestation,
@@ -24,6 +26,8 @@ services:
   worker-model:
     <<: *registry-image
   worker-tuning:
+    <<: *registry-image
+  worker-security:
     <<: *registry-image
   frontend:
     image: ${STOIC_FRONTEND_IMAGE:?registry mode — run deploy/update.sh so the attested digest is pinned}
