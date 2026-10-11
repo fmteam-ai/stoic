@@ -11,7 +11,7 @@ $installer = Join-Path $PSScriptRoot "..\backend\static\STOIC-Installer.ps1"
 $reader    = Join-Path $PSScriptRoot "ea_dropfile_reader.py"
 . $installer
 
-$token = "k3XbQ2m9Vp0sT7wLzA4cR8yE1nH6uJ5gD2fK9qW0xZs"       # nosec — synthetic test fixture, 43 chars = token_urlsafe(32) shape, never issued
+$token = "stoic-test-token-" + ("x" * 26)        # 43 chars like token_urlsafe(32); synthetic, low entropy on purpose (gitleaks)
 $inst  = "inst_0123456789ab"
 $url   = "https://stoicaibot.com"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ("stoic-dropfiles-" + [guid]::NewGuid().ToString("N"))

@@ -32,7 +32,7 @@ def _reader():
     return mod
 
 
-TOKEN = "k3XbQ2m9Vp0sT7wLzA4cR8yE1nH6uJ5gD2fK9qW0xZs"   # 43 chars — secrets.token_urlsafe(32)
+TOKEN = "stoic-test-token-" + "x" * 26   # 43 chars like secrets.token_urlsafe(32); low entropy on purpose (gitleaks)
 BOM = b"\xef\xbb\xbf"
 OLD_TOKEN_FILE = BOM + b"# STOIC bridge token \xe2\x80\x94 keep this file confidential.\r\n# Account: OnEquity #1083440 (demo)\r\n" + TOKEN.encode() + b"\r\n"
 
