@@ -3,6 +3,7 @@
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
 ## Unreleased — M122 + Simple Onboarding Phases 1–4 (EA v1.64, installer v1.9)
+- **Security audit #20** (`docs/SECURITY_AUDIT_20.md`): PASS — audit #19 SEC-001/SEC-002 re-verified fixed; StatusFixDialog / WebRequestGuide / perimeter sweep clean. Two P3 notes only (admin may read any install-progress — intended; InfraWizard bootstrap token displayed in a URL string — backlog).
 - **Security audit #19** (`docs/SECURITY_AUDIT_19.md`, scope M122 + onboarding Phases 1–4): CONDITIONAL PASS → both items fixed — SEC-001 (P2) the `.cmd` installer download no longer carries the pairing token in its URL: `pairing-token` issues an opaque 10-min owner-bound download handle (`cmd_download_path`), `GET /setup/installer.cmd?d=…` requires the owner's session, bakes token/login/repair into the file body only and answers `no-store` + `Referrer-Policy: no-referrer`; SEC-002 (P3) `POST /setup/pairing-token` rate-limited 10 / user / 15 min.
 - Status line fix buttons open their dialog on the account card (`StatusFixDialog.jsx`: connect/repair line, trust terminal, adopt reported server, WebRequest guide).
 
