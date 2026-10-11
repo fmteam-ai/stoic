@@ -142,6 +142,15 @@ class FakeCollection:
             self.rows.append(d)
         return _Res(matched_count=0, modified_count=0)
 
+    async def replace_one(self, q, doc, upsert=False):
+        for i, r in enumerate(self.rows):
+            if _match(r, q):
+                self.rows[i] = dict(doc)
+                return _Res(matched_count=1, modified_count=1)
+        if upsert:
+            self.rows.append(dict(doc))
+        return _Res(matched_count=0, modified_count=0)
+
     async def find_one_and_update(self, q, upd, projection=None, return_document=None, **kw):
         for r in self.rows:
             if _match(r, q):

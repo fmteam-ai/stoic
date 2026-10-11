@@ -4,6 +4,7 @@ import api, { formatApiError, API } from "@/lib/api";
 import { AccountCertification } from "@/components/AccountCertification";
 import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 import { AddAccountWizard } from "@/components/AddAccountWizard";
+import { EditAccountDialog } from "@/components/EditAccountDialog";
 import { VpsOfferButton } from "@/components/VpsOffer";
 import { InstallProgressChip } from "@/components/InstallProgressPanel";
 import { TrustedTerminals } from "@/components/TrustedTerminals";
@@ -16,7 +17,7 @@ import MultiAccountOverview from "@/components/MultiAccountOverview";
 // of the prior .mq5, which otherwise re-downloads stale source.
 const LATEST_EA_VERSION = "1.63";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
-import { Plus, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning, ShieldCheck } from "lucide-react";
+import { Plus, Pencil, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning, ShieldCheck } from "lucide-react";
 const Warning = AlertTriangle;
 import { useLiveStream } from "@/lib/useLiveStream";
 import { toast } from "sonner";
@@ -352,6 +353,7 @@ export default function Accounts() {
 
     // iter-137 · Multi-account management — patch metadata (group / trading toggle)
     const [overviewKey, setOverviewKey] = useState(0);
+    const [editAccount, setEditAccount] = useState(null);     // M123-4 — Edit button on the account card
     const patchAccount = async (id, payload, okMsg) => {
         try {
             await api.patch(`/accounts/${id}`, payload);
@@ -408,6 +410,8 @@ export default function Accounts() {
                 <AddAccountWizard open={showWizard} onClose={() => setShowWizard(false)}
                     pairedHosts={[...new Set(accounts.map(a => a.installer_paired_hostname).filter(Boolean))]}
                     onCreated={() => load()} onAdvanced={() => { setShowWizard(false); setShowForm(true); }} />
+                <EditAccountDialog account={editAccount} open={!!editAccount} onClose={() => setEditAccount(null)}
+                    onSaved={() => { load(); setOverviewKey(k => k + 1); }} />
 
                 {/* Multi-account portfolio overview (iter-137) */}
                 <MultiAccountOverview refreshKey={overviewKey} />
@@ -835,6 +839,11 @@ export default function Accounts() {
                                                 title="Deep-sync: your EA re-scans the last 7 days of broker deal history and repairs any estimated or missing trade data with exact figures"
                                                 className="px-3 py-2 border border-[#00BFFF]/40 text-[#00BFFF] hover:bg-[#00BFFF]/10 text-xs font-mono tracking-widest flex items-center gap-1 transition-colors disabled:opacity-50">
                                                 <ArrowsClockwise className={`w-3.5 h-3.5 ${syncing[a.id] ? "animate-spin" : ""}`} /> {syncing[a.id] ? "QUEUED…" : "SYNC"}
+                                            </button>
+                                            <button onClick={() => setEditAccount(a)} data-testid={`edit-account-${a.account_number}`}
+                                                title="Edit label, group and the MT5 server name"
+                                                className="px-3 py-2 border border-[#1F1F1F] hover:border-[#FFD700]/60 hover:text-[#FFD700] text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">
+                                                <Pencil className="w-3.5 h-3.5" /> EDIT
                                             </button>
                                             <button onClick={() => rotate(a.id)} data-testid={`rotate-token-${a.account_number}`}
                                                 className="px-3 py-2 border border-[#1F1F1F] hover:border-[#333333] text-xs font-mono tracking-widest flex items-center gap-1 transition-colors">

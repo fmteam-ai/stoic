@@ -72,14 +72,17 @@ def _iso_days_ago(days: int) -> str:
 
 
 def _serialize(doc: dict) -> dict:
-    doc["id"] = str(doc.pop("_id"))
     # audit v4 P0-2 — server-owned environment classification, separate
     # from connection state and telemetry freshness.
+    # M123-3 — computed BEFORE `_id` is popped: attestation_identity() binds the digest to the account id, so
+    # an empty id voided every attestation here while Admin → Account Environments (raw doc) showed it valid.
     from broker_env import attestation_state, attested_environment, broker_environment
     doc["environment"] = broker_environment(doc)
-    doc["environment_attested"] = attested_environment(doc) != "LIVE"
+    doc["environment_effective"] = attested_environment(doc)
+    doc["environment_attested"] = doc["environment_effective"] != "LIVE"
     doc["environment_attestation_state"] = attestation_state(doc)
     doc.pop("environment_attestation", None)
+    doc["id"] = str(doc.pop("_id"))
     doc.pop("position_mode_override", None)   # audit A6 SEC-001 — admin-only (who/when/why); owner sees mode+source only
     creds = doc.pop("creds", {}) or {}
     doc["has_investor_password"] = bool(creds.get("investor"))

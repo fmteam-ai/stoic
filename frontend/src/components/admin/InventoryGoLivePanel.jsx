@@ -58,6 +58,14 @@ export const InventoryGoLivePanel = () => {
     if (!inv || !pend) return <div className="p-4 text-white/40 text-sm font-mono"><Loader2 className="inline h-4 w-4 animate-spin mr-2" />loading inventory…</div>;
     const c = inv.counts || {};
     const violations = inv.violations || [];
+    // M123-P1 — approving the current hash CLEARS these two violations, so they must never block the approval itself.
+    // Use the server's verdict (approvable / blocking_violations); same rule as a fallback for older backends.
+    const APPROVAL_CLEARS = ["inventory changed without an approved configuration event",
+                             "no approved inventory configuration event — production fails closed"];
+    const blocking = inv.blocking_violations ?? violations.filter((v) => !APPROVAL_CLEARS.includes(v));
+    const approvable = inv.approvable ?? blocking.length === 0;
+    const activeOrphans = (pend.orphan_bots || []).filter((b) => b.active);
+    const inactiveOrphans = (pend.orphan_bots || []).filter((b) => !b.active);
     const singleAdmin = pend.approval_mode === "single_admin";
     const secondAdminMissing = !singleAdmin && (pend.admin_count || 0) < 2;
     const selfBlocked = (proposedBy) => !singleAdmin && proposedBy === pend.me;
@@ -86,19 +94,34 @@ export const InventoryGoLivePanel = () => {
                 <div>
                     <div className="font-mono text-xs text-white/50 uppercase tracking-wider mb-2">violations</div>
                     {violations.length === 0 ? <div className="text-emerald-300 text-sm">none</div> : (
-                        <ul data-testid="inventory-violations" className="space-y-1 text-sm text-[#FF3B30]">{violations.map((v, i) => <li key={`${i}-${v}`}>· {v}</li>)}</ul>
+                        <ul data-testid="inventory-violations" className="space-y-1 text-sm">{violations.map((v, i) => <li key={`${i}-${v}`} className={blocking.includes(v) ? "text-[#FF3B30]" : "text-[#FFB000]"} title={blocking.includes(v) ? undefined : "not blocking — cleared by approving the current hash"}>· {v}{blocking.includes(v) ? "" : " (cleared by approval)"}</li>)}</ul>
                     )}
                 </div>
             </div>
 
-            {pend.orphan_bots?.length > 0 && (
+            {activeOrphans.length > 0 && (
                 <div data-testid="inventory-orphans" className="rounded-lg border border-[#FF3B30]/30 p-3 space-y-2">
-                    <div className="font-mono text-xs text-[#FF3B30] uppercase">bot configs with no account ({pend.orphan_total ?? pend.orphan_bots.length}{pend.orphan_total > pend.orphan_bots.length ? `, showing ${pend.orphan_bots.length}` : ""}) — delete to clear the defect</div>
-                    {pend.orphan_bots.map((b) => (
+                    <div className="font-mono text-xs text-[#FF3B30] uppercase">active bot configs with no account ({activeOrphans.length}) — delete to clear the defect</div>
+                    {activeOrphans.map((b) => (
                         <div key={b.id} className="flex items-center justify-between text-sm">
-                            <span className="font-mono text-xs">{b.id} · {b.symbol || b.name || "—"} · owner {b.user_id || "?"} · {b.active ? "ACTIVE" : "inactive"}</span>
+                            <span className="font-mono text-xs">{b.id} · {b.symbol || b.name || "—"} · owner {b.user_id || "?"} · ACTIVE</span>
                             <Button size="sm" variant="ghost" data-testid={`orphan-bot-delete-${b.id}`} disabled={!!busy} onClick={() => run(b.id, () => api.delete(`/authority/inventory/orphan-bots/${b.id}`), "orphan bot config deleted")}>
                                 <Trash2 className="h-4 w-4 text-[#FF3B30]" />
+                            </Button>
+                        </div>
+                    ))}
+                </div>
+            )}
+            {inactiveOrphans.length > 0 && (
+                /* M123-2 — seed.py recreates the inactive user-default profile on every restart; it can never trade and
+                   is NOT a violation (inventory_projection counts only ACTIVE account-less bots). Shown greyed, not red. */
+                <div data-testid="inventory-default-profiles" className="rounded-lg border border-white/10 p-3 space-y-1 opacity-60">
+                    <div className="font-mono text-xs text-white/50 uppercase">default profile{inactiveOrphans.length > 1 ? "s" : ""} — inactive, harmless ({inactiveOrphans.length}{pend.orphan_total > (pend.orphan_bots || []).length ? ` of ${pend.orphan_total} account-less` : ""})</div>
+                    {inactiveOrphans.map((b) => (
+                        <div key={b.id} className="flex items-center justify-between text-sm">
+                            <span className="font-mono text-xs text-white/50">{b.id} · {b.symbol || b.name || "default"} · owner {b.user_id || "?"} · inactive · recreated by seed on restart</span>
+                            <Button size="sm" variant="ghost" data-testid={`orphan-bot-delete-${b.id}`} disabled={!!busy} title="optional — seed.py recreates it on the next restart" onClick={() => run(b.id, () => api.delete(`/authority/inventory/orphan-bots/${b.id}`), "default profile deleted (seed recreates it on restart)")}>
+                                <Trash2 className="h-4 w-4 text-white/40" />
                             </Button>
                         </div>
                     ))}
@@ -137,7 +160,7 @@ export const InventoryGoLivePanel = () => {
                     )}
                     {policy && <div data-testid="expectation-policy-info" className="text-[11px] font-mono text-[#71717A]">signed by {policy.issuer} · expires {String(policy.expires_at).slice(0, 10)} · {policy.demo_only ? "every listed account must be an attested DEMO account" : "real-money policy"}</div>}
                     {pend.expectation_pending ? (
-                        <div data-testid="expectation-pending" className="text-xs text-[#FFB000] font-mono">pending {pend.expectation_pending.accounts}/{pend.expectation_pending.enabled}/{pend.expectation_pending.bots} proposed by {pend.expectation_pending.proposed_by} — a DIFFERENT admin must approve</div>
+                        <div data-testid="expectation-pending" className="text-xs text-[#FFB000] font-mono">pending {pend.expectation_pending.accounts}/{pend.expectation_pending.enabled}/{pend.expectation_pending.bots} proposed by {pend.expectation_pending.proposed_by} — {singleAdmin ? "approve with a fresh step-up (single-operator mode)" : "a DIFFERENT admin must approve"}</div>
                     ) : null}
                     {exp.bots !== "" && exp.enabled !== "" && exp.bots !== exp.enabled && (
                         <div data-testid="expectation-precheck" className="text-xs text-[#FFB000] font-mono">policy: bots must equal enabled (one bot per enabled account)</div>
@@ -159,9 +182,9 @@ export const InventoryGoLivePanel = () => {
                     <div className="font-mono text-xs text-white/50 uppercase tracking-wider">2 · approve current inventory hash</div>
                     {pend.hash_pending ? (
                         <div data-testid="hash-pending" className="text-xs text-[#FFB000] font-mono">hash {pend.hash_pending.inventory_hash?.slice(0, 16)} proposed by {pend.hash_pending.proposed_by} — {singleAdmin ? "confirm with a fresh step-up (single-operator mode)" : "a DIFFERENT admin must confirm"}</div>
-                    ) : <div className="text-xs text-white/40">requires zero violations above</div>}
+                    ) : <div className="text-xs text-white/40" data-testid="hash-propose-hint">{approvable ? (violations.length > 0 ? "approving records the first configuration event — the remaining violation clears with it" : "no violations — propose the current hash") : `requires zero blocking violations above (${blocking.length} left)`}</div>}
                     <div className="flex gap-2">
-                        <Button size="sm" data-testid="hash-propose" disabled={!!busy || violations.length > 0}
+                        <Button size="sm" data-testid="hash-propose" disabled={!!busy || !approvable}
                             onClick={() => run("hp", () => api.post("/authority/inventory/approve", { note: "go-live approval" }), singleAdmin ? "inventory hash proposed — confirm it" : "inventory hash proposed — second admin must confirm")}>
                             {busy === "hp" ? <Loader2 className="h-4 w-4 animate-spin" /> : "Propose approval"}
                         </Button>
