@@ -75,9 +75,14 @@ def env_checks(env=None, *, vault_token: bool = False) -> list[dict]:
                       "configured" if (env.get("RESEND_API_KEY") or "").strip() else "missing — production refuses to boot"))
     cf = (env.get("TRUST_CF_CONNECTING_IP") or "").strip().lower() == "true"
     cidrs = (env.get("TRUSTED_PROXY_CIDRS") or "").strip()
-    out.append(_check("client_ip", "Client-IP chain configured (TRUSTED_PROXY_CIDRS · TRUST_CF_CONNECTING_IP)", "info",
-                      f"proxy ranges: {'set' if cidrs else 'unset'} · Cloudflare header: {'trusted' if cf else 'off'}",
-                      "set TRUST_CF_CONNECTING_IP=true ONLY if the domain is proxied by Cloudflare (R-8)"))
+    # O2 (Phase 1) — the Cloudflare overlay is a host fact (CLOUDFLARE_MODE / compose overlay, exported by the
+    # deploy scripts): active overlay without the header trust is a FAIL, not a note.
+    cf_overlay = (env.get("CLOUDFLARE_MODE") or "").strip().lower() == "true" or "cloudflare" in (env.get("COMPOSE_FILE") or "")
+    cf_status = "fail" if (cf_overlay and not cf) else ("pass" if cf_overlay else "info")
+    out.append(_check("client_ip", "Client-IP chain configured (TRUSTED_PROXY_CIDRS · TRUST_CF_CONNECTING_IP)", cf_status,
+                      f"proxy ranges: {'set' if cidrs else 'unset'} · Cloudflare overlay: {'active' if cf_overlay else 'off'} · Cloudflare header: {'trusted' if cf else 'off'}",
+                      "Cloudflare overlay active but TRUST_CF_CONNECTING_IP is not true — every client shares the edge IP; set it in backend/.env (deploy/doctor.sh checks it)"
+                      if cf_status == "fail" else "set TRUST_CF_CONNECTING_IP=true ONLY if the domain is proxied by Cloudflare (R-8)"))
     hold = (env.get("UPDATE_HOLD_ON_FAILURE") or "").strip()
     out.append(_check("hold_on_failure", "UPDATE_HOLD_ON_FAILURE=1 for this deploy", "pass" if hold == "1" else "info",
                       "set" if hold == "1" else "not visible to the backend — tick the manual step when you run update.sh"))

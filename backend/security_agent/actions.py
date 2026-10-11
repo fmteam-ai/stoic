@@ -67,7 +67,16 @@ async def execute(db, cfg: dict, prop: dict, finding: dict) -> dict:
            "check_id": finding["check_id"], "mode": cfg.get("mode"), "at": now.isoformat(), "actor": "security_agent", **prop,
            "expires_at": (now + timedelta(minutes=prop["expires_min"])).isoformat() if prop.get("expires_min") else None}
     shared = await shared_ip_share(db, prop["target"]) if prop["action"] == "block_ip" else 0.0
-    if prop.get("blocked_by") or rules.is_protected(cfg, prop["target_kind"], prop["target"]):
+    if prop.get("blocked_by") == "cloudflare_edge":
+        # O1 (Phase 1) — a Cloudflare edge IP is never an attacker: the finding is a proxy misconfiguration
+        # (high, not critical) carrying the one-line fix; nothing is blocked, nothing is "refused as protected".
+        row["status"] = "reclassified_proxy_misconfiguration"
+        await open_or_update(db, f("proxy_misconfiguration", f"ip:{prop['target']}", "high", "platform",
+                                   f"{prop['rule']} saw Cloudflare edge IP {prop['target']} as the client — the client-IP chain is misconfigured; "
+                                   "set TRUST_CF_CONNECTING_IP=true in backend/.env and redeploy (deploy/doctor.sh checks it)",
+                                   {"ip": prop["target"], "rule": prop["rule"], "finding": finding["dedup_key"],
+                                    "fix": "TRUST_CF_CONNECTING_IP=true"}))
+    elif prop.get("blocked_by") or rules.is_protected(cfg, prop["target_kind"], prop["target"]):
         row["status"] = "refused_protected"
         await open_or_update(db, f("protected_target", f"{prop['rule']}:{prop['target']}", "critical", "platform",
                                    f"{prop['rule']} would have applied {prop['action']} to protected {prop['target_kind']} {prop['target']} — refused",

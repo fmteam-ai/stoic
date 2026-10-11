@@ -44,22 +44,7 @@ class AccountUpdate(BaseModel):
     server: str | None = None
 
 
-SERVER_NAME_RE = r"^[A-Za-z0-9][A-Za-z0-9 ._-]{1,63}$"   # MT5 server names: "OnEquity-Server", "ICMarketsSC-Demo02", "VTMarkets-Live 2"
-
-
-def _server_change_doc(acc: dict, new_server: str, *, source: str, by: str) -> dict:
-    """M122-P2 — one Mongo update for both the manual edit and 'use the server the EA reports': server /
-    broker_server / expected_identity.broker_server move together, the verified chain is cleared so the next
-    heartbeat re-verifies against the new name, and the mismatch flag no longer blocks trust-terminal."""
-    now = datetime.now(timezone.utc).isoformat()
-    exp = dict(acc.get("expected_identity") or {})
-    exp["broker_server"] = new_server
-    return {
-        "$set": {"server": new_server, "broker_server": new_server, "expected_identity": exp,
-                 "broker_account_mismatch": False, "broker_account_mismatch_reason": None,
-                 "server_changed": {"from": acc.get("server"), "to": new_server, "at": now, "source": source, "by": by}},
-        "$unset": {"verified_identity": ""},
-    }
+from server_adopt import SERVER_NAME_RE, server_change_doc as _server_change_doc  # noqa: E402 — U2 shares the update with auto-adopt
 
 
 def _ea_reported_server(acc: dict) -> str | None:
@@ -501,6 +486,9 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
     if new_server is not None:
         if acc.get("mode") == "paper":
             raise HTTPException(status_code=400, detail="Paper accounts have no broker server")
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail={"code": "admin_only",
+                                                         "message": "The server name is adopted from the EA automatically; only an admin may edit it by hand"})
         from step_up import audit_event, require_step_up
         await require_step_up(db, user, request, "account_server_edit")
         if new_server != (acc.get("server") or ""):
@@ -724,6 +712,9 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
     }
     result = await db.accounts.insert_one(doc)
     doc["_id"] = result.inserted_id
+    # U11 (Phase 1) — exactly one bot, bound to this account, default profile, inactive until Start
+    from bot_inventory import ensure_account_bot
+    await ensure_account_bot(db, user["id"], str(doc["_id"]))
     out = _serialize(doc)
     if not is_paper:
         # A10-5 — the plaintext is shown exactly ONCE here (hash only in the DB); afterwards
@@ -763,16 +754,22 @@ async def delete_account(account_id: str, force: bool = False,
                     "Pass ?force=true to override."
                 ),
             )
+    # U18 (Phase 1) — tombstone BEFORE the row goes: the EA on the VPS keeps polling with the old token; the
+    # bridge answers 410 account_deleted (EA 1.64 stops itself) and the security agent files ONE info finding
+    # instead of a CRITICAL token-guessing storm.
+    _doomed = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
+                                         {"bridge_token_hash": 1, "bridge_token_prev_hash": 1, "bridge_token_retired_hashes": 1,
+                                          "label": 1, "account_number": 1, "broker": 1})
+    if _doomed:
+        from account_tombstones import write_tombstone
+        await write_tombstone(db, _doomed, deleted_by=user["id"])
     result = await db.accounts.delete_one(
         {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
     )
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Account not found")
-    # Clean up the per-account bot_config override (if any) — the user's
-    # default profile is preserved.
-    await db.bot_configs.delete_one(
-        {"user_id": user["id"], "account_id": account_id}
-    )
+    # U11 — every bot config bound to the account goes with it (one bot per account, never an orphan)
+    await db.bot_configs.delete_many({"account_id": account_id})
     # M119-5 — pairing tokens + open alerts go with the account (an orphan token kept VPS PAIRING SILENT firing)
     from account_cleanup import cleanup_deleted_account
     cleanup = await cleanup_deleted_account(db, account_id)

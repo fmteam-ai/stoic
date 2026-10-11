@@ -128,33 +128,11 @@ async def seed_admin():
     # Otherwise: NEVER overwrite an existing admin hash — the admin can
     # change their password and it must survive restarts.
 
-    # Default bot config for admin (account_id=None marks the user-default profile)
-    admin = await db.users.find_one({"email": admin_email})
-    admin_id = str(admin["_id"])
-    await db.bot_configs.update_one(
-        {"user_id": admin_id, "$or": [{"account_id": None},
-                                      {"account_id": {"$exists": False}}]},
-        {"$setOnInsert": {
-            "user_id": admin_id,
-            "account_id": None,
-            "risk_level": "medium",
-            "symbols": ["XAUUSD", "BTCUSD"],
-            "active": False,
-            "max_concurrent_trades": 3,
-            "auto_execute": True,
-            "max_lot_size": 0.0,
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }},
-        upsert=True,
-    )
-
-    # Backfill: any legacy bot_configs doc that pre-dates per-account scoping
-    # has no `account_id`. Mark it as the user's default (None) so the new
-    # filter (`account_id` null OR missing) keeps matching it.
-    await db.bot_configs.update_many(
-        {"account_id": {"$exists": False}},
-        {"$set": {"account_id": None}},
-    )
+    # U11 (Phase 1) — no account-less "default profile" any more: the bot is created WITH the account.
+    # The user-default (account_id=None) doc that used to be upserted here was the eternal inventory orphan.
+    # U11 (Phase 1) — migration: delete account-less bot configs and configs whose account no longer exists.
+    from bot_inventory import delete_orphan_bot_configs
+    await delete_orphan_bot_configs(db, reason="startup-migration")
 
 
 async def _migrate_iso_strings_to_bson_dates(db):

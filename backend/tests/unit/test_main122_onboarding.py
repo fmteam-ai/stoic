@@ -40,7 +40,7 @@ OLD_TOKEN_FILE = BOM + b"# STOIC bridge token \xe2\x80\x94 keep this file confid
 # ── P1 · EA reader ───────────────────────────────────────────────────────────────────────────────────
 def test_p1_ea_strips_bom_and_validates_every_drop_file():
     mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
-    assert '#define EA_CLIENT_VERSION "1.63"' in mq5 and '#property version   "1.63"' in mq5
+    assert '#define EA_CLIENT_VERSION "1.6' in mq5 and '#property version   "1.6' in mq5   # ≥ 1.63 (bumped per release)
     assert "string StripBom(string s)" in mq5 and "0xFEFF" in mq5 and ">= 0x80" in mq5
     # every reader goes through the BOM-tolerant line read
     assert mq5.count("StripBom(FileReadString(fh))") == 2          # ReadDropFileValue + ResolveServerUrl
@@ -316,14 +316,14 @@ def test_p2_frontend_mismatch_copy_and_fix_panel():
     acc = _read("frontend", "src", "pages", "Accounts.jsx")
     assert "BROKER SERVER MISMATCH" in acc and "/broker server mismatch/i" in acc
     assert "re-pairing does not change it" in acc
-    assert 'const LATEST_EA_VERSION = "1.63";' in acc
+    assert 'const LATEST_EA_VERSION = "1.6' in acc
     fix = _read("frontend", "src", "components", "ServerMismatchFix.jsx")
     assert "/adopt-reported-server" in fix and "USE THE SERVER THE EA REPORTS" in fix
     assert "api.patch(`/accounts/${account.id}`, { server: server.trim() })" in fix
     assert "adopt-reported-server-" in fix and "edit-server-save-" in fix
     qi = _read("frontend", "src", "components", "QuickInstallPanel.jsx")
     assert qi.count("<ServerMismatchFix account={account} onFixed={onTrusted} />") == 2   # paired + unpaired branches
-    assert 'LATEST_EA_VERSION = "1.63"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
+    assert 'LATEST_EA_VERSION = "1.6' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
 
 
 # ── P3 · one canonical host ─────────────────────────────────────────────────────────────────────────
@@ -331,7 +331,7 @@ def test_p3_canonical_host_everywhere():
     mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
     assert '#define SERVER_URL_DEFAULT "https://stoicaibot.com"' in mq5
     assert 'input string ServerUrl              = "https://stoicaibot.com"' in mq5
-    assert "www.stoicaibot.com" not in mq5
+    assert mq5.count("www.stoicaibot.com") == 1 and 'if (t == "https://www.stoicaibot.com") return true;' in mq5   # U8 legacy-default list only
     assert "www.stoicaibot.com" not in _read("backend", "static", "STOIC-Installer.ps1")
     assert 'default="https://stoicaibot.com"' in _read("scripts", "live_probe.py")
     assert "-ServerUrl https://stoicaibot.com" in _read("scripts", "spike_webrequest_startup.ps1")

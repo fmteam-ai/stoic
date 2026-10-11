@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 const INPUT = "w-full bg-black border border-[#1F1F1F] px-3 py-2 text-sm font-mono text-white focus:border-[#FFD700] outline-none";
 const norm = (s) => String(s || "").trim();
@@ -11,12 +12,14 @@ const norm = (s) => String(s || "").trim();
  *  PATCH /accounts/{id}: label/group are plain; a server change is step-up MFA (api interceptor prompts), audited,
  *  and resets the verified chain so the next heartbeat re-verifies. */
 export function EditAccountDialog({ account, open, onClose, onSaved }) {
+    const { user } = useAuth();
+    const isAdmin = user?.role === "admin";          // U3 — the server name is adopted from the EA; only admins edit it by hand
     const [label, setLabel] = useState("");
     const [group, setGroup] = useState("");
     const [server, setServer] = useState("");
     const [suggest, setSuggest] = useState(null);
     const [busy, setBusy] = useState(false);
-    const isLive = account && account.mode !== "paper";
+    const isLive = account && account.mode !== "paper" && isAdmin;
 
     useEffect(() => {
         if (!open || !account) return;
@@ -58,7 +61,7 @@ export function EditAccountDialog({ account, open, onClose, onSaved }) {
             <DialogContent className="bg-[#0A0A0A] border-[#1F1F1F] text-white max-w-md" data-testid={`edit-account-dialog-${account.account_number}`}>
                 <DialogHeader>
                     <DialogTitle className="font-display">Edit account</DialogTitle>
-                    <DialogDescription className="font-mono text-xs text-[#71717A]">{account.broker} · #{account.account_number}{isLive ? "" : " · paper"}</DialogDescription>
+                    <DialogDescription className="font-mono text-xs text-[#71717A]">{account.broker} · #{account.account_number}{account.mode === "paper" ? " · paper" : ""}</DialogDescription>
                 </DialogHeader>
                 <div className="space-y-3">
                     <label className="block text-[10px] font-mono tracking-widest text-[#A1A1AA]">LABEL
@@ -67,6 +70,11 @@ export function EditAccountDialog({ account, open, onClose, onSaved }) {
                     <label className="block text-[10px] font-mono tracking-widest text-[#A1A1AA]">GROUP <span className="text-[#52525B]">(optional)</span>
                         <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="AGGRESSIVE, PROP, FAMILY…" className={`${INPUT} mt-1`} data-testid="edit-account-group" maxLength={40} />
                     </label>
+                    {account.mode !== "paper" && !isAdmin && (
+                        <div className="text-[11px] text-[#71717A]" data-testid="edit-account-server-auto">
+                            MT5 server: <span className="font-mono text-[#A1A1AA]">{account.server || "— filled from the EA's first heartbeat"}</span> · adopted automatically from the EA
+                        </div>
+                    )}
                     {isLive && (
                         <label className="block text-[10px] font-mono tracking-widest text-[#A1A1AA]">MT5 SERVER <span className="text-[#52525B]">(exact name MT5 shows)</span>
                             <input value={server} onChange={(e) => setServer(e.target.value)} className={`${INPUT} mt-1`} data-testid="edit-account-server" maxLength={64} />

@@ -31,13 +31,14 @@ async def B1(db, cfg):
 async def B2(db, cfg):
     by_ip: dict = {}
     for e in await events(db, "bridge_invalid_token", minutes=5):
-        if (e.get("detail") or {}).get("retired"):
-            continue                                   # S2 — an old EA still polling with a rotated token
+        if (e.get("detail") or {}).get("retired") or (e.get("detail") or {}).get("deleted_account"):
+            continue                                   # S2 — an old EA still polling with a rotated token / U18 — deleted account (its own info finding)
         by_ip[e.get("ip") or "?"] = by_ip.get(e.get("ip") or "?", 0) + int((e.get("detail") or {}).get("count") or 1)
     lim = th(cfg, "B2", "invalid_token_5m", 100)
     # S2 — never block an address that ALSO heartbeats with a valid token (a VPS running several EAs).
     # M1 — read the per-IP last-valid-heartbeat record (hb_valid_ips), not the throttled sightings.
-    since = iso_ago(minutes=5)
+    # O1 (Phase 1) — the exemption window is 10 min (an operator re-attaching EAs pauses heartbeats for a while).
+    since = iso_ago(minutes=10)
     valid_ips = set()
     async for r in db.hb_valid_ips.find({"last_at": {"$gte": since}}, {"_id": 1}).limit(5000):
         valid_ips.add(r["_id"])

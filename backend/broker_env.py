@@ -138,7 +138,7 @@ def attested_environment(account: dict) -> str:
     att = account.get("environment_attestation") or {}
     if (str(att.get("environment") or "").upper() == "DEMO" and att.get("approved_by")
             and att.get("identity_hash") == attestation_identity(account)
-            and (att.get("proof") or {}).get("verifier") in ("ea_heartbeat", "admin_override")
+            and (att.get("proof") or {}).get("verifier") in ("ea_heartbeat", "admin_override", "ea_heartbeat_auto")   # U9
             and broker_environment(account) == "DEMO"):
         return "DEMO"
     return "LIVE"

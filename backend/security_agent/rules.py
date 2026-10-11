@@ -111,9 +111,20 @@ def evaluate(finding: dict, cfg: dict) -> list[dict]:
         p("R7", "account", (ev.get("event") or {}).get("account_id"), 0, note="until admin clears")
     if cid == "A7" and int(ev.get("top_ip_rpm") or 0) >= 300:
         p("R8", "ip", ev.get("top_ip"), ipm)
+    kept = []
     for prop in out:
         assert prop["action"] not in FORBIDDEN_ACTIONS
         assert target_kind_valid(prop["action"], prop["target_kind"]), (prop["rule"], prop["action"], prop["target_kind"])
+        # O1 (Phase 1) — a Cloudflare edge address as "attacker" means the client-IP chain is misconfigured
+        # (TRUST_CF_CONNECTING_IP not true): no block proposal, no CRITICAL escalation — a proxy finding instead.
+        if prop["target_kind"] == "ip" and is_cloudflare(prop["target"]):
+            prop.update(action="none", undo=None, blocked_by="cloudflare_edge", reclassified="proxy_misconfiguration",
+                        severity_override="high",
+                        note="source is a Cloudflare edge IP — the real client IP is in CF-Connecting-IP; "
+                             "set TRUST_CF_CONNECTING_IP=true in backend/.env (deploy/doctor.sh checks it)")
+            kept.append(prop)
+            continue
         if is_protected(cfg, prop["target_kind"], prop["target"]):
             prop.update(blocked_by="protected_target", severity_escalation="critical")
-    return out
+        kept.append(prop)
+    return kept

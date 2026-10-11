@@ -81,6 +81,27 @@ async def _account_by_token(token: str) -> dict:
         return acc
     if not acc:
         from security_agent.events import emit_throttled as _sa_emit_t
+        # U18 (Phase 1) — a deleted account's EA keeps polling: tell it to stop (410) and file ONE info finding.
+        from account_tombstones import find_by_token_hash, note_poll
+        tomb = await find_by_token_hash(db, bt.token_hash(token))
+        if tomb:
+            from security_agent.events import request_ip as _sa_ip
+            first = await note_poll(db, tomb, ip=_sa_ip.get())
+            logger.info("bridge 410 reason=account_deleted account=%s first_poll=%s", tomb["_id"], first)
+            await _sa_emit_t(db, "bridge_invalid_token", {"token_prefix": str(token)[:4], "retired": False, "deleted_account": tomb["_id"]}, window_s=60)
+            if first:
+                try:
+                    from security_agent.checks.common import f as _finding
+                    from security_agent.findings import open_or_update
+                    await open_or_update(db, _finding("deleted_account_poll", f"account:{tomb['_id']}", "low", "bridge",
+                                                      f"EA of deleted account {tomb.get('label') or tomb['_id']} (#{tomb.get('account_number')}) still polls — "
+                                                      "told to stop with HTTP 410; remove the EA from that terminal",
+                                                      {"account_id": tomb["_id"], "deleted_at": tomb.get("deleted_at"), "ip": _sa_ip.get()}))
+                except Exception as _sw:  # noqa: BLE001 — a finding is a courtesy; the 410 is the contract
+                    record_swallow("bridge", "tombstone_finding", _sw)
+            raise HTTPException(status_code=410, detail={
+                "code": "account_deleted",
+                "message": "This account was removed on the STOIC dashboard — the EA should stop; remove it from the chart."})
         # S2 — a rotated (retired) token is an old EA, not an attacker; S15 — one event per IP per 10 s
         retired = await bt.is_retired(db, token)
         _owner = None
@@ -277,6 +298,16 @@ async def heartbeat(payload: BridgeHeartbeat):
                 f"but this STOIC account is configured for {configured}. "
                 "Attach the EA to the correct MT5 terminal."
             )
+
+    # U2 (Phase 1) — same login, token-authenticated EA, different/empty server name → adopt it (audited).
+    # Runs BEFORE the identity chain so the chain verifies against the adopted name on this very heartbeat.
+    if not mismatch and payload.account_login is not None and payload.broker_server:
+        try:
+            from server_adopt import maybe_adopt_reported_server
+            await maybe_adopt_reported_server(db, acc, payload.account_login, payload.broker_server,
+                                              installation_id=payload.installation_id)
+        except Exception as _sw:  # noqa: BLE001 — adoption is a convenience; the heartbeat must still land
+            record_swallow("bridge", "server_auto_adopt", _sw)
 
     # iter-122 Phase 3 — verified installation identity. When the EA reports
     # an installation_id, the heartbeat is AUTHORITATIVE only if the full
@@ -692,6 +723,16 @@ async def heartbeat(payload: BridgeHeartbeat):
         hb_update["$unset"] = unset_doc
     await db.accounts.update_one({"_id": acc["_id"]}, hb_update)
 
+    # U9 (Phase 1) — automatic DEMO attestation / void from broker truth + signed EA (fail closed, audited)
+    try:
+        import auto_attest
+        _fresh = {**acc, **set_doc}
+        for _k in unset_doc:
+            _fresh.pop(_k, None)
+        await auto_attest.apply(db, _fresh)
+    except Exception as _sw:  # noqa: BLE001 — attestation is derived state; the heartbeat must still land
+        record_swallow("bridge", "auto_attest", _sw)
+
     # EA-deployment machine + execution-owner lease renewal (iter-114).
     try:
         from vps_agent import on_ea_heartbeat
@@ -942,17 +983,19 @@ _LOCKED_LEVELS = {"CLOSE_ONLY", "PAUSED", "EMERGENCY", "LOCKED"}
 
 
 async def position_mode_resolution(db, acc: dict) -> dict:
-    """A6/H1 — netting vs hedging, in authority order: admin setting on the account →
-    mode reported by the EA (if ever sent) → broker-server registry entry → hedging.
-    The EA (≤ v1.57) never reports ACCOUNT_MARGIN_MODE, so without an admin setting
-    or a registry entry an account is treated as HEDGING — shown on the account card."""
+    """A6/H1 — netting vs hedging. U10 (Phase 1): the mode the EA reads from the broker
+    (ACCOUNT_MARGIN_MODE, every heartbeat since 1.57) is the truth and comes FIRST; an admin setting applies
+    only while no EA report exists, and is flagged when it contradicts the broker. Then registry → hedging."""
     ov = acc.get("position_mode_override") or {}
-    if str(ov.get("mode") or "").lower() in ("netting", "hedging"):
-        return {"mode": str(ov["mode"]).lower(), "source": "admin", "by": ov.get("by"), "at": ov.get("at")}
     ident = acc.get("ea_identity") or {}
     mode = str(acc.get("margin_mode") or ident.get("margin_mode") or "").lower()
     if mode in ("netting", "hedging"):
-        return {"mode": mode, "source": "ea"}
+        out = {"mode": mode, "source": "ea", "reported_at": acc.get("margin_mode_reported_at")}
+        if str(ov.get("mode") or "").lower() in ("netting", "hedging") and str(ov["mode"]).lower() != mode:
+            out["admin_override_contradicted"] = {"mode": str(ov["mode"]).lower(), "by": ov.get("by"), "at": ov.get("at")}
+        return out
+    if str(ov.get("mode") or "").lower() in ("netting", "hedging"):
+        return {"mode": str(ov["mode"]).lower(), "source": "admin", "by": ov.get("by"), "at": ov.get("at")}
     from broker_registry import merged_capabilities, resolve_registry
     # H1 leftover — the registry is keyed by the server name the EA REPORTS
     # (ACCOUNT_SERVER); the user-typed name is only a fallback and is marked.

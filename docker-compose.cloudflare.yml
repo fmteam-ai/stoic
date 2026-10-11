@@ -6,6 +6,11 @@
 # proxied (orange cloud) the whole time — no HTTP-01 challenge, no grey-cloud
 # step. Cloudflare SSL/TLS mode must be "Full (strict)".
 services:
+  # O2 (Phase 1) — the backend learns that the Cloudflare overlay is active (demo_readiness fails closed when
+  # TRUST_CF_CONNECTING_IP is not true behind it)
+  backend:
+    environment:
+      CLOUDFLARE_MODE: "true"
   caddy:
     volumes:
       - ./deploy/cloudflare/Caddyfile:/etc/caddy/Caddyfile:ro

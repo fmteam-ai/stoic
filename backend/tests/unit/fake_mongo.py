@@ -48,6 +48,8 @@ def _match(doc, q):
                     return False
                 if op == "$regex" and not re.search(arg, str(cur or "")):
                     return False
+        elif isinstance(cur, list) and not isinstance(v, (list, dict)) and v in cur:
+            continue                                       # Mongo array-contains semantics
         elif cur != v:
             return False
     return True

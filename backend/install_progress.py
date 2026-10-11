@@ -183,6 +183,12 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
                            + (f" · EA {rej.get('ea_version')}" if rej.get("ea_version") else "")
                            + (f" · token length {rej.get('token_len')}" if rej.get("token_len") else ""),
                            _rejection_hint(rej)))
+    elif hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing and sc.get("webrequest_ok") is False:
+        # U16 — the EA itself reported WebRequest error 4014 (it recovered enough to say so): MT5 blocks the address
+        steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "warn",
+                           f"heartbeating, last {_fmt_age(hb_age)}{tail} — but the EA reported that MT5 blocks the address (WebRequest 4014)",
+                           f"MT5 blocks the address: Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' and add exactly {url or 'the STOIC server URL'} "
+                           "(copy it from the Quick Install panel), OK, then re-attach the EA. The check turns green on the next heartbeat"))
     elif hb_age is not None and hb_age <= HEARTBEAT_FRESH_S and hb_after_pairing and sc.get("autotrading") is False:
         steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "warn",
                            f"heartbeating, last {_fmt_age(hb_age)}{tail} — but AutoTrading is OFF",
@@ -203,7 +209,8 @@ def derive(account: dict, pairing: dict | None, installation: dict | None, *, at
         else:
             steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "blocked",
                                f"no heartbeat since pairing ({_fmt_age(since)})",
-                               f"Most likely the WebRequest URL is missing: Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' and add {url or 'the STOIC server URL'}. "
+                               f"No request from this terminal has reached the server — MT5 blocks the address or the EA is not on a chart. "
+                               f"Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' and add {url or 'the STOIC server URL'}. "
                                "Then attach EmergentTradingBridge (Navigator → Experts) leaving its inputs at default (server URL, token and installation id are auto-loaded), AutoTrading ON, and check the Experts tab for errors"))
     elif hb_age is not None:
         steps.append(_step("heartbeat", "EA heartbeat (WebRequest allowed · EA attached)", "warn",

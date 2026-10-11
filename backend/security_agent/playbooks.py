@@ -67,6 +67,13 @@ PLAYBOOKS = {
     "protected_target": ("Containment refused: protected target", "A rule would have locked the master admin or a protected IP — either the allow-list is wrong or the attack comes from inside it.",
                          ["Check SECURITY_AGENT_PROTECTED_IPS and the source in the evidence.", "If the source is really hostile, block it at Cloudflare manually."],
                          "No new protected_target findings for this target."),
+    # Phase 1 (U18 / O1)
+    "deleted_account_poll": ("EA of a deleted account still polling", "Noise, not an attack: the account was removed on the dashboard but the EA is still attached on the VPS (it is told to stop with HTTP 410).",
+                             ["Remove EmergentTradingBridge from that terminal's chart (EA 1.64+ stops by itself).", "Re-add the account on the dashboard if it should trade again."],
+                             "No further polls from the tombstoned token."),
+    "proxy_misconfiguration": ("Cloudflare edge IP seen as client", "Behind Cloudflare the client IP arrives in CF-Connecting-IP; without TRUST_CF_CONNECTING_IP=true every user shares the edge IP and rate limits / lockouts / blocks hit everyone.",
+                               ["Set TRUST_CF_CONNECTING_IP=true in backend/.env and restart the backend (deploy/doctor.sh checks it).", "Confirm TRUSTED_PROXY_CIDRS covers the Caddy/nginx hops."],
+                               "Findings carry real client IPs again; no Cloudflare ranges as sources."),
     "containment_cap_reached": ("Containment cap reached", "The agent hit its hourly action cap and is alert-only — a large attack or a misfiring rule.",
                                 ["Review security_actions for the last hour; raise SECURITY_AGENT_MAX_ACTIONS_PER_HOUR only if every action was right.",
                                  "Block the dominant source at Cloudflare."], "Actions per hour back under the cap."),
