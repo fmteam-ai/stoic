@@ -1177,6 +1177,8 @@ async def trade_predictions(request: Request, symbol: str = "XAUUSD", limit: int
         raise HTTPException(status_code=422, detail="invalid symbol")
     limit = max(1, min(int(limit or 20), 200))
     db = get_db()
+    from security import rate_limit
+    await rate_limit(db, "trade_predictions", f"user:{user['id']}", 60, 60, "Too many track-record requests", request=request)   # SEC-022-3
     sync = await pt.sync_outcomes(db, user["id"], symbol)
     base = base_symbol(symbol)
     rows = await db[pt.COLLECTION].find({"user_id": user["id"], "base": base}, {"_id": 0}).to_list(length=5000)

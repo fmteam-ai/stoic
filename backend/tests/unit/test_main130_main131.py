@@ -279,3 +279,12 @@ def test_p0_02_model_manifest_resign_workflow_uses_the_external_signer_and_refus
     assert "workflow_dispatch" in wf and "RELEASE_SIGNER: external" in wf and "python -m model_manifest resign --commit" in wf
     assert "python -m model_manifest verify --build" in wf and 'stoic-release-ed25519-v1' in wf and "git push origin HEAD:" in wf and "--force" not in wf
     assert "signer_probe.py" in wf and "contents: write" in wf
+
+
+# ── Security audit #22 P3 fixes ───────────────────────────────────────────────────────────────────────
+def test_sec022_pattern_gate_toggle_uses_mfa_admin_gate_and_predictions_rate_limited():
+    bot = _read("backend", "routes", "bot_routes.py").split('"pattern_gate_enabled" in update')[1][:700]
+    assert "require_admin(user)" in bot and "pattern_gate_enabled_changed" in bot
+    tr = _read("backend", "routes", "trade_routes.py").split('@router.get("/predictions")')[1].split("@router.")[0]
+    assert 'rate_limit(db, "trade_predictions", f"user:{user[\'id\']}", 60, 60' in tr
+    assert os.path.exists(os.path.join(ROOT, "docs", "SECURITY_AUDIT_22.md"))
