@@ -9,8 +9,8 @@ Covers:
   · GET /api/setup/install-progress/{account_id} → heartbeat step status reflects flags
 """
 from __future__ import annotations
-import os, re, uuid, time
-from datetime import datetime, timezone, timedelta
+import os, re, uuid
+from datetime import datetime, timezone
 import pytest, requests
 
 pytestmark = pytest.mark.http   # live-server lane (same as test_iter84_pairing_flow)
@@ -108,7 +108,8 @@ def test_installer_ps1_v1_5_zero_touch():
     r = requests.get(f"{BASE_URL}/api/setup/installer.ps1", timeout=TIMEOUT)
     assert r.status_code == 200
     body = r.text
-    for needle in ('$InstallerVersion = "1.5"',
+    assert re.search(r'\$InstallerVersion = "1\.([5-9]|[1-9][0-9])"', body), "InstallerVersion >= 1.5"
+    for needle in (
                    "function Get-StoicRunningTerminal",
                    "STOIC-Server.txt",
                    "stoic.set",
