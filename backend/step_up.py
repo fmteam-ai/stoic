@@ -30,7 +30,9 @@ STEP_UP_ACTIONS = {"live_activation", "risk_raise", "panic_release", "api_key_cr
                    # SEC-001 (main99) — trusting a terminal mints the verified identity chain
                    "terminal_trust",
                    # M122-P2 — correcting the broker server name resets the verified chain
-                   "account_server_edit"}
+                   "account_server_edit",
+                   # prod v1.60.23 (bug 2c) — changing the declared account type (demo ↔ live) re-classifies the environment
+                   "account_type_edit"}
 
 
 def _hash_token(token: str) -> str:

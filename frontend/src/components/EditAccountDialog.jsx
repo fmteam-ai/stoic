@@ -17,6 +17,7 @@ export function EditAccountDialog({ account, open, onClose, onSaved }) {
     const [label, setLabel] = useState("");
     const [group, setGroup] = useState("");
     const [server, setServer] = useState("");
+    const [acctType, setAcctType] = useState("");          // prod v1.60.23 (bug 2c) — demo ↔ live correction, step-up protected
     const [suggest, setSuggest] = useState(null);
     const [busy, setBusy] = useState(false);
     const isLive = account && account.mode !== "paper" && isAdmin;
@@ -24,6 +25,7 @@ export function EditAccountDialog({ account, open, onClose, onSaved }) {
     useEffect(() => {
         if (!open || !account) return;
         setLabel(account.label || ""); setGroup(account.group || ""); setServer(account.server || ""); setSuggest(null);
+        setAcctType(account.broker_environment === "DEMO" || account.account_type === "demo" ? "demo" : (account.account_type || "microcent"));
     }, [open, account]);
 
     useEffect(() => {
@@ -37,10 +39,13 @@ export function EditAccountDialog({ account, open, onClose, onSaved }) {
 
     if (!account) return null;
     const serverChanged = isLive && norm(server) !== norm(account.server);
+    const currentType = account.broker_environment === "DEMO" || account.account_type === "demo" ? "demo" : (account.account_type || "microcent");
+    const typeChanged = account.mode !== "paper" && acctType && acctType !== currentType;
     const changes = {
         ...(norm(label) !== norm(account.label) ? { label: norm(label) } : {}),
         ...(norm(group) !== norm(account.group) ? { group: norm(group) } : {}),
         ...(serverChanged ? { server: norm(server) } : {}),
+        ...(typeChanged ? { account_type: acctType } : {}),
     };
     const dirty = Object.keys(changes).length > 0;
 
@@ -49,7 +54,8 @@ export function EditAccountDialog({ account, open, onClose, onSaved }) {
         setBusy(true);
         try {
             await api.patch(`/accounts/${account.id}`, changes);
-            toast.success(serverChanged ? `Saved — server is now ${changes.server}; the chain re-verifies on the next heartbeat` : "Account updated");
+            toast.success(serverChanged ? `Saved — server is now ${changes.server}; the chain re-verifies on the next heartbeat`
+                : typeChanged ? `Saved — account type is now ${acctType.toUpperCase()}${acctType === "demo" ? " (environment DEMO; attestation re-earned on the next heartbeat)" : ""}` : "Account updated");
             onSaved && onSaved();
             onClose();
         } catch (e) { toast.error("Could not save", { description: formatApiError(e) }); }
@@ -70,6 +76,18 @@ export function EditAccountDialog({ account, open, onClose, onSaved }) {
                     <label className="block text-[10px] font-mono tracking-widest text-[#A1A1AA]">GROUP <span className="text-[#52525B]">(optional)</span>
                         <input value={group} onChange={(e) => setGroup(e.target.value)} placeholder="AGGRESSIVE, PROP, FAMILY…" className={`${INPUT} mt-1`} data-testid="edit-account-group" maxLength={40} />
                     </label>
+                    {account.mode !== "paper" && (
+                        <label className="block text-[10px] font-mono tracking-widest text-[#A1A1AA]">TYPE <span className="text-[#52525B]">(demo or live — security code required)</span>
+                            <select value={acctType} onChange={(e) => setAcctType(e.target.value)} className={`${INPUT} mt-1`} data-testid="edit-account-type">
+                                <option value="demo">DEMO — practice money</option>
+                                <option value="live">LIVE — real money (standard)</option>
+                                <option value="microcent">LIVE — real money (micro-cent)</option>
+                                <option value="cent">LIVE — real money (cent)</option>
+                                <option value="standard">LIVE — real money (standard)</option>
+                            </select>
+                            {typeChanged && <span className="block mt-1 text-[11px] text-[#FFB000]" data-testid="edit-account-type-note">Changing the type re-classifies the account; the broker's own trade mode still wins.</span>}
+                        </label>
+                    )}
                     {account.mode !== "paper" && !isAdmin && (
                         <div className="text-[11px] text-[#71717A]" data-testid="edit-account-server-auto">
                             MT5 server: <span className="font-mono text-[#A1A1AA]">{account.server || "— filled from the EA's first heartbeat"}</span> · adopted automatically from the EA

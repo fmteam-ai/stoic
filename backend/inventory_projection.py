@@ -72,6 +72,12 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
         bot_rows.setdefault(str(aid_b), []).append(bool(b.get("active")))
     account_ids_seen: set = set()
     rows, violations = [], []
+    # prod v1.60.23 (bug 3) — a defect or rule breach of ONE account closes ONLY that account: never the owner's
+    # other accounts, never other users. Keyed by account id; per_user_blocks keeps the per-owner texts for the notice.
+    per_account_blocks: dict = {}
+
+    def _acct_block(aid, text):
+        per_account_blocks.setdefault(str(aid), []).append(text)
     counts = {"expected_accounts": exp.get("accounts"), "expected_enabled": exp.get("enabled"),
               "expected_bots": exp.get("bots"), "configured": 0, "live_configured": 0, "enabled": 0,
               "live_enabled": 0, "bots_enabled": 0, "connected": 0, "fresh": 0, "tradable": 0,
@@ -94,6 +100,7 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
         acc_bots = bot_rows.get(aid, [])
         if len(acc_bots) > 1:
             counts["bots_duplicate"] += len(acc_bots) - 1
+            _acct_block(aid, f"{len(acc_bots)} bot configurations (exactly one required)")
             violations.append(f"{acc.get('label') or aid}: {len(acc_bots)} bot configurations (exactly one required)")
         env = str(acc.get("mode") or "demo").lower()
         enabled = acc.get("trading_enabled") is True
@@ -121,9 +128,11 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
         counts["fresh"] += fresh
         counts["tradable"] += tradable
         if enabled != bot_on:
+            _acct_block(aid, f"enabled account/bot relation broken (account_enabled={enabled}, bot_enabled={bot_on})")
             violations.append(f"{acc.get('label') or aid}: enabled account/bot relation broken "
                               f"(account_enabled={enabled}, bot_enabled={bot_on})")
-    structural = list(violations)          # duplicates / broken 1:1 so far — always blocking
+    account_scoped_texts = set(violations)      # bug 3 — per-account defects are NOT platform-wide structural defects
+    structural = []
     orphans = [a for a in bot_rows if a not in account_ids_seen]
     if orphans:
         counts["bots_orphan"] = len(orphans)
@@ -132,7 +141,7 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
     # only an ACTIVE account-less bot is a structural defect (an inactive default profile can never trade)
     if raw_bots["null_account_active"] > 0:
         violations.append(f"{raw_bots['null_account_active']} ACTIVE bot configuration(s) with no account id")
-    structural = list(violations)
+    structural = [v for v in violations if v not in account_scoped_texts]
     # Phase 3 (U12/U14) — an active RULES policy replaces the fixed-count expectation: violations are rule
     # breaches (enabled account not admitted, demo-only breached, per-user cap), never "ids differ from the set"
     import rules_policy as _rp
@@ -149,14 +158,20 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
         for a in docs:
             if a.get("mode") != "paper" and a.get("trading_enabled") is True:      # Easy Start — disabled accounts do not count
                 by_user[a.get("user_id")] = by_user.get(a.get("user_id"), 0) + 1
-        over = [u for u, n in by_user.items() if n > int(rules.get("max_accounts_per_user") or 0)]
+        cap = int(rules.get("max_accounts_per_user") or 0)
+        over = [u for u, n in by_user.items() if n > cap]
         for u in over:
-            _user_block(u, f"{by_user[u]} accounts above the policy cap of {rules.get('max_accounts_per_user')}")
+            # bug 3 — only the accounts BEYOND the cap (youngest first, same ranking as cap_count_query) are blocked
+            mine = sorted((a for a in docs if a.get("user_id") == u and a.get("mode") != "paper" and a.get("trading_enabled") is True), key=lambda a: str(a["_id"]))
+            for a in mine[cap:]:
+                _acct_block(a["_id"], f"beyond the policy cap of {cap} enabled account(s) — disable it or an older one")
+            _user_block(u, f"{by_user[u]} accounts above the policy cap of {cap}")
         if over:
-            violations.append(f"{len(over)} user(s) above the policy cap of {rules.get('max_accounts_per_user')} account(s) (close-only for those users)")
+            violations.append(f"{len(over)} user(s) above the policy cap of {cap} account(s) (close-only for those accounts)")
         not_admitted = [a for a in docs
                         if a.get("trading_enabled") and a.get("mode") != "paper" and (a.get("admission") or {}).get("state") != "admitted"]
         for a in not_admitted:
+            _acct_block(a["_id"], "enabled but not admitted by the rules policy" + ((": " + str((a.get("admission") or {}).get("reason"))) if (a.get("admission") or {}).get("reason") else ""))
             _user_block(a.get("user_id"), f"{a.get('label') or a['_id']} enabled but not admitted by the rules policy")
         if not_admitted:
             violations.append("enabled account(s) not admitted by the rules policy: " + ", ".join(a.get("label") or str(a["_id"]) for a in not_admitted[:3]))
@@ -165,11 +180,12 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
             not_demo = [a for a in docs
                         if a.get("trading_enabled") and a.get("mode") != "paper" and _ae(a) != "DEMO"]
             for a in not_demo:
+                _acct_block(a["_id"], "enabled but not attested DEMO (demo-only policy)")
                 _user_block(a.get("user_id"), f"{a.get('label') or a['_id']} enabled but not attested DEMO (demo-only policy)")
             if not_demo:
                 violations.append("demo-only policy but enabled account(s) not attested DEMO: " + ", ".join(a.get("label") or str(a["_id"]) for a in not_demo[:3]))
     # platform-wide list = everything that is NOT a per-user rule breach
-    per_user_texts = {v for v in violations if "(close-only for those users)" in v or v.startswith("enabled account(s) not admitted") or v.startswith("demo-only policy but enabled account(s)")}
+    per_user_texts = {v for v in violations if "(close-only for those accounts)" in v or v.startswith("enabled account(s) not admitted") or v.startswith("demo-only policy but enabled account(s)")} | account_scoped_texts
     if exp and not rules:
         expiry = policy_expiry(exp)
         if expiry["expired"]:
@@ -225,12 +241,12 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
             "approved_at": (approved or {}).get("at"), "unapproved_change": unapproved_change,
             "structural_defects": structural,
             "violations": violations, "platform_violations": platform_violations,
-            "per_user_blocks": per_user_blocks, "auto_approval_due": auto_approval_due,
+            "per_user_blocks": per_user_blocks, "per_account_blocks": per_account_blocks, "auto_approval_due": auto_approval_due,
             "approval_mode": approval_mode(),
             "approved_mode": (approved or {}).get("approval_mode"),
             "blocking": bool(structural) or (bool(platform_violations) and (prod or bool(exp or approved))),
             "approvable": not blocking, "blocking_violations": blocking,
-            "note": "Canonical inventory projection — counts are never collapsed; rule breaches are per user."}
+            "note": "Canonical inventory projection — counts are never collapsed; defects and rule breaches are per ACCOUNT."}
 
 
 async def auto_approve_under_rules(db, scope_user_id: str | None = None) -> dict | None:

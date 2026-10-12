@@ -633,6 +633,17 @@ export default function Accounts() {
                                                     {live ? <><PlugsConnected className="w-3 h-3 inline mr-1" /> CONNECTED</> : "● DISCONNECTED"}
                                                 </span>
                                                 {a.mode !== "paper" && <InstallProgressChip accountId={a.id} />}
+                                                {(() => {
+                                                    // prod v1.60.23 (bug 3) — no ON switch for an account the rules policy has not admitted: show the reason instead
+                                                    const adm = a.admission || {};
+                                                    const notAdmitted = a.mode !== "paper" && a.trading_enabled !== true && adm.state && adm.state !== "admitted";
+                                                    if (notAdmitted) return (
+                                                        <span data-testid={`trading-not-admitted-${a.account_number}`} title={adm.reason || "not admitted by the rules policy"}
+                                                            className="font-mono text-[10px] tracking-widest px-2 py-0.5 border border-[#FFB000]/40 text-[#FFB000] bg-[#FFB000]/10 max-w-[260px] truncate">
+                                                            ⏻ NOT ADMITTED · {adm.reason || "waiting for the rules policy"}
+                                                        </span>
+                                                    );
+                                                    return (
                                                 <button
                                                     onClick={() => patchAccount(a.id, { trading_enabled: a.trading_enabled !== true },
                                                         a.trading_enabled !== true ? `Trading enabled on ${a.label}` : `Trading disabled on ${a.label}`)}
@@ -647,6 +658,8 @@ export default function Accounts() {
                                                     }`}>
                                                     {a.trading_enabled !== true ? "⏻ TRADING OFF" : "⏻ TRADING ON"}
                                                 </button>
+                                                    );
+                                                })()}
                                                 {a.trading_enabled !== false && (() => {
                                                     const c = certMap[a.id];
                                                     if (!c || c.passed >= c.total) return null;
