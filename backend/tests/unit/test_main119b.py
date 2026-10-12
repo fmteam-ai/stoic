@@ -251,6 +251,9 @@ def test_pairing_evaluator_ignores_orphan_tokens(monkeypatch):
 def test_delete_routes_call_cleanup():
     for f in ("account_routes.py", "crypto_routes.py"):
         src = open(os.path.join(ROOT, "backend", "routes", f)).read()
+        if f == "account_routes.py":       # P1-01 (main131): both delete paths share account_deletion.purge_account
+            assert "purge_account" in src
+            src = open(os.path.join(ROOT, "backend", "account_deletion.py")).read()
         assert "cleanup_deleted_account" in src
 
 

@@ -137,6 +137,48 @@ async def admin_demo_readiness_manual(payload: dict, request: Request, user=Depe
         raise HTTPException(status_code=404, detail="unknown checklist step")
 
 
+@router.post("/admin/accounts/{account_id}/force-delete")
+async def admin_force_delete_account(account_id: str, payload: dict, request: Request, user=Depends(get_current_user)):
+    """P1-01 (main131) — the ONLY way past the normal delete's refusals. Admin + step-up MFA, a fresh broker
+    reconciliation first, an explicit position disposition and a reason, one audit chain entry."""
+    _admin_only(user)
+    db = get_db()
+    from step_up import require_step_up
+    await require_step_up(db, user, request, "authority_relax")
+    from account_deletion import DISPOSITIONS, purge_account
+    disposition = str(payload.get("disposition") or "").strip()
+    reason = str(payload.get("reason") or "").strip()
+    if disposition not in DISPOSITIONS:
+        raise HTTPException(status_code=422, detail={"code": "disposition_required", "allowed": list(DISPOSITIONS)})
+    if len(reason) < 10:
+        raise HTTPException(status_code=422, detail={"code": "reason_required", "message": "state why the normal delete was refused and what was verified (≥ 10 chars)"})
+    oid = parse_object_id(account_id, "Account")
+    acc = await db.accounts.find_one({"_id": oid})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    from trade_reconciler import reconcile_user
+    try:
+        recon = await reconcile_user(acc["user_id"], force=False)      # fresh reconciliation against the last broker truth
+    except Exception as e:  # noqa: BLE001 — the reconciliation outcome is recorded, never hidden
+        recon = {"error": type(e).__name__}
+    counts = {"open_pending": await db.trades.count_documents({"account_id": account_id, "status": {"$in": ["open", "pending"]}}),
+              "unknown_intents": await db.execution_intents.count_documents({"account_id": account_id, "status": "unknown"})}
+    if counts["open_pending"] and disposition == "no_positions":
+        raise HTTPException(status_code=409, detail={"code": "disposition_mismatch", "message": f"{counts['open_pending']} open/pending trade(s) remain after reconciliation — choose how they are disposed", **counts})
+    now = _now_iso()
+    if counts["open_pending"]:
+        await db.trades.update_many({"account_id": account_id, "status": {"$in": ["open", "pending"]}},
+                                    {"$set": {"status": "closed", "close_reason": f"admin_force_delete:{disposition}", "closed_at": now, "pnl_unknown": True}})
+    cleanup = await purge_account(db, acc, deleted_by=f"admin:{user.get('email') or user['id']}")
+    from audit_chain import append_chained
+    await append_chained(db, {"actor_email": user.get("email"), "action": "account_force_deleted", "target_kind": "account", "target_id": account_id,
+                              "reason": reason, "at": now,
+                              "meta": {"owner_user_id": acc.get("user_id"), "label": acc.get("label"), "broker": acc.get("broker"),
+                                       "account_number": acc.get("account_number"), "disposition": disposition, "reconciliation": recon,
+                                       "counts_after_reconciliation": counts, "last_heartbeat": acc.get("last_heartbeat")}})
+    return {"ok": True, "disposition": disposition, "reconciliation": recon, "counts_after_reconciliation": counts, **cleanup}
+
+
 @router.get("/admin/acceptance/current")
 async def admin_acceptance_current(user=Depends(get_current_user)):
     """A13 P1-01 — latest signed operational acceptance bundle vs the running release."""

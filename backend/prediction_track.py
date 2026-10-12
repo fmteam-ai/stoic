@@ -142,4 +142,7 @@ async def sync_outcomes(db, user_id: str, symbol: str, scan_limit: int = 500) ->
             final += 1
         else:
             pending.append(row)
-    return {"base": base, "scanned": len(decisions), "stored_new": final, "pending": pending}
+    last_bar = bars[-1]["t"] if bars else None
+    as_of = datetime.fromtimestamp(float(last_bar), tz=timezone.utc).isoformat() if isinstance(last_bar, (int, float)) else (str(last_bar) if last_bar else None)
+    return {"base": base, "scanned": len(decisions), "stored_new": final, "pending": pending,
+            "as_of": as_of, "t_basis": cdoc.get("t_basis"), "bars_n": len(bars)}

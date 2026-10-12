@@ -295,8 +295,8 @@ def test_b9_gate_rules():
 def test_b10_observe_only_wiring():
     br = _read("backend", "bot_runner.py")
     blk = br.split("Spec B — chart-pattern layer")[1].split("# iter-129")[0]
-    assert 'signal["chart_patterns"] = {"ready"' in blk and '"would_veto": pg, "enforced": _enforced' in blk
-    assert "if pg and _enforced:" in blk and blk.index('signal["chart_patterns"]') < blk.index("if pg and _enforced:")
+    assert 'signal["chart_patterns"] = {"ready"' in blk and '"would_veto": gd["would_veto"], "enforced": _enforced' in blk
+    assert 'if gd["skip"]:' in blk and blk.index('signal["chart_patterns"]') < blk.index('if gd["skip"]:')
     assert blk.count("continue") == 1 and "except Exception" in blk
     assert "_fade_exempt | {\"range_fade\"}" in blk
     assert "pattern_gate_enabled: bool = False" in _read("backend", "models.py")
@@ -306,9 +306,9 @@ def test_b10_observe_only_wiring():
     # runtime: a would-veto with the flag off does not skip; on → skips
     import chart_patterns as cp
     snap = {"ready": True, "atr": 1.0, "close": 100.0, "zones": [{"low": 100.2, "high": 100.5, "mid": 100.35, "touches": 3, "kind": "resistance"}], "patterns": []}
-    pg = cp.pattern_gate("BUY", snap)
-    for enforced, skipped in ((False, False), (True, True)):
-        assert bool(pg and enforced) is skipped
+    off, on = cp.gate_decision("BUY", snap, False), cp.gate_decision("BUY", snap, True)
+    assert off["would_veto"] and not off["skip"] and not off["alert"]
+    assert on["skip"] and on["reason"] == on["would_veto"] and not on["alert"]
 
 
 def test_b11_short_or_garbage_bars_ready_false_and_perf():

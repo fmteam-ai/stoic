@@ -69,6 +69,17 @@ async def approved_policy_expectation(db, now=None) -> dict:
             "problems": problems}
 
 
+def per_user_cap_counts(accs: list) -> dict:
+    """M1 (main130) — accounts that count toward max_accounts_per_user, exactly like the platform
+    (rules_policy.cap_count_query / inventory projection): ENABLED non-paper only. A disabled extra account —
+    the wizard's own "Disable it" fix — must never make update.sh roll back."""
+    per_user: dict = {}
+    for x in accs:
+        if x.get("trading_enabled") is True and x.get("mode") != "paper":
+            per_user[x.get("user_id")] = per_user.get(x.get("user_id"), 0) + 1
+    return per_user
+
+
 def _age(hb, now):
     try:
         return (now - datetime.fromisoformat(str(hb).replace("Z", "+00:00"))).total_seconds()
@@ -198,10 +209,7 @@ async def main() -> int:
         # A2 — rule checks instead of counts (every one must hold; nothing is inferred)
         import rules_policy as rp
         enabled_accs = [x for x in accs if x.get("trading_enabled") is True]
-        per_user: dict = {}
-        for x in accs:
-            if x.get("mode") != "paper":
-                per_user[x.get("user_id")] = per_user.get(x.get("user_id"), 0) + 1
+        per_user = per_user_cap_counts(accs)
         cap = int(rules.get("max_accounts_per_user") or 0)
         checks = {"rules_policy_unexpired": not rules.get("expired"),
                   "all_enabled_admitted": all((x.get("admission") or {}).get("state") == "admitted" for x in enabled_accs),

@@ -782,55 +782,30 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
 
 
 @router.delete("/{account_id}")
-async def delete_account(account_id: str, force: bool = False,
-                         user=Depends(get_current_user)):
-    """Delete an account.
+async def delete_account(account_id: str, user=Depends(get_current_user)):
+    """Delete an account (P1-01, main131: no `force` escape hatch).
 
-    Refuses if the account has any non-terminal trades attached (open or
-    pending). This prevents the orphan-trades-on-deleted-account class of
-    bug. The frontend should:
-      1. Call POST /api/trades/reconcile to sync stale state
-      2. Manually close any genuinely-open trades
-      3. Retry DELETE
-    Pass `?force=true` to override (admin / cleanup escape hatch).
+    Refuses (409) while the account has open / pending / UNKNOWN trades or stale broker truth (last
+    heartbeat older than 10 min). An account that never connected and never traded may be deleted.
+    Anything else is an admin decision: POST /api/admin/accounts/{id}/force-delete.
     """
     db = get_db()
-    if not force:
-        non_terminal = await db.trades.count_documents({
-            "account_id": account_id,
-            "user_id": user["id"],
-            "status": {"$in": ["open", "pending"]},
-        })
-        if non_terminal > 0:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Cannot delete account: {non_terminal} non-terminal "
-                    "trade(s) still attached. Click SYNC WITH BROKER on the "
-                    "Trades page to clear orphans, or close them manually first. "
-                    "Pass ?force=true to override."
-                ),
-            )
+    from account_deletion import delete_refusal, purge_account
+    oid = parse_object_id(account_id, "Account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    non_terminal = await db.trades.count_documents({"account_id": account_id, "user_id": user["id"], "status": {"$in": ["open", "pending"]}})
+    unknown = await db.execution_intents.count_documents({"account_id": account_id, "status": "unknown"})
+    ever_traded = bool(await db.trades.find_one({"account_id": account_id}, {"_id": 1}))
+    refusal = delete_refusal(acc, non_terminal=non_terminal, unknown=unknown, ever_traded=ever_traded)
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
     # U18 (Phase 1) — tombstone BEFORE the row goes: the EA on the VPS keeps polling with the old token; the
     # bridge answers 410 account_deleted (EA 1.64 stops itself) and the security agent files ONE info finding
-    # instead of a CRITICAL token-guessing storm.
-    _doomed = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
-                                         {"bridge_token_hash": 1, "bridge_token_prev_hash": 1, "bridge_token_retired_hashes": 1,
-                                          "label": 1, "account_number": 1, "broker": 1})
-    if _doomed:
-        from account_tombstones import write_tombstone
-        await write_tombstone(db, _doomed, deleted_by=user["id"])
-    result = await db.accounts.delete_one(
-        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
-    )
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Account not found")
-    # U11 — every bot config bound to the account goes with it (one bot per account, never an orphan)
-    await db.bot_configs.delete_many({"account_id": account_id})
-    # M119-5 — pairing tokens + open alerts go with the account (an orphan token kept VPS PAIRING SILENT firing)
-    from account_cleanup import cleanup_deleted_account
-    cleanup = await cleanup_deleted_account(db, account_id)
-    return {"ok": True, **{k: v for k, v in cleanup.items() if k != "account_id"}}
+    # instead of a CRITICAL token-guessing storm. U11 — bot configs go with it; M119-5 — pairing tokens + alerts too.
+    cleanup = await purge_account(db, acc, deleted_by=user["id"])
+    return {"ok": True, **cleanup}
 
 
 @router.get("/{account_id}/installations")

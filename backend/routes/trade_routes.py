@@ -1177,6 +1177,8 @@ async def trade_predictions(request: Request, symbol: str = "XAUUSD", limit: int
         raise HTTPException(status_code=422, detail="invalid symbol")
     limit = max(1, min(int(limit or 20), 200))
     db = get_db()
+    from security import rate_limit
+    await rate_limit(db, "trade_predictions", f"user:{user['id']}", 60, 60, "Too many track-record requests", request=request)   # SEC-022-3
     sync = await pt.sync_outcomes(db, user["id"], symbol)
     base = base_symbol(symbol)
     rows = await db[pt.COLLECTION].find({"user_id": user["id"], "base": base}, {"_id": 0}).to_list(length=5000)
@@ -1184,5 +1186,13 @@ async def trade_predictions(request: Request, symbol: str = "XAUUSD", limit: int
     for r in recent:
         r.pop("_id", None)
         r.pop("user_id", None)
-    return {"symbol": base, "horizon_bars": pt.HORIZON_BARS, "recent": recent, "calibration": pt.calibration(rows),
-            "pending": len(sync["pending"])}
+    cal = pt.calibration(rows)
+    # P2-02 (main131) — provenance: this is prediction calibration against M15 candles, NOT broker performance
+    excluded = sum(1 for r in rows if r.get("outcome") == "no_data")
+    expired = sum(1 for r in rows if r.get("outcome") == "expired")
+    return {"symbol": base, "horizon_bars": pt.HORIZON_BARS, "horizon_hours": pt.HORIZON_BARS * pt.BAR_SEC // 3600,
+            "recent": recent, "calibration": cal, "pending": len(sync["pending"]),
+            "provenance": {"label": "Prediction calibration — not broker performance", "source": "M15 candles (EA stream)",
+                           "as_of": sync.get("as_of"), "candles_t_basis": sync.get("t_basis"), "bars_available": sync.get("bars_n"),
+                           "same_bar_rule": "SL counted first when SL and TP fall inside one bar",
+                           "counts": {"decided": cal["decided"], "excluded_no_data": excluded, "expired": expired, "pending": len(sync["pending"])}}}

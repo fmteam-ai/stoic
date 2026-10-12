@@ -184,10 +184,22 @@ async def use_reported_login(account_id: str, request: Request, user=Depends(get
     dup = await db.accounts.find_one({"user_id": user["id"], "broker": acc.get("broker"), "account_number": reported, "_id": {"$ne": oid}})
     if dup:
         raise HTTPException(status_code=409, detail={"code": "login_exists", "message": f"#{reported} is already your account '{dup.get('label')}'. Open that one instead."})
+    # M3 (main130) — the SAME global uniqueness rule as account creation: a login linked to another user whose EA
+    # heartbeated within 24 h cannot be adopted here either.
+    from datetime import timedelta
+    active_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+    cross = await db.accounts.find_one({"user_id": {"$ne": user["id"]}, "broker": acc.get("broker"), "account_number": reported,
+                                        "mode": {"$ne": "paper"}, "last_heartbeat": {"$gte": active_cutoff}})
+    if cross:
+        raise HTTPException(status_code=409, detail={"code": "account_in_use",
+                                                     "message": f"{acc.get('broker')} account #{reported} is already linked to another active STOIC user. If it is yours, contact support to reclaim it."})
     now = datetime.now(timezone.utc).isoformat()
+    had = {"environment_attestation": bool(acc.get("environment_attestation")), "admission": (acc.get("admission") or {}).get("state")}
+    # the old login's trust goes with it: DEMO attestation + admission are re-earned on the next verified heartbeat
     await db.accounts.update_one({"_id": oid}, {"$set": {"account_number": reported, "login_changed": {"from": acc.get("account_number"), "to": reported, "at": now, "source": "ea_reported"}},
-                                                "$unset": {"ea_identity": "", "verified_identity": ""}})
+                                                "$unset": {"ea_identity": "", "verified_identity": "", "environment_attestation": "", "admission": ""}})
     from audit_chain import append_chained
     await append_chained(db, {"actor_email": user.get("email"), "action": "account_login_adopted_from_ea", "target_kind": "account", "target_id": account_id,
-                              "reason": "wizard: Use the login the terminal reports", "at": now, "meta": {"from": acc.get("account_number"), "to": reported}})
-    return {"ok": True, "login": reported}
+                              "reason": "wizard: Use the login the terminal reports", "at": now,
+                              "meta": {"from": acc.get("account_number"), "to": reported, "cleared": ["environment_attestation", "admission"], "previous": had}})
+    return {"ok": True, "login": reported, "cleared": ["environment_attestation", "admission"]}

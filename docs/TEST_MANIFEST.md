@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1193 |
+| unit | pure logic, no external I/O | every CI job | 1207 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4171 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4178 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5636 tests across 594 files.**
+**Total: 5657 tests across 596 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -413,6 +413,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter_optimizer_http.py` | http-live | 11 |
 | `backend/tests/test_iter_plans_editor_http.py` | http-live | 7 |
 | `backend/tests/test_iter_trade_stats_perf.py` | http-live | 6 |
+| `backend/tests/test_main130_main131_http.py` | http-live | 7 |
 | `backend/tests/test_main92_live_iter227.py` | http-live | 16 |
 | `backend/tests/test_main93_live_iter229.py` | http-live | 8 |
 | `backend/tests/test_main94_live_iter230.py` | http-live | 5 |
@@ -573,6 +574,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_main122_onboarding.py` | unit | 14 |
 | `backend/tests/unit/test_main123_golive.py` | unit | 8 |
 | `backend/tests/unit/test_main127_review.py` | unit | 10 |
+| `backend/tests/unit/test_main130_main131.py` | unit | 14 |
 | `backend/tests/unit/test_pairing_alerts.py` | unit | 5 |
 | `backend/tests/unit/test_phase1_onboarding.py` | unit | 14 |
 | `backend/tests/unit/test_phase2_installer.py` | unit | 7 |

@@ -251,15 +251,18 @@ async def health():
     # before their first login. HMAC(LEDGER_ANCHOR_KEY, "env|build").
     from environment_marker import sign_environment
     prov.update(sign_environment(prov["app_env"], prov["build_sha"]))
+    # P2-04 (main131) — ONE release identity (tag · commit · EA · policy · model manifest) for the UI footer
+    from release_truth import release_id
     try:
         await db.command("ping")
-        return {"status": "ok", "db": "connected", **prov}
+        _pol = await db.platform_state.find_one({"_id": "rules_policy"}, {"policy_version": 1})
+        return {"status": "ok", "db": "connected", **prov, "release": release_id(policy_version=(_pol or {}).get("policy_version"))}
     except Exception as e:
         # Never leak connection topology / driver internals publicly.
         cid = uuid.uuid4().hex[:12]
         logger.error("health degraded [cid=%s]: %s", cid, e)
         return {"status": "degraded", "db": "unavailable", "cid": cid,
-                **prov}
+                **prov, "release": release_id()}
 
 
 @api_router.get("/health/release")

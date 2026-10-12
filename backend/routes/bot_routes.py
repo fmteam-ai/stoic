@@ -797,9 +797,12 @@ async def update_config(payload: BotConfigUpdate,
     # Lets the UI / API do partial updates without nuking other settings.
     update = payload.model_dump(exclude_unset=True)
     if "pattern_gate_enabled" in update:
-        # Spec B — enforcing the chart-pattern gate is an OPERATOR decision: admin-only, audited
+        # Spec B — enforcing the chart-pattern gate is an OPERATOR decision: admin-only, audited.
+        # SEC-022-2: the TOTP-enrolled admin gate (require_admin), not the bare role string.
         if user.get("role") != "admin":
             raise HTTPException(status_code=403, detail={"code": "admin_only", "message": "pattern_gate_enabled can only be changed by an admin"})
+        from auth import require_admin
+        require_admin(user)
         from step_up import audit_event
         await audit_event(db, user["id"], "pattern_gate_enabled_changed",
                           {"account_id": account_id, "to": bool(update["pattern_gate_enabled"])}, request)

@@ -213,7 +213,7 @@ def test_wizard_cap_counts_only_enabled_accounts_so_disable_is_a_real_fix():
     import rules_policy as rp
     acc = _acc()
     q = rp.cap_count_query(acc)
-    assert q["$or"] == [{"trading_enabled": True}, {"_id": acc["_id"]}] and q["mode"] == {"$ne": "paper"}
+    assert q["$or"] == [{"trading_enabled": True, "_id": {"$lt": acc["_id"]}}, {"_id": acc["_id"]}] and q["mode"] == {"$ne": "paper"}
     assert 'a.get("trading_enabled") is True' in _read("backend", "inventory_projection.py").split("by_user[a.get")[0][-200:]
     fe = _read("frontend", "src", "components", "EasyStartWizard.jsx")
     for tid in ("wizard-topbar", "wizard-screen-broker", "wizard-screen-connect", "wizard-screen-activate", "wizard-screen-start", "wizard-screen-done",

@@ -1013,22 +1013,35 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "structure_gate_veto")
                 continue
 
-            # Spec B — chart-pattern layer, OBSERVE-ONLY by default: the signal records what the gate would do;
-            # a trade is skipped ONLY when the operator set pattern_gate_enabled=true. Any exception → no veto.
-            try:
-                from chart_patterns import pattern_snapshot, pattern_gate
-                if signal.get("scope") not in (_fade_exempt | {"range_fade"}):
+            # Spec B — chart-pattern layer. OBSERVE-ONLY by default: the signal records what the gate would do and a
+            # failure only marks "data unavailable" (fail open). P2-01 (main131): when the operator set
+            # pattern_gate_enabled=true the layer is a real gate — an exception or a not-ready snapshot SKIPS the
+            # trade (fail closed) and raises ONE visible ops alert (dedup per account+symbol). Decision: chart_patterns.gate_decision.
+            _enforced = bool(cfg.get("pattern_gate_enabled", False))
+            if signal.get("scope") not in (_fade_exempt | {"range_fade"}):
+                from chart_patterns import pattern_snapshot, gate_decision
+                _psnap, _perr = {}, None
+                try:
                     _psnap = pattern_snapshot((cdoc or {}).get("bars") or [])
-                    pg = pattern_gate(signal["action"], _psnap)
-                    _enforced = bool(cfg.get("pattern_gate_enabled", False))
-                    signal["chart_patterns"] = {"ready": _psnap.get("ready"), "patterns": _psnap.get("patterns") or [],
-                                                "candles": _psnap.get("candles") or [], "would_veto": pg, "enforced": _enforced}
-                    if pg and _enforced:
-                        await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=pg)
-                        await inc_intel_counter(user_id, "pattern_gate_veto")
-                        continue
-            except Exception as _pe:  # noqa: BLE001 — fail open
-                logger.debug("chart pattern layer failed for %s: %s", sym, _pe)
+                except Exception as _pe:  # noqa: BLE001
+                    logger.debug("chart pattern layer failed for %s: %s", sym, _pe)
+                    _perr = type(_pe).__name__
+                gd = gate_decision(signal["action"], _psnap, _enforced, error=_perr)
+                signal["chart_patterns"] = {"ready": bool(_psnap.get("ready")), "patterns": _psnap.get("patterns") or [],
+                                            "candles": _psnap.get("candles") or [], "would_veto": gd["would_veto"], "enforced": _enforced,
+                                            "data_unavailable": gd["data_unavailable"], "reason": gd["detail"]}
+                if gd["skip"]:
+                    await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=gd["reason"])
+                    await inc_intel_counter(user_id, "pattern_gate_fail_closed" if gd["alert"] else "pattern_gate_veto")
+                    if gd["alert"]:
+                        try:
+                            from alerting import raise_alert
+                            await raise_alert(db, "pattern_gate_fail_closed", "high", f"{sym}: {gd['reason']}",
+                                              dedup_key=f"pattern_gate_fail_closed:{cfg.get('account_id')}:{sym}",
+                                              meta={"account_id": cfg.get("account_id"), "symbol": sym, "user_id": user_id})
+                        except Exception as _ae:  # noqa: BLE001 — alerting must never change the (already fail-closed) decision
+                            logger.warning("pattern gate alert failed: %s", _ae)
+                    continue
 
             # iter-129 · Session-trend / exhaustion gates + trend-ride mode
             # (2026-07-13 review: counter-trend buys into an 85pt gold slide,
