@@ -323,6 +323,44 @@ async def rules_policy_upload(payload: dict, request: Request, user=Depends(_adm
     return {"ok": True, "policy_version": doc["policy_version"], "expires_at": doc["expires_at"]}
 
 
+@router.post("/policy/load-latest")
+async def rules_policy_load_latest(request: Request, user=Depends(_admin)):
+    """A1 — one click: fetch the newest signed policy from the repo's policies/ (GitHub API, or the local dir),
+    verify, activate. Admin + step-up; no release, no deploy."""
+    import rules_policy as rp
+    from step_up import audit_event, require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    out = await rp.load_latest(db, actor=user["email"])
+    await audit_event(db, user["id"], "rules_policy_load_latest", {k: out.get(k) for k in ("activated", "source", "policy_version", "reason")}, request)
+    return out
+
+
+@router.post("/policy/retire-id-list")
+async def rules_policy_retire_id_list(payload: dict | None = None, request: Request = None, user=Depends(_admin)):
+    """A3 — one-time migration: replace the signed per-account id list with the active rules policy (archived + audited)."""
+    import rules_policy as rp
+    from step_up import audit_event, require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    out = await rp.retire_id_list(db, actor=user["email"], reason=str((payload or {}).get("reason") or ""))
+    await audit_event(db, user["id"], "inventory_expectation_retire_clicked", out, request)
+    return out
+
+
+@router.get("/policy/renewal")
+async def rules_policy_renewal(user=Depends(_admin)):
+    """A4 — banner data: days left, reminder due, pre-filled workflow-form values + link; plus whether the legacy id list is still in force."""
+    _ = user
+    import rules_policy as rp
+    db = get_db()
+    pol = await rp.active(db)
+    legacy = await db.platform_state.find_one({"_id": "inventory_expectation"}, {"policy_version": 1, "account_ids": 1})
+    return {"policy_version": (pol or {}).get("policy_version"), **rp.expiry(pol),
+            "prefill": rp.renewal_prefill(pol) if pol else None, "renew_link": rp.renew_link(),
+            "legacy_id_list": {"policy_version": legacy.get("policy_version"), "accounts": len(legacy.get("account_ids") or [])} if legacy else None}
+
+
 @router.post("/admission/{account_id}/approve")
 async def admission_approve(account_id: str, request: Request, user=Depends(_admin)):
     """Real money needs a human: ONE in-app approval with password + authenticator (step-up), audited."""

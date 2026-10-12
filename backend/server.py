@@ -36,6 +36,7 @@ import warmer
 from routes.admin_routes import router as admin_router
 from routes.migration_routes import router as migration_router
 from routes.setup_routes import router as setup_router
+from routes.wizard_routes import router as wizard_router
 from routes.auth_routes import router as auth_router
 from routes.webauthn_routes import router as webauthn_router
 from modules.pamm.api import router as pamm_router
@@ -503,6 +504,7 @@ async def installer_hash():
 api_router.include_router(admin_router)
 api_router.include_router(migration_router)
 api_router.include_router(setup_router)
+api_router.include_router(wizard_router)
 from routes.vps_terminal_routes import router as vps_terminal_router  # noqa: E402
 api_router.include_router(vps_terminal_router)
 api_router.include_router(auth_router)

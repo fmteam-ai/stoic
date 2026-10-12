@@ -184,7 +184,8 @@ def test_add_account_wizard_wired_and_spec_brokers_present():
         assert f'"{tid}"' in wiz or f"'{tid}'" in wiz or f"`{tid}`" in wiz or tid in wiz, tid
     assert 'api.post("/accounts", payload)' in wiz and "<QuickInstallPanel" in wiz
     acc = _read("frontend", "src", "pages", "Accounts.jsx")
-    assert "<AddAccountWizard" in acc and 'onClick={() => setShowWizard(true)} data-testid="add-account-button"' in acc
+    assert "<AddAccountWizard" in acc and 'onClick={() => setShowWizard(true)} data-testid="add-account-advanced"' in acc   # Easy Start: ADD BROKER opens EasyStartWizard, ADVANCED keeps the manual wizard
+    assert 'onClick={() => setEasyStart({ account: null })} data-testid="add-account-button"' in acc
     assert "installer_paired_hostname" in acc           # VPS picker lists already-paired hosts
 
 

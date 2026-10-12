@@ -7,6 +7,7 @@ import { AddAccountWizard } from "@/components/AddAccountWizard";
 import { EditAccountDialog } from "@/components/EditAccountDialog";
 import { StatusFixDialog } from "@/components/StatusFixDialog";
 import { CloseOnlyBanner } from "@/components/CloseOnlyBanner";
+import { EasyStartWizard } from "@/components/EasyStartWizard";
 import { StatusLine } from "@/components/StatusLine";
 import { VpsOfferButton } from "@/components/VpsOffer";
 import { InstallProgressChip } from "@/components/InstallProgressPanel";
@@ -358,6 +359,7 @@ export default function Accounts() {
     const [overviewKey, setOverviewKey] = useState(0);
     const [editAccount, setEditAccount] = useState(null);     // M123-4 — Edit button on the account card
     const [statusFix, setStatusFix] = useState(null);         // U15 — { account, fix } opened from the StatusLine fix button
+    const [easyStart, setEasyStart] = useState(null);         // Easy Start Wizard — { account|null } (null account = new broker)
     const patchAccount = async (id, payload, okMsg) => {
         try {
             await api.patch(`/accounts/${id}`, payload);
@@ -399,10 +401,12 @@ export default function Accounts() {
                                 <ShieldCheck className="w-3.5 h-3.5" /> SIGNED EX5 <span>· {ex5Available === null ? "checking…" : "not published yet"}</span>
                             </span>
                         )}
-                        <button onClick={() => setShowWizard(true)} data-testid="add-account-button"
+                        <button onClick={() => setEasyStart({ account: null })} data-testid="add-account-button"
                             className="flex items-center gap-2 px-3 py-2 bg-[#00FF41] hover:bg-[#00E53A] text-black font-medium text-xs tracking-widest transition-colors">
-                            <Plus className="w-3.5 h-3.5" /> ADD ACCOUNT
+                            <Plus className="w-3.5 h-3.5" /> ADD BROKER
                         </button>
+                        <button onClick={() => setShowWizard(true)} data-testid="add-account-advanced" title="Paper account or manual setup"
+                            className="px-2 py-2 text-[10px] font-mono tracking-widest text-[#52525B] hover:text-white">ADVANCED</button>
                     </div>
                 }
             />
@@ -419,6 +423,8 @@ export default function Accounts() {
                     onSaved={() => { load(); setOverviewKey(k => k + 1); }} />
                 {statusFix && <StatusFixDialog account={statusFix.account} fix={statusFix.fix} onClose={() => setStatusFix(null)}
                     onDone={() => { load(); setOverviewKey(k => k + 1); }} />}
+                <EasyStartWizard open={!!easyStart} account={easyStart?.account || null} onClose={() => setEasyStart(null)}
+                    onChanged={() => { load(); setOverviewKey(k => k + 1); }} />
 
                 {/* Multi-account portfolio overview (iter-137) */}
                 <MultiAccountOverview refreshKey={overviewKey} />
@@ -575,8 +581,10 @@ export default function Accounts() {
                 ) : accounts.length === 0 ? (
                     <div className="border border-dashed border-[#1F1F1F] p-12 text-center" data-testid="accounts-empty">
                         <Plug className="w-10 h-10 text-[#52525B] mx-auto mb-3" />
-                        <div className="font-display font-bold text-lg mb-1">No accounts connected</div>
-                        <div className="text-sm text-[#A1A1AA]">Add an MT5 microcent account to start live trading.</div>
+                        <div className="font-display font-bold text-lg mb-1">Connect your first broker</div>
+                        <div className="text-sm text-[#A1A1AA] mb-4">Four screens, one button each — under five minutes with a demo login and a Windows VPS.</div>
+                        <button onClick={() => setEasyStart({ account: null })} data-testid="accounts-empty-add-broker"
+                            className="px-4 py-2 bg-[#00FF41] hover:bg-[#00E53A] text-black font-bold text-xs font-mono tracking-widest">CONNECT YOUR FIRST BROKER</button>
                     </div>
                 ) : (
                     <div className="space-y-2">
@@ -586,6 +594,10 @@ export default function Accounts() {
                                 <div key={a.id} id={`account-${a.id}`}
                                     className={`border ${a.id === focusId ? "border-[#FFD700] shadow-[0_0_0_1px_#FFD700]" : "border-[#1F1F1F]"} bg-[#0A0A0A] p-5`}
                                     data-testid={`account-row-${a.account_number}`}>
+                                    {a.mode !== "paper" && a.trading_enabled !== true && (
+                                        <button onClick={() => setEasyStart({ account: a })} data-testid={`continue-setup-${a.id}`}
+                                            className="mb-1 text-[10px] font-mono tracking-widest text-[#FFD700] hover:underline">CONTINUE SETUP →</button>
+                                    )}
                                     <StatusLine account={a} onFix={(fix) => {
                                         // U15 — one fix button: Start acts inline, everything else opens its dialog on the card
                                         if (fix.action === "start") patchAccount(a.id, { trading_enabled: true }, "Trading started");

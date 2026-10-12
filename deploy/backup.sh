@@ -142,6 +142,8 @@ case "${1:-backup}" in
     docker compose exec -T "${MONGO_SVC}" sh -c "mongodump ${MONGO_AUTH} --archive --gzip" > "${OUT}"
     echo "   $(du -h "${OUT}" | cut -f1) written"
     _write_manifest "${OUT}"
+    # A5 (Easy Start) — record the backup so the Go-Live checklist can show "last backup N h ago" (best effort)
+    docker compose exec -T "${MONGO_SVC}" sh -c "mongosh ${MONGO_AUTH} --quiet \"\$DB_NAME\" --eval 'db.platform_state.replaceOne({_id:\"last_backup\"},{_id:\"last_backup\",at:new Date().toISOString(),file:\"$(basename "${OUT}")\"},{upsert:true})'" >/dev/null 2>&1 || true
     if [ -n "${BACKUP_PASSPHRASE_FILE:-}" ] && [ -f "${BACKUP_PASSPHRASE_FILE}" ]; then
       echo "-- encrypting (AES-256-CBC, PBKDF2)"
       # shellcheck disable=SC2046

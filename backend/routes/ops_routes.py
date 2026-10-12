@@ -1100,3 +1100,55 @@ async def ack_all_alerts(request: Request):
         {"$set": {"acked_at": datetime.now(timezone.utc),
                   "acked_by": actor}})
     return {"ok": True, "acked": res.modified_count}
+
+
+@router.get("/ops/go-live-checklist")
+async def go_live_checklist(request: Request):
+    """A5 (Easy Start) — ONE page of green/red rows for the operator: release signed · rules policy active · workers
+    healthy · Cloudflare IP trust · backups · admin 2FA. Every red row carries one fix (a button action or the one
+    command to copy). Built on release_readiness (admin + enrolled 2FA, or the metrics token)."""
+    resp = await release_readiness(request)
+    if resp.status_code == 403:
+        return resp
+    import json as _json
+    ready = _json.loads(bytes(resp.body).decode()) if isinstance(resp, JSONResponse) else resp
+    checks = ready.get("checks") or {}
+    db = get_db()
+    import rules_policy as rp
+    pol = await rp.active(db)
+    exp = rp.expiry(pol)
+    admins = await db.users.find({"role": "admin"}, {"email": 1, "two_factor_enabled": 1}).to_list(length=50)
+    no_2fa = [a.get("email") for a in admins if not a.get("two_factor_enabled")]
+    cf_trust = os.environ.get("TRUST_CF_CONNECTING_IP", "false").lower() == "true"
+    behind_cf = bool(request.headers.get("cf-connecting-ip") or request.headers.get("cf-ray"))
+    backup_at = None
+    bk = await db.platform_state.find_one({"_id": "last_backup"}) or {}
+    backup_at = bk.get("at")
+    backup_age_h = None
+    if backup_at:
+        try:
+            backup_age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(str(backup_at).replace("Z", "+00:00"))).total_seconds() / 3600
+        except ValueError:
+            backup_age_h = None
+    ea = checks.get("ea_release") or {}
+    workers = checks.get("workers") or {}
+    rows = [
+        {"id": "release_signed", "label": "Release signed (EA + installer)", "ok": bool(ea.get("ok", False)) and not ea.get("fails"),
+         "detail": ea.get("detail") or ea.get("version") or ("EA release verified" if ea.get("ok") else "no signed EA release"),
+         "fix": None if ea.get("ok") else {"kind": "command", "label": "Run the ea-release workflow, then", "command": "deploy/update.sh <tag>"}},
+        {"id": "rules_policy", "label": "Rules policy active", "ok": bool(pol) and not exp["expired"],
+         "detail": (f"{pol.get('policy_version')} · {exp['days_left']} day(s) left" if pol and not exp["expired"] else ("expired" if pol else "none active")),
+         "fix": None if (pol and not exp["expired"]) else {"kind": "action", "label": "Load latest signed policy", "action": "load_latest_policy", "link": rp.renew_link()}},
+        {"id": "workers", "label": "Workers healthy", "ok": bool(workers.get("ok")), "detail": ", ".join(f"{k} {'ok' if v.get('alive') else 'DOWN'}" for k, v in (workers.get("detail") or {}).items()) or "no worker leases",
+         "fix": None if workers.get("ok") else {"kind": "command", "label": "On the VPS", "command": "docker compose restart worker-trading worker-ops && docker compose logs --tail 50 worker-trading"}},
+        {"id": "cloudflare", "label": "Cloudflare IP trust", "ok": cf_trust or not behind_cf,
+         "detail": "TRUST_CF_CONNECTING_IP=true" if cf_trust else ("behind Cloudflare but client IPs are NOT trusted — rate limits see Cloudflare's IPs" if behind_cf else "not behind Cloudflare"),
+         "fix": None if (cf_trust or not behind_cf) else {"kind": "command", "label": "In backend/.env on the VPS, then restart", "command": "TRUST_CF_CONNECTING_IP=true"}},
+        {"id": "backups", "label": "Backups (last 24 h)", "ok": backup_age_h is not None and backup_age_h <= 24,
+         "detail": f"last backup {backup_age_h:.1f} h ago" if backup_age_h is not None else "no backup recorded",
+         "fix": None if (backup_age_h is not None and backup_age_h <= 24) else {"kind": "command", "label": "On the VPS", "command": "deploy/backup.sh && cat backups/latest.txt"}},
+        {"id": "admin_2fa", "label": "Admin accounts with authenticator 2FA", "ok": not no_2fa and bool(admins),
+         "detail": f"{len(admins) - len(no_2fa)}/{len(admins)} enrolled" + (f" — missing: {', '.join(no_2fa)}" if no_2fa else ""),
+         "fix": None if not no_2fa else {"kind": "link", "label": "Enroll in Settings → Security", "href": "/settings"}},
+    ]
+    return {"ok": all(r["ok"] for r in rows), "rows": rows, "generated_at": datetime.now(timezone.utc).isoformat()}

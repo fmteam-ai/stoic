@@ -278,9 +278,12 @@ if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 1 ]; then
   RECONCILE_EXPECT=""
 fi
 if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 0 ]; then
-  [ -n "${RECONCILE_EXPECT}" ] || { echo "!! production requires RECONCILE_EXPECT in .env — RECONCILE_EXPECT=approved takes the counts from the signed policy (approved policy: ${APPROVED_POLICY})"; rollback; }
-  echo "${RECONCILE_EXPECT}" | grep -Eq '^([0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}|approved)$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N) or 'approved'"; rollback; }
-  if [ "${RECONCILE_EXPECT}" != approved ]; then
+  # A2 (Easy Start) — RECONCILE_EXPECT=rules is the default: the active signed RULES policy is checked (caps · demo-only ·
+  # every enabled account admitted) instead of fixed N/N/N counts. production_reconcile.py REFUSES (rollback) when no
+  # unexpired rules policy is active — fail closed, so the default never weakens the gate.
+  RECONCILE_EXPECT="${RECONCILE_EXPECT:-rules}"
+  echo "${RECONCILE_EXPECT}" | grep -Eq '^([0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}|approved|rules)$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N, 'approved' or 'rules')"; rollback; }
+  if [ "${RECONCILE_EXPECT}" != approved ] && [ "${RECONCILE_EXPECT}" != rules ]; then
     [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY} (set RECONCILE_EXPECT=approved to use the signed policy itself)"; rollback; }
   fi
   [ -n "${RECONCILE_SCOPE}" ] || { echo "!! production requires RECONCILE_SCOPE_USER_ID (explicit tenant scope)"; rollback; }
