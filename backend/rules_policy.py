@@ -45,6 +45,14 @@ def problems(pol: dict, *, now: datetime | None = None) -> list:
     from release_signing import verify_hex
     now = now or _now()
     errs = []
+    if not isinstance(pol, dict):
+        return ["policy is not an object"]
+    try:                                                   # C2 — a future-dated issue would win every "newest" comparison
+        issued = datetime.fromisoformat(str(pol.get("issued_at")).replace("Z", "+00:00"))
+        if issued > now + timedelta(minutes=5):
+            errs.append("issued_at is in the future")
+    except (TypeError, ValueError):
+        pass
     if pol.get("schema") != SCHEMA:
         errs.append(f"schema must be {SCHEMA}")
     if not re.match(VERSION_RE, str(pol.get("policy_version") or "")):
@@ -141,8 +149,16 @@ async def load_from_repo(db) -> dict | None:
         except (OSError, ValueError) as e:
             logger.warning("rules policy file %s unreadable: %s", name, e)
             continue
-        if problems(pol):
-            logger.info("rules policy file %s skipped: %s", name, problems(pol)[:2])
+        if not isinstance(pol, dict):                      # C1 — a JSON list/scalar is not a policy
+            logger.warning("rules policy file %s skipped: not an object", name)
+            continue
+        try:
+            errs = problems(pol)
+        except Exception as e:  # noqa: BLE001 — C1: one malformed file must never abort loading of the others
+            logger.warning("rules policy file %s skipped: malformed (%s)", name, type(e).__name__)
+            continue
+        if errs:
+            logger.info("rules policy file %s skipped: %s", name, errs[:2])
             continue
         if best is None or str(pol.get("issued_at")) > str(best.get("issued_at")):
             best = pol

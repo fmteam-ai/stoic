@@ -21,11 +21,18 @@ def _hashes(acc: dict) -> list:
     return sorted(set(out))
 
 
+async def ensure_indexes(db) -> None:
+    """C3 — the bridge scans token_hashes on every unknown token; expired tombstones leave by TTL."""
+    await db.account_tombstones.create_index("token_hashes")
+    await db.account_tombstones.create_index("expires_at", expireAfterSeconds=0)
+
+
 async def write_tombstone(db, acc: dict, *, deleted_by: str) -> dict:
     now = datetime.now(timezone.utc)
     doc = {"_id": str(acc["_id"]), "token_hashes": _hashes(acc), "label": acc.get("label"), "broker": acc.get("broker"),
            "account_number": acc.get("account_number"), "deleted_at": now.isoformat(), "deleted_by": deleted_by,
-           "expires_at": datetime.fromtimestamp(now.timestamp() + TOMBSTONE_TTL_DAYS * 86400, tz=timezone.utc).isoformat(),
+           "expires_at": datetime.fromtimestamp(now.timestamp() + TOMBSTONE_TTL_DAYS * 86400, tz=timezone.utc),   # C3 — BSON date (TTL index)
+           "expires_at_iso": datetime.fromtimestamp(now.timestamp() + TOMBSTONE_TTL_DAYS * 86400, tz=timezone.utc).isoformat(),
            "polls_after_delete": 0, "last_poll_at": None, "finding_recorded": False}
     await db.account_tombstones.replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return doc

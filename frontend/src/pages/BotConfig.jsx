@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
+import { TrackRecord } from "@/components/TrackRecord";
 import { extractBlockerDetail } from "@/lib/fixShortcuts";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AiOptimizerSection from "@/components/AiOptimizerSection";
@@ -46,6 +47,7 @@ export default function BotConfig() {
     const [savingPreset, setSavingPreset] = useState(false);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
+    const [botTab, setBotTab] = useState("config");   // Spec A — Track record tab
     const [errFix, setErrFix] = useState(null);
     const [msg, setMsg] = useState("");
     const [saveMsg, setSaveMsg] = useState("");
@@ -341,6 +343,14 @@ export default function BotConfig() {
             />
 
             <div className="p-4 md:p-8 space-y-6 max-w-4xl">
+                <div className="flex items-center gap-1 border-b border-[#1F1F1F]" data-testid="bot-tabs">
+                    {[["config", "CONFIG"], ["track", "TRACK RECORD"]].map(([k, l]) => (
+                        <button key={k} onClick={() => setBotTab(k)} data-testid={`bot-tab-${k}`}
+                            className={`px-3 py-2 text-[11px] font-mono tracking-widest border-b-2 -mb-px ${botTab === k ? "border-[#FFD700] text-white" : "border-transparent text-[#71717A] hover:text-white"}`}>{l}</button>
+                    ))}
+                </div>
+                {botTab === "track" && <TrackRecord symbols={cfg?.symbols || []} />}
+                <div className={botTab === "track" ? "hidden" : "space-y-6"} data-testid="bot-config-tab">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
                 {errFix && (
                     <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-3 space-y-2"
@@ -704,6 +714,7 @@ export default function BotConfig() {
                         className="bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium px-6 py-2.5 text-xs tracking-widest flex items-center gap-2 transition-colors">
                         <FloppyDisk className="w-3.5 h-3.5" /> {saving ? "SAVING…" : "SAVE CONFIGURATION"}
                     </button>
+                </div>
                 </div>
             </div>
         </AppLayout>
@@ -1300,6 +1311,7 @@ function PositionSizingPreview({ accountId, cfg }) {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
+    const [botTab, setBotTab] = useState("config");   // Spec A — Track record tab
 
     // Recompute whenever the user changes the symbol, risk level, max_lot_size,
     // or switches to a different account scope.

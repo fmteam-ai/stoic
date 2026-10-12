@@ -1013,6 +1013,23 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "structure_gate_veto")
                 continue
 
+            # Spec B — chart-pattern layer, OBSERVE-ONLY by default: the signal records what the gate would do;
+            # a trade is skipped ONLY when the operator set pattern_gate_enabled=true. Any exception → no veto.
+            try:
+                from chart_patterns import pattern_snapshot, pattern_gate
+                if signal.get("scope") not in (_fade_exempt | {"range_fade"}):
+                    _psnap = pattern_snapshot((cdoc or {}).get("bars") or [])
+                    pg = pattern_gate(signal["action"], _psnap)
+                    _enforced = bool(cfg.get("pattern_gate_enabled", False))
+                    signal["chart_patterns"] = {"ready": _psnap.get("ready"), "patterns": _psnap.get("patterns") or [],
+                                                "candles": _psnap.get("candles") or [], "would_veto": pg, "enforced": _enforced}
+                    if pg and _enforced:
+                        await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=pg)
+                        await inc_intel_counter(user_id, "pattern_gate_veto")
+                        continue
+            except Exception as _pe:  # noqa: BLE001 — fail open
+                logger.debug("chart pattern layer failed for %s: %s", sym, _pe)
+
             # iter-129 · Session-trend / exhaustion gates + trend-ride mode
             # (2026-07-13 review: counter-trend buys into an 85pt gold slide,
             # selling the day low after -2%, and 12pt TPs in an 80pt trend).

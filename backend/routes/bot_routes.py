@@ -796,6 +796,13 @@ async def update_config(payload: BotConfigUpdate,
     # PATCH semantics — only fields explicitly sent by the client are written.
     # Lets the UI / API do partial updates without nuking other settings.
     update = payload.model_dump(exclude_unset=True)
+    if "pattern_gate_enabled" in update:
+        # Spec B — enforcing the chart-pattern gate is an OPERATOR decision: admin-only, audited
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail={"code": "admin_only", "message": "pattern_gate_enabled can only be changed by an admin"})
+        from step_up import audit_event
+        await audit_event(db, user["id"], "pattern_gate_enabled_changed",
+                          {"account_id": account_id, "to": bool(update["pattern_gate_enabled"])}, request)
     if update.get("active") is True and owns is not None:
         problems = await _activation_readiness(db, owns)
         if problems:
