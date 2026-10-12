@@ -80,13 +80,27 @@ jobs:
           print("key_id:", d.get("key_id"), "code_commit:", d["body"].get("code_commit"))
           assert d.get("key_id") != "stoic-release-ed25519-v1", "manifest still signed by the revoked v1 key"
           PY
-      - name: Commit the re-signed manifest back to the source branch
+      - name: Re-bind the RC lock to the re-signed manifest (model_manifest_sha256) — the installer's provenance gate compares them
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from datetime import datetime, timezone
+          lock = json.load(open("release/rc_lock.json"))
+          actual = hashlib.sha256(open("backend/models_store/MODEL_MANIFEST.json", "rb").read()).hexdigest()
+          print("lock.model_manifest_sha256", lock.get("model_manifest_sha256"), "->", actual)
+          lock["model_manifest_sha256"] = actual
+          lock["captured_at"] = datetime.now(timezone.utc).isoformat()
+          json.dump(lock, open("release/rc_lock.json", "w"), indent=2)
+          open("release/rc_lock.json", "a").write("\n")
+          PY
+          python3 scripts/release_consistency_check.py
+      - name: Commit the re-signed manifest + re-bound lock back to the source branch
         run: |
           git config user.name "stoic-model-manifest[bot]"
           git config user.email "model-manifest@users.noreply.github.com"
-          git add backend/models_store/MODEL_MANIFEST.json
+          git add backend/models_store/MODEL_MANIFEST.json release/rc_lock.json
           if git diff --cached --quiet; then echo "manifest unchanged"; exit 0; fi
-          git commit -m "model-manifest: re-signed with the current release key for ${GITHUB_SHA} [skip ci]"
+          git commit -m "model-manifest: re-signed with the current release key for ${GITHUB_SHA}; rc_lock re-bound [skip ci]"
           git push origin HEAD:"${TARGET_REF}"
         env:
           TARGET_REF: ${{ github.event.inputs.ref || github.ref_name }}

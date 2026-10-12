@@ -30,4 +30,4 @@ Removed: `test_reports/easy_start/` (duplicate images).
 
 ## Operator notes
 - Live suites that used `DELETE …?force=true` for cleanup still work for never-connected test accounts (the parameter is ignored); accounts with trades now need the admin force-delete.
-- Run **model-manifest-resign** once on main, then tag v1.60.19.
+- Run **model-manifest-resign** once on main, then tag v1.60.19. The workflow re-signs the manifest AND re-binds `release/rc_lock.json.model_manifest_sha256` in the same commit (first run on 2026-10-12 only committed the manifest, which tripped the installer's provenance gate `FAIL model_manifest_sha256: lock != actual`; re-run after pulling this fix).
