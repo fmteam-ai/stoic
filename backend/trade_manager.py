@@ -298,7 +298,6 @@ async def _check_daily_drawdown(cfg: dict) -> None:
     # Starting equity — account-scoped if cfg is per-account, else user-wide.
     acct_q: dict = {"user_id": user_id}
     if cfg_account_id:
-        from bson import ObjectId
         try:
             acct_q["_id"] = ObjectId(cfg_account_id)
         except Exception:
@@ -388,7 +387,6 @@ async def _tick() -> None:
 
 async def run_loop() -> None:
     """Forever loop — started from server.py startup."""
-    from datetime import datetime, timezone
     while True:
         started = datetime.now(timezone.utc)
         try:
@@ -396,7 +394,6 @@ async def run_loop() -> None:
         except Exception as e:
             logger.exception("trade_manager tick crashed: %s", e)
         try:
-            from database import get_db
             from workers.base import persist_progress, record_progress
             record_progress("trade_manager.run_loop", processed=1,
                             started_at=started, interval_sec=_interval())

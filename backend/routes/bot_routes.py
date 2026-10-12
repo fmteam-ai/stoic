@@ -174,6 +174,7 @@ def _serialize(cfg: dict) -> dict:
         # iter-39 — Paper Shadow Mode (run pipeline, never execute) +
         # per-account crypto risk cap override.
         "paper_shadow_mode": bool(cfg.get("paper_shadow_mode", False)),
+        "pattern_gate_enabled": bool(cfg.get("pattern_gate_enabled", False)),   # Spec B — observe-only unless an admin flipped it
         "crypto_risk_pct_per_trade": cfg.get("crypto_risk_pct_per_trade"),
         # iter-41 — payoff-ratio repair (Soft-Stop + Let Winners Run)
         "soft_stop_enabled": bool(cfg.get("soft_stop_enabled", False)),
@@ -739,7 +740,6 @@ def _cfg_value(cur: dict, field: str):
     """Stored value, else the model default (a missing field never reads as 0)."""
     if cur.get(field) is not None:
         return cur[field]
-    from models import BotConfigUpdate
     return BotConfigUpdate.model_fields[field].default
 
 
@@ -803,7 +803,6 @@ async def update_config(payload: BotConfigUpdate,
             raise HTTPException(status_code=403, detail={"code": "admin_only", "message": "pattern_gate_enabled can only be changed by an admin"})
         from auth import require_admin
         require_admin(user)
-        from step_up import audit_event
         await audit_event(db, user["id"], "pattern_gate_enabled_changed",
                           {"account_id": account_id, "to": bool(update["pattern_gate_enabled"])}, request)
     if update.get("active") is True and owns is not None:
@@ -2180,7 +2179,6 @@ async def _quick_truth_safe(db, user_id: str, open_count: int) -> dict:
         from state_contract import quick_truth
         return await quick_truth(db, user_id, open_count)
     except Exception as e:  # noqa: BLE001
-        import logging
         logging.getLogger("bot_routes").warning(
             "quick_truth failed for %s: %s", user_id, e)
         return {"position_truth": "UNKNOWN", "open_trades_broker": None,

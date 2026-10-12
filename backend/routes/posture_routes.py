@@ -64,7 +64,6 @@ async def market_state(user=Depends(get_current_user)):
 async def trend_score_endpoint(symbol: str = "XAUUSD",
                                user=Depends(get_current_user)):
     """Autopilot #12 — composite trend-quality + exhaustion score."""
-    from pip_utils import base_symbol
     from trend_score import trend_report
     db = get_db()
     uid = str(user.get("id") or user.get("_id"))

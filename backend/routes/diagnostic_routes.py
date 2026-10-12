@@ -568,6 +568,5 @@ async def ai_latency_view(hours: int = 24, user=Depends(get_current_user)):
     """AI latency card — per provider/model p50/p95, timeouts and errors from every process. Admin only (audit P3)."""
     from auth import require_admin
     require_admin(user)
-    from database import get_db
     from llm_timeout import latency_summary
     return await latency_summary(get_db(), hours=max(1, min(int(hours or 24), 168)))

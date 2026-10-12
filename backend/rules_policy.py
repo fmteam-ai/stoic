@@ -338,7 +338,6 @@ def expiry(pol: dict | None, now: datetime | None = None) -> dict:
 
 def renewal_prefill(pol: dict) -> dict:
     """A4 — the workflow-form values for the next period (same rules, new version suffix)."""
-    import re
     v = str(pol.get("policy_version") or "rules-v1")
     m = re.search(r"(\d+)$", v)
     nxt = (v[: m.start()] + str(int(m.group(1)) + 1)) if m else v + "-2"

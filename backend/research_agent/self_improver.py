@@ -213,7 +213,6 @@ async def _maybe_auto_accept(db, *, user_id: str, proposals: list[dict],
     # Apply via the shared targeting helper — auto-accept uses the
     # "matching" target mode (only bots whose symbols overlap the
     # proposal's symbols; falls back to all if the proposal has no scope).
-    from datetime import datetime, timezone
     from research_agent.proposal_targeting import (
         resolve_target_configs, apply_proposal_to_configs,
     )

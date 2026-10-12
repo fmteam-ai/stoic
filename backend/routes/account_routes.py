@@ -52,7 +52,6 @@ def _ea_reported_server(acc: dict) -> str | None:
 
 
 def _iso_days_ago(days: int) -> str:
-    from datetime import timedelta
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
 
@@ -129,7 +128,6 @@ async def accounts_overview(user=Depends(get_current_user)):
     """
     db = get_db()
     accounts = await db.accounts.find({"user_id": user["id"]}).sort("created_at", -1).to_list(length=100)
-    from datetime import timedelta
     now = datetime.now(timezone.utc)
     hb_cutoff = (now - timedelta(minutes=5)).isoformat()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -233,7 +231,6 @@ async def accounts_equity_curve(days: int = 30, user=Depends(get_current_user)):
         {"account_id": 1, "pnl": 1, "closed_at": 1},
     ).to_list(length=50000)
 
-    from datetime import timedelta
     daily = {}  # date -> {account_id -> pnl}
     for t in trades:
         d = (t.get("closed_at") or "")[:10]
@@ -364,7 +361,6 @@ async def broker_comparison(days: int = 30, user=Depends(get_current_user)):
     days = max(1, min(days, 365))
     db = get_db()
     since = _iso_days_ago(days)
-    from datetime import timedelta
     hb_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
 
     accounts = await db.accounts.find({"user_id": user["id"]}).to_list(length=100)
@@ -685,7 +681,6 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         # Cross-user: only block if the OTHER user's EA is actively heartbeating
         # (within the last 24h). A long-abandoned record shouldn't lock the
         # broker account out for a new owner who legitimately took it over.
-        from datetime import timedelta
         active_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         cross_dup = await db.accounts.find_one({
             "user_id": {"$ne": user["id"]},
@@ -1769,7 +1764,6 @@ async def account_execution_health(account_id: str, user=Depends(get_current_use
 async def account_execution_brake_release(account_id: str, request: Request, user=Depends(get_current_user)):
     """Resume after an execution brake — operator spec: ADMIN only (after checking the
     EA / VPS), step-up verified, audited. Owners see the brake but cannot lift it."""
-    from auth import require_admin
     require_admin(user)
     db = get_db()
     acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")},

@@ -130,7 +130,6 @@ async def inventory_fingerprint(db, user_id: str) -> str:
     """Cheap digest of the user's account/bot inventory inputs (ids, enabled,
     mode, bot active) — any add/remove/toggle invalidates the snapshot even when
     the writer did not call bump_authority_version()."""
-    import hashlib
     import json
     rows = []
     async for a in db.accounts.find({"user_id": user_id}, {"_id": 1, "trading_enabled": 1, "mode": 1, "verified_identity": 1,

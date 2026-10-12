@@ -135,7 +135,6 @@ async def rewrap_all(db, actor: dict) -> dict:
     previous). Writes a rewrap manifest first, verifies completeness (every record
     re-openable with the current key), and flips the manifest to `complete` —
     an incomplete manifest is a readiness blocker until resolved."""
-    from datetime import datetime, timezone
     now = datetime.now(timezone.utc).isoformat()
     docs = await db.secrets_vault.find({}).to_list(500)
     manifest = {"_id": f"rewrap_{now}", "status": "running", "started_at": now, "actor": actor.get("email"),

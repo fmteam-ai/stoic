@@ -1546,7 +1546,6 @@ class ScalpRunner:
                 unacked += 1
         # review item 2 — uncertain/unqueued provisional reservations are
         # invisible to db.trades: count them as held exposure too.
-        from scalp import risk_reservations
         reserved_unaccounted = await risk_reservations.unaccounted_count(
             db, self.account_id)
         broker_pos = (self.account or {}).get("open_positions")

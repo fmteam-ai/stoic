@@ -503,10 +503,12 @@ jobs:
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
         with:
           python-version: "3.11"
-      - name: Ruff (fatal error classes only)
+      - name: Ruff (fatal error classes only + F823 local-before-assignment)
         run: |
           pip install ruff
-          ruff check backend --select E9,F63,F7,F82
+          ruff check backend --select E9,F63,F7,F82,F823
+      - name: Local import must not shadow a module-level import (prod v1.60.22 — UnboundLocalError in update_config)
+        run: python3 scripts/check_local_import_shadows.py
       - name: Test manifest drift check
         run: python scripts/generate_test_manifest.py --check
       - name: Release summary drift check (stale docs/RELEASE_SUMMARY.md must fail the PR, not the release)

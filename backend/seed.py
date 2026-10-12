@@ -10,7 +10,6 @@ async def dependency_health_check() -> dict:
     the driver stack (bson/pymongo/motor), a live DB ping, and that the
     safety-critical unique indexes actually exist. Logs CRITICAL on any
     failure so a bad deploy is visible immediately."""
-    import logging
     log = logging.getLogger("startup-health")
     result = {"deps_ok": True, "db_ok": False, "indexes_ok": False,
               "missing_indexes": []}
@@ -270,7 +269,6 @@ async def _record_ticket_index_state(db, *, present: bool, stale: bool, key=None
                                      duplicates: int = 0) -> None:
     """A6/H12 — the boot verdict on the unique ticket index is kept in platform_state so
     release readiness and Admin Ops show it (a log line alone is not an operator surface)."""
-    from datetime import datetime, timezone
     doc = {"present": present, "stale": stale, "ok": present and not stale, "duplicates": duplicates,
            "checked_at": datetime.now(timezone.utc).isoformat()}
     if stale:

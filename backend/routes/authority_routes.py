@@ -142,7 +142,6 @@ async def inventory_policies_ep(user=Depends(get_current_user)):
     if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     import glob
-    import json
     import os
     from inventory_projection import installation_id, environment_label
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "release", "policy_migrations")

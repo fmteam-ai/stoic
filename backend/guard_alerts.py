@@ -128,7 +128,6 @@ def queue_ops_alert_email(db, kind: str, severity: str, message: str,
 async def _send_ops_alert(db, kind: str, severity: str, message: str,
                           dedup_key: str) -> None:
     try:
-        import os
         import socket
         subject = f"[STOIC {severity.upper()}] {kind}"
         try:

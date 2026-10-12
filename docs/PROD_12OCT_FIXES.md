@@ -23,3 +23,17 @@ version, zero unresolved executions, position truth, authority, bot-health caps)
 behaves exactly as before (`all_enabled_live` + performance attestation).
 Tests `tests/unit/test_item4_demo_period_evidence.py` (5): demo_only + attested DEMO → PASS; demo_only + LIVE → FAIL;
 demo period still fails on other gates; LIVE regime unchanged.
+
+## v1.60.22 — Bot Config save 500 (UnboundLocalError) + access-log redaction tracebacks
+- Root cause: `routes/bot_routes.py update_config()` re-imported `audit_event` inside the `pattern_gate_enabled` branch; Python
+  made the name local for the whole function, so every step-up save (`live_activation` / `risk_raise`, mode promotion /
+  demotion) without `pattern_gate_enabled` raised `UnboundLocalError` → 500. Fix: local import deleted (module import at
+  line 10 provides it). Same class fixed repo-wide: **56** function-local imports that shadowed a module-level import of the
+  identical name were removed across 27 backend files (identical source module only — verified by AST; ruff F821/F811 clean).
+- New CI gate: `scripts/check_local_import_shadows.py` (AST, every function in backend/) + ruff `F823` in `static-analysis`.
+- `_serialize()` now also returns `pattern_gate_enabled` (the admin toggle was written but invisible in `GET /api/bot/config`).
+- `security_agent/redact.py`: `uvicorn.access` records keep their 5-tuple `record.args` (string members masked in place) —
+  no more "Logging error … not enough values to unpack (expected 5, got 0)".
+- Tests `tests/unit/test_prod_v1_60_22_bot_config_500.py` (5): risk raise and activation on a live-context account without
+  `pattern_gate_enabled` → 200 + step-up audit; admin toggle still audited; repo-wide shadow check; access-log args shape.
+  Verified live on preview: `PUT /api/bot/config` risk raise → 200, `risk_raise` audit written.

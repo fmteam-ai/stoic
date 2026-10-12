@@ -72,7 +72,6 @@ async def list_transactions(user=Depends(get_current_user), limit: int = 50):
 
     Only returns the fields safe to surface in the UI — no raw Stripe metadata.
     """
-    from database import get_db
     db = get_db()
     cursor = db.payment_transactions.find(
         {"user_id": user["id"]}
@@ -100,10 +99,7 @@ async def upgrade_preview(user=Depends(get_current_user)):
     subscription_service.apply_successful_payment."""
     from datetime import datetime, timezone, timedelta
     from dateutil.relativedelta import relativedelta
-    from subscription_plans import (
-        all_plans_public, TIER_RANK, TIER_BASE_CENTS, canonical_tier,
-    )
-    from subscription_service import get_subscription
+    from subscription_plans import TIER_RANK, TIER_BASE_CENTS, canonical_tier
 
     sub = await get_subscription(user["id"])
     now = datetime.now(timezone.utc)
