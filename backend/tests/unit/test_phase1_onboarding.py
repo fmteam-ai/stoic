@@ -53,6 +53,10 @@ def test_u2_adopt_writes_and_audits(monkeypatch):
     db = FakeDb()
     acc = _acc(verified_identity={"broker_server": "OnEquity-Demo"}, broker_account_mismatch=True)
     _run(db.accounts.insert_one(dict(acc)))
+    # H3 — without the identity chain (installation + lease) nothing is adopted
+    assert _run(sa.maybe_adopt_reported_server(db, acc, 1083440, "OnEquity-Server", installation_id="inst_0123456789ab")) is None
+    _run(db.installations.insert_one({"installation_id": "inst_0123456789ab", "account_id": str(acc["_id"]), "revoked": False}))
+    _run(db.execution_leases.insert_one({"account_id": str(acc["_id"]), "installation_id": "inst_0123456789ab"}))
     ev = _run(sa.maybe_adopt_reported_server(db, acc, 1083440, "OnEquity-Server", installation_id="inst_0123456789ab"))
     assert ev["to"] == "OnEquity-Server" and ev["from"] == "OnEquity-Demo" and ev["token_authenticated"] is True
     row = _run(db.accounts.find_one({"_id": acc["_id"]}))
@@ -61,21 +65,45 @@ def test_u2_adopt_writes_and_audits(monkeypatch):
     assert row["server_changed"]["source"] == "ea_auto_adopt"
     assert audits[0]["action"] == "server_adopted_from_ea" and audits[0]["meta"]["mt5_login"] == "1083440"
     assert acc["server"] == "OnEquity-Server"                                        # caller's doc updated in place
-    assert _run(sa.maybe_adopt_reported_server(db, acc, 1083440, "OnEquity-Server")) is None   # idempotent
+    assert _run(sa.maybe_adopt_reported_server(db, acc, 1083440, "OnEquity-Server", installation_id="inst_0123456789ab")) is None   # idempotent
+    # H3 — a second terminal reporting the OLD name within 6 h is a flip-flop: finding, no adoption
+    findings = []
+
+    async def _open(db_, finding):
+        findings.append(finding)
+    monkeypatch.setattr("security_agent.findings.open_or_update", _open)
+    assert _run(sa.maybe_adopt_reported_server(db, acc, 1083440, "OnEquity-Demo", installation_id="inst_0123456789ab")) is None
+    assert findings and findings[0]["check_id"] == "server_flipflop" and acc["server"] == "OnEquity-Server"
+    # M5 — a manual edit is locked against auto-adopt for 24 h
+    acc["server_changed"] = {"from": "x", "to": "OnEquity-Server", "at": sa.datetime.now(sa.timezone.utc).isoformat(), "source": "owner_edit", "by": "u1"}
+    assert sa.manual_lock_active(acc) is True
+    assert _run(sa.maybe_adopt_reported_server(db, acc, 1083440, "OnEquity-Live", installation_id="inst_0123456789ab")) is None
+    acc["server_changed"]["at"] = "2020-01-01T00:00:00+00:00"
+    assert sa.manual_lock_active(acc) is False
 
 
-def test_u2_heartbeat_wires_adoption_before_identity_chain():
+def test_u2_heartbeat_adopts_only_after_identity_chain_with_full_token():
+    """H3 (main127) — adoption runs AFTER verify_heartbeat_identity, only for a server-name-only failure, only
+    with a FULL (current) token, and never changes this heartbeat's identity result."""
     src = _read("backend", "routes", "bridge_routes.py")
     hb = src.split('@router.post("/heartbeat")')[1].split("@router.")[0]
     assert "maybe_adopt_reported_server(db, acc, payload.account_login, payload.broker_server" in hb
-    assert hb.index("maybe_adopt_reported_server") < hb.index("verify_heartbeat_identity(")
+    assert hb.index("verify_heartbeat_identity(") < hb.index("maybe_adopt_reported_server")
+    assert '"broker server mismatch" in str(identity.get("reason") or "") and acc.get("_token_kind") == "current"' in hb
+    assert "require_identity=True" in hb
+    adopt_block = hb.split("maybe_adopt_reported_server")[1][:600]
+    assert "identity[\"ok\"] = True" not in adopt_block and "mismatch = False" not in adopt_block
+    assert 'acc["_token_kind"] = "current"' in src and 'acc["_token_kind"] = "grace"' in src
 
 
 # ── U3 Edit: server admin-only ─────────────────────────────────────────────────────────────────────────
 def test_u3_server_edit_admin_only():
     src = _read("backend", "routes", "account_routes.py")
     patch = src.split('@router.patch("/{account_id}")')[1].split("@router.")[0]
-    assert 'if user.get("role") != "admin":' in patch and '"admin_only"' in patch
+    assert 'if not is_admin:' in patch and '"admin_only"' in patch
+    # M6 (main127) — admin check comes FIRST: admins reach any account, users only their own
+    assert 'acc = await db.accounts.find_one({"_id": oid} if is_admin else {"_id": oid, "user_id": user["id"]})' in patch
+    assert patch.index('is_admin = user.get("role") == "admin"') < patch.index("db.accounts.find_one(")
     dlg = _read("frontend", "src", "components", "EditAccountDialog.jsx")
     assert 'const isAdmin = user?.role === "admin";' in dlg and 'data-testid="edit-account-server-auto"' in dlg
     assert 'const isLive = account && account.mode !== "paper" && isAdmin;' in dlg
@@ -191,12 +219,16 @@ def test_u11_no_account_less_configs_and_orphan_migration():
     assert _run(db.bot_configs.count_documents({"user_id": "u1"})) == 1
     assert _run(_resolve_account_scope(db, "u1", None)) == str(aid)               # default scope → the only account
     assert _run(_get_or_create_config(db, "u1", None))["_id"] == bound["_id"]       # no second config
-    # migration: null-account + unknown-account configs are deleted, bound one stays
+    # M4 (main127) migration: INACTIVE orphans are quarantined (restorable), an ACTIVE orphan is never deleted
     _run(db.bot_configs.insert_one({"user_id": "u1", "account_id": None, "active": False}))
     _run(db.bot_configs.insert_one({"user_id": "u1", "account_id": str(ObjectId()), "active": True}))
+    _run(db.bot_configs.insert_one({"user_id": "u1", "account_id": str(ObjectId()), "active": False}))
     out = _run(bi.delete_orphan_bot_configs(db, reason="test"))
-    assert out["deleted_null_account"] == 1 and out["deleted_unknown_account"] == 1
-    assert _run(db.bot_configs.count_documents({})) == 1
+    assert out["quarantined_null_account"] == 1 and out["quarantined_unknown_account"] == 1 and out["active_orphans_kept"] == 1
+    assert _run(db.bot_configs.count_documents({})) == 2                            # bound one + the ACTIVE orphan
+    assert _run(db.bot_configs_orphaned.count_documents({})) == 2
+    assert all(r["orphaned_reason"] == "test" for r in db.bot_configs_orphaned.rows)
+    assert "delete_many" not in _read("backend", "bot_inventory.py").split("if c.get(\"active\"):")[0]   # no delete before the active check
     seed = _read("backend", "seed.py")
     assert "delete_orphan_bot_configs(db, reason=\"startup-migration\")" in seed and '"account_id": None,\n            "risk_level"' not in seed
     auth = _read("backend", "routes", "auth_routes.py")

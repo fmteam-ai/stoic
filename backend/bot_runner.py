@@ -1815,6 +1815,15 @@ async def _process_user_account_locked(db, cfg: dict):
         if rcap:
             profile = {**profile,
                        "risk_pct": min(float(profile.get("risk_pct") or 0), float(rcap))}
+        # M2 (main127) — the signed RULES policy's max_risk_pct is a HARD ceiling on the risk actually used
+        try:
+            from rules_policy import risk_caps as _policy_caps
+            _pc = await _policy_caps(db)
+            if _pc.get("max_risk_pct") is not None and float(profile.get("risk_pct") or 0) > _pc["max_risk_pct"]:
+                signal["policy_risk_clamp"] = {"from": float(profile.get("risk_pct") or 0), "to": _pc["max_risk_pct"]}
+                profile = {**profile, "risk_pct": _pc["max_risk_pct"]}
+        except Exception as e:  # noqa: BLE001
+            logger.warning("rules-policy risk cap lookup failed: %s — keeping profile risk", e)
         # iter-133 · Kelly disabled by default (quant review C1). iter-144 C2:
         # when enabled, Kelly may ONLY consume a CALIBRATED probability — the
         # setup score is quality, not p_win. Gate on the Wilson lower bound

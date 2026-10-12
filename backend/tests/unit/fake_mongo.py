@@ -97,6 +97,8 @@ class FakeCollection:
 
     async def find_one(self, q=None, proj=None, sort=None):
         rows = [r for r in self.rows if _match(r, q or {})]
+        for key, direction in reversed(list(sort or [])):
+            rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=(direction == -1))
         return dict(rows[0]) if rows else None
 
     async def count_documents(self, q):
@@ -107,6 +109,11 @@ class FakeCollection:
         d.setdefault("_id", ObjectId())
         self.rows.append(d)
         return _Res(inserted_id=d["_id"])
+
+    async def insert_many(self, docs):
+        for d in docs:
+            await self.insert_one(d)
+        return _Res(inserted_id=None)
 
     def _apply(self, r, upd):
         for k, v in (upd.get("$set") or {}).items():

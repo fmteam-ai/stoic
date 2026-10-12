@@ -68,6 +68,9 @@ PLAYBOOKS = {
                          ["Check SECURITY_AGENT_PROTECTED_IPS and the source in the evidence.", "If the source is really hostile, block it at Cloudflare manually."],
                          "No new protected_target findings for this target."),
     # Phase 1 (U18 / O1)
+    "server_flipflop": ("Two terminals fight over one account's broker server", "Auto-adoption of the server name moved back and forth within hours: two MT5 terminals with the same login (or a cloned token) are heartbeating. One of them is not yours — adoption is paused until it stops.",
+                        ["Remove EmergentTradingBridge from the terminal that should not trade this account.", "If both are yours, set the server by hand (Edit account) — the manual value is locked for 24 h.", "Rotate the bridge token if you do not recognise the second terminal."],
+                        "Heartbeats report one server name for 6 h; the identity chain verifies again."),
     "deleted_account_poll": ("EA of a deleted account still polling", "Noise, not an attack: the account was removed on the dashboard but the EA is still attached on the VPS (it is told to stop with HTTP 410).",
                              ["Remove EmergentTradingBridge from that terminal's chart (EA 1.64+ stops by itself).", "Re-add the account on the dashboard if it should trade again."],
                              "No further polls from the tombstoned token."),

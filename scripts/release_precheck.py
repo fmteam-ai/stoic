@@ -25,17 +25,24 @@ def tag_on_origin(tag: str) -> bool:
 
 
 def release_run(repo: str, tag: str, token: str | None) -> dict:
-    url = "https://api.github.com/repos/%s/actions/workflows/release.yml/runs?per_page=20&event=push" % repo
+    """H4 (main127) — releases are cut from tag pushes, from the GitHub UI ("release: published") and by hand
+    (workflow_dispatch): query ALL events and match the run on the tag name."""
+    url = "https://api.github.com/repos/%s/actions/workflows/release.yml/runs?per_page=40" % repo
     req = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json", "User-Agent": "stoic-update"})
     if token:
         req.add_header("Authorization", "Bearer %s" % token)
     with urllib.request.urlopen(req, timeout=30) as r:
         data = json.loads(r.read().decode("utf-8"))
+    best = None
     for run in data.get("workflow_runs") or []:
-        if run.get("head_branch") == tag:
-            return {"found": True, "status": run.get("status"), "conclusion": run.get("conclusion"),
-                    "url": run.get("html_url"), "sha": run.get("head_sha")}
-    return {"found": False}
+        if run.get("head_branch") != tag or run.get("event") not in ("push", "release", "workflow_dispatch"):
+            continue
+        cand = {"found": True, "status": run.get("status"), "conclusion": run.get("conclusion"),
+                "url": run.get("html_url"), "sha": run.get("head_sha"), "event": run.get("event")}
+        if cand["conclusion"] == "success":
+            return cand                                  # any green run of this tag is proof enough
+        best = best or cand
+    return best or {"found": False}
 
 
 def main(argv=None) -> int:
@@ -49,7 +56,7 @@ def main(argv=None) -> int:
         return 2
     try:
         run = release_run(a.repo, a.tag, os.environ.get("GITHUB_TOKEN") or None)
-    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError) as e:
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, OSError, KeyError) as e:   # H4 — every network/parse failure → 4, never a traceback
         print("!! release check: GitHub API unreachable (%s) — cannot confirm the Release workflow of %s" % (e, a.tag))
         return 4
     if not run["found"]:

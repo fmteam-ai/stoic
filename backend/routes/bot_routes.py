@@ -978,6 +978,9 @@ async def _activation_readiness(db, account) -> list:
 async def start_bot(request: Request, account_id: Optional[str] = None,
                     user=Depends(get_current_user)):
     db = get_db()
+    # H2 (main127) — the default scope resolves to ONE account; the readiness gate runs on whichever account
+    # this start will actually enable (never skipped because the id was omitted)
+    account_id = await _resolve_account_scope(db, user["id"], account_id)
     owns = None
     if account_id:
         owns = await db.accounts.find_one(
@@ -1059,18 +1062,25 @@ async def start_bot(request: Request, account_id: Optional[str] = None,
             "$unset": {"tripped_at": "", "tripped_reason": ""},
         },
     )
+    try:
+        from inventory_projection import auto_approve_under_rules
+        await auto_approve_under_rules(db)          # M3 — bot_enabled changed the inventory hash; approve under the rules policy now
+    except Exception:  # noqa: BLE001 — the 60 s sweep catches up
+        logger.exception("rules auto-approval after bot start failed")
     return {"active": True, "account_id": account_id}
 
 
 @router.post("/stop")
 async def stop_bot(account_id: Optional[str] = None, user=Depends(get_current_user)):
     db = get_db()
-    account_id = await _resolve_account_scope(db, user["id"], account_id)   # U11
-    await db.bot_configs.update_one(
-        _config_filter(user["id"], account_id),
-        {"$set": {"active": False, "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
-    return {"active": False, "account_id": account_id}
+    now = datetime.now(timezone.utc).isoformat()
+    if account_id:
+        await db.bot_configs.update_one(_config_filter(user["id"], account_id), {"$set": {"active": False, "updated_at": now}})
+        return {"active": False, "account_id": account_id, "stopped_account_ids": [account_id]}
+    # H2 (main127) — "stop" with no id is a STOP-ALL for the caller: every account's bot, not one guessed scope
+    owned = [str(a["_id"]) for a in await db.accounts.find({"user_id": user["id"]}, {"_id": 1}).to_list(length=200)]
+    res = await db.bot_configs.update_many({"user_id": user["id"], "active": True}, {"$set": {"active": False, "updated_at": now}})
+    return {"active": False, "account_id": None, "stopped_account_ids": owned, "stopped": int(res.modified_count)}
 
 
 @router.get("/presets")

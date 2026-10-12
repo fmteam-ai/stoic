@@ -50,8 +50,13 @@ def problems(pol: dict, *, now: datetime | None = None) -> list:
     if not re.match(VERSION_RE, str(pol.get("policy_version") or "")):
         errs.append("policy_version invalid")
     want = installation_id()
-    if want and pol.get("installation_id") != want:
-        errs.append("installation_id does not name this installation")
+    if want:
+        if pol.get("installation_id") != want:
+            errs.append("installation_id does not name this installation")
+    else:
+        from app_env import is_production
+        if is_production():          # M1 (main127) — production without STOIC_INSTALLATION_ID: fail closed, never load an unbound policy
+            errs.append("STOIC_INSTALLATION_ID is not set on this host — a rules policy cannot be bound to the installation (fail closed)")
     if pol.get("environment") != environment_label():
         errs.append(f"environment must be {environment_label()}")
     cap = pol.get("max_accounts_per_user")
@@ -158,6 +163,32 @@ def broker_allowed(pol: dict, broker: str) -> bool:
     return b in allowed
 
 
+def effective_max_risk_pct(cfg: dict | None) -> float:
+    """M2 (main127) — the risk the bot can ACTUALLY use for this config: the risk-level profile's risk_pct, lifted
+    to adaptive_risk_cap_pct when adaptive sizing may scale up (bot_runner: adaptive → cap → Kelly). Saved configs
+    carry risk_level/adaptive_risk_cap_pct, never a literal risk_per_trade_pct."""
+    from risk import get_profile
+    cfg = cfg or {}
+    base = float(get_profile(str(cfg.get("risk_level") or "medium")).get("risk_pct") or 0)
+    explicit = cfg.get("risk_percent") or cfg.get("risk_per_trade_pct") or cfg.get("risk_pct")
+    if explicit is not None:
+        try:
+            base = max(base, float(explicit))
+        except (TypeError, ValueError):
+            pass
+    if cfg.get("adaptive_sizing_enabled", True):
+        base = max(base, float(cfg.get("adaptive_risk_cap_pct") or 2.0))
+    return base
+
+
+async def risk_caps(db) -> dict:
+    """Active policy risk caps for the runtime clamps (bot_runner sizing, circuit_breakers daily loss). {} = none."""
+    pol = await active(db)
+    if not pol or pol.get("expired"):
+        return {}
+    return {k: float(v) for k, v in (pol.get("risk_caps") or {}).items() if isinstance(v, (int, float)) and v > 0}
+
+
 def evaluate_admission(acc: dict, pol: dict, *, user_account_count: int, bot_cfg: dict | None = None) -> dict:
     """Pure. {'state': admitted|pending_operator|blocked, 'reason', 'checks'} — fail closed."""
     from broker_env import attested_environment, broker_reports_real
@@ -172,7 +203,8 @@ def evaluate_admission(acc: dict, pol: dict, *, user_account_count: int, bot_cfg
     }
     rc = pol.get("risk_caps") or {}
     if bot_cfg is not None and rc.get("max_risk_pct") is not None:
-        checks["risk_within_cap"] = float(bot_cfg.get("risk_per_trade_pct") or bot_cfg.get("risk_pct") or 0) <= float(rc["max_risk_pct"])
+        checks["risk_within_cap"] = effective_max_risk_pct(bot_cfg) <= float(rc["max_risk_pct"])
+        checks["effective_max_risk_pct"] = effective_max_risk_pct(bot_cfg)
     if not checks["broker_allowed"]:
         return {"state": "blocked", "reason": f"broker {acc.get('broker')} is not in the policy's allowed brokers", "checks": checks}
     if not checks["within_account_cap"]:
@@ -193,11 +225,18 @@ async def sync_admission(db, acc: dict) -> dict | None:
     if not pol:
         return None
     n = await db.accounts.count_documents({"user_id": acc.get("user_id"), "mode": {"$ne": "paper"}})
-    cfg = await db.bot_configs.find_one({"account_id": str(acc["_id"])}, {"risk_per_trade_pct": 1, "risk_pct": 1})
+    cfg = await db.bot_configs.find_one({"account_id": str(acc["_id"])},
+                                        {"risk_level": 1, "risk_percent": 1, "risk_per_trade_pct": 1, "risk_pct": 1,
+                                         "adaptive_sizing_enabled": 1, "adaptive_risk_cap_pct": 1})
     d = evaluate_admission(acc, pol, user_account_count=n, bot_cfg=cfg)
     cur = acc.get("admission") or {}
     if cur.get("state") == "admitted" and cur.get("by") not in (SYSTEM_ACTOR, None) and d["state"] == "pending_operator":
-        return cur                                                     # operator-approved real-money account stays admitted
+        # operator-approved real-money account stays admitted — but ONLY for the identity it was approved on
+        from broker_env import attestation_identity
+        if cur.get("identity_hash") and cur.get("identity_hash") == attestation_identity(acc):
+            return cur
+        d = {"state": "pending_operator", "reason": "operator approval was bound to a different terminal/server/login identity — re-approval needed",
+             "checks": {**d["checks"], "approval_identity_hash": cur.get("identity_hash"), "current_identity_hash": attestation_identity(acc)}}
     if cur.get("state") == d["state"] and cur.get("policy_version") == pol.get("policy_version"):
         return cur
     now = _now().isoformat()
@@ -224,8 +263,10 @@ async def operator_approve(db, acc: dict, *, approver_email: str) -> dict:
     if d["state"] == "blocked":
         raise HTTPException(status_code=409, detail={"code": "admission_blocked", "message": d["reason"]})
     now = _now().isoformat()
+    from broker_env import attestation_identity
     new = {"state": "admitted", "reason": "real-money account approved by the operator", "by": approver_email, "at": now,
-           "policy_version": pol.get("policy_version"), "checks": d["checks"]}
+           "policy_version": pol.get("policy_version"), "checks": d["checks"],
+           "identity_hash": attestation_identity(acc)}       # the approval is bound to THIS terminal/server/login identity
     await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"admission": new}})
     from audit_chain import append_chained
     await append_chained(db, {"actor_email": approver_email, "action": "account_admission_operator_approved", "target_kind": "account",

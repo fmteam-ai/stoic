@@ -73,10 +73,19 @@ else
   # O3 (Phase 1) — a release tag is checked BEFORE the backup: exists on origin + Release workflow green.
   # (Previously the attestation gate refused an unfinished Release only after backup + checkout.)
   if printf '%s' "${REF}" | grep -qE '^v[0-9]' && [ "${STOIC_ALLOW_UNATTESTED:-0}" != 1 ]; then
-    _repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2-); [ -n "${_repo}" ] || _repo=$(_repo_slug)
+    # H4 (main127) — under `set -euo pipefail` a missing .env line made grep fail and the script die SILENTLY;
+    # every lookup is `|| true` and a missing repo slug is reported in words.
+    _repo=$(grep -E '^GITHUB_REPO=' .env 2>/dev/null | cut -d= -f2- || true)
+    [ -n "${_repo}" ] || _repo=$(_repo_slug || true)
+    if [ -z "${_repo}" ]; then
+      echo "!! release check: cannot determine the GitHub repo (set GITHUB_REPO=owner/repo in ./.env or use a GitHub origin remote)"
+      echo "   continuing — the attestation gate verifies the signed artefacts after checkout"
+    fi
+    _gh_token="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2- || true)}"
     _rc=0
-    GITHUB_TOKEN="${GITHUB_TOKEN:-$(grep -E '^GITHUB_TOKEN=' .env 2>/dev/null | cut -d= -f2-)}" \
-      python3 scripts/release_precheck.py --repo "${_repo}" --tag "${REF}" || _rc=$?
+    if [ -n "${_repo}" ]; then
+      GITHUB_TOKEN="${_gh_token}" python3 scripts/release_precheck.py --repo "${_repo}" --tag "${REF}" || _rc=$?
+    fi
     case "${_rc}" in
       0) ;;
       4) echo "   release check: continuing — the attestation gate verifies the signed artefacts after checkout" ;;

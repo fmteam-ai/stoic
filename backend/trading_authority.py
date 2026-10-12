@@ -304,12 +304,22 @@ async def inventory_domain(db, account: dict | None = None) -> dict:
     from inventory_projection import projection, production_mode
     exp = await db.platform_state.find_one({"_id": "inventory_expectation"})
     if not exp:
-        if production_mode():
+        import rules_policy as _rp
+        rules = await _rp.active(db)
+        if rules and not rules.get("expired"):
+            exp = {"scope_user_id": None, "demo_only": bool(rules.get("demo_only")), "rules_policy": rules.get("policy_version")}   # a signed RULES policy stands in for the fixed expectation
+        elif production_mode():
             return {"level": "CLOSE_ONLY", "reason": "no inventory expectation declared — production fails closed"}
-        return {"level": "FULL", "reason": "no inventory expectation declared (non-production)"}
+        else:
+            return {"level": "FULL", "reason": "no inventory expectation declared (non-production)"}
     proj = await projection(db, exp.get("scope_user_id"))
     if proj["blocking"]:
-        return {"level": "CLOSE_ONLY", "reason": "; ".join(proj["violations"][:3])}
+        return {"level": "CLOSE_ONLY", "reason": "; ".join(proj["platform_violations"][:3] or proj["violations"][:3])}
+    # H1 (main127) — rule breaches (per-user cap, not admitted, not DEMO) close ONLY the breaching user's accounts
+    if account is not None and account.get("user_id") is not None:
+        mine = (proj.get("per_user_blocks") or {}).get(str(account.get("user_id")))
+        if mine:
+            return {"level": "CLOSE_ONLY", "reason": "rules policy breach for this user: " + "; ".join(mine[:3])}
     if exp.get("demo_only") and account is not None and "_id" in account:
         # A15-1 — a signed DEMO-only policy never authorises a real-money account
         from broker_env import attested_environment

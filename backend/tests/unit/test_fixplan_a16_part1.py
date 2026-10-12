@@ -123,7 +123,7 @@ def test_a16_4_expired_policy_is_close_only_and_alerts():
     src = _read("backend/inventory_projection.py")
     assert "inventory close-only until a new signed policy is approved" in src[src.index("async def projection"):src.index("def _reservation_scope") if "def _reservation_scope" in src else len(src)]
     ta = _read("backend/trading_authority.py")
-    assert '"level": "CLOSE_ONLY", "reason": "; ".join(proj["violations"][:3])' in ta
+    assert '"level": "CLOSE_ONLY", "reason": "; ".join(proj["platform_violations"][:3] or proj["violations"][:3])' in ta
     # alerts: expired = critical + Telegram; reminder 3 days before = warning + Telegram
     p = pea.plan(exp, NOW)
     assert p["active"] == {pea.KEY_EXPIRED} and p["raise"][0][0] == pea.KIND_EXPIRED and p["raise"][0][1] == "critical" and "CLOSE-ONLY" in p["raise"][0][3]

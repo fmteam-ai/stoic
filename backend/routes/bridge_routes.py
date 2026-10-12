@@ -67,6 +67,7 @@ async def _account_by_token(token: str) -> dict:
             await db.accounts.update_one(
                 {"_id": acc["_id"]},
                 {"$set": {"bridge_last_used_at": now_iso}})
+        acc["_token_kind"] = "current"          # H3 — only a FULL (current) token may drive server adoption
         return acc
     # 15-min grace for the previous token after a rotation, so a live
     # EA keeps reporting while the operator swaps the new token in.
@@ -78,6 +79,7 @@ async def _account_by_token(token: str) -> dict:
         # new token has never been used (installation still pending), the grace slot keeps sliding.
         if acc.get("installation_pending"):
             await bt.extend_prev_grace(db, acc)
+        acc["_token_kind"] = "grace"
         return acc
     if not acc:
         from security_agent.events import emit_throttled as _sa_emit_t
@@ -299,15 +301,9 @@ async def heartbeat(payload: BridgeHeartbeat):
                 "Attach the EA to the correct MT5 terminal."
             )
 
-    # U2 (Phase 1) — same login, token-authenticated EA, different/empty server name → adopt it (audited).
-    # Runs BEFORE the identity chain so the chain verifies against the adopted name on this very heartbeat.
-    if not mismatch and payload.account_login is not None and payload.broker_server:
-        try:
-            from server_adopt import maybe_adopt_reported_server
-            await maybe_adopt_reported_server(db, acc, payload.account_login, payload.broker_server,
-                                              installation_id=payload.installation_id)
-        except Exception as _sw:  # noqa: BLE001 — adoption is a convenience; the heartbeat must still land
-            record_swallow("bridge", "server_auto_adopt", _sw)
+    # U2 (Phase 1) / H3 (main127) — server adoption now runs AFTER the identity chain (see below): only a
+    # heartbeat whose installation is recognised, bound to this account and holding the lease, sent with a
+    # FULL token, may adopt — and the adoption never flips this heartbeat's identity result.
 
     # iter-122 Phase 3 — verified installation identity. When the EA reports
     # an installation_id, the heartbeat is AUTHORITATIVE only if the full
@@ -344,6 +340,17 @@ async def heartbeat(payload: BridgeHeartbeat):
         if not identity["ok"]:
             mismatch = True
             mismatch_reason = mismatch_reason or identity.get("reason")
+            # H3 (main127) — the ONLY thing wrong is the server NAME on an otherwise fully verified chain
+            # (installation active + bound here, same login, holds the lease, FULL token) → adopt the EA's name
+            # (audited, manual-edit lock + two-terminal flip-flop guard inside). This heartbeat stays
+            # non-authoritative; the next one verifies against the adopted name.
+            if "broker server mismatch" in str(identity.get("reason") or "") and acc.get("_token_kind") == "current":
+                try:
+                    from server_adopt import maybe_adopt_reported_server
+                    await maybe_adopt_reported_server(db, acc, payload.account_login, payload.broker_server,
+                                                      installation_id=effective_installation_id, require_identity=True)
+                except Exception as _sw:  # noqa: BLE001 — adoption is a convenience; the heartbeat must still land
+                    record_swallow("bridge", "server_auto_adopt", _sw)
 
     set_doc = {
         "balance": payload.balance if not mismatch else None,
@@ -733,7 +740,10 @@ async def heartbeat(payload: BridgeHeartbeat):
         if _res == "granted":
             _fresh = await db.accounts.find_one({"_id": acc["_id"]}) or _fresh
         import rules_policy as _rp
-        await _rp.sync_admission(db, _fresh)                 # Phase 3 — admitted automatically under the rules policy
+        adm_new = await _rp.sync_admission(db, _fresh)                 # Phase 3 — admitted automatically under the rules policy
+        if (adm_new or {}).get("state") == "admitted":
+            from inventory_projection import auto_approve_under_rules
+            await auto_approve_under_rules(db)                         # M3 — the write step lives here, not in the GET
     except Exception as _sw:  # noqa: BLE001 — attestation/admission are derived state; the heartbeat must still land
         record_swallow("bridge", "auto_attest", _sw)
 
