@@ -116,6 +116,14 @@ async def market_posture(user=Depends(get_current_user)):
                           "bars_n": 0}
         except Exception as e:
             logger.debug("posture structure failed: %s", e)
+        patterns = None
+        try:
+            from chart_patterns import pattern_snapshot, pattern_gate
+            patterns = pattern_snapshot((cdoc or {}).get("bars") or [])
+            if patterns.get("ready"):
+                patterns["would_veto"] = {a: pattern_gate(a, patterns) for a in ("BUY", "SELL")}
+        except Exception as e:
+            logger.debug("posture chart patterns failed: %s", e)
         lmap = None
         try:
             from liquidity_map import build_liquidity_map
@@ -194,6 +202,7 @@ async def market_posture(user=Depends(get_current_user)):
                          or {"ready": False, "reason": "no data", "bars_n": 0},
             "range_forecast": sig.get("range_forecast"),
             "liquidity": lmap,
+            "chart_patterns": patterns,
             "news_ai": news_ai,
             "calendar_intel": cal_pred,
             "causal": causal,

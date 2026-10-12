@@ -65,7 +65,65 @@ async def nl_strategy_code(payload: dict, user=Depends(get_current_user)):  # no
         raise api_error(502, "code_generation_failed", "Code generation is temporarily unavailable.", exc=e)
     if dsl.get("error"):
         raise HTTPException(status_code=502, detail=dsl["error"])
-    return {"dsl": dsl}
+    from dsl_engine import explain
+    return {"dsl": dsl, "explanation": explain(dsl)}
+
+
+def _checked_dsl(payload: dict) -> dict:
+    """Closed-vocab validation (same gate as the generator) on a copy of the caller's DSL."""
+    import copy
+    from strategy_code_generator import _validate
+    dsl = copy.deepcopy(payload.get("dsl") or {})
+    ok, reason = _validate(dsl)
+    if not ok:
+        raise HTTPException(status_code=422, detail={"code": "invalid_dsl", "reason": reason})
+    return dsl
+
+
+@router.post("/strategy/explain")
+async def nl_strategy_explain(payload: dict, user=Depends(get_current_user)):  # noqa: ARG001
+    """Plain-English read-back generated from the rule tree itself (no LLM).
+
+    Body: {"dsl": {...}, "timeframe": "M15"|"D1"}
+    """
+    from dsl_engine import explain
+    return explain(_checked_dsl(payload), intraday=payload.get("timeframe", "M15") != "D1")
+
+
+@router.post("/strategy/simulate")
+async def nl_strategy_simulate(payload: dict, user=Depends(get_current_user)):
+    """Backtest the DSL on real candles (next-bar fills, costs, TP/SL/BE/trail).
+
+    Body: {"dsl": {...}, "symbol": "XAUUSD", "timeframe": "M15"|"D1", "cost_bps": 2}
+      M15 → the user's EA-streamed intraday candles (up to ~8 days)
+      D1  → ~1 year of daily history from the market data service
+    """
+    from dsl_engine import backtest
+    from pip_utils import base_symbol
+    dsl = _checked_dsl(payload)
+    timeframe = payload.get("timeframe", "M15")
+    if timeframe not in ("M15", "D1"):
+        raise HTTPException(status_code=422, detail="timeframe must be M15 or D1")
+    symbols = [str(x).upper() for x in dsl.get("symbols") or []]
+    symbol = str(payload.get("symbol") or (symbols[0] if symbols else "")).upper()
+    if not symbol or (symbols and symbol not in symbols):
+        raise HTTPException(status_code=422, detail="symbol must be one of dsl.symbols")
+    try:
+        cost_bps = min(max(float(payload.get("cost_bps", 2.0)), 0.0), 100.0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="cost_bps must be a number") from None
+    if timeframe == "M15":
+        cdoc = await get_db().intraday_candles.find_one(
+            {"user_id": user["id"], "symbol": base_symbol(symbol), "timeframe": "M15"}, {"bars": 1})
+        rows = (cdoc or {}).get("bars") or []
+    else:
+        from market import get_history
+        try:
+            rows = await get_history(symbol)
+        except RuntimeError as e:
+            from errors import api_error
+            raise api_error(502, "history_unavailable", "Daily history is unavailable for this symbol.", exc=e)
+    return {"symbol": symbol, **backtest(dsl, rows, timeframe, cost_bps)}
 
 
 @router.post("/strategy/optimize")
@@ -590,3 +648,49 @@ async def _save_trigger(user_id, params, idem_key: str | None = None, ctx=None):
         return {"trigger_id": str(r.inserted_id), "symbol": doc["symbol"],
                 "condition": doc["condition"], "threshold_pct": doc["threshold_pct"]}
     return await nx.fenced(db, ctx, work)
+
+
+# ------------------- Shadow strategies (forward paper trading) -------------
+@router.post("/strategy/shadow")
+async def nl_strategy_shadow_promote(payload: dict, user=Depends(get_current_user)):
+    """Promote a backtested DSL to forward SHADOW trading on M15 candles.
+
+    Body: {"dsl": {...}, "symbol": "XAUUSD", "name": "...", "cost_bps": 2}
+    Paper only — no orders are ever placed. Trading starts after the latest
+    stored bar; the backtest snapshot at promotion is kept for comparison.
+    """
+    import dsl_shadow
+    dsl = _checked_dsl(payload)
+    symbols = [str(x).upper() for x in dsl.get("symbols") or []]
+    symbol = str(payload.get("symbol") or (symbols[0] if symbols else "")).upper()
+    if not symbol or (symbols and symbol not in symbols):
+        raise HTTPException(status_code=422, detail="symbol must be one of dsl.symbols")
+    try:
+        cost_bps = min(max(float(payload.get("cost_bps", 2.0)), 0.0), 100.0)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="cost_bps must be a number") from None
+    try:
+        doc = await dsl_shadow.promote(get_db(), user["id"], dsl, symbol,
+                                       name=str(payload.get("name") or "") or None, cost_bps=cost_bps)
+    except ValueError:
+        raise HTTPException(status_code=409, detail={
+            "code": "shadow_limit_reached",
+            "message": f"At most {dsl_shadow.MAX_ACTIVE_PER_USER} active shadow strategies — stop one first."}) from None
+    doc["id"] = str(doc.pop("_id"))
+    doc.pop("state", None)
+    return doc
+
+
+@router.get("/strategy/shadow")
+async def nl_strategy_shadow_list(user=Depends(get_current_user)):
+    """The caller's shadow strategies: live forward results next to the backtest that justified them."""
+    import dsl_shadow
+    return {"mode": "shadow", "strategies": await dsl_shadow.list_for_user(get_db(), user["id"])}
+
+
+@router.post("/strategy/shadow/{strategy_id}/stop")
+async def nl_strategy_shadow_stop(strategy_id: str, user=Depends(get_current_user)):
+    import dsl_shadow
+    if not await dsl_shadow.stop(get_db(), user["id"], strategy_id):
+        raise HTTPException(status_code=404, detail="active shadow strategy not found")
+    return {"stopped": True}

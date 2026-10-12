@@ -1013,6 +1013,26 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "structure_gate_veto")
                 continue
 
+            # Chart-pattern gate (zones / classic patterns with measured odds).
+            # OBSERVE by default: the would-veto reason rides on the signal so
+            # the gate proves itself in shadow before pattern_gate_enabled.
+            if signal.get("scope") not in (_fade_exempt | {"range_fade"}):
+                try:
+                    from chart_patterns import pattern_snapshot, pattern_gate
+                    psnap = pattern_snapshot((cdoc or {}).get("bars") or [])
+                    pg = pattern_gate(signal["action"], psnap)
+                    signal["chart_patterns"] = {
+                        "ready": psnap.get("ready"),
+                        "patterns": psnap.get("patterns", []), "candles": psnap.get("candles", []),
+                        "would_veto": pg, "enforced": bool(cfg.get("pattern_gate_enabled", False))}
+                except Exception as e:  # noqa: BLE001 — fail-open like the other gates
+                    logger.debug("pattern gate failed: %s", e)
+                    pg = None
+                if pg and cfg.get("pattern_gate_enabled", False):
+                    await _record_pulse(db, cfg, symbol=sym,
+                        action="SKIP", level="warn", reason=pg)
+                    continue
+
             # iter-129 · Session-trend / exhaustion gates + trend-ride mode
             # (2026-07-13 review: counter-trend buys into an 85pt gold slide,
             # selling the day low after -2%, and 12pt TPs in an 80pt trend).

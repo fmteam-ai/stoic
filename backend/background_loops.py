@@ -157,6 +157,13 @@ async def _analytics_loop():
             await run_daily_aggregates(get_db())
             record_progress("_analytics_loop", processed=1,
                             started_at=t0, interval_sec=INTERVAL)
+            # Forward paper trading of promoted strategy DSLs (no orders).
+            # Isolated so a failure never stalls analytics progress.
+            try:
+                from dsl_shadow import advance_all
+                await advance_all(get_db())
+            except Exception:  # noqa: BLE001
+                logger.exception("dsl shadow advance failed")
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
