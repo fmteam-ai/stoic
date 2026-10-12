@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1214 |
+| unit | pure logic, no external I/O | every CI job | 1219 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4178 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5664 tests across 597 files.**
+**Total: 5669 tests across 598 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -558,6 +558,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_install_report_healthwatch.py` | unit | 3 |
 | `backend/tests/unit/test_inventory_null_account_profile.py` | unit | 3 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
+| `backend/tests/unit/test_item4_demo_period_evidence.py` | unit | 5 |
 | `backend/tests/unit/test_llm_models_single_source.py` | unit | 6 |
 | `backend/tests/unit/test_main114_followups.py` | unit | 9 |
 | `backend/tests/unit/test_main115_a18.py` | unit | 13 |

@@ -6,7 +6,8 @@ candidate build. Read-only. Exit 0 only when EVERY gate passes.
       --scope-user <tenant user id> --expect 6/3/3 [--expect-ids a,b,c]
 
 Gates (any failure → FAIL): signed topology reconciliation (production_reconcile
---strict), all enabled accounts LIVE, synthetic accounts enumerated+excluded,
+--strict), all enabled accounts LIVE — or, under an ACTIVE demo_only rules policy ("demo period"), all enabled
+accounts ATTESTED DEMO with the LIVE-only performance attestation skipped —, synthetic accounts enumerated+excluded,
 EA heartbeat consensus (fresh, verified identity, one EA version, worker view
 agrees), zero unresolved executions (UNKNOWN or aged) and zero position
 mismatches, canonical authority FULL and UI/enforced levels agree per account,
@@ -61,17 +62,37 @@ def preflight(args, env: dict) -> list:
     return p
 
 
+def regime_from_policy(policy: dict | None) -> dict:
+    """Item 4 (main132 follow-up): a demo-only production is governed by an ACTIVE demo_only rules policy. The
+    evidence gates then require every enabled account to be an ATTESTED DEMO account (server-authoritative
+    attestation, never a user-written field) and the LIVE-only performance attestation is skipped — every other
+    gate (EA fresh, identity, executions, position truth, authority, bot health) stays exactly as strict."""
+    demo = bool(policy) and bool(policy.get("demo_only")) and not policy.get("expired")
+    return {"demo_period": demo, "required_environment": "DEMO" if demo else "LIVE",
+            "policy_version": (policy or {}).get("policy_version"), "label": "demo period" if demo else "live"}
+
+
+def environment_gates(en_rows: list, regime: dict) -> dict:
+    """Pure. LIVE regime: `all_enabled_live` (broker environment LIVE). Demo period: `all_enabled_attested_demo`
+    (attested_environment == DEMO on every enabled account; a LIVE account under a demo_only policy FAILS)."""
+    if regime.get("demo_period"):
+        return {"all_enabled_attested_demo": bool(en_rows) and all(x.get("attested_environment") == "DEMO" for x in en_rows)}
+    return {"all_enabled_live": bool(en_rows) and all(x.get("environment") == "LIVE" for x in en_rows)}
+
+
 async def collect(args) -> dict:
     from database import get_db
-    from broker_env import broker_environment
+    from broker_env import broker_environment, attested_environment
     from synthetic_data import is_synthetic_account
     from execution_truth import execution_truth_check
     from trading_authority import compute_authority
     from state_contract import contract
     from routes.performance_routes import _attestation_gate
+    import rules_policy as rp
     db = get_db()
     now = datetime.now(timezone.utc)
     gates: dict = {}
+    regime = regime_from_policy(await rp.active(db))
 
     # 1 · signed topology reconciliation (same script the deploy gate runs)
     cmd = [sys.executable, os.path.join(HERE, "production_reconcile.py"), "--expect", args.expect, "--scope-user", args.scope_user, "--strict"]
@@ -96,11 +117,12 @@ async def collect(args) -> dict:
     for a in real:
         age = _age(a.get("last_heartbeat"), now)
         acct_rows.append({"id_hash": _h(a["_id"]), "enabled": a.get("trading_enabled") is True, "environment": broker_environment(a),
+                          "attested_environment": attested_environment(a),
                           "bot_enabled": str(a["_id"]) in bots, "heartbeat_age_s": None if age is None else round(age),
                           "ea_fresh": age is not None and age <= FRESH_S, "ea_version": a.get("ea_version"),
                           "identity_verified": bool(a.get("verified_identity")), "open_positions_broker": a.get("open_positions")})
     en_rows = [x for x in acct_rows if x["enabled"]]
-    gates["all_enabled_live"] = all(x["environment"] == "LIVE" for x in en_rows) and bool(en_rows)
+    gates.update(environment_gates(en_rows, regime))
     gates["ea_heartbeat_fresh_all_enabled"] = all(x["ea_fresh"] for x in en_rows)
     gates["ea_identity_verified_all_enabled"] = all(x["identity_verified"] for x in en_rows)
     ea_versions = {x["ea_version"] for x in en_rows}
@@ -145,12 +167,18 @@ async def collect(args) -> dict:
                   "position_truth_not_fresh": [r.get("account_id") for r in rows if r.get("position_truth") not in (None, "FRESH") and r.get("bot_enabled")]}
     gates["bot_health_caps_clear"] = not any(cap_inputs.values())
 
-    # 6 · performance attestation gate (reconciled P&L, LIVE only, nothing synthetic)
-    perf_reasons = await _attestation_gate(db, args.scope_user)
-    gates["performance_reconciled_attestable"] = not perf_reasons
+    # 6 · performance attestation gate (reconciled P&L, LIVE only, nothing synthetic). Demo period: this LIVE-only
+    # claim is the ONE gate skipped — DEMO rows can never back a live-performance attestation and must not block.
+    if regime["demo_period"]:
+        perf_reasons = ["SKIPPED_DEMO_PERIOD"]
+        gates["performance_reconciled_attestable"] = True
+    else:
+        perf_reasons = await _attestation_gate(db, args.scope_user)
+        gates["performance_reconciled_attestable"] = not perf_reasons
 
     body = {"bundle": "pre-promotion-evidence", "read_only": True, "at": now.isoformat(),
             "build": os.environ.get("GIT_SHA"), "tenant_hash": _h(args.scope_user), "expected_topology": args.expect,
+            "regime": regime, "evidence_label": regime["label"],
             "accounts": acct_rows, "enabled_id_hashes": sorted(_h(i) for i in enabled_ids), "synthetic_excluded": synthetic,
             "topology_reconciliation": {k: recon.get(k) for k in ("result", "checks", "checks_ids", "failed_checks", "signature", "evidence_hash", "build")},
             "execution_truth": {k: et.get(k) for k in ("unresolved_executions", "unresolved_by_status", "unresolved_truncated",
@@ -192,7 +220,7 @@ def main() -> int:
     except OSError:
         pass
     print(json.dumps(body, indent=1, default=str))
-    print(f"PREPROMOTION {body['result']} failed_gates={body['failed_gates']}", file=sys.stderr)
+    print(f"PREPROMOTION {body['result']} [{body.get('evidence_label')}] failed_gates={body['failed_gates']}", file=sys.stderr)
     return 0 if body["result"] == "PASS" else 1
 
 
