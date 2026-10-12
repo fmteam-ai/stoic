@@ -235,7 +235,7 @@ def test_u11_no_account_less_configs_and_orphan_migration():
     assert "U11 (Phase 1) — no account-less default bot profile at signup" in auth
     acc_src = _read("backend", "routes", "account_routes.py")
     assert "await ensure_account_bot(db, user[\"id\"], str(doc[\"_id\"]))" in acc_src
-    assert 'await db.bot_configs.delete_many({"account_id": account_id})' in acc_src
+    assert "purge_account" in acc_src and 'await db.bot_configs.delete_many({"account_id": aid})' in _read("backend", "account_deletion.py")
 
 
 # ── U16 diagnostics ─────────────────────────────────────────────────────────────────────────────────────

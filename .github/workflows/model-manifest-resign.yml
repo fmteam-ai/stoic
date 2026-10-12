@@ -1,0 +1,92 @@
+name: model-manifest-resign
+
+# P0-02 hygiene (main131): re-sign the REPO copy of backend/models_store/MODEL_MANIFEST.json with the
+# current CI release key (v2). The release job already re-signs the staged tree for every tagged release;
+# this one-click workflow brings the committed developer copy in line so the repo never carries a manifest
+# signed by a revoked key. The private key never leaves the external signer; the record is committed back
+# bound to the exact source commit it was produced from (a normal push — never a force push).
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "branch to re-sign and commit on (default: main)"
+        default: main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: model-manifest-resign-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  resign-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"
+      - name: Signer secrets present (fail with a clear message, not a traceback)
+        env:
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+        run: |
+          missing=""
+          for v in RELEASE_SIGNER_URL RELEASE_SIGNER_TOKEN RELEASE_SIGNER_ALLOWED_HOSTS RELEASE_PUBLIC_KEY_B64 RELEASE_SIGNER_KEY_ID; do
+            [ -n "${!v}" ] || missing="$missing $v"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::model manifest re-sign cannot run: GitHub repository secrets missing —$missing (docs/RELEASE_SIGNER.md)."
+            exit 1
+          fi
+          echo "all signer secrets present"
+      - name: Signer identity preflight (pin + code generation)
+        env:
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+        run: |
+          set -o pipefail
+          pip install -q cryptography requests
+          printf '%s' "$RELEASE_SIGNER_TOKEN" > "$RUNNER_TEMP/signer.token"
+          python scripts/signer_probe.py --url "$RELEASE_SIGNER_URL" --token-file "$RUNNER_TEMP/signer.token" \
+               --public-key "$RELEASE_PUBLIC_KEY_B64" --key-id "$RELEASE_SIGNER_KEY_ID"
+      - name: Re-sign the model manifest with the release key, bound to this commit, then verify
+        env:
+          APP_ENV: production
+          RELEASE_SIGNER: external
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+          STOIC_BUILD_SHA: ${{ github.sha }}
+        run: |
+          pip install -q -r backend/requirements.txt 2>/dev/null || pip install -q cryptography requests
+          cd backend
+          python -m model_manifest resign --commit "${GITHUB_SHA}"
+          python -m model_manifest verify --build "${GITHUB_SHA}"
+          python - <<'PY'
+          import json
+          d = json.load(open("models_store/MODEL_MANIFEST.json"))
+          print("key_id:", d.get("key_id"), "code_commit:", d["body"].get("code_commit"))
+          assert d.get("key_id") != "stoic-release-ed25519-v1", "manifest still signed by the revoked v1 key"
+          PY
+      - name: Commit the re-signed manifest back to the source branch
+        run: |
+          git config user.name "stoic-model-manifest[bot]"
+          git config user.email "model-manifest@users.noreply.github.com"
+          git add backend/models_store/MODEL_MANIFEST.json
+          if git diff --cached --quiet; then echo "manifest unchanged"; exit 0; fi
+          git commit -m "model-manifest: re-signed with the current release key for ${GITHUB_SHA} [skip ci]"
+          git push origin HEAD:"${TARGET_REF}"
+        env:
+          TARGET_REF: ${{ github.event.inputs.ref || github.ref_name }}

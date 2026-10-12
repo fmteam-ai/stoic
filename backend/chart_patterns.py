@@ -292,6 +292,21 @@ def pattern_snapshot(bars):
             "trendlines": {k: v for k, v in tl.items() if v}, "patterns": pats, "candles": candles, "odds": odds}
 
 
+def gate_decision(action, snap, enforced, error=None):
+    """Spec B + P2-01 (main131). Pure. Observe mode (enforced=False) never skips — an error or not-ready
+    snapshot only marks data_unavailable. Enforced mode is a real gate: a would-veto skips, and an error /
+    not-ready snapshot ALSO skips (fail closed) and asks for ONE visible alert."""
+    snap = snap or {}
+    unavailable = bool(error) or not snap.get("ready")
+    pg = None if unavailable else pattern_gate(action, snap)
+    fail = (f"pattern layer error ({error})" if error
+            else (f"pattern data unavailable ({snap.get('reason') or 'snapshot not ready'})" if unavailable else None))
+    skip = bool(enforced and (pg or fail))
+    reason = pg if (pg and enforced) else (f"pattern gate enforced — {fail}: trade skipped (fail closed)" if skip else None)
+    return {"skip": skip, "reason": reason, "would_veto": pg, "data_unavailable": unavailable,
+            "alert": bool(skip and fail), "detail": fail}
+
+
 def pattern_gate(action, snap, min_lower_bound=0.5):
     if action not in ("BUY", "SELL") or not snap or not snap.get("ready") or (snap.get("atr") or 0) <= 0:
         return None

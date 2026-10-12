@@ -171,9 +171,12 @@ async def load_from_repo(db) -> dict | None:
 
 # ── admission ─────────────────────────────────────────────────────────────────────────────────────────
 def cap_count_query(acc: dict) -> dict:
-    """Easy Start — accounts that count toward max_accounts_per_user: this one plus every ENABLED non-paper account
-    of the same user. A disabled account stops counting, so "Disable it" is a real fix for an over-cap sentence."""
-    return {"user_id": acc.get("user_id"), "mode": {"$ne": "paper"}, "$or": [{"trading_enabled": True}, {"_id": acc["_id"]}]}
+    """Easy Start — accounts that count toward max_accounts_per_user for THIS account: itself plus every ENABLED
+    non-paper account of the same user that is OLDER (_id < this one). Ranking by age (M2, main130) means adding
+    a second account can never take admission away from the first — the newest account is the one blocked, and
+    the wizard's "Disable it" is a real fix for whichever one the user drops (a disabled account stops counting)."""
+    return {"user_id": acc.get("user_id"), "mode": {"$ne": "paper"},
+            "$or": [{"trading_enabled": True, "_id": {"$lt": acc["_id"]}}, {"_id": acc["_id"]}]}
 
 
 def broker_allowed(pol: dict, broker: str) -> bool:
@@ -414,7 +417,16 @@ async def load_latest(db, *, actor: str) -> dict:
         cands, source = local_candidates(), "repo"
     valid, rejected = [], []
     for c in cands:
-        errs = problems(c["policy"])
+        pol = c.get("policy")
+        if not isinstance(pol, dict):                      # C1 — a JSON list/scalar is not a policy
+            rejected.append({"name": c["name"], "problems": ["not an object"]})
+            continue
+        try:
+            errs = problems(pol)
+        except Exception as e:  # noqa: BLE001 — C1 (main130 follow-up): one malformed file must never 500 the whole load
+            logger.warning("rules policy candidate %s skipped: malformed (%s)", c.get("name"), type(e).__name__)
+            rejected.append({"name": c["name"], "problems": [f"malformed: {type(e).__name__}"]})
+            continue
         (rejected if errs else valid).append({"name": c["name"], "problems": errs[:2]} if errs else c)
     if not valid:
         return {"activated": False, "source": source, "reason": "no valid signed policy found", "rejected": rejected[:5]}

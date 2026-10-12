@@ -1132,10 +1132,11 @@ async def go_live_checklist(request: Request):
             backup_age_h = None
     ea = checks.get("ea_release") or {}
     workers = checks.get("workers") or {}
+    from release_truth import release_signed_verdict
+    rs = release_signed_verdict(ea, checks.get("release_attestation"))
     rows = [
-        {"id": "release_signed", "label": "Release signed (EA + installer)", "ok": bool(ea.get("ok", False)) and not ea.get("fails"),
-         "detail": ea.get("detail") or ea.get("version") or ("EA release verified" if ea.get("ok") else "no signed EA release"),
-         "fix": None if ea.get("ok") else {"kind": "command", "label": "Run the ea-release workflow, then", "command": "deploy/update.sh <tag>"}},
+        {"id": "release_signed", "label": "Release signed (EA + installer)", "ok": rs["ok"], "detail": rs["detail"], "checks": rs["checks"],
+         "fix": None if rs["ok"] else {"kind": "command", "label": "Run the ea-release workflow, then", "command": "deploy/update.sh <tag>"}},
         {"id": "rules_policy", "label": "Rules policy active", "ok": bool(pol) and not exp["expired"],
          "detail": (f"{pol.get('policy_version')} · {exp['days_left']} day(s) left" if pol and not exp["expired"] else ("expired" if pol else "none active")),
          "fix": None if (pol and not exp["expired"]) else {"kind": "action", "label": "Load latest signed policy", "action": "load_latest_policy", "link": rp.renew_link()}},

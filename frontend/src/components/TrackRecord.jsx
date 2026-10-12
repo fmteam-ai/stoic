@@ -42,14 +42,24 @@ export function TrackRecord({ symbols = ["XAUUSD"] }) {
     useEffect(() => { setData(null); api.get("/trades/predictions", { params: { symbol: sym, limit: 30 } }).then((r) => setData(r.data)).catch((e) => setErr(formatApiError(e))); }, [sym]);
     const c = data?.calibration;
     const rej = c?.by_status?.rejected;
+    const prov = data?.provenance;
+    const cnt = prov?.counts;
     return (
         <div className="space-y-4" data-testid="track-record-tab">
             <div className="flex flex-wrap items-center gap-3">
                 <select value={sym} onChange={(e) => setSym(e.target.value)} data-testid="track-symbol-picker" className="bg-black border border-[#1F1F1F] px-2 py-1.5 text-xs font-mono text-white">
                     {(symbols.length ? symbols : ["XAUUSD"]).map((s) => <option key={s} value={s}>{s}</option>)}
                 </select>
-                <span className="text-xs text-[#A1A1AA]">Every BUY/SELL the bot considered, checked against what price did next (24 h).</span>
+                <span className="text-xs text-[#A1A1AA]">Every BUY/SELL the bot considered, checked against what price did next ({data?.horizon_hours ?? 24} h).</span>
             </div>
+            {data && (
+                <div className="border border-[#FFB000]/30 bg-[#FFB000]/5 px-3 py-2 text-[11px] font-mono text-[#A1A1AA] space-y-0.5" data-testid="track-provenance">
+                    <div className="text-[#FFB000] font-bold tracking-wide" data-testid="track-provenance-label">{prov?.label || "Prediction calibration — not broker performance"}</div>
+                    <div>source <span className="text-white" data-testid="track-source">{prov?.source || "M15 candles"}</span> · as of <span className="text-white" data-testid="track-as-of">{prov?.as_of ? String(prov.as_of).slice(0, 16).replace("T", " ") + " UTC" : "no candles yet"}</span> · horizon <span className="text-white" data-testid="track-horizon">{data.horizon_hours ?? 24} h</span> ({data.horizon_bars} bars)</div>
+                    <div>same-bar rule: <span className="text-white" data-testid="track-same-bar-rule">{prov?.same_bar_rule || "SL counted first"}</span></div>
+                    <div data-testid="track-counts">decided <span className="text-white">{cnt?.decided ?? c?.decided ?? 0}</span> · excluded (no data) <span className="text-white">{cnt?.excluded_no_data ?? 0}</span> · expired <span className="text-white">{cnt?.expired ?? 0}</span> · pending <span className="text-white">{cnt?.pending ?? data.pending}</span></div>
+                </div>
+            )}
             {err && <div className="text-xs text-[#FF3B30] font-mono" data-testid="track-error">{err}</div>}
             {!data && !err && <div className="text-xs text-[#71717A] font-mono flex items-center gap-1"><Loader2 className="w-3 h-3 animate-spin" /> scoring…</div>}
             {data && (
