@@ -508,6 +508,30 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
     return _serialize(doc)
 
 
+@router.get("/close-only-notice")
+async def close_only_notice(user=Depends(get_current_user)):
+    """main128 — "why am I close-only": the caller's own rule breaches from the inventory projection
+    (`per_user_blocks`), one line + what fixes it. Never another user's data. {"blocked": false} when clean."""
+    from inventory_projection import projection
+    import rules_policy as rp
+    db = get_db()
+    proj = await projection(db, None)
+    mine = (proj.get("per_user_blocks") or {}).get(str(user["id"])) or []
+    if not mine:
+        return {"blocked": False, "reasons": [], "line": None, "fix": None, "policy_version": proj["counts"].get("rules_policy")}
+    rules = await rp.active(db) or {}
+    cap = int(rules.get("max_accounts_per_user") or 0)
+    if any("above the policy cap" in r for r in mine):
+        fix = {"action": "remove_account", "label": f"Keep {cap} account{'s' if cap != 1 else ''} — delete or disable the rest"}
+    elif any("not attested DEMO" in r for r in mine):
+        fix = {"action": "demo_only", "label": "Demo-only policy — connect a DEMO account or ask the operator"}
+    else:
+        fix = {"action": "admission", "label": "Open the account's status line and follow its one fix"}
+    return {"blocked": True, "reasons": mine, "policy_version": rules.get("policy_version"),
+            "line": f"Your accounts are close-only (no new trades): {mine[0]}" + (f" (+{len(mine) - 1} more)" if len(mine) > 1 else ""),
+            "fix": fix}
+
+
 @router.get("/{account_id}/status-line")
 async def account_status_line(account_id: str, user=Depends(get_current_user)):
     """U15 (Phase 4) — one line, one fix button; internals behind "Why?"."""
@@ -1583,7 +1607,7 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
             max_concurrent=999,           # bypass concurrent cap for test
             cfg_account_id=account_id,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         raise HTTPException(
             status_code=500,
             detail={"code": "execution_error",

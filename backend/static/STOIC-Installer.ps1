@@ -219,11 +219,54 @@ function Get-StoicTerminalExe {
     return ""
 }
 
+function Remove-StoicStaleEaCharts {
+    # v1.10 (main128 Repair cleanup) — with MT5 CLOSED, strip every saved EmergentTradingBridge <expert> block from
+    # the profile chart files (profiles\charts\*\chart*.chr) and chart templates (profiles\templates\*.tpl).
+    # Those blocks are what re-attaches a second EA on restart — often with a hand-typed BridgeToken input that
+    # overrides the drop file and heartbeats with a stale token (401). The startup ini then attaches exactly ONE EA.
+    # Charts stay; only the EA block goes. Originals are kept as *.stoic-bak.
+    param([Parameter(Mandatory = $true)][string]$DataFolder)
+    $removed = 0; $tokens = 0; $files = @()
+    $chartsDir = Join-Path $DataFolder "profiles\charts"
+    $tplDir    = Join-Path $DataFolder "profiles\templates"
+    if (Test-Path $chartsDir) { $files += Get-ChildItem -Path $chartsDir -Recurse -Filter "chart*.chr" -File -ErrorAction SilentlyContinue }
+    if (Test-Path $tplDir)    { $files += Get-ChildItem -Path $tplDir -Filter "*.tpl" -File -ErrorAction SilentlyContinue }
+    $block = [regex]'(?is)<expert>\s*(?:(?!</expert>).)*?name=EmergentTradingBridge(?:(?!</expert>).)*?</expert>\s*'
+    foreach ($f in $files) {
+        try {
+            $raw = [System.IO.File]::ReadAllBytes($f.FullName)
+            # MT5 writes these as UTF-16 LE with BOM; fall back to UTF-8 for hand-made files
+            $utf16 = ($raw.Length -ge 2 -and $raw[0] -eq 0xFF -and $raw[1] -eq 0xFE)
+            $text = if ($utf16) { [System.Text.Encoding]::Unicode.GetString($raw, 2, $raw.Length - 2) } else { [System.Text.Encoding]::UTF8.GetString($raw) }
+            if ($text -notmatch 'name=EmergentTradingBridge') { continue }
+            $hits = $block.Matches($text)
+            if ($hits.Count -eq 0) { continue }
+            foreach ($m in $hits) { if ($m.Value -match '(?im)^\s*BridgeToken=\S+') { $tokens++ } }
+            $clean = $block.Replace($text, '')
+            Copy-Item -Path $f.FullName -Destination "$($f.FullName).stoic-bak" -Force
+            if ($utf16) { [System.IO.File]::WriteAllBytes($f.FullName, [byte[]](0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes($clean)) }
+            else        { [System.IO.File]::WriteAllText($f.FullName, $clean, (New-Object System.Text.UTF8Encoding($false))) }
+            $removed += $hits.Count
+        } catch {
+            Write-Host "    (could not clean $($f.Name): $($_.Exception.Message))" -ForegroundColor DarkGray
+        }
+    }
+    if ($removed -gt 0) {
+        Write-Host "    Repair: removed $removed saved EmergentTradingBridge attachment(s) from charts/templates" -NoNewline -ForegroundColor White
+        if ($tokens -gt 0) { Write-Host " — $tokens carried a hand-typed BridgeToken input (stale token → 401); the drop file is the only source now." -ForegroundColor Yellow } else { Write-Host "." -ForegroundColor White }
+        Write-Host "    (originals kept as *.stoic-bak next to each file)" -ForegroundColor DarkGray
+    } else {
+        Write-Host "    Repair: no duplicate EA attachments saved in charts/templates." -ForegroundColor DarkGray
+    }
+    return $removed
+}
+
 function Restart-StoicTerminal {
     # v1.5 — close the running terminal of THIS install gracefully, relaunch with the startup config.
     # N110-3 — graceful close only (60 s); never force-kill a terminal that may be managing positions.
+    # v1.10 — -CleanCharts (Repair): once MT5 is closed, strip saved EA attachments so exactly one EA comes back.
     param([Parameter(Mandatory = $true)][string]$Exe, [Parameter(Mandatory = $true)][string]$DataFolder,
-          [Parameter(Mandatory = $true)][string]$StartupIni)
+          [Parameter(Mandatory = $true)][string]$StartupIni, [switch]$CleanCharts)
     $exeDir = (Split-Path $Exe -Parent).TrimEnd('\')
     $running = @(Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object { try { (Split-Path $_.Path -Parent).TrimEnd('\') -ieq $exeDir } catch { $false } })
     foreach ($p in $running) {
@@ -235,6 +278,7 @@ function Restart-StoicTerminal {
         }
     }
     Start-Sleep -Seconds 2
+    if ($CleanCharts) { $null = Remove-StoicStaleEaCharts -DataFolder $DataFolder }
     $args = @("/config:`"$StartupIni`"")
     if ($exeDir -ieq $DataFolder.TrimEnd('\')) { $args = @("/portable") + $args }
     Start-Process -FilePath $Exe -ArgumentList $args -WorkingDirectory $exeDir | Out-Null
@@ -425,7 +469,7 @@ function Install-Stoic {
         [switch]$Repair
     )
 
-    $InstallerVersion = "1.9"
+    $InstallerVersion = "1.10"
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $ServerUrl = $ServerUrl.TrimEnd('/')
     # N110-2 — the bridge token travels to this host: https only, no exceptions
@@ -702,7 +746,7 @@ Period=$ChartPeriod
                 # Phase 2 (U6/U17) — MT5 not running: just start it with the EA attached (nothing is at stake);
                 # Repair: the operator asked for exactly this — no questions
                 Write-Host ("    " + $(if ($Repair) { "Repair:" } else { "MT5 is not running:" }) + " starting MetaTrader 5 with the EA on a $chartSymbol chart, Algo Trading ON.") -ForegroundColor White
-                Restart-StoicTerminal -Exe $exe -DataFolder $terminal.FullName -StartupIni (Join-Path $terminal.FullName "stoic-start.ini")
+                Restart-StoicTerminal -Exe $exe -DataFolder $terminal.FullName -StartupIni (Join-Path $terminal.FullName "stoic-start.ini") -CleanCharts:$Repair
             } else {
             # N110-3 — opt-in restart (default N) with the consequences spelled out first
             Write-Host "    MT5 can be restarted now so the EA attaches itself to a $chartSymbol chart." -ForegroundColor White

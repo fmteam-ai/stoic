@@ -177,3 +177,30 @@ def test_operator_approval_is_bound_to_identity():
     assert 'cur.get("identity_hash") == attestation_identity(acc)' in sync and "re-approval needed" in sync
     ta = _read("backend", "trading_authority.py")
     assert "a signed RULES policy stands in for the fixed expectation" in ta
+
+
+# ── main128 follow-ups: per-user close-only banner ────────────────────────────────────────────────────
+def test_close_only_notice_is_user_scoped(monkeypatch):
+    import routes.account_routes as ar
+    import inventory_projection as ip
+    import rules_policy as rp
+
+    async def _proj(db, scope):
+        return {"per_user_blocks": {"u1": ["3 accounts above the policy cap of 1", "second: enabled but not admitted by the rules policy"]},
+                "counts": {"rules_policy": "demo-rules-v1"}}
+
+    async def _active(db):
+        return {"policy_version": "demo-rules-v1", "max_accounts_per_user": 1}
+    monkeypatch.setattr(ip, "projection", _proj)
+    monkeypatch.setattr(rp, "active", _active)
+    ar.get_db = lambda: FakeDb()
+    mine = _run(ar.close_only_notice(user={"id": "u1"}))
+    assert mine["blocked"] is True and mine["fix"]["action"] == "remove_account" and "(+1 more)" in mine["line"]
+    assert mine["line"].startswith("Your accounts are close-only (no new trades): 3 accounts above the policy cap")
+    other = _run(ar.close_only_notice(user={"id": "u2"}))
+    assert other == {"blocked": False, "reasons": [], "line": None, "fix": None, "policy_version": "demo-rules-v1"}
+    src = _read("backend", "routes", "account_routes.py")
+    assert src.index('@router.get("/close-only-notice")') < src.index('@router.get("/{account_id}/status-line")')
+    fe = _read("frontend", "src", "components", "CloseOnlyBanner.jsx")
+    assert '"/accounts/close-only-notice"' in fe and 'data-testid="close-only-banner"' in fe and "if (!notice?.blocked) return null" in fe
+    assert "<CloseOnlyBanner refreshKey={overviewKey} />" in _read("frontend", "src", "pages", "Accounts.jsx")

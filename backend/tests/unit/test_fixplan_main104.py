@@ -44,7 +44,7 @@ def test_n104_1_installer_builds_the_download_url_and_picks_the_terminal_before_
     assert body.index("Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId") < body.index("/api/setup/claim-pairing")
     assert "if (-not $terminal) { return }" in body                        # bad path / no terminal / bad choice → token untouched
     assert "pairing token NOT used" in ps
-    assert re.search(r'\$InstallerVersion = "1\.[3-9]"', ps)
+    assert re.search(r'\$InstallerVersion = "1\.([3-9]|[1-9][0-9])"', ps)
     assert ". .\\STOIC-Installer.ps1" in ps and ".\\STOIC-Installer.ps1 -Token" not in ps   # usage line: the file only defines the function
     # the behavioural pwsh test exists, dot-sources the installer and runs on the Windows CI runner
     t = _read("scripts/test_installer.ps1")

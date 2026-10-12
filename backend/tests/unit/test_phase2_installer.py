@@ -15,7 +15,7 @@ def _read(*rel):
 
 def test_u4_terminal_chosen_by_login_prompt_only_when_ambiguous():
     ps = _read("backend", "static", "STOIC-Installer.ps1")
-    assert '$InstallerVersion = "1.9"' in ps and "[string]$Login = \"\"" in ps and "[switch]$Repair" in ps
+    assert '$InstallerVersion = "1.10"' in ps and "[string]$Login = \"\"" in ps and "[switch]$Repair" in ps
     assert "Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId -ExpectedLogin $Login" in ps
     body = ps.split("function Resolve-StoicTerminal")[1].split("\nfunction ")[0]
     assert '$byLogin = @($found | Where-Object { (Get-StoicTerminalLogin $_.FullName) -eq "$ExpectedLogin" })' in body
@@ -118,3 +118,35 @@ def test_u17_repair_button_one_line():
     assert qi.count("{repairSection}") == 1
     ps = _read("backend", "static", "STOIC-Installer.ps1")
     assert '$(if ($Repair) { "Repair:" } else { "MT5 is not running:" })' in ps
+
+
+def test_v110_repair_strips_saved_ea_attachments_and_stale_bridgetoken_inputs():
+    """main128 Repair cleanup — with MT5 closed, every saved EmergentTradingBridge <expert> block is removed from
+    profiles\\charts\\*\\chart*.chr and profiles\\templates\\*.tpl (charts stay, originals → *.stoic-bak), so the
+    startup ini re-attaches exactly ONE EA and no hand-typed BridgeToken input can override the drop file."""
+    import re
+    ps = _read("backend", "static", "STOIC-Installer.ps1")
+    assert "function Remove-StoicStaleEaCharts" in ps and "[switch]$CleanCharts" in ps
+    assert "if ($CleanCharts) { $null = Remove-StoicStaleEaCharts -DataFolder $DataFolder }" in ps
+    assert "-CleanCharts:$Repair" in ps
+    # the clean runs AFTER the graceful close and BEFORE the relaunch
+    body = ps.split("function Restart-StoicTerminal")[1].split("\nfunction ")[0]
+    assert body.index("WaitForExit(60000)") < body.index("Remove-StoicStaleEaCharts") < body.index("Start-Process -FilePath $Exe")
+    assert "chart*.chr" in ps and "*.tpl" in ps and ".stoic-bak" in ps
+    # the .NET regex the installer uses, evaluated with Python's engine (same constructs) against a real-shaped .chr
+    pat = re.search(r"\$block = \[regex\]'(.+?)'\n", ps).group(1)
+    rx = re.compile(pat.replace("(?is)", ""), re.I | re.S)
+    chr_text = (
+        "<chart>\nid=1\nsymbol=EURUSD\nperiod_type=1\n"
+        "<expert>\nname=EmergentTradingBridge\npath=Experts\\EmergentTradingBridge.ex5\nexpertmode=1\n"
+        "<inputs>\nServerUrl=https://old.example\nBridgeToken=abc123stale\n</inputs>\n</expert>\n"
+        "<expert>\nname=OtherEA\npath=Experts\\OtherEA.ex5\n<inputs>\nLots=0.1\n</inputs>\n</expert>\n"
+        "<window>\nheight=100\n</window>\n</chart>\n")
+    hits = rx.findall(chr_text)
+    assert len(hits) == 1 and "BridgeToken=abc123stale" in hits[0]
+    clean = rx.sub("", chr_text)
+    assert "EmergentTradingBridge" not in clean and "BridgeToken" not in clean
+    assert "name=OtherEA" in clean and "symbol=EURUSD" in clean and "<window>" in clean   # chart + other EAs untouched
+    # two STOIC blocks on one chart (the duplicate case) → both go
+    dup = chr_text.replace("<expert>\nname=OtherEA", "<expert>\nname=EmergentTradingBridge\n<inputs>\n</inputs>\n</expert>\n<expert>\nname=OtherEA")
+    assert len(rx.findall(dup)) == 2 and "EmergentTradingBridge" not in rx.sub("", dup)

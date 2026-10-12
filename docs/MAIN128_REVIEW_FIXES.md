@@ -35,8 +35,12 @@ the changed fields are exactly `test_manifest_sha256 / captured_at / git_commit 
 | Operator approval isn't tied to identity | **FIXED** — `operator_approve` stores `identity_hash = attestation_identity(acc)`; `sync_admission` drops an operator approval whose identity hash no longer matches back to `pending_operator` ("re-approval needed"). |
 | A rules policy can't stand in for the expectation | **FIXED** — `inventory_domain` / `projection` treat an active, unexpired signed rules policy as the expectation (no "no inventory expectation declared" close-only in production while a rules policy is active). |
 | Auto-DEMO grant forgeable by whoever holds the token (heartbeat `trade_mode`) | **OPEN (waived P1-01-r20-ea-proof)** — needs the EA-side binary proof (EX5 hash reported by the terminal and verified against the signed release); EA/installer change, not in this zip. |
-| Repair leaves a duplicate EA or stale `BridgeToken` input | **OPEN** — installer-side (`STOIC-Installer.ps1`); scheduled with the next EA/installer release. |
+| Repair leaves a duplicate EA or stale `BridgeToken` input | **FIXED (installer v1.10)** — `Remove-StoicStaleEaCharts`: with MT5 closed (after the graceful close, before relaunch) every saved `EmergentTradingBridge` `<expert>` block is stripped from `profiles\charts\*\chart*.chr` and `profiles\templates\*.tpl` (charts and other EAs stay; originals → `*.stoic-bak`; hand-typed `BridgeToken=` inputs counted and reported). `Restart-StoicTerminal -CleanCharts:$Repair`. Test `test_v110_repair_strips_saved_ea_attachments_and_stale_bridgetoken_inputs`. |
 | P3 items | unchanged |
+
+## Follow-ups shipped in the same drop
+- **Per-user close-only banner** — `GET /api/accounts/close-only-notice` (caller's own `per_user_blocks` → one line + the fix) and `CloseOnlyBanner.jsx` on the Accounts page (`close-only-banner*` testids). Test `test_close_only_notice_is_user_scoped`.
+- **Installer v1.10** (above).
 
 ## Changed files
 backend: `inventory_projection.py`, `trading_authority.py`, `rules_policy.py`, `server_adopt.py`, `bot_inventory.py`,
@@ -45,10 +49,10 @@ backend: `inventory_projection.py`, `trading_authority.py`, `rules_policy.py`, `
 deploy/scripts: `deploy/update.sh`, `scripts/release_precheck.py`;
 tests: `tests/unit/test_main127_review.py` (new, 8), `test_phase1_onboarding.py`, `test_phase3_rules_policy.py`,
 `test_fixplan_a16_part1.py`, `fake_mongo.py` (insert_many, sort);
-artefacts: `docs/TEST_MANIFEST.md` (5598 tests / 591 files), `docs/RELEASE_SUMMARY.md`, `release/rc_lock.json` (manifest hash only).
+artefacts: `docs/TEST_MANIFEST.md` (5600 tests / 591 files), `docs/RELEASE_SUMMARY.md`, `release/rc_lock.json` (manifest hash only).
 
 ## Test results
-`DB_NAME=ai_trading_bot_test python -m pytest tests/unit` → **1322 passed, 4 skipped** (unit lane), `ruff` clean on every
+`DB_NAME=ai_trading_bot_test python -m pytest tests/unit` → **1324 passed, 4 skipped** (unit lane), `ruff` clean on every
 touched module, `bash -n deploy/update.sh` OK, `check_deploy_python_snippets.py` OK (43 snippets / 3.6 syntax),
 `freeze_rc_lock.py --check` OK. Live preview: `GET /api/authority/inventory` read-only (returns
 `platform_violations` / `per_user_blocks` / `auto_approval_due`), `POST /api/bot/stop` without id returns

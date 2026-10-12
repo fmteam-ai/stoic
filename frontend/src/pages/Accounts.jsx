@@ -6,6 +6,7 @@ import { QuickInstallPanel } from "@/components/QuickInstallPanel";
 import { AddAccountWizard } from "@/components/AddAccountWizard";
 import { EditAccountDialog } from "@/components/EditAccountDialog";
 import { StatusFixDialog } from "@/components/StatusFixDialog";
+import { CloseOnlyBanner } from "@/components/CloseOnlyBanner";
 import { StatusLine } from "@/components/StatusLine";
 import { VpsOfferButton } from "@/components/VpsOffer";
 import { InstallProgressChip } from "@/components/InstallProgressPanel";
@@ -407,6 +408,7 @@ export default function Accounts() {
             />
 
             <div className="p-4 md:p-8 space-y-4" data-testid="accounts-page">
+                <CloseOnlyBanner refreshKey={overviewKey} />
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
                 {msg && <div className="border border-[#00FF41]/30 bg-[#00FF41]/10 px-4 py-2 text-xs text-[#00FF41] font-mono">{msg}</div>}
 
