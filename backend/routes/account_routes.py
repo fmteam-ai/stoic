@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 from pydantic import BaseModel, Field
 
-from auth import get_current_user, generate_bridge_token, verify_password
+from auth import get_current_user, generate_bridge_token, verify_password, require_admin
 from database import get_db
 from state_contract import HEARTBEAT_FRESH_S
 from models import AccountCreate, AccountCredsUpdate
@@ -485,6 +485,8 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
     acc = await db.accounts.find_one({"_id": oid} if is_admin else {"_id": oid, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
+    if is_admin and acc.get("user_id") != user["id"]:
+        require_admin(user)          # SEC-021 — cross-owner edits go through the MFA-enrolled admin gate, not a bare role check
     if new_server is not None:
         if acc.get("mode") == "paper":
             raise HTTPException(status_code=400, detail="Paper accounts have no broker server")
@@ -504,8 +506,38 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
             updates = {}
     if updates:
         await db.accounts.update_one({"_id": oid}, {"$set": updates})
+        if is_admin and acc.get("user_id") != user["id"]:
+            # SEC-021 — every cross-owner admin edit is audited (not only the server branch) and needs the MFA'd admin gate
+            from step_up import audit_event
+            await audit_event(db, user["id"], "account_edited_by_admin",
+                              {"account_id": account_id, "owner_user_id": acc.get("user_id"), "on_behalf": True,
+                               "changes": {k: {"from": acc.get(k), "to": v} for k, v in updates.items()}}, request)
     doc = await db.accounts.find_one({"_id": oid})
     return _serialize(doc)
+
+
+@router.get("/close-only-notice")
+async def close_only_notice(user=Depends(get_current_user)):
+    """main128 — "why am I close-only": the caller's own rule breaches from the inventory projection
+    (`per_user_blocks`), one line + what fixes it. Never another user's data. {"blocked": false} when clean."""
+    from inventory_projection import projection
+    import rules_policy as rp
+    db = get_db()
+    proj = await projection(db, user["id"])       # SEC-021 — caller-scoped projection: cheaper, and nothing foreign is even computed
+    mine = (proj.get("per_user_blocks") or {}).get(str(user["id"])) or []
+    if not mine:
+        return {"blocked": False, "reasons": [], "line": None, "fix": None, "policy_version": proj["counts"].get("rules_policy")}
+    rules = await rp.active(db) or {}
+    cap = int(rules.get("max_accounts_per_user") or 0)
+    if any("above the policy cap" in r for r in mine):
+        fix = {"action": "remove_account", "label": f"Keep {cap} account{'s' if cap != 1 else ''} — delete or disable the rest"}
+    elif any("not attested DEMO" in r for r in mine):
+        fix = {"action": "demo_only", "label": "Demo-only policy — connect a DEMO account or ask the operator"}
+    else:
+        fix = {"action": "admission", "label": "Open the account's status line and follow its one fix"}
+    return {"blocked": True, "reasons": mine, "policy_version": rules.get("policy_version"),
+            "line": f"Your accounts are close-only (no new trades): {mine[0]}" + (f" (+{len(mine) - 1} more)" if len(mine) > 1 else ""),
+            "fix": fix}
 
 
 @router.get("/{account_id}/status-line")
@@ -1583,7 +1615,7 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
             max_concurrent=999,           # bypass concurrent cap for test
             cfg_account_id=account_id,
         )
-    except Exception as e:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         raise HTTPException(
             status_code=500,
             detail={"code": "execution_error",
