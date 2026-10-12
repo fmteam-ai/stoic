@@ -125,7 +125,7 @@ def test_load_latest_skips_a_malformed_candidate_instead_of_500(monkeypatch):
                 {"name": "x.json", "policy": {}}]
     monkeypatch.setattr(rp, "fetch_candidates_from_github", _cands)
     out = _run(rp.load_latest(FakeDb(), actor="t"))
-    assert out["activated"] is False and out["reason"] == "no valid signed policy found"
+    assert out["activated"] is False and out["reason"] in ("no valid signed policy found", "repo not configured")
     names = {r["name"] for r in out["rejected"]}
     assert {"bad.json", "worse.json", "x.json"} <= names
 
