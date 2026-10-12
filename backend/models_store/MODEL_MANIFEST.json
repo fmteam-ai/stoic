@@ -12,8 +12,8 @@
         "principal_id": "6a65a1a89d126b87feed2591"
       }
     ],
-    "code_commit": "138a6f745fdf09789a63eb8aede291af04fc1ba5",
-    "generated_at": "2026-10-12T14:45:36.153835+00:00",
+    "code_commit": "d1f41a37af5e415e2509dad8a2b054398f1b9424",
+    "generated_at": "2026-10-12T15:32:57.384824+00:00",
     "models": [
       {
         "bytes": 291569,
@@ -50,11 +50,11 @@
     ],
     "policy_version": "model-governance-v2",
     "record": "stoic.model-manifest",
-    "resigned_from_commit": "ad6758c462335b061d827ffec498defa2c30973e",
+    "resigned_from_commit": "138a6f745fdf09789a63eb8aede291af04fc1ba5",
     "version": 2
   },
-  "body_sha256": "3349c4f52d7b4b7c795e3cb33f14fdde1958ac5f72421e46a094457873fe47e3",
+  "body_sha256": "ec91de6e7071bb2f999e19a36fb285baeb8cf54980c6bbecced6dcc2962aedf7",
   "key_id": "stoic-release-ed25519-v2",
   "public_key_b64": "tllb0cdDccjwYUsKJtsM2D43sZOVaCmORgSAboRnRqQ=",
-  "signature_hex": "68bebc591473ae23fa6a32f2f6364dc2076f1c78a8332dd38d90524731b9e3490b38b55e935981305c32e5f5a0a4076d2bc581d4256d1ca6a796a47d17e2a80c"
+  "signature_hex": "c0e77d9581e706ca2578ea8eaa92a55214e423c95994b587c061d7894a41c25599c21b4d2534debfe766a122a85c0c1349c43621fb93bea7abd5e01d3fc02006"
 }
