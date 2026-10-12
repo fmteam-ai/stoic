@@ -11,3 +11,15 @@
 Full lane: unit 1381 ✓ · frontend lint/typecheck/test ✓ · manifest 5664/597 · rc_lock refrozen by `freeze_rc_lock.py` only · `ea_release.json` untouched · release summary + provenance checks OK.
 
 Operator steps on prod after deploying this build: `sed -i '/^ATTESTATION_REQUIRED=/d' .env` (then `deploy/update.sh <tag>` verifies the attestation), set `GITHUB_REPO=fmteam-ai/stoic` in `backend/.env` and `deploy/restart.sh --env-changed` (now waits for health through nginx), re-upload `demo-rules-v1` via the panel.
+
+## Item 4 (main132 follow-up) — demo-only production can leave close-only
+`backend/ops/prepromotion_evidence.py` now reads the ACTIVE rules policy (`rules_policy.active`). Under a `demo_only`
+policy ("demo period") the environment gate becomes `all_enabled_attested_demo` — every enabled account must be an
+**attested** DEMO account (`broker_env.attested_environment`, server-authoritative; a LIVE account or an unattested
+demo-looking account FAILS) — and the LIVE-only performance attestation is the ONE gate skipped
+(`performance_gate_reasons: ["SKIPPED_DEMO_PERIOD"]`). Every other gate (topology, EA fresh, identity verified, single EA
+version, zero unresolved executions, position truth, authority, bot-health caps) is unchanged. The bundle carries
+`regime` + `evidence_label: "demo period"`; `update.sh` prints the label. LIVE regime (no policy / `demo_only: false`)
+behaves exactly as before (`all_enabled_live` + performance attestation).
+Tests `tests/unit/test_item4_demo_period_evidence.py` (5): demo_only + attested DEMO → PASS; demo_only + LIVE → FAIL;
+demo period still fails on other gates; LIVE regime unchanged.

@@ -316,7 +316,7 @@ PY
       PP="release/evidence/prepromotion-$(git rev-parse --short HEAD).json"
       if docker compose exec -T -e GIT_SHA="${GIT_SHA}" -e APP_ENV=production backend \
            python ops/prepromotion_evidence.py --expect "${RECONCILE_EXPECT}" --scope-user "${RECONCILE_SCOPE}" > "${PP}" 2>/dev/null; then
-        echo "   pre-promotion evidence: PASS, signed (${PP})"
+        echo "   pre-promotion evidence: PASS, signed (${PP})$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); l=d.get("evidence_label"); print(f" — {l}" if l and l != "live" else "")' "${PP}" 2>/dev/null || true)"
       else
         echo "!! pre-promotion evidence FAILED (see ${PP}: failed_gates) — refusing this release"; rollback
       fi

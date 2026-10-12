@@ -327,8 +327,8 @@ async def rules_policy_upload(payload: dict, request: Request, user=Depends(_adm
             raise HTTPException(status_code=413, detail={"code": "policy_too_large", "message": "policy file over 64 KiB"})
         try:
             pol = json.loads(raw)
-        except ValueError as e:
-            raise HTTPException(status_code=422, detail={"code": "policy_not_json", "message": f"Not valid JSON: {e}"})
+        except ValueError:
+            raise HTTPException(status_code=422, detail={"code": "policy_not_json", "message": "Not valid JSON — paste the signed policy file exactly as written by the signer"})   # SEC-023-1: no parser internals echoed
         if not isinstance(pol, dict):
             raise HTTPException(status_code=422, detail={"code": "policy_not_object", "message": "the policy file must be a JSON object"})
     else:
