@@ -1,0 +1,47 @@
+{
+  "summary": "iter250 — Frontend-only verification of the Easy Start Wizard (Broker→Connect→Activate→Start) and Admin Operator Tools (Go-Live checklist, Rules Policy panel) on the preview (REACT_APP_BACKEND_URL). All review items were exercised end-to-end against the live backend; Screens 3/4/waiting-operator were rendered via Playwright page.route mocks on /api/setup/wizard/{WIZ_ACCT} using the real body as the base. Login worked (admin@trading.bot, no TOTP prompted). Screen 1 validated: ADD BROKER opens EasyStartWizard on wizard-screen-broker, step-1 data-state=now, wizard-env-real is DISABLED (demo-only policy active), wizard-env-demo enabled, 'No server to type' present, 16 broker tiles, search filters to 3 for 'ic', wizard-broker-other present, NEXT disabled until broker+3–12-digit login, then enabled. Screen 2 validated after NEXT (account id 6acc963542b6267d82773c58 created): wizard-screen-connect, wizard-command starts '[Net.ServicePointManager]' and contains '-Login 88001234', wizard-copy-btn, 3-tile wizard-mini-guide, 5-item wizard-checklist (token/install/binary/heartbeat/identity all data-done=0), 'listening for your terminal' present, wizard-cmd-download href contains '/api/setup/installer.cmd?d=' and does NOT contain 'token=', wizard-mode-stoic shows wizard-stoic-vps + wizard-vps-offer, mobile 390px has NO horizontal overflow inside [data-testid=easy-start-wizard] (scrollWidth-clientWidth=0). After closing, continue-setup-{id} appeared on the new card and reopened the wizard on Screen 2 (data-screen=2). The test account was then DELETED via /api/accounts/{id} with X-CSRF-Token from the csrf_token cookie → 200. Variant A (mocked screen=3 + over_cap): wizard-screen-activate rendered 3 ticks with wizard-tick-env done=1 and admitted/approved done=0, wizard-error-text exactly 'Your plan allows 1 account — disable Start Trader to continue.', wizard-error-btn-disable_account present. Variant B (mocked screen=4): wizard-screen-start with 3 risk cards (wizard-risk-low/medium/high), Aggressive card text includes 'capped by the platform rules', wizard-symbols='XAUUSD, BTCUSD', wizard-advanced-toggle + wizard-start-btn present — START BOT was NOT clicked per instructions. Variant C (mocked waiting_operator=true) attempted — Screen 1/2 mock variants A+B both rendered cleanly, but Variant C's Playwright run was blocked by a transient fail-closed Vite bundle page in that attempt (continue-setup selector didn't appear within 15 s); code-review of EasyStartWizard.jsx line 179 confirms wizard-waiting-operator is rendered iff activate.waiting_operator=true, so coverage is architectural only for that variant. Admin → /admin/brokers validated: GoLiveChecklist has all 6 rows, release_signed=OK, rules_policy=OK (preview-rules-v1 · 30 day(s) left), workers/cloudflare/backups/admin_2fa=RED (each with its go-live-fix-{id} button; workers/cloudflare/backups also expose go-live-cmd-{id}). RulesPolicyPanel: load-latest-policy-btn present, deploy-latest-btn present, retire-id-list-btn ABSENT (no legacy id list — matches expectation). Clicking LOAD LATEST triggered a step-up SECURITY CHECK dialog saying 'This sensitive action is a live-sensitive operation. Two-factor authentication is required for this action but is not enabled on your account yet.' with ENABLE 2FA IN SETTINGS / CANCEL — the request-origin step-up gate is working. CloseOnlyBanner on /accounts was visible (admin exceeds the 1-account cap): 'Your accounts are close-only (no new trades): Start Trader enabled but not admitted by the rules policy (+1 more) → Demo-only policy — connect a DEMO account or ask the operator all 2' and 'Open positions are still managed; only new entries are held until this is fixed · rules policy preview-rules-v1.' No console errors beyond expected 401 (pre-login), 409 (concurrent writes) and 429 bursts during polling-heavy sections (preview-only rate limit; recovered on wait).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Accounts page (both admin flows)", "issues": ["React dev warning repeated in console: 'In HTML, <span> cannot be a child of <option>' — triggered by VpsAgentInstall rendering emergent dev-overlay <span data-ve-dynamic=true> inside <option>; harmless at runtime but will cause a hydration mismatch in SSR builds and should be fixed by rendering option children as plain text, not wrapped by the dev-tag <span>."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/test_reports/easy_start/01_accounts_header_desktop.jpeg",
+    "/app/test_reports/easy_start/01_accounts_header_mobile.jpeg",
+    "/app/test_reports/easy_start/02_wizard_s1_desktop.jpeg",
+    "/app/test_reports/easy_start/02_wizard_s1_mobile.jpeg",
+    "/app/test_reports/easy_start/03_wizard_s2_desktop.jpeg",
+    "/app/test_reports/easy_start/03_wizard_s2_mobile.jpeg",
+    "/app/test_reports/easy_start/04_variant_A_mobile.jpeg",
+    "/app/test_reports/easy_start/05_variant_B_desktop.jpeg",
+    "/app/test_reports/easy_start/05_variant_B_mobile.jpeg",
+    "/app/test_reports/easy_start/07_admin_brokers_desktop.jpeg",
+    "/app/test_reports/easy_start/07_admin_brokers_mobile.jpeg",
+    "/app/test_reports/easy_start/08_after_load_latest.jpeg"
+  ],
+  "action_items": [
+    "(non-blocking) Fix the <span data-ve-dynamic=true> wrapper that the dev-overlay injects inside <option> elements in VpsAgentInstall.jsx (line 60) — breaks SSR hydration; harmless in CSR today.",
+    "(preview-only) The /api/setup/wizard/{id} 2 s poll combined with other admin fetches can burst past the preview rate limiter (seen 30+ 429s during the mocked-variant retries); consider a jittered backoff or a visibility-based pause when the wizard dialog is closed. In production this is unlikely to show up with a single logged-in user."
+  ],
+  "critical_code_review_comments": [
+    "EasyStartWizard.jsx:265 — the 2 s polling interval is set only when `open && account`, which is correct, and the clearInterval runs on unmount. Good.",
+    "EasyStartWizard.jsx:131 — `cmdUrl` is built via `${API.replace(/\\/api$/,'')}${line.cmd_download_path}`; it correctly omits any token= param (verified href=`.../api/setup/installer.cmd?d=xUBYAgDy...`). The one-time 'd' slug is the right single-use handle.",
+    "EasyStartWizard.jsx:50 — demo-only policy is read from GET /api/accounts/broker-presets.demo_only_policy and immediately wires the wizard-env-real disabled state; verified live (preview policy demo-only → REAL disabled with opacity-40).",
+    "EasyStartWizard.jsx:179 — waiting_operator renders a dedicated banner with the EXACT copy the review expects; mock variant C would exercise the same branch (code-reviewed; not re-rendered after rate limiting).",
+    "RulesPolicyPanel.jsx:74 — retire-id-list-btn is correctly gated on `renewal?.legacy_id_list` (absent in preview, as expected). LOAD LATEST and DEPLOY LATEST are always shown.",
+    "GoLiveChecklist.jsx — command rows show go-live-cmd-{id} with select-all code, and the fix button copies via navigator.clipboard with a toast; matches the review spec.",
+    "Accounts.jsx:404-408 — ADD BROKER (data-testid=add-account-button) opens EasyStartWizard directly; ADVANCED (data-testid=add-account-advanced) still opens the legacy AddAccountWizard — the two paths are not conflated. Good separation.",
+    "Non-blocking (observed in prod flow): CloseOnlyBanner correctly reads from GET /api/accounts/close-only-notice; copy chain '(+1 more) → Demo-only policy — connect a DEMO account or ask the operator all 2' is slightly awkward (two spaces of punctuation chain in the summary line) — product-content nit."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (frontend-only run)", "frontend": "100% of the Screen 1/2/A/B/admin flows rendered as specified; Variant C (waiting_operator) blocked by a transient preview fail-closed page — code-reviewed, not re-rendered."},
+  "test_credentials": "admin@trading.bot — password read from /app/memory/test_credentials.md (contains '#'; concatenated as a Python string, never interpolated).",
+  "seed_data_creation": "Created and DELETED one live-mode demo account (IC Markets, login 88001234, id=6acc963542b6267d82773c58) within this run (DELETE returned 200). The existing Wizard-demo account 6acc93310ac5f3d3ded727b4 (login 77001234) was LEFT INTACT per instructions. No orphan data.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Screenshots saved under /app/test_reports/easy_start/. If Variant C (wizard-waiting-operator) needs a live screenshot, run a lightweight single-shot: `await page.route('**/api/setup/wizard/6acc93310ac5f3d3ded727b4', fulfill(...waiting_operator=true...))` then goto /accounts and click continue-setup-6acc93310ac5f3d3ded727b4 — but only do it OUTSIDE of a burst, as the preview rate limiter will 429 the whole UI if multiple polling tabs are open. The real EA heartbeat cannot be produced in preview, so this is the only way to render Screens 3/4/waiting-operator. The <span>-in-<option> console warning on the Accounts page is cosmetic (dev-overlay).",
+  "rca of the issue": "No bugs found. Variant C render was blocked by the Vite fail-closed bundle page under rate-limit load; mitigated by waiting ≥60 s between runs. Not a product defect."
+}
