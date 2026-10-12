@@ -480,13 +480,15 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
         raise HTTPException(status_code=400, detail="Nothing to update")
     db = get_db()
     oid = parse_object_id(account_id, "Account")
-    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    # M6 (main127) — admin first: an admin edits ANY account (audited), users only their own
+    is_admin = user.get("role") == "admin"
+    acc = await db.accounts.find_one({"_id": oid} if is_admin else {"_id": oid, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
     if new_server is not None:
         if acc.get("mode") == "paper":
             raise HTTPException(status_code=400, detail="Paper accounts have no broker server")
-        if user.get("role") != "admin":
+        if not is_admin:
             raise HTTPException(status_code=403, detail={"code": "admin_only",
                                                          "message": "The server name is adopted from the EA automatically; only an admin may edit it by hand"})
         from step_up import audit_event, require_step_up
@@ -497,6 +499,7 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
             await db.accounts.update_one({"_id": oid}, change)
             await audit_event(db, user["id"], "account_server_edited",
                               {"account_id": account_id, "from": acc.get("server"), "to": new_server,
+                               "owner_user_id": acc.get("user_id"), "on_behalf": acc.get("user_id") != user["id"],
                                "ea_reported": _ea_reported_server(acc)}, request)
             updates = {}
     if updates:
@@ -733,6 +736,8 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
     try:
         import rules_policy as _rp
         await _rp.sync_admission(db, doc)       # Phase 3 — admission state from the moment the account exists
+        from inventory_projection import auto_approve_under_rules
+        await auto_approve_under_rules(db)      # M3 — explicit write step (GET /authority/inventory is read-only)
     except Exception as _sw:  # noqa: BLE001
         logging.getLogger("accounts").warning("admission sync at creation failed: %s", _sw)
     out = _serialize(doc)

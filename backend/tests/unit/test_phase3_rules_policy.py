@@ -167,15 +167,37 @@ def test_u14_inventory_auto_approved_under_rules(signer, monkeypatch):
     _run(db.bot_configs.insert_one({"user_id": "u1", "account_id": str(acc["_id"]), "active": True}))
     proj = _run(ip.projection(db, None))
     assert proj["violations"] == [] and proj["approvable"] is True and proj["blocking"] is False
+    # M3 (main127) — the GET projection is read-only: nothing written until the explicit write step runs
+    assert proj["auto_approval_due"] is True and _run(db.inventory_config_events.count_documents({})) == 0
+    assert _run(ip.auto_approve_under_rules(db)) is not None
     ev = _run(db.inventory_config_events.find_one({"approved": True}))
     assert ev["actor"] == rp.SYSTEM_ACTOR and ev["approval_mode"] == "rules_policy" and ev["inventory_hash"] == proj["inventory_hash"]
     assert any(e["action"] == "inventory_config_auto_approved" for e in AUDIT)
-    # a second account for the same user breaches the cap → violation, no new approval event
+    assert _run(ip.auto_approve_under_rules(db)) is None                   # idempotent: same hash, nothing due
+    # a second account for the same user breaches the cap → violation scoped to THAT user, no new approval event
     other = _acc(user_id="u1", account_number="2", label="second")
     _run(db.accounts.insert_one(dict(other)))
+    _run(db.bot_configs.insert_one({"user_id": "u1", "account_id": str(other["_id"]), "active": True}))
     proj2 = _run(ip.projection(db, None))
     assert any("above the policy cap" in v for v in proj2["violations"]) and any("not admitted" in v for v in proj2["violations"])
-    assert _run(db.inventory_config_events.count_documents({})) == 1
+    # the new account changed the hash → unapproved change (platform) until the write step records it; the per-user
+    # breach itself never blocks the platform
+    assert proj2["platform_violations"] == [ip.V_UNAPPROVED_CHANGE] and "u1" in proj2["per_user_blocks"]
+    assert _run(ip.auto_approve_under_rules(db)) is not None and _run(db.inventory_config_events.count_documents({})) == 2
+    proj2 = _run(ip.projection(db, None))
+    # H1 (main127) — rule breaches never close the PLATFORM: only user u1's accounts
+    assert proj2["blocking"] is False and proj2["platform_violations"] == [] and "u1" in proj2["per_user_blocks"]
+    assert len(proj2["per_user_blocks"]["u1"]) == 2
+    import trading_authority as ta
+    monkeypatch.setattr(ip, "production_mode", lambda: False)
+    mine = _run(ta.inventory_domain(db, {"_id": acc["_id"], "user_id": "u1"}))
+    assert mine["level"] == "CLOSE_ONLY" and "rules policy breach for this user" in mine["reason"]
+    theirs = _run(ta.inventory_domain(db, {"_id": ObjectId(), "user_id": "u2"}))
+    assert theirs["level"] == "FULL"                                      # another user is untouched
+    src = _read("backend", "inventory_projection.py")
+    assert "insert_one" not in src[src.index("async def projection"):src.index("async def auto_approve_under_rules")]
+    for rel in (("backend", "routes", "bridge_routes.py"), ("backend", "routes", "account_routes.py"), ("backend", "routes", "bot_routes.py"), ("backend", "background_loops.py")):
+        assert "auto_approve_under_rules(" in _read(*rel), rel
 
 
 def test_o4_and_migration_script():

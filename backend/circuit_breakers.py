@@ -110,6 +110,17 @@ async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
     weekly_limit_pct = _weekly_limit(cfg)
     monthly_limit_pct = _monthly_limit(cfg)
     daily_enabled = bool(cfg.get("daily_drawdown_enabled", True))
+    policy_daily_cap = None
+    try:
+        from rules_policy import risk_caps as _policy_caps
+        policy_daily_cap = (await _policy_caps(db)).get("max_daily_loss_pct")
+    except Exception:  # noqa: BLE001 — the per-user limit still applies
+        policy_daily_cap = None
+    if policy_daily_cap is not None:
+        # M2 (main127) — the signed RULES policy's daily-loss cap is enforced here: it can only tighten, and it
+        # cannot be switched off by the user
+        daily_limit_pct = min(daily_limit_pct, float(policy_daily_cap))
+        daily_enabled = True
     weekly_enabled = bool(cfg.get("weekly_drawdown_enabled", True))
     monthly_enabled = bool(cfg.get("monthly_drawdown_enabled", True))
 
@@ -118,6 +129,7 @@ async def check_and_trip(db, user_id: str, cfg: dict, accounts: list) -> dict:
         "pnl_week": round(pnl_week, 2),
         "pnl_month": round(pnl_month, 2),
         "limit_pct": daily_limit_pct,
+        "policy_daily_cap_pct": policy_daily_cap,
         "weekly_limit_pct": weekly_limit_pct,
         "monthly_limit_pct": monthly_limit_pct,
         "equity": round(total_equity, 2),

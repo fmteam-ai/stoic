@@ -52,6 +52,12 @@ def evaluate(acc: dict, *, accepted_hashes: list, now=None) -> dict:
     if att.get("approved_by") and att.get("approved_by") != AUTO_APPROVER:
         return {"grant": False, "void": False, "checks": {**checks, "manual_attestation_present": True}, "proof": proof}
     already = (att.get("approved_by") == AUTO_APPROVER and att.get("identity_hash") == attestation_identity(acc))
+    if att.get("approved_by") == AUTO_APPROVER:
+        # re-check on EVERY heartbeat (main127 open item): identity moved, the binary is no longer a signed
+        # release, the broker no longer says demo, or the proof fails → the automatic grant is voided
+        stale = att.get("identity_hash") != attestation_identity(acc)
+        if stale or not all(checks.values()):
+            return {"grant": False, "void": True, "checks": {**checks, "recheck_failed": True, "identity_moved": stale}, "proof": proof}
     return {"grant": all(checks.values()) and not already, "void": False, "checks": checks, "proof": proof}
 
 
@@ -64,12 +70,17 @@ async def apply(db, acc: dict, *, accepted_hashes: list | None = None) -> str | 
     now = _now()
     if d["void"]:
         att = acc.get("environment_attestation") or {}
+        recheck = bool(d["checks"].get("recheck_failed"))
         await db.accounts.update_one({"_id": acc["_id"]}, {"$unset": {"environment_attestation": ""}})
         await append_chained(db, {"actor_email": "system", "action": "account_environment_attestation_voided",
                                   "target_kind": "account", "target_id": str(acc["_id"]),
-                                  "reason": "broker reports real/contest money — DEMO attestation voided (U9, broker truth wins)",
+                                  "reason": ("automatic DEMO attestation re-check failed on this heartbeat (identity/binary/broker/proof) — voided"
+                                             if recheck else
+                                             "broker reports real/contest money — DEMO attestation voided (U9, broker truth wins)"),
                                   "at": now, "meta": {"previous_approved_by": att.get("approved_by"),
-                                                      "reported_trade_mode": acc.get("account_trade_mode")}})
+                                                      "reported_trade_mode": acc.get("account_trade_mode"),
+                                                      "checks": d["checks"]}})
+        acc.pop("environment_attestation", None)
         return "voided"
     if not d["grant"]:
         return None

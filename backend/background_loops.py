@@ -113,14 +113,17 @@ async def _protection_guard_loop():
 
 async def _heartbeat_watch_loop():
     """iter-173 — EA heartbeat / verification outage alerts (transition
-    based; Telegram + owner email + in-app alert)."""
+    based; Telegram + owner email + in-app alert). M3 (main127): also runs the
+    rules-policy inventory auto-approval write step (GET stays read-only)."""
     from heartbeat_watch import check_once
+    from inventory_projection import auto_approve_under_rules
     INTERVAL = int(os.environ.get("HEARTBEAT_WATCH_INTERVAL_SEC", "60"))
     while True:
         try:
             await asyncio.sleep(INTERVAL)
             t0 = datetime.now(timezone.utc)
             await check_once(get_db())
+            await auto_approve_under_rules(get_db())
             record_progress("_heartbeat_watch_loop", processed=1,
                             started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
