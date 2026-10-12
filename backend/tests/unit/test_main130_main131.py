@@ -280,9 +280,12 @@ def test_p0_02_model_manifest_resign_workflow_uses_the_external_signer_and_refus
     assert "python -m model_manifest verify --build" in wf and 'stoic-release-ed25519-v1' in wf and "git push origin HEAD:" in wf and "--force" not in wf
     assert "signer_probe.py" in wf and "contents: write" in wf
     # install-from-archive gate (2026-10-12): the re-signed manifest changes model_manifest_sha256 → the lock must be re-bound in the same commit
-    assert 'lock["model_manifest_sha256"] = actual' in wf and "git add backend/models_store/MODEL_MANIFEST.json release/rc_lock.json" in wf
-    assert wf.index('lock["model_manifest_sha256"] = actual') < wf.index("git add backend/models_store/MODEL_MANIFEST.json release/rc_lock.json")
+    assert 'lock["model_manifest_sha256"] = actual' in wf and "git add backend/models_store/MODEL_MANIFEST.json release/rc_lock.json docs/RELEASE_SUMMARY.md" in wf
+    assert wf.index('lock["model_manifest_sha256"] = actual') < wf.index("git add backend/models_store/MODEL_MANIFEST.json release/rc_lock.json docs/RELEASE_SUMMARY.md")
     assert "scripts/release_consistency_check.py" in wf
+    # release.yml ci-gates/static-analysis runs generate_release_summary.py --check: the summary copies lock.model_manifest_sha256
+    assert "python3 scripts/generate_release_summary.py\n" in wf and "generate_release_summary.py --check" in wf
+    assert "git add backend/models_store/MODEL_MANIFEST.json release/rc_lock.json docs/RELEASE_SUMMARY.md" in wf
 
 
 # ── Security audit #22 P3 fixes ───────────────────────────────────────────────────────────────────────
