@@ -1164,3 +1164,25 @@ async def bulk_clear_trades(
         "scope": scope,
         "older_than_days": older_than_days,
     }
+
+
+@router.get("/predictions")
+async def trade_predictions(request: Request, symbol: str = "XAUUSD", limit: int = 20, user=Depends(get_current_user)):
+    """Spec A — prediction track record for the caller's own decisions on one symbol: sync outcomes against the
+    stored M15 candles, then calibration over every stored row (cap 5000)."""
+    import re as _re
+    import prediction_track as pt
+    from pip_utils import base_symbol
+    if not _re.match(r"^[A-Za-z0-9._-]{2,20}$", symbol or ""):
+        raise HTTPException(status_code=422, detail="invalid symbol")
+    limit = max(1, min(int(limit or 20), 200))
+    db = get_db()
+    sync = await pt.sync_outcomes(db, user["id"], symbol)
+    base = base_symbol(symbol)
+    rows = await db[pt.COLLECTION].find({"user_id": user["id"], "base": base}, {"_id": 0}).to_list(length=5000)
+    recent = sorted(rows + sync["pending"], key=lambda r: str(r.get("ts") or ""), reverse=True)[:limit]
+    for r in recent:
+        r.pop("_id", None)
+        r.pop("user_id", None)
+    return {"symbol": base, "horizon_bars": pt.HORIZON_BARS, "recent": recent, "calibration": pt.calibration(rows),
+            "pending": len(sync["pending"])}

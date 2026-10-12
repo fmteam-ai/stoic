@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1158 |
+| unit | pure logic, no external I/O | every CI job | 1193 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4171 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5601 tests across 591 files.**
+**Total: 5636 tests across 594 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -517,6 +517,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_a13_part2.py` | unit | 11 |
 | `backend/tests/unit/test_a13_part3.py` | unit | 13 |
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
+| `backend/tests/unit/test_addons_spec.py` | unit | 24 |
 | `backend/tests/unit/test_admin_integrations.py` | unit | 6 |
 | `backend/tests/unit/test_alert_test_and_scalp_migration.py` | unit | 4 |
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
@@ -524,6 +525,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
 | `backend/tests/unit/test_easy_connect_p1.py` | unit | 11 |
+| `backend/tests/unit/test_easy_start_wizard.py` | unit | 9 |
 | `backend/tests/unit/test_env_template_sync.py` | unit | 4 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
 | `backend/tests/unit/test_fixplan_a16_part1.py` | unit | 5 |
@@ -587,6 +589,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
 | `backend/tests/unit/test_release_key_pin.py` | unit | 4 |
 | `backend/tests/unit/test_sec002_static_errors.py` | unit | 2 |
+| `backend/tests/unit/test_secret_scan_prose_fp.py` | unit | 2 |
 | `backend/tests/unit/test_security_agent_sa1_sa2.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa3.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa4.py` | unit | 6 |

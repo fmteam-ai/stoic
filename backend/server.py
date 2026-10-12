@@ -36,6 +36,7 @@ import warmer
 from routes.admin_routes import router as admin_router
 from routes.migration_routes import router as migration_router
 from routes.setup_routes import router as setup_router
+from routes.wizard_routes import router as wizard_router
 from routes.auth_routes import router as auth_router
 from routes.webauthn_routes import router as webauthn_router
 from modules.pamm.api import router as pamm_router
@@ -503,6 +504,7 @@ async def installer_hash():
 api_router.include_router(admin_router)
 api_router.include_router(migration_router)
 api_router.include_router(setup_router)
+api_router.include_router(wizard_router)
 from routes.vps_terminal_routes import router as vps_terminal_router  # noqa: E402
 api_router.include_router(vps_terminal_router)
 api_router.include_router(auth_router)
@@ -955,6 +957,10 @@ async def on_startup():
         if _ts_violation:
             raise RuntimeError(_ts_violation)
         await get_db().turnstile_consumed_tokens.create_index("expires_at", expireAfterSeconds=0)
+        from account_tombstones import ensure_indexes as _tomb_idx
+        await _tomb_idx(get_db())                                   # C3
+        from prediction_track import ensure_indexes as _pred_idx
+        await _pred_idx(get_db())                                   # Spec A
         import device_attestation as _da
         await _da.ensure_indexes(get_db())   # r26 P1-02 nonce TTL + uniqueness
         from close_commands import ensure_indexes as _close_idx   # r25 P2-01: unique (trade_id, close_seq)

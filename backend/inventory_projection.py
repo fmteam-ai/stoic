@@ -147,7 +147,7 @@ async def projection(db, scope_user_id: str | None = None, *, include_foreign_bo
             violations.append(f"rules policy {rules.get('policy_version')} expired {str(rules.get('expires_at'))[:10]} — activate a new signed policy")
         by_user: dict = {}
         for a in docs:
-            if a.get("mode") != "paper":
+            if a.get("mode") != "paper" and a.get("trading_enabled") is True:      # Easy Start — disabled accounts do not count
                 by_user[a.get("user_id")] = by_user.get(a.get("user_id"), 0) + 1
         over = [u for u, n in by_user.items() if n > int(rules.get("max_accounts_per_user") or 0)]
         for u in over:
@@ -383,7 +383,12 @@ def policy_expiry(exp: dict, now: datetime | None = None) -> dict:
 
 
 async def demo_only_policy_active(db) -> bool:
-    """A17-13 — True while the approved inventory expectation is a signed DEMO-only policy that has not expired."""
+    """A17-13 — True while the approved inventory expectation is a signed DEMO-only policy that has not expired.
+    Easy Start: an active, unexpired demo-only RULES policy counts the same (the id list may be retired)."""
+    import rules_policy as _rp
+    rules = await _rp.active(db)
+    if rules and not rules.get("expired") and rules.get("demo_only"):
+        return True
     exp = await db.platform_state.find_one({"_id": "inventory_expectation"}, projection={"demo_only": 1, "policy_expires_at": 1})
     return bool(exp and exp.get("demo_only") and not policy_expiry(exp)["expired"])
 

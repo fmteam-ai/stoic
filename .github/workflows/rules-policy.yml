@@ -1,0 +1,112 @@
+# A1 (Easy Start) — sign a RULES policy from a form, no terminal needed. Same approval model as policy-migration:
+# the `policy-approval` environment's required reviewer approves the run; the external release signer (key v2,
+# purpose `policy-rules`) signs; the file is committed under policies/<version>.json. The server activates it with
+# one click (Admin → Policy → "Load latest signed policy") — no release, no deploy.
+name: rules-policy
+
+on:
+  workflow_dispatch:
+    inputs:
+      installation_id:
+        description: "STOIC_INSTALLATION_ID of the production host"
+        required: true
+      policy_version:
+        description: "new policy version, e.g. demo-rules-v2"
+        required: true
+      demo_only:
+        description: "DEMO-only — real-money accounts are never admitted under this policy"
+        type: boolean
+        default: true
+      max_accounts_per_user:
+        description: "accounts per user (1-99)"
+        default: "1"
+      allowed_brokers:
+        description: "comma-separated broker names, or * for any registry broker"
+        default: "*"
+      max_risk_pct:
+        description: "cap on risk per trade in % (empty = none)"
+        default: ""
+      max_daily_loss_pct:
+        description: "cap on daily loss in % (empty = none)"
+        default: ""
+      expires_days:
+        description: "validity in days — empty = default (demo_only 30, live 45); demo max 45, live max 180"
+        default: ""
+      reason:
+        description: "why (goes into the signed body and the audit chain)"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: rules-policy
+  cancel-in-progress: false
+
+jobs:
+  sign:
+    runs-on: ubuntu-latest
+    environment: policy-approval
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6 (pinned)
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5 (pinned)
+        with:
+          python-version: "3.11"
+      - run: pip install -q cryptography==50.0.0 requests==2.34.2 pymongo==4.18.2 fastapi==0.135.1 httpx==0.28.1   # the signer imports backend/rules_policy (fastapi HTTPException)
+      - name: Signer imports in a clean environment
+        run: python scripts/sign_rules_policy.py --help >/dev/null && python -c "import sys; sys.path.insert(0,'backend'); import rules_policy"
+      - name: Sign the rules policy with the CI release key
+        # SEC-001 (audit #5) — workflow inputs reach the shell ONLY through env vars, never via ${{ }} interpolation
+        env:
+          APP_ENV: production
+          RELEASE_SIGNER: external
+          RELEASE_SIGNER_URL: ${{ secrets.RELEASE_SIGNER_URL }}
+          RELEASE_SIGNER_TOKEN: ${{ secrets.RELEASE_SIGNER_TOKEN }}
+          RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          STOIC_INSTALLATION_ID: ${{ inputs.installation_id }}
+          IN_INSTALLATION_ID: ${{ inputs.installation_id }}
+          IN_VERSION: ${{ inputs.policy_version }}
+          IN_DEMO_ONLY: ${{ inputs.demo_only }}
+          IN_CAP: ${{ inputs.max_accounts_per_user }}
+          IN_BROKERS: ${{ inputs.allowed_brokers }}
+          IN_MAX_RISK: ${{ inputs.max_risk_pct }}
+          IN_MAX_DAILY: ${{ inputs.max_daily_loss_pct }}
+          IN_EXPIRES_DAYS: ${{ inputs.expires_days }}
+          IN_REASON: ${{ inputs.reason }}
+          IN_ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          [[ "$IN_VERSION" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo "bad policy_version (no '/': it becomes the file name)"; exit 1; }
+          [[ "$IN_INSTALLATION_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]] || { echo "bad installation_id"; exit 1; }
+          [[ "$IN_CAP" =~ ^[0-9]{1,2}$ ]] && [ "$IN_CAP" -ge 1 ] || { echo "max_accounts_per_user must be 1..99"; exit 1; }
+          [[ "$IN_BROKERS" =~ ^[A-Za-z0-9 .,*_-]{1,256}$ ]] || { echo "bad allowed_brokers"; exit 1; }
+          if [ -z "$IN_EXPIRES_DAYS" ]; then if [ "$IN_DEMO_ONLY" = "true" ]; then IN_EXPIRES_DAYS=30; else IN_EXPIRES_DAYS=45; fi; fi
+          [[ "$IN_EXPIRES_DAYS" =~ ^[0-9]{1,3}$ ]] || { echo "bad expires_days"; exit 1; }
+          if [ "$IN_DEMO_ONLY" = "true" ] && { [ "$IN_EXPIRES_DAYS" -lt 1 ] || [ "$IN_EXPIRES_DAYS" -gt 45 ]; }; then echo "demo_only: expires_days must be 1..45"; exit 1; fi
+          if [ "$IN_EXPIRES_DAYS" -lt 1 ] || [ "$IN_EXPIRES_DAYS" -gt 180 ]; then echo "expires_days must be 1..180"; exit 1; fi
+          EXTRA=()
+          [ "$IN_DEMO_ONLY" = "true" ] && EXTRA+=(--demo-only)
+          if [ -n "$IN_MAX_RISK" ]; then [[ "$IN_MAX_RISK" =~ ^[0-9]{1,2}(\.[0-9]{1,2})?$ ]] || { echo "bad max_risk_pct"; exit 1; }; EXTRA+=(--max-risk-pct "$IN_MAX_RISK"); fi
+          if [ -n "$IN_MAX_DAILY" ]; then [[ "$IN_MAX_DAILY" =~ ^[0-9]{1,2}(\.[0-9]{1,2})?$ ]] || { echo "bad max_daily_loss_pct"; exit 1; }; EXTRA+=(--max-daily-loss-pct "$IN_MAX_DAILY"); fi
+          python scripts/sign_rules_policy.py \
+            --installation-id "$IN_INSTALLATION_ID" --environment production \
+            --version "$IN_VERSION" --max-accounts-per-user "$IN_CAP" --allowed-brokers "$IN_BROKERS" \
+            --expires-days "$IN_EXPIRES_DAYS" --reason "$IN_REASON" --issuer "$IN_ACTOR via policy-approval" \
+            "${EXTRA[@]}" --out "policies/${IN_VERSION}.json"
+      - name: Commit the signed policy
+        env:
+          IN_VERSION: ${{ inputs.policy_version }}
+          IN_DEMO_ONLY: ${{ inputs.demo_only }}
+        run: |
+          set -euo pipefail
+          git config user.name "stoic-policy-bot"
+          git config user.email "policy-bot@users.noreply.github.com"
+          git add policies/
+          git commit -m "rules-policy: ${IN_VERSION} (demo_only=${IN_DEMO_ONLY}) [skip ci]"
+          git push origin HEAD:main

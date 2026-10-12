@@ -174,6 +174,7 @@ class AccountOut(BaseModel):
 class BotConfigUpdate(BaseModel):
     # Conservative first-live defaults (audit C2/C3): low risk, one symbol,
     # one concurrent trade, spread filter ON. Users opt UP explicitly.
+    pattern_gate_enabled: bool = False     # Spec B — observe-only unless an admin flips it (audited)
     risk_level: RiskLevel = "low"
     symbols: List[str] = ["XAUUSD"]
     active: bool = False

@@ -90,10 +90,13 @@ class FakeCollection:
         self.rows: list[dict] = []
         self.indexes: list = []
 
-    def find(self, q=None, proj=None):
+    def find(self, q=None, proj=None, sort=None):
         for r in self.rows:
             r.setdefault("_id", ObjectId())
-        return _Cursor([dict(r) for r in self.rows if _match(r, q or {})])
+        rows = [dict(r) for r in self.rows if _match(r, q or {})]
+        for key, direction in reversed(list(sort or [])):
+            rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=(direction == -1))
+        return _Cursor(rows)
 
     async def find_one(self, q=None, proj=None, sort=None):
         rows = [r for r in self.rows if _match(r, q or {})]

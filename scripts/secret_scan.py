@@ -135,7 +135,10 @@ def scan_text(text: str, path: str, findings: list) -> None:
             kind = "retired-rotated" if _rotated(m.group(2)) else "login-credential-pair"
             findings.append({"path": path, "line": i, "kind": kind, "match": m.group(1)})
             continue
-        if STABLE_ACCOUNT_HINT.search(line) and re.search(rf"(?i){CRED_NAME}\s*[:=]\s*['\"][^'\"]{{6,}}['\"]", line):
+        # the quoted value must look like ONE credential token (no whitespace) — otherwise a prose
+        # fragment such as "does NOT contain 'token=', wizard-mode shows …'" spans the whole sentence
+        # (false positive on test_reports/iteration_250.json, 2026-10-12)
+        if STABLE_ACCOUNT_HINT.search(line) and re.search(rf"(?i){CRED_NAME}\s*[:=]\s*['\"][^'\"\s]{{6,}}['\"]", line):
             findings.append({"path": path, "line": i, "kind": "stable-account-credential", "match": "admin/ops literal"})
             continue
         # prose-form pair "admin@host / P4ssw0rd…" (test_reports/iteration_221.json leak, 2026-10-03):

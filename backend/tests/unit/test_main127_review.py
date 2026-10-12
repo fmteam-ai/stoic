@@ -105,7 +105,7 @@ def test_m2_risk_caps_compare_against_the_risk_the_bot_uses_and_are_enforced_at_
     # saved configs carry risk_level / adaptive cap — never a literal risk_per_trade_pct
     assert rp.effective_max_risk_pct({"risk_level": "low", "adaptive_sizing_enabled": False}) == 0.5
     assert rp.effective_max_risk_pct({"risk_level": "high", "adaptive_sizing_enabled": False}) == 2.5
-    assert rp.effective_max_risk_pct({"risk_level": "low"}) == 2.0                  # adaptive may scale up to the cap
+    assert rp.effective_max_risk_pct({"risk_level": "low"}) == 2.0 and rp.effective_max_risk_pct({"risk_level": "low"}, clamp=1.0) == 1.0   # adaptive scales up to the cap, the runtime clamp bounds it
     assert rp.effective_max_risk_pct({"risk_level": "low", "adaptive_risk_cap_pct": 0.8}) == 0.8
     assert rp.effective_max_risk_pct({}) == 2.0
     pol = {"max_accounts_per_user": 5, "allowed_brokers": ["*"], "risk_caps": {"max_risk_pct": 1.0}}
