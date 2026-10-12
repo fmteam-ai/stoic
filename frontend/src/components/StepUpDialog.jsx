@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 
 const ACTION_LABELS = {
     live_activation: "Activate live trading",
+    account_type_edit: "Change the account type (demo / live)",
+    account_server_edit: "Correct the broker server name",
     risk_raise: "Raise risk limits",
     panic_release: "Release panic lock",
     api_key_create: "Create an API key",
