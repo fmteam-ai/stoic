@@ -177,3 +177,12 @@ def test_3_bootstrap_never_writes_attestation_required_false_on_public_hosts():
     assert "echo 'ATTESTATION_REQUIRED=false' >> .env" in dev                    # --dev keeps the old behaviour
     lib = _read("deploy", "lib.sh")
     assert 'v="${ATTESTATION_REQUIRED:-}"' in lib                                   # the exported value is honoured for the bootstrap run
+
+
+# ── Security audit #23 P3 fixes ───────────────────────────────────────────────────────────────────────
+def test_sec023_generic_json_error_and_explicit_edge_body_cap():
+    src = _read("backend", "routes", "authority_routes.py").split("async def rules_policy_upload")[1]
+    assert 'f"Not valid JSON: {e}"' not in src and '"code": "policy_not_json"' in src
+    conf = _read("deploy", "nginx.conf").split("location /api/ {")[1].split("location / {")[0]
+    assert "client_max_body_size 1m;" in conf
+    assert os.path.exists(os.path.join(ROOT, "docs", "SECURITY_AUDIT_23.md"))
