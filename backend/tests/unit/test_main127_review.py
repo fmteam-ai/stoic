@@ -204,3 +204,12 @@ def test_close_only_notice_is_user_scoped(monkeypatch):
     fe = _read("frontend", "src", "components", "CloseOnlyBanner.jsx")
     assert '"/accounts/close-only-notice"' in fe and 'data-testid="close-only-banner"' in fe and "if (!notice?.blocked) return null" in fe
     assert "<CloseOnlyBanner refreshKey={overviewKey} />" in _read("frontend", "src", "pages", "Accounts.jsx")
+
+
+def test_sec021_admin_cross_owner_edits_are_mfa_gated_and_audited():
+    src = _read("backend", "routes", "account_routes.py")
+    patch = src.split("async def update_account")[1].split("@router.")[0]
+    assert "require_admin(user)" in patch and patch.index("require_admin(user)") < patch.index("if new_server is not None:")
+    assert '"account_edited_by_admin"' in patch and '"on_behalf": True' in patch
+    notice = src.split('@router.get("/close-only-notice")')[1].split("@router.")[0]
+    assert 'projection(db, user["id"])' in notice and "projection(db, None)" not in notice

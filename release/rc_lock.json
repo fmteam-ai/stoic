@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-10-12T06:39:22.955434+00:00",
-  "git_commit": "890c32c9a26ba479f530df467d2cda9625950f62",
-  "source_sha": "890c32c9a26ba479f530df467d2cda9625950f62",
+  "captured_at": "2026-10-12T06:47:36.029768+00:00",
+  "git_commit": "9c0e217a5cf39b2a8aa3a101d9cf64d800bfd3b3",
+  "source_sha": "9c0e217a5cf39b2a8aa3a101d9cf64d800bfd3b3",
   "images": {
     "backend": null,
     "frontend": null
@@ -12,7 +12,7 @@
   "signer_key_id": "stoic-release-ed25519-v2",
   "migrations_sha256": "9d5e137fa0fd8bfa5658435dff724140e6ed8b022067d5e001d4d3741415b94a",
   "frontend_asset_digest": null,
-  "test_manifest_sha256": "290ceb7e06659f2dc7347521c14f38fe196ea3b96fefd66144d425389fb0e7fa",
+  "test_manifest_sha256": "cc13fb8516527d8e3385d984c6cf9961f1ce46c8f6b9aeaf507c6791e2533d70",
   "model_manifest_sha256": "7e1c621d9df39e1a9d3f6d2a0f6f5c9cb63c3585418f8041d0f05d01fdbe1373",
   "python": {
     "version": "3.11.17",
