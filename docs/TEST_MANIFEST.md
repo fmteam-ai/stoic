@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1158 |
+| unit | pure logic, no external I/O | every CI job | 1189 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4171 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5601 tests across 591 files.**
+**Total: 5632 tests across 594 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -522,6 +522,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_blank_env_boot.py` | unit | 5 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
+| `backend/tests/unit/test_chart_patterns.py` | unit | 18 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
 | `backend/tests/unit/test_easy_connect_p1.py` | unit | 11 |
 | `backend/tests/unit/test_env_template_sync.py` | unit | 4 |
@@ -576,6 +577,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_phase2_installer.py` | unit | 7 |
 | `backend/tests/unit/test_phase3_rules_policy.py` | unit | 6 |
 | `backend/tests/unit/test_phase4_status_ui.py` | unit | 4 |
+| `backend/tests/unit/test_prediction_track.py` | unit | 11 |
 | `backend/tests/unit/test_public_status_bounded.py` | unit | 2 |
 | `backend/tests/unit/test_r25_close_writers_migrated.py` | unit | 7 |
 | `backend/tests/unit/test_r25_ea_binary_proof.py` | unit | 5 |
@@ -601,6 +603,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_step4_fail_closed_risk.py` | unit | 5 |
 | `backend/tests/unit/test_step5_symbol_matching.py` | unit | 7 |
 | `backend/tests/unit/test_step6_signal_data.py` | unit | 9 |
+| `backend/tests/unit/test_strategy_lab_routes.py` | unit | 2 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |
