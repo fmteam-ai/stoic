@@ -476,7 +476,6 @@ async def soak_report(request: Request, days: int = 14):
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     db = get_db()
-    from datetime import timedelta
     days = min(max(int(days), 1), 45)
     since = datetime.now(timezone.utc) - timedelta(days=days)
     samples = await db.ops_soak_samples.find(

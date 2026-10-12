@@ -163,7 +163,6 @@ async def scalp_review(user=Depends(get_current_user)):
     """Iter-156 · Fast-Scalp review: execution heatmap (dow×hour), gate
     effectiveness (what each veto avoided, shadow-labeled), per-broker
     calibration and cost/latency attribution."""
-    from datetime import datetime, timezone
     db = get_db()
 
     def _stage(d):
@@ -360,7 +359,6 @@ async def scalp_executions(limit: int = 25, account_id: str = None,
     """Iter-154 · execution metadata for scalp-originated orders: intent /
     reservation / order / deal / position identifiers, broker latency,
     lifecycle timeline and protection state."""
-    from datetime import datetime, timezone
     db = get_db()
     q = {"user_id": user["id"], "scope": "scalp_fast"}
     if account_id:
@@ -577,7 +575,7 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
                  "P95/P99 matter more than averages for scalping"),
     }
     # Round 17 item 10 — distributed submission-capacity operational view.
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
     from scalp.engine import (MAX_BROKER_CONCURRENT_SUBMISSIONS,
                               _slot_metrics, capacity_integrity_reason)
     now_dt = datetime.now(timezone.utc)

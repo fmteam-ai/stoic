@@ -174,7 +174,6 @@ async def csrf_middleware(request, call_next):
     """CSRF double-submit enforcement for cookie-authenticated mutations
     (SameSite=None cookies make cross-site sends possible; CORS alone is
     not a CSRF defense). Bearer/bridge/webhook callers are unaffected."""
-    from fastapi.responses import JSONResponse
     from security import csrf_check
     err = csrf_check(request)
     if err is not None:
@@ -189,7 +188,6 @@ async def csrf_middleware(request, call_next):
 @app.middleware("http")
 async def request_id_middleware(request, call_next):
     """Iter-152 · distributed request IDs + structured JSON access logs."""
-    import uuid
     import re as _re
     import time as _t
     import json as _json
@@ -291,7 +289,6 @@ async def health_ready():
     """Readiness: DB ping + critical unique indexes + submission-slot
     integrity. Degraded readiness returns 503 so orchestrators stop
     routing traffic without leaking internals."""
-    from fastapi.responses import JSONResponse
     checks = {}
     ok = True
     # audit r3 P0 · critical startup failures (indexes, dependency health)
@@ -774,7 +771,6 @@ async def _flush_denied_counts(force: bool = False) -> None:
 
 @app.middleware("http")
 async def _security_agent_middleware(request: Request, call_next):
-    from fastapi.responses import JSONResponse
     from security import client_ip, is_blocked
     ip = client_ip(request)
     if request.url.path.startswith("/api/"):

@@ -119,7 +119,6 @@ minified JSON, no code fences, exactly these keys:
 
 
 async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
-    import os
     data = {
         "symbol": trade.get("symbol"), "action": trade.get("action"),
         "entry_price": trade.get("entry_price"),

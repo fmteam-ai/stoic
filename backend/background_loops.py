@@ -289,7 +289,7 @@ async def _stuck_open_sync_loop():
         try:
             await asyncio.sleep(INTERVAL)
             db = get_db()
-            from datetime import datetime, timezone, timedelta as _td
+            from datetime import timedelta as _td
             cutoff_iso = (datetime.now(timezone.utc) - _td(minutes=STALE_MINUTES)).isoformat()
             # Distinct users with a stuck-open trade
             user_ids = await db.trades.distinct("user_id", {

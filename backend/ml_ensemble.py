@@ -241,7 +241,6 @@ async def _persist_training(db, user_id: str, meta: dict, candidate: dict | None
 async def train_ensemble(db, user_id: str) -> dict:
     import asyncio
     from bson import ObjectId
-    from datetime import timedelta
     if not ml_runtime_enabled():
         meta = {**_training_meta(user_id, 0), "status": "disabled_low_memory",
                 "note": (f"container memory budget "

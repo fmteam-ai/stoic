@@ -63,6 +63,15 @@ class RedactingFilter(logging.Filter):
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
+            if record.name == "uvicorn.access" and isinstance(record.args, tuple):
+                # uvicorn's AccessFormatter unpacks record.args as a 5-tuple (client, method, path, version, status) —
+                # collapsing it to () made every access line a "Logging error … expected 5, got 0" traceback.
+                # Mask the string members in place and leave the tuple shape alone.
+                masked_args = tuple(mask(a) if isinstance(a, str) else a for a in record.args)
+                if masked_args != record.args:
+                    record.args = masked_args
+                    record.security_redacted = True
+                return True
             msg = record.getMessage()
             masked = mask(msg)
             if masked != msg:

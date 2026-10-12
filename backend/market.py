@@ -412,7 +412,6 @@ async def get_quote(symbol: str) -> dict:
             # Persist into Mongo time-series collection for fast windowed queries
             try:
                 from database import get_db
-                from datetime import datetime, timezone
                 db = get_db()
                 await db.price_ticks.insert_one({
                     "ts": datetime.now(timezone.utc),
