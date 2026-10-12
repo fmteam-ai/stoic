@@ -1,4 +1,5 @@
 """Global Trading Authority API — /api/authority"""
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -317,7 +318,21 @@ async def rules_policy_upload(payload: dict, request: Request, user=Depends(_adm
     from step_up import audit_event, require_step_up
     db = get_db()
     await require_step_up(db, user, request, "authority_relax")
-    pol = payload.get("policy") if isinstance(payload.get("policy"), dict) else payload
+    # Prod fix (12 Oct): the browser's JSON.parse turns 5.0 into 5, so a dict payload can no longer reproduce the
+    # bytes the signer signed ("5.0" vs "5" → "signature does not verify"). The UI sends the pasted file as a raw
+    # string (`policy_text`) and Python's json.loads keeps 5.0 a float — body() then matches the signer exactly.
+    raw = payload.get("policy_text")
+    if isinstance(raw, str):
+        if len(raw) > 65536:
+            raise HTTPException(status_code=413, detail={"code": "policy_too_large", "message": "policy file over 64 KiB"})
+        try:
+            pol = json.loads(raw)
+        except ValueError as e:
+            raise HTTPException(status_code=422, detail={"code": "policy_not_json", "message": f"Not valid JSON: {e}"})
+        if not isinstance(pol, dict):
+            raise HTTPException(status_code=422, detail={"code": "policy_not_object", "message": "the policy file must be a JSON object"})
+    else:
+        pol = payload.get("policy") if isinstance(payload.get("policy"), dict) else payload
     doc = await rp.activate(db, pol, actor=user["email"], source="upload")
     await audit_event(db, user["id"], "rules_policy_uploaded", {"policy_version": doc["policy_version"]}, request)
     return {"ok": True, "policy_version": doc["policy_version"], "expires_at": doc["expires_at"]}
@@ -357,7 +372,7 @@ async def rules_policy_renewal(user=Depends(_admin)):
     pol = await rp.active(db)
     legacy = await db.platform_state.find_one({"_id": "inventory_expectation"}, {"policy_version": 1, "account_ids": 1})
     return {"policy_version": (pol or {}).get("policy_version"), **rp.expiry(pol),
-            "prefill": rp.renewal_prefill(pol) if pol else None, "renew_link": rp.renew_link(),
+            "prefill": rp.renewal_prefill(pol) if pol else None, "renew_link": rp.renew_link(), "repo_configured": bool(rp.github_repo()),
             "legacy_id_list": {"policy_version": legacy.get("policy_version"), "accounts": len(legacy.get("account_ids") or [])} if legacy else None}
 
 

@@ -264,10 +264,43 @@ def resolve_public_key(args) -> str | None:
     return None
 
 
+def load_backend_env_pins(path=None, env=None) -> dict:
+    """Prod fix (12 Oct, v1.60.21): deploy/lib.sh runs `--check` in the HOST shell, which has none of the key pins
+    the API container gets from backend/.env — the record then fails as 'revoked-or-unknown'. Read ONLY the
+    three pin variables from backend/.env (never printed, never overriding an exported value)."""
+    env = env if env is not None else os.environ
+    path = path or env.get("STOIC_BACKEND_ENV_FILE") or os.path.join(ROOT, "backend", ".env")
+    loaded = {}
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return loaded
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        if k.startswith("export "):
+            k = k[7:].strip()
+        if k in PIN_KEYS and not (env.get(k) or "").strip():
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            if v:
+                env[k] = v
+                loaded[k] = v
+    return loaded
+
+
+PIN_KEYS = ("RELEASE_PUBLIC_KEY_B64", "RELEASE_SIGNER_KEY_ID", "RELEASE_SIGNER")
+
+
 def check(args):
     if not os.path.exists(HASHES):
         raise SystemExit("FAIL: docs/RELEASE_HASHES.json missing — run "
                          "scripts/capture_release_hashes.py first")
+    load_backend_env_pins()
     from release_signing import _mode
     if resolve_public_key(args) is None and _mode(os.environ) != "local":
         exp = committed_fingerprint(os.environ.get("RELEASE_SIGNER_KEY_ID") or _default_key_id())

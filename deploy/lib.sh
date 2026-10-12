@@ -337,6 +337,19 @@ wait_frontend() {
   return 1
 }
 
+# Prod fix (12 Oct): health THROUGH the frontend's nginx proxy — a healthy backend behind a stale nginx
+# upstream (old container IP) still served 502 to users for ~3 min. Success only when /api/health is 200 via :3000.
+wait_api_health_via_frontend() {
+  local n="${1:-45}" i code
+  for i in $(seq 1 "$n"); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health 2>/dev/null || echo 000)
+    [ "${code}" = "200" ] && return 0
+    sleep 2
+  done
+  echo "!! /api/health via the frontend proxy returned ${code} after $((n * 2))s — nginx upstream stale? (docker compose restart frontend)" >&2
+  return 1
+}
+
 # Wait until the FULL topology readiness probe is green (workers need ~45s
 # to acquire leases). Prints the body on success; returns 1 on timeout.
 # Readiness policy mirrors deploy/install.sh: the INFRASTRUCTURE checks must be
@@ -369,6 +382,8 @@ sys.exit(0 if not missing else 1)
 # stack). Refusing here avoids a build → restart → rollback churn for a known outcome.
 strict_prebuild_gate() {
   local tok body k bad=""
+  # verify_ea_release.py --check reads the three key pins (RELEASE_PUBLIC_KEY_B64 / RELEASE_SIGNER_KEY_ID /
+  # RELEASE_SIGNER) from backend/.env itself — the host shell never has them (12 Oct prod: every update refused)
   python3 scripts/verify_ea_release.py --check >/dev/null 2>&1 || bad="${bad} ea_release"
   tok=$(metrics_token) || return 1
   body=$(curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null || true)

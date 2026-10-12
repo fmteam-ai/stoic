@@ -436,8 +436,17 @@ if [ "${PUBLIC}" = 1 ]; then
   echo "-- DNS / ports were verified in the system check (step 0)"
 fi
 if [ "${SKIP_ATTEST}" = 1 ]; then
-  touch .env; grep -q '^ATTESTATION_REQUIRED=' .env && sed -i 's/^ATTESTATION_REQUIRED=.*/ATTESTATION_REQUIRED=false/' .env || echo 'ATTESTATION_REQUIRED=false' >> .env
-  echo "!! attestation gate DISABLED (--skip-attestation): images are built from this checkout without a CI attestation record"
+  if [ "${PUBLIC}" = 1 ]; then
+    # Prod fix (12 Oct): a production/behind-proxy/cloudflare host NEVER gets ATTESTATION_REQUIRED=false written —
+    # releases are attested, and lib.sh warns on every deploy that the line bypasses the release gate. The flag is
+    # honoured for THIS bootstrap run only (exported, N102-6) so the first install can still go through.
+    export ATTESTATION_REQUIRED=false
+    touch .env; grep -q '^ATTESTATION_REQUIRED=' .env && sed -i '/^ATTESTATION_REQUIRED=/d' .env
+    echo "!! attestation gate skipped for THIS bootstrap only (--skip-attestation on a public host): ./.env keeps the gate REQUIRED; the next update.sh verifies the release attestation"
+  else
+    touch .env; grep -q '^ATTESTATION_REQUIRED=' .env && sed -i 's/^ATTESTATION_REQUIRED=.*/ATTESTATION_REQUIRED=false/' .env || echo 'ATTESTATION_REQUIRED=false' >> .env
+    echo "!! attestation gate DISABLED (--skip-attestation, --dev): images are built from this checkout without a CI attestation record"
+  fi
 fi
 
 # ------------------------------------------------------------------ 4 · install

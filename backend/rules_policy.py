@@ -415,6 +415,7 @@ async def load_latest(db, *, actor: str) -> dict:
     source = "github"
     if not cands:
         cands, source = local_candidates(), "repo"
+    repo_note = None if github_repo() else "GITHUB_REPO not configured — only the image's local policies/ dir was searched; set GITHUB_REPO (and GITHUB_DISPATCH_TOKEN for a private repo) in backend/.env"
     valid, rejected = [], []
     for c in cands:
         pol = c.get("policy")
@@ -429,13 +430,16 @@ async def load_latest(db, *, actor: str) -> dict:
             continue
         (rejected if errs else valid).append({"name": c["name"], "problems": errs[:2]} if errs else c)
     if not valid:
-        return {"activated": False, "source": source, "reason": "no valid signed policy found", "rejected": rejected[:5]}
+        reason = "no valid signed policy found" if github_repo() else "repo not configured"
+        return {"activated": False, "source": source, "reason": reason, "repo_configured": bool(github_repo()), "note": repo_note, "rejected": rejected[:5]}
     best = max(valid, key=lambda c: str(c["policy"].get("issued_at") or ""))
     cur = await db.platform_state.find_one({"_id": STATE_ID}, {"policy_version": 1, "issued_at": 1})
     if cur and str(cur.get("issued_at") or "") >= str(best["policy"].get("issued_at") or ""):
-        return {"activated": False, "source": source, "reason": f"{cur.get('policy_version')} is already the newest", "policy_version": cur.get("policy_version"), "rejected": rejected[:5]}
+        return {"activated": False, "source": source, "reason": f"{cur.get('policy_version')} is already the newest", "policy_version": cur.get("policy_version"),
+                "repo_configured": bool(github_repo()), "note": repo_note, "rejected": rejected[:5]}
     doc = await activate(db, best["policy"], actor=actor, source=source)
-    return {"activated": True, "source": source, "policy_version": doc["policy_version"], "expires_at": doc["expires_at"], "file": best["name"], "rejected": rejected[:5]}
+    return {"activated": True, "source": source, "policy_version": doc["policy_version"], "expires_at": doc["expires_at"], "file": best["name"],
+            "repo_configured": bool(github_repo()), "note": repo_note, "rejected": rejected[:5]}
 
 
 async def retire_id_list(db, *, actor: str, reason: str = "") -> dict:

@@ -143,6 +143,7 @@ def test_verify_ea_release_check_is_offline_and_fingerprint_bound(monkeypatch):
     ver = importlib.import_module("verify_ea_release")
     for k in ("RELEASE_PUBLIC_KEY_B64", "RELEASE_SIGNER_KEY_ID"):
         monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("STOIC_BACKEND_ENV_FILE", "/nonexistent/backend.env")    # 12 Oct: --check reads pins from backend/.env; here: none anywhere
     monkeypatch.setenv("RELEASE_SIGNER", "external"); monkeypatch.setenv("RELEASE_SIGNER_URL", "https://signer:9443")
 
     class A:

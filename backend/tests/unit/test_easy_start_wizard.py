@@ -76,7 +76,10 @@ def test_a1_load_latest_picks_newest_valid_and_never_downgrades(monkeypatch):
     monkeypatch.setattr(rp, "fetch_candidates_from_github", _none)
     monkeypatch.setattr(rp, "local_candidates", lambda: [])
     out = _run(rp.load_latest(FakeDb(), actor="ops@x"))
-    assert out["activated"] is False and out["source"] == "repo" and "no valid" in out["reason"]
+    assert out["activated"] is False and out["source"] == "repo" and out["reason"] == "repo not configured"      # GITHUB_REPO unset (prod 12 Oct)
+    monkeypatch.setenv("GITHUB_REPO", "stoic/bot")
+    out = _run(rp.load_latest(FakeDb(), actor="ops@x"))
+    assert out["activated"] is False and "no valid" in out["reason"]
 
 
 # ── A2 ────────────────────────────────────────────────────────────────────────────────────────────────

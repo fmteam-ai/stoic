@@ -23,8 +23,10 @@ export function RulesPolicyPanel() {
     const upload = async () => {
         setBusy(true);
         try {
-            const policy = JSON.parse(text);
-            const { data } = await api.post("/authority/policy/upload", { policy });
+            // Prod fix (12 Oct): send the pasted file AS TEXT — JSON.parse would turn 5.0 into 5 and the server
+            // could no longer rebuild the exact bytes the signer signed ("signature does not verify").
+            JSON.parse(text);                                    // client-side syntax check only
+            const { data } = await api.post("/authority/policy/upload", { policy_text: text });
             toast.success(`Rules policy ${data.policy_version} active until ${String(data.expires_at).slice(0, 10)}`);
             setText(""); load();
         } catch (e) { toast.error(e instanceof SyntaxError ? "Not valid JSON" : formatApiError(e)); }
@@ -46,8 +48,9 @@ export function RulesPolicyPanel() {
         try {
             const { data } = await api.post("/authority/policy/load-latest");
             if (data.activated) toast.success(`Rules policy ${data.policy_version} active (${data.source})`, { description: `expires ${String(data.expires_at).slice(0, 10)}` });
+            else if (data.repo_configured === false) toast.warning("Repo not configured", { description: data.note || "set GITHUB_REPO in backend/.env" });
             else toast.info(data.reason || "nothing newer", { description: (data.rejected || []).map((r) => `${r.name}: ${(r.problems || []).join("; ")}`).join(" · ") || undefined });
-            window.location.reload();
+            if (data.activated) window.location.reload();
         } catch (e) { toast.error(formatApiError(e)); } finally { setOpBusy(""); }
     };
     const retire = async () => {
@@ -71,6 +74,9 @@ export function RulesPolicyPanel() {
                     <Button size="sm" data-testid="load-latest-policy-btn" disabled={!!opBusy} onClick={loadLatest} title="Fetches the newest signed file from the repo's policies/ (GitHub API or local dir), verifies the v2 signature and activates it — step-up; no release, no deploy">
                         {opBusy === "load" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null} LOAD LATEST SIGNED POLICY
                     </Button>
+                    {renewal && renewal.repo_configured === false && (
+                        <span className="font-mono text-[10px] text-[#FFB000]" data-testid="rules-policy-repo-not-configured" title="GITHUB_REPO is not set in backend/.env — Load latest can only see the image's local policies/ dir">repo not configured</span>
+                    )}
                     {renewal?.legacy_id_list && (
                         <Button size="sm" variant="outline" data-testid="retire-id-list-btn" disabled={!!opBusy || !pol || pol.expired} onClick={retire} title="A3 — one-time: archive the signed per-account id list; the rules policy governs from then on">
                             {opBusy === "retire" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null} REPLACE ACCOUNT LIST WITH RULES POLICY
