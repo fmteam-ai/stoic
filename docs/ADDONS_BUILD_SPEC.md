@@ -16,7 +16,7 @@ NOT built (per spec): funding-rate carry, strategy-DSL backtester, shadow runner
 | 6 | C1–C3 each with a test that fails before and passes after | PASS — `test_c1_list_file_is_skipped_and_valid_one_loads`, `test_c2_future_issued_at_rejected`, `test_c3_tombstone_indexes_and_bson_expiry`; preview DB has `token_hashes_1` + `expires_at_1 (expireAfterSeconds 0)` |
 | 7 | Both screens at 390 px and desktop (screenshots) | PASS — `docs/screenshots/addons/*.jpg` (4 files) |
 | 8 | No new code path places or modifies an order | PASS — diff + new modules grepped for `execute(`, `order_send`, `place_order`, `modify`, `close_position`, `MT5BridgeEngine`, `pending_trades` inserts: none |
-| 9 | Manifest regenerated, `rc_lock.json` refrozen (only hash/commit/timestamp changed), unit lane green, ruff clean, CI green | PASS locally — manifest 5634 tests / 593 files; rc_lock diff = `captured_at`, `git_commit`, `source_sha`, `test_manifest_sha256` only; `tests/unit` 1358 passed / 4 skipped; `ruff check backend --select E9,F63,F7,F82` clean. CI runs on push. |
+| 9 | Manifest regenerated, `rc_lock.json` refrozen (only hash/commit/timestamp changed), unit lane green, ruff clean, CI green | PASS locally — manifest 5636 tests / 594 files; rc_lock diff = `captured_at`, `git_commit`, `source_sha`, `test_manifest_sha256` only; `tests/unit` 1358 passed / 4 skipped; `ruff check backend --select E9,F63,F7,F82` clean. CI runs on push. |
 
 ## Test results
 - `tests/unit/test_addons_spec.py`: 24 passed (A 10 · B 11 · C 3).
