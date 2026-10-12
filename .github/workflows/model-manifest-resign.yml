@@ -93,14 +93,16 @@ jobs:
           json.dump(lock, open("release/rc_lock.json", "w"), indent=2)
           open("release/rc_lock.json", "a").write("\n")
           PY
+          python3 scripts/generate_release_summary.py
+          python3 scripts/generate_release_summary.py --check
           python3 scripts/release_consistency_check.py
-      - name: Commit the re-signed manifest + re-bound lock back to the source branch
+      - name: Commit the re-signed manifest + re-bound lock + release summary back to the source branch
         run: |
           git config user.name "stoic-model-manifest[bot]"
           git config user.email "model-manifest@users.noreply.github.com"
-          git add backend/models_store/MODEL_MANIFEST.json release/rc_lock.json
+          git add backend/models_store/MODEL_MANIFEST.json release/rc_lock.json docs/RELEASE_SUMMARY.md
           if git diff --cached --quiet; then echo "manifest unchanged"; exit 0; fi
-          git commit -m "model-manifest: re-signed with the current release key for ${GITHUB_SHA}; rc_lock re-bound [skip ci]"
+          git commit -m "model-manifest: re-signed with the current release key for ${GITHUB_SHA}; rc_lock + release summary re-bound [skip ci]"
           git push origin HEAD:"${TARGET_REF}"
         env:
           TARGET_REF: ${{ github.event.inputs.ref || github.ref_name }}
