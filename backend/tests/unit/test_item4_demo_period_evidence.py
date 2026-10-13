@@ -69,7 +69,8 @@ def _wire(monkeypatch, db, policy, attested_env):
     monkeypatch.setattr("trading_authority.compute_authority", _auth)
 
     async def _contract(db_, uid):
-        return {"totals": {"eas_connected": 1, "accounts_enabled": 1}, "rows": []}
+        return {"totals": {"eas_connected": 1, "accounts_enabled": 1}, "rows": [],
+                "accounts": [{"account_enabled": True, "ea_connected": True}]}      # v1.60.25 — gate counts enabled rows
     monkeypatch.setattr("state_contract.contract", _contract)
     perf_calls = []
 

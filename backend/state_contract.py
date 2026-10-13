@@ -208,7 +208,11 @@ async def contract(db, user_id: str) -> dict:
             broker_known = False
         else:
             tot["open_broker"] += truth["open_positions_broker"]
-        if TRUTH_RANK[truth["position_truth"]] > TRUTH_RANK[worst]:
+        # prod v1.60.24 — the user-level truth is the worst of the accounts that CAN trade or still carry
+        # exposure; an account switched OFF on purpose (no open positions) never paints the others STALE/UNKNOWN.
+        counted = enabled or open_local > 0 or (truth["open_positions_broker"] or 0) > 0
+        rows[-1]["counted"] = counted
+        if counted and TRUTH_RANK[truth["position_truth"]] > TRUTH_RANK[worst]:
             worst = truth["position_truth"]
     if not broker_known:
         tot["open_broker"] = None      # UNKNOWN must never collapse to 0
@@ -229,9 +233,11 @@ async def quick_truth(db, user_id: str, open_local: int) -> dict:
                        and r.get("state_reason")), None)
     truth = c["position_truth"]
     broker = tot["open_broker"]
-    # PANIC must be available whenever exposure exists OR cannot be ruled out
+    # PANIC must be available whenever exposure exists OR cannot be ruled out — on ANY account, including one switched
+    # OFF (SEC-024-1: the user-level truth ignores OFF accounts, the panic hint never does)
     panic_available = (open_local > 0 or (broker or 0) > 0
-                       or truth != "FRESH")
+                       or truth != "FRESH"
+                       or any(r["position_truth"] != "FRESH" for r in c["accounts"]))
     return {"position_truth": truth,
             "open_trades_broker": broker,
             "effective_state": eff,

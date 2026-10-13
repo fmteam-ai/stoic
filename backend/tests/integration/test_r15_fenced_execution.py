@@ -331,10 +331,13 @@ def test_public_status_is_availability_only_unless_exact_signed_inventory():
     from live_target import get_base_url
     src = open(os.path.join(os.path.dirname(__file__), "..", "..", "routes", "portal_routes.py")).read()
     block = src[src.index("audit r15 P1-02"):src.index("trading_ready = ")]
-    for needle in ('proj["approved_hash"] == proj["inventory_hash"]', "not proj[\"violations\"]",
+    # v1.60.24 — only PLATFORM-wide violations break the attestation (a defect scoped to one account closes that
+    # account, never the public readiness claim); structural defects still break it
+    for needle in ('proj["approved_hash"] == proj["inventory_hash"]', "not proj[\"platform_violations\"]",
                    "not proj[\"structural_defects\"]", "v_before == v_after", 'st == "READY" for st in states',
                    "exp_declared"):
         assert needle in block, needle
+    assert 'not proj["violations"]' not in block
     payload = src[src.index("trading = {"):src.index("headline = (")]
     for forbidden in ("fresh_terminals", "enabled_accounts_present", "accounts_enabled", "accounts_ready", "sig"):
         assert forbidden not in payload, forbidden

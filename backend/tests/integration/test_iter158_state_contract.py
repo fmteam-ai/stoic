@@ -105,20 +105,31 @@ async def _contract_scenario():
         assert c["totals"] == {"accounts_total": 2, "accounts_enabled": 1,
                                "bots_enabled": 1, "eas_connected": 1,
                                "open_local": 1, "open_broker": None}
-        assert c["position_truth"] == "UNKNOWN"      # worst-of (Dead B)
+        # v1.60.24 — Dead B is OFF on purpose with no exposure: it is reported UNKNOWN per row but never paints the
+        # user-level truth (only enabled accounts / accounts with exposure count)
+        assert c["position_truth"] == "FRESH"
         assert c["as_of"]
         by = {r["label"]: r for r in c["accounts"]}
         assert by["Live A"]["effective_state"] == "ACTIVE"
         assert by["Live A"]["force_trade_allowed"] is True
+        assert by["Live A"]["counted"] is True
         assert by["Dead B"]["effective_state"] == "OFF"
         assert by["Dead B"]["force_trade_allowed"] is False
         assert by["Dead B"]["open_positions_broker"] is None
+        assert by["Dead B"]["position_truth"] == "UNKNOWN" and by["Dead B"]["counted"] is False
 
-        # quick truth: PANIC available (open>0 AND truth not fresh)
+        # quick truth: PANIC available (open>0, and Dead B's broker truth cannot be ruled out — SEC-024-1)
         q = await quick_truth(db, uid, open_local=1)
         assert q["panic_available"] is True
         assert q["open_trades_broker"] is None       # unknown ≠ zero
         assert q["effective_state"] == "ACTIVE"
+
+        # Dead B still OFF but now carrying an open trade → exposure counts, user-level truth goes UNKNOWN
+        dead = await db.accounts.find_one({"label": "Dead B"})
+        await db.trades.insert_one({"user_id": uid, "account_id": str(dead["_id"]), "status": "open", "symbol": "XAUUSD"})
+        c2 = await contract(db, uid)
+        assert c2["position_truth"] == "UNKNOWN"
+        await db.trades.delete_many({"account_id": str(dead["_id"])})
 
         # flat + all accounts fresh → PANIC correctly unavailable
         await db.accounts.delete_many({"label": "Dead B"})

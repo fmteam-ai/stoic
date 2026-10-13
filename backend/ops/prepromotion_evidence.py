@@ -72,6 +72,21 @@ def regime_from_policy(policy: dict | None) -> dict:
             "policy_version": (policy or {}).get("policy_version"), "label": "demo period" if demo else "live"}
 
 
+def worker_enabled_view(worker_rows: list, totals: dict | None = None) -> dict:
+    """Worker-side counts over ENABLED accounts only — like with like. `contract().totals.eas_connected` counts every
+    account of the user, so a DISABLED account with a live EA inflated it against `ea_fresh` (enabled rows only) and
+    failed every production update (prod v1.60.25)."""
+    en = [r for r in worker_rows if r.get("account_enabled") is True]
+    return {"accounts_total": len(worker_rows), "accounts_enabled": len(en),
+            "eas_connected": sum(1 for r in en if r.get("ea_connected")),
+            "eas_connected_all_accounts": (totals or {}).get("eas_connected", sum(1 for r in worker_rows if r.get("ea_connected")))}
+
+
+def ea_count_gate(worker_view: dict, en_rows: list) -> bool:
+    return worker_view.get("eas_connected") == sum(1 for x in en_rows if x["ea_fresh"]) \
+        and worker_view.get("accounts_enabled") == len(en_rows)
+
+
 def environment_gates(en_rows: list, regime: dict) -> dict:
     """Pure. LIVE regime: `all_enabled_live` (broker environment LIVE). Demo period: `all_enabled_attested_demo`
     (attested_environment == DEMO on every enabled account; a LIVE account under a demo_only policy FAILS)."""
@@ -138,9 +153,8 @@ async def collect(args) -> dict:
         and (approved_ea is None or ea_versions == {approved_ea})
     gates["bot_map_one_to_one"] = sorted(str(a["_id"]) for a in enabled) == sorted(b for b in bots if b in {str(a["_id"]) for a in real})
     ctr = await contract(db, args.scope_user)
-    worker_view = ctr.get("totals") or {}
-    gates["ea_count_agrees_with_worker_view"] = worker_view.get("eas_connected") == sum(1 for x in en_rows if x["ea_fresh"]) \
-        and worker_view.get("accounts_enabled") == len(en_rows)
+    worker_view = worker_enabled_view(ctr.get("accounts") or [], totals=ctr.get("totals") or {})
+    gates["ea_count_agrees_with_worker_view"] = ea_count_gate(worker_view, en_rows)
 
     # 3 · execution truth (exact) + position truth
     et = await execution_truth_check(db, account_ids=[str(a["_id"]) for a in enabled] or None)
