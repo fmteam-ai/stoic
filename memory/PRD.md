@@ -1,5 +1,17 @@
 # AI Trading Bot — STOIC · PRD
 
+> ## ⚠️ NON-NEGOTIABLE — NO SECRET VALUES IN ANY WRITTEN OUTPUT (SECURITY 2026-10-13)
+> The platform commits the agent's **finish summary verbatim as the commit message** on a PUBLIC repo. Commit
+> `e17db269` (2026-10-05) carried a live `SECURITY_AGENT_TELEGRAM_BOT_TOKEN=<value>` line that way and the bot was
+> hijacked for spam; `6086a7b0` (2026-08-29) carried a temporary admin password. **Never write a token, password,
+> API key, bot token, private key or a `KEY=value` .env line into: finish summaries, chat output, commit messages,
+> PR descriptions, docs, test files, test reports or memory files.** Write `KEY=<set>` / `<rotated>` instead.
+> `backend/.env` and `memory/test_credentials.md` are the ONLY places a value may live. Enforcement: CI
+> `security-scan` runs gitleaks (stdin, `.gitleaks-commit-messages.toml`) + `scripts/commit_message_secret_scan.py`
+> on every commit message in the push/PR range and on the whole history; local hook `scripts/git-hooks/commit-msg`
+> (`git config core.hooksPath scripts/git-hooks`). A leaked value must be ROTATED, then its sha256 added to
+> `scripts/retired_credentials.sha256` (hash only).
+
 ## Original Problem Statement
 Build STOIC — an AI trading bot for Gold (XAUUSD), Indices (US30/NAS100) and
 Bitcoin (BTCUSD) with four risk profiles (low/middle/high/extreme), live MT5
@@ -3679,3 +3691,4 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 - 2026-10-13 Security Audit #25 (docs/SECURITY_AUDIT_25.md, scope v1.60.25–28): PASS, no P0–P2. P3 fixed: SEC-025-1 `POST /accounts/{id}/request-sync` rate-limited (6/h per user, `request_sync` scope) + `already_pending` short-circuit (no re-queue) + test. P3 accepted: SEC-025-2 /status 12-char digest + input_version (non-sensitive). Unit lane ✓; artifacts regenerated.
 - 2026-10-13 CI backend-integration: `docker run -d mongo:7` container died before the ping loop ("container … is not running") on a fresh runner → both "Start MongoDB replica set" steps now use `start_mongo()` (checks State.Running each second, dumps `docker logs` on early exit, retries once, fails loudly). Workflow-only change.
 - 2026-10-13 v1.60.29 Decision Cache — `canonical_decision._cached_decision(db, key, ver, fp, compute, fresh)` is the single persisted single-flight snapshot cache (TTL 5 s, version + fingerprint) now used by decide_user (key user_id), NEW decide_account (key `acct:<id>`, `account_fingerprint`: account row + its bots + platform switches) and NEW cached decide_platform (key `platform`, `platform_fingerprint`: switches + global counts of enabled accounts / active bots / fresh terminals). Cached hits are deep copies; `fresh=True` now overwrites and returns the fresh computation (previously could return the stale winner). Execution choke points still call compute_authority directly (uncached). FakeDb: update_one upsert returns `upserted_id`, raises DuplicateKeyError on duplicate _id, strips `$`-operators from the upserted doc; find_one_and_update supports upsert; delete_many accepts session. Tests tests/unit/test_v1_60_29_decision_cache.py (5). Unit lane 1432 ✓; integration lane green except known preview-env-only (scalp registration, trust-terminal wording); live /state/readiness 0.59 s → 0.11 s on warm cache.
+- 2026-10-13 SECURITY — commit e17db269 (2026-10-05) carried a live SECURITY_AGENT_TELEGRAM_BOT_TOKEN=<value> line in its COMMIT MESSAGE (agent finish summary committed verbatim) on the public repo; bot hijacked. Also found 6086a7b0 (2026-08-29, temporary admin password in message). Actions: both fingerprints (sha256 only) added to scripts/retired_credentials.sha256; NEW scripts/commit_message_secret_scan.py (known token shapes + env-style NAME=value with credential names, placeholders allowed, values never printed; --range / --all / --message-file); CI security-scan now (a) sha256-pins the gitleaks tarball, (b) runs gitleaks STDIN mode over every commit message in the push/PR range with .gitleaks-commit-messages.toml (allowlists only the Emergent-Commit-Key provenance trailer), (c) runs the scanner on the range AND the full history; local hook scripts/git-hooks/commit-msg; rule banner at top of PRD.md + docs/RUNBOOK.md Secrets. Tests tests/unit/test_security_commit_message_scan.py (8). Operator action still required: revoke the hijacked bot token via @BotFather (/revoke) and put the NEW token in secrets/security_telegram_token on the host.

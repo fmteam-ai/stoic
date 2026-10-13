@@ -39,3 +39,10 @@
 All configuration via `backend/.env` (see `deploy/env/backend.env.example`). Broker/exchange
 secrets at rest are encrypted with `KEY_VAULT_MASTER`. Rotate `JWT_SECRET`
 only during a maintenance window (invalidates all sessions).
+
+**Never write a secret VALUE anywhere but `backend/.env` / `secrets/*`** — not in commit messages, PR descriptions,
+docs, test files, test reports or chat (SECURITY 2026-10-13: commit `e17db269` carried a live Telegram bot token in
+its *message*; the bot was hijacked). Use `KEY=<set>`. CI (`security-scan`) blocks credentials in commit messages
+with gitleaks (stdin mode, `.gitleaks-commit-messages.toml`) and `scripts/commit_message_secret_scan.py`; install the
+local guard with `git config core.hooksPath scripts/git-hooks`. After any exposure: rotate the credential first, then
+add its sha256 to `scripts/retired_credentials.sha256` (hash only, with date and where it leaked).

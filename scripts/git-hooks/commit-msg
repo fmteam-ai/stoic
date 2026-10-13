@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# commit-msg hook — refuses a commit whose MESSAGE carries a credential (SECURITY 2026-10-13: commit e17db269
+# leaked a live Telegram bot token in its message; the bot was hijacked).
+# Install once per clone:  git config core.hooksPath scripts/git-hooks
+set -euo pipefail
+python3 "$(git rev-parse --show-toplevel)/scripts/commit_message_secret_scan.py" --message-file "$1" || {
+  echo "commit-msg: credential detected in the commit message — replace the value with <set> and commit again" >&2
+  exit 1
+}
