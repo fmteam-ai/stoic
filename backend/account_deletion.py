@@ -49,5 +49,14 @@ async def purge_account(db, acc: dict, *, deleted_by: str) -> dict:
     await write_tombstone(db, acc, deleted_by=deleted_by)
     await db.accounts.delete_one({"_id": acc["_id"]})
     await db.bot_configs.delete_many({"account_id": aid})
+    # Scalp Fast Path: its configs + in-memory runners go with the account (otherwise orphan cards linger)
+    scalp = await db.scalp_configs.delete_many({"account_id": aid})
+    try:
+        from scalp.engine import _runners
+        for k in [k for k in _runners if k.startswith(f"{aid}:")]:
+            _runners.pop(k, None)
+    except ImportError:
+        pass
     cleanup = await cleanup_deleted_account(db, aid)
+    cleanup["scalp_configs_removed"] = scalp.deleted_count
     return {k: v for k, v in cleanup.items() if k != "account_id"}
