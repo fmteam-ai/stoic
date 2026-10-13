@@ -452,15 +452,15 @@ export default function BotConfig() {
                                     aria-disabled={overCap || undefined}
                                     title={capFitTitle(p.cap_fit)}
                                     data-testid={`preset-card-${p.key}`}
-                                    className={`text-left p-4 border transition-colors duration-150 disabled:opacity-50 disabled:cursor-not-allowed ${
+                                    className={`text-left p-4 border transition-colors duration-150 disabled:cursor-not-allowed ${overCap ? "disabled:opacity-80" : "disabled:opacity-50"} ${
                                         active ? "border-[#FFD700] bg-[#FFD700]/5" : overCap ? "border-[#FF3B30]/30" : "border-[#1F1F1F] hover:border-[#FFD700]/40"
                                     } ${isHighlighted ? "ring-2 ring-[#00FF41] animate-pulse" : ""}`}>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center gap-2">
-                                            <Icon className="w-4 h-4" style={{ color: p.color }} />
+                                    <div className="flex items-start justify-between gap-2 mb-2 flex-wrap">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <Icon className="w-4 h-4 shrink-0" style={{ color: p.color }} />
                                             <span className="font-display font-bold text-sm tracking-tight">{p.label}</span>
                                         </div>
-                                        <div className="flex items-center gap-1.5">
+                                        <div className="flex items-center gap-1.5 flex-wrap justify-end">
                                             <CapFitPill fit={p.cap_fit} testId={`preset-cap-fit-${p.key}`} />
                                             {active && (
                                                 <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700] bg-[#FFD700]/10">
@@ -506,9 +506,9 @@ export default function BotConfig() {
                                             data-testid={`custom-preset-${p.id}`}
                                             title={capFitTitle(p.cap_fit)}
                                             className={`text-left p-4 border transition-colors duration-150 group ${
-                                                active ? "border-[#9B59B6] bg-[#9B59B6]/5" : overCap ? "border-[#FF3B30]/30 opacity-60" : "border-[#1F1F1F] hover:border-[#9B59B6]/40"
+                                                active ? "border-[#9B59B6] bg-[#9B59B6]/5" : overCap ? "border-[#FF3B30]/30" : "border-[#1F1F1F] hover:border-[#9B59B6]/40"
                                             } ${isHighlighted ? "ring-2 ring-[#00FF41] animate-pulse" : ""}`}>
-                                            <div className="flex items-center justify-between mb-2">
+                                            <div className="flex items-start justify-between gap-2 mb-2 flex-wrap">
                                                 <div className="flex items-center gap-2 min-w-0">
                                                     <Bookmark className="w-4 h-4 text-[#9B59B6] shrink-0" />
                                                     <span className="font-display font-bold text-sm tracking-tight truncate">{p.name}</span>
