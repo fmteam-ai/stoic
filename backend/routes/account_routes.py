@@ -1672,6 +1672,71 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
     }
 
 
+def _certification_fix(key: str, a: dict, *, v, hb_age, pm, sync_stuck, pending_sync, base_pass, cert_age) -> dict:
+    """v1.60.27 — state-specific guidance for a FAILING certification check: what the user does, in their own words,
+    plus the in-app action that does it when one exists (`action` is consumed by AccountCertification.jsx)."""
+    from routes.diagnostic_routes import LATEST_EA
+    paired = bool(a.get("bridge_token_hash") or a.get("bridge_token"))
+    never_hb = hb_age is None
+    if key == "ea_version":
+        if not v:
+            return {"text": "No EA has reported yet. Download the EA, attach it to one MT5 chart with Algo Trading ON and paste this account's bridge token.",
+                    "action": "download_ea"}
+        return {"text": f"Terminal runs EA v{v}; download v{LATEST_EA}, replace the file in MQL5/Experts, recompile and re-attach it to the chart.",
+                "action": "download_ea"}
+    if key == "bridge_paired":
+        return {"text": "Generate a bridge token for this account and paste it into the EA's BridgeToken input.", "action": "pair_bridge"}
+    if key == "heartbeat":
+        if never_hb:
+            return {"text": "The EA never connected. Check that MT5 is running, Algo Trading is ON, the chart has the EA attached and the server URL is in Tools → Options → Expert Advisors → Allow WebRequest.",
+                    "action": "download_ea" if not paired else None}
+        return {"text": f"Last heartbeat {int(hb_age // 60)} min ago. Re-open MT5 / the chart with the EA, make sure Algo Trading is ON and the terminal is online.",
+                "action": None}
+    if key == "account_type":
+        if never_hb:
+            return {"text": "Reported by the EA on its first heartbeat — bring the terminal online first.", "action": None}
+        return {"text": f"Your EA predates margin-mode reporting; update to v{LATEST_EA}. An admin can also set hedging / netting manually.",
+                "action": "download_ea"}
+    if key in ("symbol_specs", "stop_freeze_levels", "symbol_mapping"):
+        if never_hb:
+            return {"text": "Sent by the EA with its heartbeat — bring the terminal online first.", "action": None}
+        return {"text": "Add the traded symbols (e.g. XAUUSD, BTCUSD) to MT5 Market Watch and to the EA's TrackedSymbols input, then wait for the next heartbeat.",
+                "action": None}
+    if key == "spread_feed":
+        return {"text": ("Bring the terminal online first." if never_hb
+                         else "Spreads arrive with each heartbeat while the market is open; make sure TrackedSymbols lists your symbols and MT5 is connected to the broker."),
+                "action": None}
+    if key == "clock_sync":
+        return {"text": ("Reported by the EA on its heartbeat — bring the terminal online first." if never_hb
+                         else f"Your EA predates broker-time reporting; update to v{LATEST_EA} (it is learned from deals otherwise)."),
+                "action": None if never_hb else "download_ea"}
+    if key == "history_sync":
+        if sync_stuck:
+            return {"text": f"A sync was requested but the EA never confirmed it — it needs EA v1.39+ (you run v{v or '?'}). Update the EA, then request the sync again.",
+                    "action": "request_sync"}
+        if pending_sync:
+            return {"text": "Sync queued — the EA picks it up on its next poll (a few seconds while online).", "action": None}
+        if never_hb:
+            return {"text": "Queued automatically on the first verified heartbeat — bring the terminal online first.", "action": None}
+        return {"text": "Request a broker-history sync now; the EA re-reads 7 days of deals and confirms.", "action": "request_sync"}
+    if key == "identity":
+        return {"text": "The terminal is logged into a different broker account than this card. Log MT5 into the right account, or pair the EA with the card that matches it.",
+                "action": None}
+    if key in ("order_check", "fill_policy"):
+        if not v:
+            return {"text": "Follows from the EA version — install and connect the EA first (see EA version above).", "action": None}
+        need = "1.50" if key == "order_check" else "1.28"
+        return {"text": f"{'OrderCheck preflight' if key == 'order_check' else 'Filling-mode auto-select'} needs EA v{need}+; update to v{LATEST_EA}.",
+                "action": "download_ea"}
+    if key == "demo_certified":
+        if not base_pass:
+            return {"text": "Clear every check above first — CERTIFY NOW appears here as soon as they all pass.", "action": None}
+        if cert_age is not None:
+            return {"text": "Certification is older than 30 days — press CERTIFY NOW to re-stamp it.", "action": "certify"}
+        return {"text": "All checks pass — press CERTIFY NOW to stamp this account.", "action": "certify"}
+    return {"text": "See the hint for this check.", "action": None}
+
+
 @router.get("/certification")
 async def accounts_certification(user=Depends(get_current_user)):
     """Iter-151 · per-account go-live certification checklist, computed from
@@ -1776,6 +1841,10 @@ async def accounts_certification(user=Depends(get_current_user)):
              "ok": cert_age is not None and cert_age < 30 * 86400,
              "hint": "stamped via POST /accounts/{id}/certify once all "
                      "other checks pass"})
+        for c in checks:
+            if not c["ok"]:
+                c["fix"] = _certification_fix(c["key"], a, v=v, hb_age=hb_age, pm=pm, sync_stuck=sync_stuck,
+                                              pending_sync=pending_sync, base_pass=base_pass, cert_age=cert_age)
         passed = sum(1 for c in checks if c["ok"])
         out.append({"account_id": str(a["_id"]), "label": a.get("label"),
                     "mode": a.get("mode"),

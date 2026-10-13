@@ -95,3 +95,52 @@ def test_heartbeat_bootstraps_exactly_one_deep_sync():
     assert '"requested_by": "certification_bootstrap"' in block and 'set_doc["history_sync_bootstrap_at"] = now_iso' in block
     # the guard flag is written in the same update, so a terminal that never confirms is asked exactly once
     assert block.index('set_doc["history_sync_bootstrap_at"]') < block.index('set_doc["pending_history_sync"]')
+
+
+# ── v1.60.27 — every failing check carries state-specific guidance (`fix.text` + optional in-app `fix.action`) ──
+def test_every_failing_check_has_fix_guidance_and_passing_checks_do_not():
+    db = FakeDb()
+    _run(db.accounts.insert_one(_full_account(ea_version="1.20", margin_mode=None, broker_time_info=None,
+                                              last_full_sync_at=None, symbol_specs={}, available_symbols=[],
+                                              broker_account_mismatch=True, demo_certified_at=None)))
+    item = _cert(db)
+    for c in item["checks"]:
+        if c["ok"]:
+            assert "fix" not in c, c["key"]
+        else:
+            assert c["fix"]["text"] and "action" in c["fix"], c["key"]
+    by = {c["key"]: c for c in item["checks"]}
+    assert by["ea_version"]["fix"]["action"] == "download_ea" and "v1.20" in by["ea_version"]["fix"]["text"]
+    assert by["history_sync"]["fix"]["action"] == "request_sync"
+    assert by["identity"]["fix"]["action"] is None and "different broker account" in by["identity"]["fix"]["text"]
+    assert by["demo_certified"]["fix"]["action"] is None and "Clear every check above" in by["demo_certified"]["fix"]["text"]
+    assert by["order_check"]["fix"]["action"] == "download_ea" and by["fill_policy"]["fix"]["action"] == "download_ea"
+
+
+def test_fix_guidance_follows_the_terminal_state():
+    # never connected → every EA-sourced check says "bring the terminal online first", no misleading action
+    db = FakeDb()
+    _run(db.accounts.insert_one(_full_account(ea_version=None, last_heartbeat=None, margin_mode=None, broker_time_info=None,
+                                              last_full_sync_at=None, bridge_token_hash=None, symbol_specs={})))
+    by = {c["key"]: c for c in _cert(db)["checks"]}
+    assert by["bridge_paired"]["fix"]["action"] == "pair_bridge"
+    assert "never connected" in by["heartbeat"]["fix"]["text"]
+    for k in ("account_type", "clock_sync", "history_sync", "symbol_specs"):
+        assert "online first" in by[k]["fix"]["text"] and by[k]["fix"]["action"] is None, k
+    # stuck sync → explains the EA version requirement and offers to request again
+    db2 = FakeDb()
+    _run(db2.accounts.insert_one(_full_account(ea_version="1.30", pending_history_sync={"requested_at": _iso(3600)})))
+    f = {c["key"]: c for c in _cert(db2)["checks"]}["history_sync"]["fix"]
+    assert f["action"] == "request_sync" and "v1.39+" in f["text"] and "v1.30" in f["text"]
+    # all base checks pass, never certified → certify action
+    db3 = FakeDb()
+    _run(db3.accounts.insert_one(_full_account(demo_certified_at=None)))
+    f3 = {c["key"]: c for c in _cert(db3)["checks"]}["demo_certified"]["fix"]
+    assert f3["action"] == "certify" and "All checks pass" in f3["text"]
+
+
+def test_frontend_renders_fix_guidance_with_actions():
+    src = open(os.path.join(ROOT, "frontend", "src", "components", "AccountCertification.jsx"), encoding="utf-8").read()
+    for needle in ("cert-fixes-", "cert-fix-text-", "c.fix?.text", "request_sync", "download_ea", '"certify"',
+                   "/request-sync", "HOW TO CLEAR"):
+        assert needle in src, needle
