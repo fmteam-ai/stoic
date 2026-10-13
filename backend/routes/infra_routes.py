@@ -1062,14 +1062,15 @@ async def shadow_certification(user=Depends(get_current_user)):
             break
     checks["ea_heartbeat"] = hb_fresh
     checks["broker_reconciliation"] = bool(
-        await db.broker_deals.find_one({}))
+        await db.broker_deals.find_one({"user_id": user["id"]}))
     # Clock synchronization — same source as the account certification badge (v1.60.26): the EA heartbeat's
     # broker_time (server_gmt_offset_sec) or the offset learned from deals, via broker_offset_sec(). The VPS agent's
     # clock_offset_ms is only a secondary source (fleet installs); accounts bridged from a user's own VPS have none.
     from routes.bridge_routes import broker_offset_sec
     clock_detail = {"source": "unknown", "offset_sec": None, "account": None}
     async for a in db.accounts.find({"user_id": user["id"], "status": {"$ne": "deleted"}, "mode": {"$ne": "paper"}},
-                                    {"label": 1, "broker_time_info": 1, "broker_utc_offset_sec": 1, "last_heartbeat": 1}):
+                                    {"label": 1, "broker_time_info": 1, "broker_utc_offset_sec": 1, "last_heartbeat": 1}
+                                    ).sort("last_heartbeat", -1):           # freshest heartbeat decides
         off_s, src = broker_offset_sec(a)
         if src != "unknown":
             clock_detail = {"source": src, "offset_sec": off_s, "account": a.get("label")}

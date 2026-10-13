@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1317 |
+| unit | pure logic, no external I/O | every CI job | 1320 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4178 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4186 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5767 tests across 613 files.**
+**Total: 5778 tests across 614 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -278,6 +278,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter24g_wrong_terminal.py` | http-live | 4 |
 | `backend/tests/test_iter24h_position_snapshot.py` | http-live | 5 |
 | `backend/tests/test_iter24j_import_positions.py` | http-live | 5 |
+| `backend/tests/test_iter254_verified_archived_infra_live.py` | http-live | 8 |
 | `backend/tests/test_iter25_invalid_id_handler.py` | http-live | 3 |
 | `backend/tests/test_iter25_revive_clears_pending_mod.py` | http-live | 2 |
 | `backend/tests/test_iter25b_mod_ack_notifications.py` | http-live | 3 |
@@ -605,7 +606,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_release_v1_60_30_items.py` | unit | 8 |
 | `backend/tests/unit/test_scalp_orphan_config_removal.py` | unit | 7 |
 | `backend/tests/unit/test_sec002_static_errors.py` | unit | 2 |
-| `backend/tests/unit/test_secret_scan_prose_fp.py` | unit | 2 |
+| `backend/tests/unit/test_secret_scan_prose_fp.py` | unit | 3 |
 | `backend/tests/unit/test_security_agent_sa1_sa2.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa3.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa4.py` | unit | 6 |
@@ -626,5 +627,5 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |
 | `backend/tests/unit/test_update_preflight_shell.py` | unit | 7 |
 | `backend/tests/unit/test_v1_60_29_decision_cache.py` | unit | 5 |
-| `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 6 |
+| `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 8 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |

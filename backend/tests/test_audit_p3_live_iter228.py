@@ -10,9 +10,11 @@ import requests
 pytestmark = pytest.mark.http
 
 BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
-ADMIN_EMAIL = "admin@stoicaibot.com"
-# Build runtime so secret scanner doesn't catch; from /app/memory/test_credentials.md
-ADMIN_PASS = "J024" + "ESNi6U4evswZHZjV38EtZA" + "#" + "722"
+from dotenv import dotenv_values as _dv
+_BE = _dv("/app/backend/.env")
+ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or _BE.get("TEST_ADMIN_EMAIL") or "admin@trading.bot"
+# never hardcode credentials (secret previously embedded here — rotate)
+ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD") or _BE.get("TEST_ADMIN_PASSWORD")
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +110,7 @@ def test_security_headers_on_health():
 def test_non_admin_forbidden_on_diagnostics():
     import uuid
     email = f"TEST_p3user_{uuid.uuid4().hex[:8]}@example.com"
-    pwd = "Zx9#" + "Qk4m" + "WpR7" + "nLvT"
+    pwd = f"Tmp-{uuid.uuid4().hex[:12]}#9A"      # throwaway for a freshly generated user, never a stable account
     rr = requests.post(f"{BASE}/api/auth/register",
                        json={"email": email, "password": pwd, "name": "p3"},
                        timeout=30)

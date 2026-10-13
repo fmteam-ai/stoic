@@ -5,6 +5,7 @@ import secrets
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
+from bson import ObjectId
 from pydantic import BaseModel
 
 from auth import get_current_user
@@ -37,37 +38,43 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
     def _bucket(store, aid):
         return store.setdefault(aid, {"net": 0.0, "wins": 0, "losses": 0, "deals": 0, "first": None, "last": None})
 
-    async for d in db.broker_deals.find(
-            {"user_id": user_id},
-            {"account_id": 1, "deal_time": 1, "profit": 1, "commission": 1,
-             "swap": 1, "deal_entry": 1}).sort("deal_time", 1).limit(20000):
-        realized = (float(d.get("profit") or 0)
-                    + float(d.get("commission") or 0)
-                    + float(d.get("swap") or 0))
-        ts = d.get("deal_time")
+    def _realized_day(d):
+        realized = (float(d.get("profit") or 0) + float(d.get("commission") or 0) + float(d.get("swap") or 0))
         try:
-            day = datetime.fromtimestamp(int(ts), tz=timezone.utc).date().isoformat()
+            day = datetime.fromtimestamp(int(d.get("deal_time")), tz=timezone.utc).date().isoformat()
         except (TypeError, ValueError, OSError):
+            return None, None
+        return realized, day
+
+    proj = {"account_id": 1, "deal_time": 1, "profit": 1, "commission": 1, "swap": 1, "deal_entry": 1}
+    # headline deals: current accounts only, oldest→newest, bounded — archived deals are read separately so a
+    # large deleted-account history can never consume the headline's limit
+    live_ids = list(accounts)
+    async for d in db.broker_deals.find(
+            {"user_id": user_id, "account_id": {"$in": live_ids}}, proj).sort("deal_time", 1).limit(20000):
+        realized, day = _realized_day(d)
+        if day is None:
             continue
-        aid = d.get("account_id")
-        is_out = d.get("deal_entry") == "out"
-        if aid not in accounts:
-            p = _bucket(archived_per, aid)
-            p["net"] += realized; p["deals"] += 1; p["first"] = p["first"] or day; p["last"] = day
-            if is_out:
-                p["wins" if realized > 0 else "losses"] += 1
-            continue
-        p = _bucket(per, aid)
+        p = _bucket(per, d.get("account_id"))
         for row in (p, total):
             row["net"] += realized
             row["deals"] += 1
             row["first"] = row["first"] or day
             row["last"] = day
-        if is_out:
+        if d.get("deal_entry") == "out":
             outcome = "wins" if realized > 0 else "losses"
             p[outcome] += 1
             total[outcome] += 1
         daily[day] = daily.get(day, 0.0) + realized
+    async for d in db.broker_deals.find(
+            {"user_id": user_id, "account_id": {"$nin": live_ids}}, proj).sort("deal_time", 1).limit(20000):
+        realized, day = _realized_day(d)
+        if day is None:
+            continue
+        p = _bucket(archived_per, d.get("account_id"))
+        p["net"] += realized; p["deals"] += 1; p["first"] = p["first"] or day; p["last"] = day
+        if d.get("deal_entry") == "out":
+            p["wins" if realized > 0 else "losses"] += 1
 
     curve, cum, peak, max_dd = [], 0.0, 0.0, 0.0
     for day in sorted(daily):
@@ -99,31 +106,36 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             "environment": _broker_env(a),
             **_stats(p)})
 
-    # Archived — deals of accounts that no longer exist. Environment comes from the tombstone, which recorded the
-    # server classification at deletion time; no tombstone (pre-U18 deletion / expired) is honestly UNKNOWN.
+    # Archived — deals of accounts that are gone. Label source order: the soft-deleted account document (status
+    # 'deleted', still present) → the tombstone written at hard deletion (server classification at that moment) →
+    # honestly UNKNOWN (pre-U18 deletion / expired tombstone).
     tombs = {}
     if archived_per:
-        async for t in db.account_tombstones.find({"_id": {"$in": list(archived_per)}},
+        async for a in db.accounts.find({"_id": {"$in": [ObjectId(x) for x in archived_per if ObjectId.is_valid(x)]}},
+                                        {"label": 1, "broker": 1, "mode": 1, "account_type": 1, "broker_environment": 1,
+                                         "server": 1, "broker_server": 1, "deleted_at": 1}):
+            tombs[str(a["_id"])] = {"label": a.get("label"), "broker": a.get("broker"), "mode": a.get("mode"),
+                                    "environment": _broker_env(a), "deleted_at": a.get("deleted_at")}
+        async for t in db.account_tombstones.find({"_id": {"$in": [x for x in archived_per if x not in tombs]}},
                                                   {"label": 1, "broker": 1, "environment": 1, "mode": 1, "deleted_at": 1}):
             tombs[str(t["_id"])] = t
     archived_rows = []
     for i, (aid, p) in enumerate(sorted(archived_per.items(), key=lambda kv: -kv[1]["net"])):
         t = tombs.get(aid)
         archived_rows.append({
-            "account_id_suffix": str(aid)[-6:],
             "label": (f"ARCHIVED-{i + 1}" if mask
                       else ((t or {}).get("label") or f"DELETED ACCOUNT …{str(aid)[-6:]}")),
-            "broker": (t or {}).get("broker"),
             "mode": (t or {}).get("mode"),
             "environment": ((t or {}).get("environment") or "UNKNOWN"),
-            "deleted_at": (t or {}).get("deleted_at"),
             "tombstone": t is not None,
+            # identifiers stay off the public (masked) surface
+            **({} if mask else {"account_id_suffix": str(aid)[-6:], "broker": (t or {}).get("broker"),
+                                "deleted_at": (t or {}).get("deleted_at")}),
             **_stats(p)})
 
     # Integrity stamp — computed from the SAME deal set as the headline (current accounts only): every headline closed
     # position is a broker-reported deal; bot-side closed trades on those accounts that never matched a broker deal
     # are the unverified remainder and are excluded from the record.
-    live_ids = list(accounts)
     verified = total["wins"] + total["losses"]
     unmatched = await db.trades.count_documents(
         {"user_id": user_id, "status": "closed", "origin": "auto", "account_id": {"$in": live_ids},
@@ -380,8 +392,11 @@ async def public_performance(share_id: str):
         payload["overall"] = None
         payload["max_drawdown"] = None
         payload["equity_curve"] = []
-        for row in payload.get("accounts") or []:
-            for k in ("net", "wins", "losses", "win_rate", "profit_factor"):
+        for row in (payload.get("accounts") or []) + (payload.get("archived") or []):
+            for k in ("net", "net_pnl", "wins", "losses", "win_rate", "profit_factor", "deals", "closed_positions"):
+                row.pop(k, None)
+        for row in payload.get("archived") or []:            # archived rows never identify the deleted account publicly
+            for k in ("account_id_suffix", "deleted_at", "broker"):
                 row.pop(k, None)
     else:
         payload["verification_status"] = "VERIFIED"

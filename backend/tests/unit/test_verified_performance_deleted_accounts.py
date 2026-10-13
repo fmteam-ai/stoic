@@ -87,7 +87,48 @@ def test_masked_public_payload_masks_archived_labels_and_unknown_only_without_to
     assert out["accounts"][0]["label"] == "ACCOUNT-1"
     assert out["archived"][0]["label"] == "ARCHIVED-1" and out["archived"][0]["environment"] == "UNKNOWN"
     assert out["archived"][0]["tombstone"] is False
+    # masked rows carry no identifiers (public share surface)
+    assert not {"account_id_suffix", "deleted_at", "broker"} & set(out["archived"][0])
     assert plain["archived"][0]["label"] == "DELETED ACCOUNT …11d14d"       # honest when the tombstone is missing
+    # a SOFT-deleted account (doc still present, status=deleted) is labelled from its own document
+    soft = ObjectId()
+    db.accounts.rows.append({"_id": soft, "user_id": uid, "label": "Old demo", "broker": "Exness", "status": "deleted",
+                             "mode": "live", "account_type": "demo", "broker_environment": "DEMO"})
+    db.broker_deals.rows.append(_deal(uid, str(soft), 1_700_000_000, 3.0))
+    with patch("broker_statement_ledger.ledger_gate", AsyncMock(return_value=[])):
+        plain = _run(pr._verified_payload(db, uid))
+    row = next(r for r in plain["archived"] if r["label"] == "Old demo")
+    assert row["environment"] == "DEMO" and row["broker"] == "Exness" and row["tombstone"] is True
+    assert all(a["label"] != "Old demo" for a in plain["accounts"])
+
+
+def test_public_share_strips_every_financial_and_identifying_field_when_attestation_is_blocked(monkeypatch):
+    import routes.performance_routes as pr
+    db = FakeDb()
+    uid = str(ObjectId())
+    _seed(db, uid)
+    db.performance_shares.rows.append({"share_id": "s1", "user_id": uid, "revoked": False})
+    monkeypatch.setattr(pr, "get_db", lambda: db)
+    monkeypatch.setattr(pr, "_attestation_gate", AsyncMock(return_value=["NON_LIVE_ENVIRONMENT:DEMO"]))
+    import json
+    with patch("broker_statement_ledger.ledger_gate", AsyncMock(return_value=[])):
+        resp = _run(pr.public_performance("s1"))
+    body = json.loads(resp.body)
+    assert body["verification_status"].startswith("UNVERIFIED") and body["overall"] is None
+    for row in body["accounts"] + body["archived"]:
+        assert not {"net_pnl", "net", "win_rate", "deals", "closed_positions"} & set(row), row
+    for row in body["archived"]:
+        assert not {"account_id_suffix", "deleted_at", "broker"} & set(row), row
+    assert body["archived"][0]["label"] == "ARCHIVED-1"
+
+
+def test_archived_history_never_starves_the_headline_limit():
+    import routes.performance_routes as pr
+    src = open(os.path.join(ROOT, "backend", "routes", "performance_routes.py"), encoding="utf-8").read()
+    body = src.split("async def _verified_payload")[1].split("\n\n\nATTESTATION_POLICY_VERSION")[0]
+    assert body.count(".limit(20000)") == 2                                    # one bounded query per set
+    assert '"account_id": {"$in": live_ids}}, proj' in body and '"account_id": {"$nin": live_ids}}, proj' in body
+    assert pr is not None
 
 
 def test_attestation_freshness_ignores_deals_of_deleted_accounts(monkeypatch):

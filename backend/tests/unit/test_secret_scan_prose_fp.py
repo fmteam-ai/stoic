@@ -23,3 +23,20 @@ def test_quoted_single_token_credential_still_blocks():
     fake = "Zq9#vL2m" + "!pX7rT4w"      # assembled so the scanner never sees a literal pair in source
     line = 'login as admin@trading.bot with pass' + 'word: "' + fake + '"'
     assert [f["kind"] for f in _scan(line)] == ["stable-account-credential"]
+
+
+def test_credential_assembled_from_string_fragments_blocks_in_every_path():
+    """2026-10-13 — backend/tests/test_audit_p3_live_iter228.py carried the LIVE admin password as
+    `ADMIN_PASS = "ab" + "cd" + "#ef"` to dodge the literal rule. The shape itself is now a blocking finding."""
+    import secret_scan
+    frag = 'ADMIN_P' + 'ASS = "Kq7" + "mZ2v" + "#Rt9" + "pL4"'
+    for path in ("backend/tests/test_live.py", "backend/routes/x.py", "scripts/run.sh"):
+        out = []
+        secret_scan.scan_text(frag, path, out)
+        assert [f["kind"] for f in out] == ["concatenated-credential-literal"], path
+    # fixture shapes stay allowed: `"…" * n` padding, assertions of ABSENCE, non-credential names
+    for ok in ('TOKEN = "abcdefgh" + "x" * 16', "assert ('ADMIN_PASS" + "WORD=\"admin' + '123\"') not in ci",
+               'label = "ab" + "cd" + "ef"', 'path = "/api/bridge/poll?token=" + "A" * 48'):
+        out = []
+        secret_scan.scan_text(ok, "backend/tests/unit/t.py", out)
+        assert out == [], ok

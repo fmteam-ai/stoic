@@ -141,7 +141,7 @@ export default function Infrastructure() {
                                 <div className="font-mono text-[8px] text-[#52525B] uppercase">{k.replace(/_/g, " ")}</div>
                                 <div className={`font-mono text-xs ${v ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{v ? "PASS" : "FAIL"}</div>
                                 {k === "clock_synchronization" && cert.details?.clock_synchronization && (
-                                    <div className="font-mono text-[8px] text-[#52525B] mt-0.5" data-testid="cert-clock-detail">
+                                    <div className="font-mono text-[8px] text-[#52525B] mt-0.5 break-words leading-tight" data-testid="cert-clock-detail">
                                         {cert.details.clock_synchronization.source === "unknown"
                                             ? "no broker time on any heartbeat yet — connect EA 1.64+"
                                             : `${cert.details.clock_synchronization.source} · offset ${cert.details.clock_synchronization.offset_sec}s${cert.details.clock_synchronization.account ? ` · ${cert.details.clock_synchronization.account}` : ""}`}

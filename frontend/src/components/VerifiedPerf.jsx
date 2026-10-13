@@ -4,6 +4,9 @@ import {
 } from "recharts";
 import { BadgeCheck, ShieldAlert, Archive } from "lucide-react";
 
+// signed money: "+$7,928.90" / "-$27.46" (never "$-27.46")
+const signedUsd = (v) => v == null ? "—" : `${v > 0 ? "+" : v < 0 ? "-" : ""}$${Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
 export function IntegrityStamp({ integrity }) {
     if (!integrity) return null;
     const pct = integrity.verified_pct;
@@ -23,7 +26,7 @@ export function IntegrityStamp({ integrity }) {
                 · {integrity.estimated_or_unknown_excluded} estimates excluded
                 {integrity.archived_accounts_excluded > 0 &&
                     ` · ${integrity.archived_deals_excluded} deals of ${integrity.archived_accounts_excluded} deleted account${integrity.archived_accounts_excluded === 1 ? "" : "s"} archived`}
-                · source: {integrity.source}
+                {" "}· source: {integrity.source}
                 {integrity.freshest_heartbeat_age_sec != null &&
                     ` · feed ${integrity.freshest_heartbeat_age_sec}s ago`}
             </span>
@@ -36,7 +39,7 @@ export function ArchivedAccountsTable({ archived }) {
     const envs = [...new Set(archived.map(a => a.environment || "UNKNOWN"))];
     return (
         <div className="border border-[#1F1F1F]/70 bg-[#0A0A0A]/60 overflow-x-auto" data-testid="archived-accounts">
-            <div className="px-3 pt-3 font-mono text-[9px] tracking-widest text-[#52525B] flex items-center gap-2 flex-wrap">
+            <div className="px-3 pt-3 font-mono text-[9px] tracking-widest text-[#71717A] flex items-center gap-2 flex-wrap">
                 <Archive className="w-3 h-3" />
                 ARCHIVED ({envs.join(" / ")}) · DELETED ACCOUNTS · NOT IN THE HEADLINE · KEPT AS AUDIT TRAIL
             </div>
@@ -55,11 +58,11 @@ export function ArchivedAccountsTable({ archived }) {
                     {archived.map((a, i) => (
                         <tr key={i} className="border-b border-[#1F1F1F]" data-testid={`archived-row-${i}`}>
                             <td className="p-3 font-mono text-[#A1A1AA]">{a.label}</td>
-                            <td className="p-3 text-[#52525B]">{a.broker || "—"}</td>
-                            <td className="p-3 uppercase font-mono text-[10px] text-[#52525B]" data-testid={`archived-env-${i}`}>{a.environment || "UNKNOWN"}</td>
-                            <td className="p-3 text-right font-mono text-[#A1A1AA]">{a.net_pnl >= 0 ? "+" : ""}${a.net_pnl}</td>
-                            <td className="p-3 text-right font-mono text-[#52525B]">{a.closed_positions}</td>
-                            <td className="p-3 text-right font-mono text-[#52525B]">{a.deleted_at ? a.deleted_at.slice(0, 10) : "—"}</td>
+                            <td className="p-3 text-[#71717A]">{a.broker || "—"}</td>
+                            <td className="p-3 uppercase font-mono text-[10px] text-[#71717A]" data-testid={`archived-env-${i}`}>{a.environment || "UNKNOWN"}</td>
+                            <td className="p-3 text-right font-mono text-[#A1A1AA]">{signedUsd(a.net_pnl)}</td>
+                            <td className="p-3 text-right font-mono text-[#71717A]">{a.closed_positions}</td>
+                            <td className="p-3 text-right font-mono text-[#71717A]">{a.deleted_at ? a.deleted_at.slice(0, 10) : "—"}</td>
                         </tr>
                     ))}
                 </tbody>
@@ -78,11 +81,11 @@ export function StatTiles({ overall, maxDrawdown }) {
     );
     return (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3" data-testid="verified-stats">
-            {t("NET P&L (BROKER)", `${overall.net_pnl >= 0 ? "+" : ""}$${overall.net_pnl}`,
+            {t("NET P&L (BROKER)", signedUsd(overall.net_pnl),
                 overall.net_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]")}
             {t("WIN RATE", overall.win_rate != null ? `${overall.win_rate}%` : "—")}
             {t("CLOSED POSITIONS", overall.closed_positions)}
-            {t("MAX DRAWDOWN", `$${maxDrawdown}`, "text-[#FFB000]")}
+            {t("MAX DRAWDOWN", signedUsd(maxDrawdown).replace("+", ""), "text-[#FFB000]")}
             {t("ACTIVE SINCE", overall.first_deal || "—")}
         </div>
     );
@@ -145,7 +148,7 @@ export function AccountsTable({ accounts }) {
                             <td className={`p-3 uppercase font-mono text-[10px] ${a.environment === "LIVE" ? "text-[#FF3B30]" : "text-[#A1A1AA]"}`}
                                 data-testid={`verified-env-${i}`}>{a.environment || "UNKNOWN"}</td>
                             <td className={`p-3 text-right font-mono ${a.net_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
-                                {a.net_pnl >= 0 ? "+" : ""}${a.net_pnl}
+                                {signedUsd(a.net_pnl)}
                             </td>
                             <td className="p-3 text-right font-mono text-[#A1A1AA]">{a.win_rate != null ? `${a.win_rate}%` : "—"}</td>
                             <td className="p-3 text-right font-mono text-[#A1A1AA]">{a.closed_positions}</td>
