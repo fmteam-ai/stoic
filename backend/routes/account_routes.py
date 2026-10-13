@@ -1071,7 +1071,7 @@ async def rotate_token(account_id: str, request: Request, user=Depends(get_curre
 
 
 @router.post("/{account_id}/request-sync")
-async def request_broker_sync(account_id: str, user=Depends(get_current_user)):
+async def request_broker_sync(account_id: str, request: Request, user=Depends(get_current_user)):
     """Queue a deep broker-history sync (7-day lookback) for the EA.
 
     The EA (v1.39+) picks the request up on its next poll (~5s), re-scans the
@@ -1080,10 +1080,15 @@ async def request_broker_sync(account_id: str, user=Depends(get_current_user)):
     or missing P&L with the exact broker figures.
     """
     db = get_db()
+    from security import rate_limit
+    await rate_limit(db, "request_sync", user["id"], 6, 3600, request=request,
+                     message="Too many sync requests — a deep history re-read is heavy for the terminal; try again later")  # SEC-025-1
     oid = parse_object_id(account_id)
     acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
+    if acc.get("pending_history_sync"):
+        return {"ok": True, "already_pending": True, **{k: acc["pending_history_sync"].get(k) for k in ("lookback_seconds", "requested_at")}}
     lookback = 7 * 86400
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.accounts.update_one({"_id": oid}, {"$set": {
@@ -1672,11 +1677,77 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
     }
 
 
+def _certification_fix(key: str, a: dict, *, v, hb_age, pm, sync_stuck, pending_sync, base_pass, cert_age) -> dict:
+    """v1.60.27 — state-specific guidance for a FAILING certification check: what the user does, in their own words,
+    plus the in-app action that does it when one exists (`action` is consumed by AccountCertification.jsx)."""
+    from routes.diagnostic_routes import LATEST_EA
+    paired = bool(a.get("bridge_token_hash") or a.get("bridge_token"))
+    never_hb = hb_age is None
+    if key == "ea_version":
+        if not v:
+            return {"text": "No EA has reported yet. Download the EA, attach it to one MT5 chart with Algo Trading ON and paste this account's bridge token.",
+                    "action": "download_ea"}
+        return {"text": f"Terminal runs EA v{v}; download v{LATEST_EA}, replace the file in MQL5/Experts, recompile and re-attach it to the chart.",
+                "action": "download_ea"}
+    if key == "bridge_paired":
+        return {"text": "Generate a bridge token for this account and paste it into the EA's BridgeToken input.", "action": "pair_bridge"}
+    if key == "heartbeat":
+        if never_hb:
+            return {"text": "The EA never connected. Check that MT5 is running, Algo Trading is ON, the chart has the EA attached and the server URL is in Tools → Options → Expert Advisors → Allow WebRequest.",
+                    "action": "download_ea" if not paired else None}
+        return {"text": f"Last heartbeat {int(hb_age // 60)} min ago. Re-open MT5 / the chart with the EA, make sure Algo Trading is ON and the terminal is online.",
+                "action": None}
+    if key == "account_type":
+        if never_hb:
+            return {"text": "Reported by the EA on its first heartbeat — bring the terminal online first.", "action": None}
+        return {"text": f"Your EA predates margin-mode reporting; update to v{LATEST_EA}. An admin can also set hedging / netting manually.",
+                "action": "download_ea"}
+    if key in ("symbol_specs", "stop_freeze_levels", "symbol_mapping"):
+        if never_hb:
+            return {"text": "Sent by the EA with its heartbeat — bring the terminal online first.", "action": None}
+        return {"text": "Add the traded symbols (e.g. XAUUSD, BTCUSD) to MT5 Market Watch and to the EA's TrackedSymbols input, then wait for the next heartbeat.",
+                "action": None}
+    if key == "spread_feed":
+        return {"text": ("Bring the terminal online first." if never_hb
+                         else "Spreads arrive with each heartbeat while the market is open; make sure TrackedSymbols lists your symbols and MT5 is connected to the broker."),
+                "action": None}
+    if key == "clock_sync":
+        return {"text": ("Reported by the EA on its heartbeat — bring the terminal online first." if never_hb
+                         else f"Your EA predates broker-time reporting; update to v{LATEST_EA} (it is learned from deals otherwise)."),
+                "action": None if never_hb else "download_ea"}
+    if key == "history_sync":
+        if sync_stuck:
+            return {"text": f"A sync was requested but the EA never confirmed it — it needs EA v1.39+ (you run v{v or '?'}). Update the EA, then request the sync again.",
+                    "action": "request_sync"}
+        if pending_sync:
+            return {"text": "Sync queued — the EA picks it up on its next poll (a few seconds while online).", "action": None}
+        if never_hb:
+            return {"text": "Queued automatically on the first verified heartbeat — bring the terminal online first.", "action": None}
+        return {"text": "Request a broker-history sync now; the EA re-reads 7 days of deals and confirms.", "action": "request_sync"}
+    if key == "identity":
+        return {"text": "The terminal is logged into a different broker account than this card. Log MT5 into the right account, or pair the EA with the card that matches it.",
+                "action": None}
+    if key in ("order_check", "fill_policy"):
+        if not v:
+            return {"text": "Follows from the EA version — install and connect the EA first (see EA version above).", "action": None}
+        need = "1.50" if key == "order_check" else "1.28"
+        return {"text": f"{'OrderCheck preflight' if key == 'order_check' else 'Filling-mode auto-select'} needs EA v{need}+; update to v{LATEST_EA}.",
+                "action": "download_ea"}
+    if key == "demo_certified":
+        if not base_pass:
+            return {"text": "Clear every check above first — CERTIFY NOW appears here as soon as they all pass.", "action": None}
+        if cert_age is not None:
+            return {"text": "Certification is older than 30 days — press CERTIFY NOW to re-stamp it.", "action": "certify"}
+        return {"text": "All checks pass — press CERTIFY NOW to stamp this account.", "action": "certify"}
+    return {"text": "See the hint for this check.", "action": None}
+
+
 @router.get("/certification")
 async def accounts_certification(user=Depends(get_current_user)):
     """Iter-151 · per-account go-live certification checklist, computed from
     the EA's own reported state (heartbeats, specs, clock, history sync)."""
     from routes.diagnostic_routes import LATEST_EA
+    from routes.bridge_routes import broker_offset_sec, position_mode_resolution
     db = get_db()
     now = datetime.now(timezone.utc)
 
@@ -1698,7 +1769,14 @@ async def accounts_certification(user=Depends(get_current_user)):
         spreads_age = _age(a.get("spreads_updated_at"))
         sync_age = _age(a.get("last_full_sync_at"))
         v = a.get("ea_version")
-        acct_type = str(a.get("account_type") or "").lower()
+        # prod v1.60.26 — read the facts where the EA/backend actually store them: `account_type` is the LOT type
+        # (microcent/cent/standard), the hedging/netting verdict is the EA-reported ACCOUNT_MARGIN_MODE
+        # (position_mode_resolution); the broker clock offset is heartbeat `broker_time` (broker_offset_sec).
+        pm = await position_mode_resolution(db, a)
+        clock_off, clock_src = broker_offset_sec(a)
+        pending_sync = a.get("pending_history_sync") or {}
+        pending_age = _age(pending_sync.get("requested_at")) if pending_sync else None
+        sync_stuck = pending_age is not None and pending_age > 900
         checks = [
             {"key": "ea_version", "label": "EA version",
              "value": v or "—", "ok": bool(v) and v == LATEST_EA,
@@ -1709,9 +1787,11 @@ async def accounts_certification(user=Depends(get_current_user)):
             {"key": "heartbeat", "label": "EA heartbeat",
              "value": f"{int(hb_age)}s ago" if hb_age is not None else "never",
              "ok": hb_age is not None and hb_age < HEARTBEAT_FRESH_S},
-            {"key": "account_type", "label": "Account type",
-             "value": acct_type or "unknown",
-             "ok": acct_type in ("hedging", "netting")},
+            {"key": "account_type", "label": "Position mode (hedging / netting)",
+             "value": (f"{pm['mode']} · {pm['source']}" if pm["source"] in ("ea", "admin")
+                       else f"unknown · {pm['source']} assumes {pm['mode']}"),
+             "ok": pm["mode"] in ("hedging", "netting") and pm["source"] in ("ea", "admin"),
+             "hint": "ACCOUNT_MARGIN_MODE reported by the EA on every heartbeat (or set by an admin)"},
             {"key": "symbol_specs", "label": "Symbol / stop-level specs",
              "value": f"{len(specs)} symbols",
              "ok": len(specs) > 0 and specs_age is not None
@@ -1721,14 +1801,15 @@ async def accounts_certification(user=Depends(get_current_user)):
                        if spreads_age is not None else "never"),
              "ok": spreads_age is not None and spreads_age < 600},
             {"key": "clock_sync", "label": "Broker clock offset",
-             "value": (f"{a.get('broker_utc_offset_sec')}s"
-                       if a.get("broker_utc_offset_sec") is not None
-                       else "unknown"),
-             "ok": a.get("broker_utc_offset_sec") is not None},
+             "value": (f"{clock_off:+d}s · {clock_src}" if clock_src != "unknown" else "unknown"),
+             "ok": clock_src != "unknown",
+             "hint": "EA v1.54+ reports the server GMT offset on every heartbeat"},
             {"key": "history_sync", "label": "History synchronization",
-             "value": (f"{int(sync_age / 3600)}h ago"
-                       if sync_age is not None else "never"),
-             "ok": sync_age is not None and sync_age < 86400},
+             "value": ("sync requested, EA has not confirmed" if sync_stuck
+                       else f"{int(sync_age / 3600)}h ago · 60 s sweep keeps it current" if sync_age is not None
+                       else "pending" if pending_sync else "never"),
+             "ok": sync_age is not None and not sync_stuck,
+             "hint": "one deep sync is queued automatically on the first verified heartbeat; the EA sweeps deals every 60 s afterwards"},
             {"key": "identity", "label": "Terminal identity",
              "value": ("mismatch" if a.get("broker_account_mismatch")
                        else "verified"),
@@ -1765,6 +1846,10 @@ async def accounts_certification(user=Depends(get_current_user)):
              "ok": cert_age is not None and cert_age < 30 * 86400,
              "hint": "stamped via POST /accounts/{id}/certify once all "
                      "other checks pass"})
+        for c in checks:
+            if not c["ok"]:
+                c["fix"] = _certification_fix(c["key"], a, v=v, hb_age=hb_age, pm=pm, sync_stuck=sync_stuck,
+                                              pending_sync=pending_sync, base_pass=base_pass, cert_age=cert_age)
         passed = sum(1 for c in checks if c["ok"])
         out.append({"account_id": str(a["_id"]), "label": a.get("label"),
                     "mode": a.get("mode"),

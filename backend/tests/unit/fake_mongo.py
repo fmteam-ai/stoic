@@ -146,13 +146,17 @@ class FakeCollection:
         for r in self.rows:
             if _match(r, q):
                 self._apply(r, upd)
-                return _Res(matched_count=1, modified_count=1)
+                return _Res(matched_count=1, modified_count=1, upserted_id=None)
         if upsert:
-            d = dict(q)
+            d = {k: v for k, v in q.items() if not k.startswith("$") and not isinstance(v, dict)}
             self._apply(d, upd)
             d.setdefault("_id", ObjectId())
+            if any(r.get("_id") == d["_id"] for r in self.rows):
+                from pymongo.errors import DuplicateKeyError
+                raise DuplicateKeyError("E11000 duplicate key error (fake)")
             self.rows.append(d)
-        return _Res(matched_count=0, modified_count=0)
+            return _Res(matched_count=0, modified_count=0, upserted_id=d["_id"])
+        return _Res(matched_count=0, modified_count=0, upserted_id=None)
 
     async def replace_one(self, q, doc, upsert=False):
         for i, r in enumerate(self.rows):
@@ -163,12 +167,18 @@ class FakeCollection:
             self.rows.append(dict(doc))
         return _Res(matched_count=0, modified_count=0)
 
-    async def find_one_and_update(self, q, upd, projection=None, return_document=None, **kw):
+    async def find_one_and_update(self, q, upd, projection=None, return_document=None, upsert=False, **kw):
         for r in self.rows:
             if _match(r, q):
                 before = dict(r)
                 self._apply(r, upd)
                 return dict(r) if return_document else before
+        if upsert:
+            d = {k: v for k, v in q.items() if not k.startswith("$") and not isinstance(v, dict)}
+            self._apply(d, upd)
+            d.setdefault("_id", ObjectId())
+            self.rows.append(d)
+            return dict(d) if return_document else None
         return None
 
     async def update_many(self, q, upd):
@@ -179,7 +189,7 @@ class FakeCollection:
                 n += 1
         return _Res(matched_count=n, modified_count=n)
 
-    async def delete_many(self, q):
+    async def delete_many(self, q, session=None):
         keep = [r for r in self.rows if not _match(r, q)]
         n = len(self.rows) - len(keep)
         self.rows[:] = keep

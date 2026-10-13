@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1247 |
+| unit | pure logic, no external I/O | every CI job | 1265 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4178 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5697 tests across 602 files.**
+**Total: 5715 tests across 605 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -586,6 +586,8 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_prod_v1_60_23_three_bugs.py` | unit | 7 |
 | `backend/tests/unit/test_prod_v1_60_24_disabled_account_scope.py` | unit | 11 |
 | `backend/tests/unit/test_prod_v1_60_25_ea_count_gate.py` | unit | 4 |
+| `backend/tests/unit/test_prod_v1_60_26_certification_badge.py` | unit | 9 |
+| `backend/tests/unit/test_prod_v1_60_28_status_rules_declared.py` | unit | 4 |
 | `backend/tests/unit/test_public_status_bounded.py` | unit | 2 |
 | `backend/tests/unit/test_r25_close_writers_migrated.py` | unit | 7 |
 | `backend/tests/unit/test_r25_ea_binary_proof.py` | unit | 5 |
@@ -616,4 +618,5 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |
 | `backend/tests/unit/test_update_preflight_shell.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_29_decision_cache.py` | unit | 5 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |
