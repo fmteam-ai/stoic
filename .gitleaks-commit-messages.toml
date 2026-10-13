@@ -8,7 +8,10 @@ useDefault = true
 
 [[allowlists]]
 description = "platform provenance trailer on every commit"
-regexTarget = "line"
+# SEC-026-1 — match-scoped (not line-scoped): only the 64-hex digest itself is excused, so a secret placed on the
+# same line as a forged trailer is still reported.
+regexTarget = "match"
 regexes = [
-  '''Emergent-Commit-Key: [0-9a-f]{64}''',
+  '''^Emergent-Commit-Key: [0-9a-f]{64}$''',
+  '''^[0-9a-f]{64}$''',
 ]
