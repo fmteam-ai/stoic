@@ -60,7 +60,7 @@ function BrokerScreen({ onCreated }) {
         setBusy(true); setErr(null);
         try {
             const label = f.label.trim() || `${brokerName} …${f.login.slice(-3)}`;
-            const { data } = await api.post("/accounts", { label, broker: brokerName, server: "", account_number: f.login, account_type: "microcent", account_role: "STANDARD",
+            const { data } = await api.post("/accounts", { label, broker: brokerName, server: "", account_number: f.login, account_type: f.env === "demo" ? "demo" : "standard", account_role: "STANDARD",
                 base_currency: "USD", mode: "live", initial_balance: 10000, pamm_provider: null, pamm_program_id: null, pamm_broker_program_id: null,
                 declared_environment: f.env, algo_trading_consent: true });
             await api.put("/config", { risk_level: "medium" }, { params: { account_id: data.id } }).catch(() => {});   // bound bot, Balanced
@@ -88,13 +88,15 @@ function BrokerScreen({ onCreated }) {
                 <label className="block text-xs text-[#A1A1AA]">MT5 login number
                     <input value={f.login} onChange={(e) => setF({ ...f, login: e.target.value.replace(/\D/g, "") })} inputMode="numeric" placeholder="e.g. 1083440" data-testid="wizard-login"
                         className="mt-1 w-full bg-black border border-[#1F1F1F] px-3 py-2 text-sm text-white font-mono focus:border-[#FFD700] outline-none" /></label>
-                <div className="text-xs text-[#A1A1AA]">Account
+                <div className="text-xs text-[#A1A1AA]">Account type — <span className="text-white">is this MT5 login a demo or a real-money account?</span>
                     <div className="mt-1 grid grid-cols-2 border border-[#1F1F1F]" data-testid="wizard-env-toggle">
-                        {["demo", "real"].map((v) => (
+                        {[["demo", "DEMO", "practice money"], ["real", "LIVE", "real money"]].map(([v, title, sub]) => (
                             <button key={v} onClick={() => setF({ ...f, env: v })} disabled={v === "real" && demoOnly} data-testid={`wizard-env-${v}`}
-                                className={`py-2 text-xs font-mono tracking-widest disabled:opacity-40 ${f.env === v ? "bg-[#FFD700] text-black" : "text-[#A1A1AA]"}`}>{v.toUpperCase()}</button>
+                                className={`py-2 text-xs font-mono tracking-widest disabled:opacity-40 ${f.env === v ? "bg-[#FFD700] text-black" : "text-[#A1A1AA]"}`}>
+                                {title}<span className={`block text-[10px] tracking-normal ${f.env === v ? "text-black/70" : "text-[#71717A]"}`}>{sub}</span></button>
                         ))}
                     </div>
+                    <div className="mt-1 text-[10px] text-[#71717A]" data-testid="wizard-env-hint">The broker's own trade mode is checked on the first heartbeat; a wrong choice is corrected automatically for demo accounts.</div>
                     {demoOnly && <div className="mt-1 text-[10px] text-[#71717A]">Demo-only period — real accounts after the operator opens it.</div>}
                 </div>
                 <label className="block text-xs text-[#A1A1AA]">Name (optional)

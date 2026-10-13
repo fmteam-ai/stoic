@@ -58,7 +58,12 @@ def evaluate(acc: dict, *, accepted_hashes: list, now=None) -> dict:
         stale = att.get("identity_hash") != attestation_identity(acc)
         if stale or not all(checks.values()):
             return {"grant": False, "void": True, "checks": {**checks, "recheck_failed": True, "identity_moved": stale}, "proof": proof}
-    return {"grant": all(checks.values()) and not already, "void": False, "checks": checks, "proof": proof}
+    # prod v1.60.23 (bug 2a): the broker itself reports DEMO on a verified terminal running the signed, installer-
+    # attested EA, but the owner's record never DECLARED demo (type left at "microcent" → classified LIVE). Broker
+    # truth outranks a missing declaration: declare it DEMO automatically (audited), then the grant follows.
+    others = {k: v for k, v in checks.items() if k != "declared_demo"}
+    declare = (not checks["declared_demo"]) and all(others.values()) and not acc.get("broker_environment")
+    return {"grant": all(checks.values()) and not already, "void": False, "declare_demo": declare, "checks": checks, "proof": proof}
 
 
 async def apply(db, acc: dict, *, accepted_hashes: list | None = None) -> str | None:
@@ -68,6 +73,16 @@ async def apply(db, acc: dict, *, accepted_hashes: list | None = None) -> str | 
         accepted_hashes = accepted_ea_sha256s()
     d = evaluate(acc, accepted_hashes=accepted_hashes)
     now = _now()
+    if d.get("declare_demo"):
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$set": {"broker_environment": "DEMO", "declared_environment": "demo",
+                                                                    "environment_declared_auto": {"at": now, "source": "broker_trade_mode_demo", "ea_binary_sha256": acc.get("ea_binary_sha256")}}})
+        await append_chained(db, {"actor_email": "system", "action": "account_environment_declared_demo_auto",
+                                  "target_kind": "account", "target_id": str(acc["_id"]),
+                                  "reason": "broker reports ACCOUNT_TRADE_MODE_DEMO on a verified terminal running the signed, installer-attested EA — declared DEMO automatically (owner left the type at its default)",
+                                  "at": now, "meta": {"previous_account_type": acc.get("account_type"), "previous_broker_environment": acc.get("broker_environment"),
+                                                      "checks": d["checks"]}})
+        acc = {**acc, "broker_environment": "DEMO", "declared_environment": "demo"}
+        d = evaluate(acc, accepted_hashes=accepted_hashes)
     if d["void"]:
         att = acc.get("environment_attestation") or {}
         recheck = bool(d["checks"].get("recheck_failed"))

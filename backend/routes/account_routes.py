@@ -42,6 +42,7 @@ class AccountUpdate(BaseModel):
     group: str | None = None
     trading_enabled: bool | None = None
     server: str | None = None
+    account_type: Literal["microcent", "cent", "standard", "demo", "live"] | None = None   # bug 2c — step-up, audited
 
 
 from server_adopt import SERVER_NAME_RE, server_change_doc as _server_change_doc  # noqa: E402 — U2 shares the update with auto-adopt
@@ -472,7 +473,7 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
         raise HTTPException(status_code=400, detail={
             "code": "invalid_server_name",
             "message": "Server must be the exact MT5 server name (2-64 characters: letters, digits, space, '.', '_', '-')"})
-    if not updates and new_server is None:
+    if not updates and new_server is None and payload.account_type is None:
         raise HTTPException(status_code=400, detail="Nothing to update")
     db = get_db()
     oid = parse_object_id(account_id, "Account")
@@ -483,6 +484,39 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
         raise HTTPException(status_code=404, detail="Account not found")
     if is_admin and acc.get("user_id") != user["id"]:
         require_admin(user)          # SEC-021 — cross-owner edits go through the MFA-enrolled admin gate, not a bare role check
+    if payload.trading_enabled is True and acc.get("mode") != "paper" and acc.get("trading_enabled") is not True:
+        # prod v1.60.23 (bug 3) — trading can only be turned ON for an account the rules policy ADMITTED; the UI
+        # shows the admission reason instead of an ON switch. (Server-side so the API path cannot bypass it.)
+        import rules_policy as _rp
+        rules = await _rp.active(db)
+        adm = acc.get("admission") or {}
+        if rules and not rules.get("expired") and adm.get("state") != "admitted":
+            raise HTTPException(status_code=409, detail={"code": "not_admitted", "state": adm.get("state") or "pending",
+                                                         "message": adm.get("reason") or "The rules policy has not admitted this account yet — connect the EA and wait for the DEMO attestation",
+                                                         "fix": adm.get("fix")})
+    if payload.account_type is not None:
+        # bug 2c (prod v1.60.23) — the Edit dialog can correct a wrongly saved type. "demo"/"live" also set the
+        # declared environment the UI + auto-attestation read; broker truth (real/contest trade mode) still wins.
+        if acc.get("mode") == "paper":
+            raise HTTPException(status_code=400, detail="Paper accounts have no broker account type")
+        if payload.account_type == "live" and await demo_only_policy_active(db):
+            raise HTTPException(status_code=409, detail={"code": "demo_only_policy", "message": "The active rules policy admits demo accounts only — a live account cannot be declared during the demo period"})
+        from step_up import audit_event, require_step_up
+        await require_step_up(db, user, request, "account_type_edit")
+        new_type = "standard" if payload.account_type == "live" else payload.account_type
+        env = "DEMO" if payload.account_type == "demo" else ("LIVE" if payload.account_type == "live" else None)
+        updates["account_type"] = new_type
+        if env:
+            updates["broker_environment"] = env
+            updates["declared_environment"] = "demo" if env == "DEMO" else "real"
+        if (acc.get("account_type") != new_type) or (env and acc.get("broker_environment") != env):
+            if env and str(acc.get("broker_environment") or "").upper() != env and (acc.get("environment_attestation") or {}).get("approved_by"):
+                # the DEMO attestation was bound to the old declaration — re-earned on the next heartbeat
+                await db.accounts.update_one({"_id": oid}, {"$unset": {"environment_attestation": ""}})
+            await audit_event(db, user["id"], "account_type_edited",
+                              {"account_id": account_id, "from": {"account_type": acc.get("account_type"), "broker_environment": acc.get("broker_environment")},
+                               "to": {"account_type": new_type, "broker_environment": env}, "owner_user_id": acc.get("user_id"),
+                               "on_behalf": acc.get("user_id") != user["id"]}, request, step_up=True)
     if new_server is not None:
         if acc.get("mode") == "paper":
             raise HTTPException(status_code=400, detail="Paper accounts have no broker server")
@@ -741,6 +775,11 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         "mode": payload.mode,
         # A17-13 — what the owner DECLARED (never authoritative: broker_env.attested_environment decides) + consent record
         "declared_environment": None if is_paper else payload.declared_environment,
+        # prod v1.60.23 (bug 2b) — the owner's declaration is reflected in the classification the UI and the auto
+        # DEMO attestation read (`broker_environment`), instead of the lot-size `account_type` silently meaning LIVE.
+        # Never authoritative: broker truth (ACCOUNT_TRADE_MODE real/contest) still overrides to LIVE.
+        "broker_environment": (None if is_paper else ("DEMO" if payload.declared_environment == "demo" or payload.account_type == "demo"
+                                                      else ("LIVE" if payload.declared_environment == "real" else None))),
         "algo_trading_consent_at": (datetime.now(timezone.utc).isoformat()
                                     if (payload.algo_trading_consent and not is_paper) else None),
         **__import__("bridge_tokens").token_fields(_new_token),  # P1-01 — hash only; paper needs no EA token
