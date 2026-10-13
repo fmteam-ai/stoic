@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1281 |
+| unit | pure logic, no external I/O | every CI job | 1293 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4178 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5731 tests across 607 files.**
+**Total: 5743 tests across 609 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -523,6 +523,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_alert_test_and_scalp_migration.py` | unit | 4 |
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_blank_env_boot.py` | unit | 5 |
+| `backend/tests/unit/test_blocker_demo_autopilot_attested_env.py` | unit | 4 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
 | `backend/tests/unit/test_easy_connect_p1.py` | unit | 11 |
@@ -598,6 +599,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_rc_lock_manifest_bound.py` | unit | 1 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
 | `backend/tests/unit/test_release_key_pin.py` | unit | 4 |
+| `backend/tests/unit/test_release_v1_60_30_items.py` | unit | 8 |
 | `backend/tests/unit/test_scalp_orphan_config_removal.py` | unit | 7 |
 | `backend/tests/unit/test_sec002_static_errors.py` | unit | 2 |
 | `backend/tests/unit/test_secret_scan_prose_fp.py` | unit | 2 |

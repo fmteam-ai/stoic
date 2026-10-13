@@ -764,6 +764,17 @@ export default function Accounts() {
                                                         </div>
                                                     );
                                                 })()}
+                                                {a.connection_hint && !isFresh(a.last_heartbeat) && (
+                                                    <div className="mt-1 border border-[#FFB000]/40 bg-[#FFB000]/5 px-2 py-1 font-mono text-[10px] text-[#FFB000]"
+                                                        data-testid={`connection-hint-${a.account_number}`}>
+                                                        {a.connection_hint.text}
+                                                        {a.connection_hint.url && (
+                                                            <button onClick={() => { navigator.clipboard?.writeText(a.connection_hint.url); toast.success("URL copied"); }}
+                                                                data-testid={`connection-hint-copy-${a.account_number}`}
+                                                                className="ml-2 underline hover:text-white">COPY URL</button>
+                                                        )}
+                                                    </div>
+                                                )}
                                                 <button onClick={() => refreshBalance(a.id)}
                                                     disabled={!!refreshingBalance[a.id]}
                                                     data-testid={`refresh-balance-${a.account_number}`}

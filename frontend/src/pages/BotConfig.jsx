@@ -564,15 +564,23 @@ export default function BotConfig() {
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SECTION 01</div>
                         <div className="font-display font-bold text-lg tracking-tight">Risk Management Profile</div>
                     </div>
+                    {cfg.policy_risk_cap_pct != null && (
+                        <div className="px-5 pt-3 font-mono text-[10px] tracking-widest text-[#FFB000]" data-testid="policy-risk-cap">
+                            POLICY CAP · RISK PER TRADE ≤ {cfg.policy_risk_cap_pct}% — levels above the cap cannot be saved
+                        </div>
+                    )}
                     <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="risk-grid">
                         {Object.entries(profiles).map(([key, p]) => {
                             const selected = cfg.risk_level === key;
+                            const overCap = cfg.policy_risk_cap_pct != null && Number(p.risk_pct) > Number(cfg.policy_risk_cap_pct);
                             return (
-                                <button key={key} onClick={() => setCfg({ ...cfg, risk_level: key })}
+                                <button key={key} onClick={() => !overCap && setCfg({ ...cfg, risk_level: key })}
                                     data-testid={`risk-option-${key}`}
+                                    disabled={overCap}
+                                    title={overCap ? `Above the policy cap of ${cfg.policy_risk_cap_pct}% — cannot be saved` : undefined}
                                     className={`text-left p-4 border transition-colors duration-150 ${
                                         selected ? "border-[#00FF41] bg-[#00FF41]/5" : "border-[#1F1F1F] hover:border-[#333333]"
-                                    }`}>
+                                    } ${overCap ? "opacity-40 cursor-not-allowed" : ""}`}>
                                     <div className="flex items-center justify-between mb-2">
                                         <div className="flex items-center gap-2">
                                             <div className="font-display font-bold tracking-tight">{p.label}</div>
@@ -585,7 +593,7 @@ export default function BotConfig() {
                                     </div>
                                     <p className="text-xs text-[#A1A1AA] mb-3 leading-relaxed">{RISK_DESCRIPTIONS[key]}</p>
                                     <div className="grid grid-cols-2 gap-1.5 font-mono text-[10px]">
-                                        <div><span className="text-[#52525B]">RISK</span> <span className="text-white">{p.risk_pct}%</span></div>
+                                        <div><span className="text-[#52525B]">RISK</span> <span className={overCap ? "text-[#FF3B30]" : "text-white"}>{p.risk_pct}%</span>{overCap && <span className="ml-1 text-[#FF3B30]" data-testid={`risk-over-cap-${key}`}>› CAP {cfg.policy_risk_cap_pct}%</span>}</div>
                                         <div><span className="text-[#52525B]">CONF≥</span> <span className="text-white">{p.min_confidence}%</span></div>
                                         <div><span className="text-[#52525B]">MAX POS</span> <span className="text-white">{p.max_concurrent}</span></div>
                                         <div><span className="text-[#52525B]">LEV ≤</span> <span className="text-white">{p.leverage_cap}x</span></div>

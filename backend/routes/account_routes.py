@@ -86,6 +86,35 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 
+def webrequest_hint(url: str) -> str:
+    """The exact MT5 allow-list line. MT5 matches the origin literally: https://stoicaibot.com and
+    https://www.stoicaibot.com are two different entries (prod: EA WebRequest error 4014 was invisible on the site)."""
+    bare = url.rstrip("/")
+    host = bare.split("://", 1)[-1]
+    variant = "without www" if not host.startswith("www.") else "with www"
+    return (f"MT5 is blocking the connection: Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' → "
+            f"add {bare} (exactly, {variant}) → OK, then restart the EA")
+
+
+def connection_hint(a: dict, conn: dict | None) -> dict | None:
+    """v1.60.30 — why the heartbeat is stale, on the card itself: a terminal that paired / ran the installer but
+    whose heartbeats never (or no longer) arrive is most often MT5 blocking WebRequest (error 4014 never reaches us)."""
+    if (a.get("mode") or "") == "paper" or not conn or conn.get("connected"):
+        return None
+    from install_progress import webrequest_url
+    url = webrequest_url()
+    paired = a.get("installer_paired_at") or a.get("bridge_token_hash") or a.get("bridge_token")
+    if not paired:
+        return None
+    state = conn.get("state")
+    code = "webrequest_blocked_likely" if state == "NEVER_CONNECTED" else "heartbeat_stale"
+    text = webrequest_hint(url) if url else ("MT5 is blocking the connection: Tools → Options → Expert Advisors → "
+                                              "Allow WebRequest → add the STOIC server URL exactly")
+    if state != "NEVER_CONNECTED":
+        text = "Heartbeat stopped — if MT5 is running, check the Experts tab for WebRequest error 4014. " + text
+    return {"code": code, "text": text, "url": url or None}
+
+
 @router.get("")
 async def list_accounts(user=Depends(get_current_user)):
     db = get_db()
@@ -103,12 +132,16 @@ async def list_accounts(user=Depends(get_current_user)):
                 logging.getLogger("accounts").warning("position mode resolution failed for %s: %s",
                                                       str(d["_id"]), type(e).__name__)
                 modes[str(d["_id"])] = {"mode": "unknown", "source": "error"}
+    raw_by_id = {str(d["_id"]): dict(d) for d in docs}
     out = [_serialize(d) for d in docs]
+    from state_contract import effective_connection_state
     for d in out:
         res = modes.get(d["id"])
         if res:
             d["position_mode"] = res["mode"]
             d["position_mode_source"] = res["source"]
+        raw = raw_by_id.get(d["id"]) or {}
+        d["connection_hint"] = connection_hint(raw, effective_connection_state(raw))     # v1.60.30 — WebRequest 4014 on the card
     return out
 
 
@@ -194,6 +227,7 @@ async def accounts_overview(user=Depends(get_current_user)):
             "balance": a.get("balance"), "equity": a.get("equity"),
             "open_positions": a.get("open_positions") or 0,
             "last_heartbeat": a.get("last_heartbeat"),
+            "connection_hint": connection_hint(a, conn),
             "pnl_today": round(b["today"], 2), "pnl_7d": round(b["d7"], 2),
             "pnl_30d": round(b["d30"], 2),
         })
@@ -567,7 +601,11 @@ async def close_only_notice(user=Depends(get_current_user)):
     mine = [f"{acc['label']}: {t}" for acc in accounts for t in acc["reasons"]]
     rules = await rp.active(db) or {}
     cap = int(rules.get("max_accounts_per_user") or 0)
-    if any("policy cap" in r for r in mine):
+    if any("risk per trade" in r for r in mine):
+        rcap = (rules.get("risk_caps") or {}).get("max_risk_pct")
+        fix = {"action": "lower_risk", "label": f"Lower the bot's risk to ≤ {float(rcap):g}% (Bot Config → Risk level)" if rcap else
+               "Lower the bot's risk to the policy cap (Bot Config → Risk level)"}
+    elif any("policy cap" in r for r in mine):
         fix = {"action": "remove_account", "label": f"Keep {cap} account{'s' if cap != 1 else ''} — delete or disable the rest"}
     elif any("not attested DEMO" in r for r in mine):
         fix = {"action": "demo_only", "label": "Demo-only policy — connect a DEMO account or ask the operator"}
