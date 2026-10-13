@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1265 |
+| unit | pure logic, no external I/O | every CI job | 1297 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4178 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5715 tests across 605 files.**
+**Total: 5747 tests across 610 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -523,7 +523,9 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_alert_test_and_scalp_migration.py` | unit | 4 |
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_blank_env_boot.py` | unit | 5 |
+| `backend/tests/unit/test_blocker_demo_autopilot_attested_env.py` | unit | 4 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
+| `backend/tests/unit/test_cap_aware_presets.py` | unit | 4 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
 | `backend/tests/unit/test_easy_connect_p1.py` | unit | 11 |
 | `backend/tests/unit/test_easy_start_wizard.py` | unit | 9 |
@@ -598,6 +600,8 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_rc_lock_manifest_bound.py` | unit | 1 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
 | `backend/tests/unit/test_release_key_pin.py` | unit | 4 |
+| `backend/tests/unit/test_release_v1_60_30_items.py` | unit | 8 |
+| `backend/tests/unit/test_scalp_orphan_config_removal.py` | unit | 7 |
 | `backend/tests/unit/test_sec002_static_errors.py` | unit | 2 |
 | `backend/tests/unit/test_secret_scan_prose_fp.py` | unit | 2 |
 | `backend/tests/unit/test_security_agent_sa1_sa2.py` | unit | 7 |
@@ -606,6 +610,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_security_audit12.py` | unit | 4 |
 | `backend/tests/unit/test_security_audit13.py` | unit | 5 |
 | `backend/tests/unit/test_security_audit8.py` | unit | 3 |
+| `backend/tests/unit/test_security_commit_message_scan.py` | unit | 9 |
 | `backend/tests/unit/test_security_telegram_vault.py` | unit | 4 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 24 |
 | `backend/tests/unit/test_signer_verification_diagnosis.py` | unit | 6 |

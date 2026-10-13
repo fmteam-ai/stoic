@@ -1,5 +1,6 @@
 """Release-readiness probe — verifies the complete trading topology before a
 deployment is accepted (used by deploy/update.sh). METRICS_TOKEN gated."""
+import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -85,6 +86,44 @@ def _as_dt(v):
 def _iso(v):
     dt = _as_dt(v)
     return dt.isoformat() if dt else None
+
+
+@router.post("/ops/dependency-audit")
+async def publish_dependency_audit(request: Request):
+    """daily report D1/D2 — CI (security-scan / weekly dependency-audit) publishes its scan result here so the
+    security worker reads platform_state.dependency_audit_{python|frontend} instead of reporting "no data".
+    METRICS_TOKEN bearer or admin session; body ≤ 256 KiB; vulnerabilities normalised to
+    {package, version, id, score, fix}. Idempotent upsert, never deletes."""
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=401, content={"detail": "METRICS_TOKEN bearer or admin session required"})
+    raw = await request.body()
+    if len(raw) > 262_144:
+        return JSONResponse(status_code=413, content={"detail": "payload too large"})
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        return JSONResponse(status_code=400, content={"detail": "invalid JSON"})
+    kind = str(body.get("kind") or "")
+    if kind not in ("python", "frontend"):
+        return JSONResponse(status_code=400, content={"detail": "kind must be python or frontend"})
+    vulns = []
+    for v in (body.get("vulnerabilities") or [])[:500]:
+        if not isinstance(v, dict):
+            continue
+        try:
+            score = float(v.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        vulns.append({"package": str(v.get("package") or "")[:120], "version": str(v.get("version") or "")[:60],
+                      "id": str(v.get("id") or "")[:80], "score": score, "fix": (str(v.get("fix"))[:120] if v.get("fix") else None)})
+    db = get_db()
+    doc = {"kind": kind, "vulnerabilities": vulns, "count": len(vulns),
+           "source": str(body.get("source") or "ci")[:80], "commit": str(body.get("commit") or "")[:64],
+           "tool": str(body.get("tool") or "")[:80], "published_by": actor,
+           "published_at": datetime.now(timezone.utc).isoformat()}
+    await db.platform_state.update_one({"_id": f"dependency_audit_{kind}"}, {"$set": doc}, upsert=True)
+    return {"ok": True, "kind": kind, "count": len(vulns), "published_at": doc["published_at"]}
 
 
 @router.get("/ops/release-readiness")

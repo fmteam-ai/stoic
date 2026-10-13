@@ -148,6 +148,17 @@ function Get-StoicWebRequestHost {
     return $u.Scheme + "://" + $u.Authority
 }
 
+function Get-StoicWebRequestHosts {
+    # v1.11 — MT5 matches the WebRequest allow-list origin literally: the bare host and its www. variant are
+    # two different entries. Tell the user to add BOTH (Install and Repair).
+    param([Parameter(Mandatory = $true)][string]$HeartbeatUrl)
+    $u = [Uri]$HeartbeatUrl
+    $host1 = $u.Scheme + "://" + $u.Authority
+    if ($u.Host.StartsWith("www.")) { $alt = $u.Scheme + "://" + $u.Authority.Substring(4) }
+    else { $alt = $u.Scheme + "://www." + $u.Authority }
+    return @($host1, $alt)
+}
+
 function Write-StoicDropFile {
     # M122-P1 — every MQL5\Files\STOIC-*.txt is written WITHOUT a byte-order mark. `Set-Content -Encoding UTF8` on
     # Windows PowerShell 5.1 writes a UTF-8 BOM; the EA opens the file with FILE_ANSI, the first line became
@@ -469,7 +480,7 @@ function Install-Stoic {
         [switch]$Repair
     )
 
-    $InstallerVersion = "1.10"
+    $InstallerVersion = "1.11"
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch { }
     $ServerUrl = $ServerUrl.TrimEnd('/')
     # N110-2 — the bridge token travels to this host: https only, no exceptions
@@ -766,9 +777,11 @@ Period=$ChartPeriod
     Write-Host "[5/5] All set." -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Two things left, in MT5 ($($terminal.FullName)):" -ForegroundColor White
-    Write-Host "  1. Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' → add:" -ForegroundColor White
+    Write-Host "  1. Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' → add BOTH lines:" -ForegroundColor White
     Write-Host "       $heartbeatHost" -ForegroundColor Yellow
-    Write-Host "     (MT5 keeps this list outside any file — the installer cannot set it for you)" -ForegroundColor DarkGray
+    foreach ($h in (Get-StoicWebRequestHosts -HeartbeatUrl $heartbeatUrl)) { if ($h -ne $heartbeatHost) { Write-Host "       $h" -ForegroundColor Yellow } }
+    Write-Host "     (exactly as printed — MT5 treats the www and non-www origins as different entries;" -ForegroundColor DarkGray
+    Write-Host "      MT5 keeps this list outside any file — the installer cannot set it for you)" -ForegroundColor DarkGray
     Write-Host "  2. If the EA is not on a chart after the restart: Navigator → Experts → drag 'EmergentTradingBridge' onto any chart → OK. AutoTrading ON (green ▶)." -ForegroundColor White
     Write-Host ""
     Write-Host "  Do NOT edit the EA inputs: server URL, bridge token and installation id are auto-loaded from" -ForegroundColor DarkGray

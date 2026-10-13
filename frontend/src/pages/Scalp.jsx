@@ -193,8 +193,11 @@ export default function Scalp() {
         }
     };
 
-    const removeRunner = async (accId, symbol) => {
-        if (!window.confirm(`Remove ${symbol} runner on ${acctName(accId)} from the Scalp page? Incoming ticks from that terminal will be ignored until you re-enable it.`))
+    const removeRunner = async (accId, symbol, orphan = false) => {
+        const msg = orphan
+            ? `This ${symbol} runner belongs to an account that no longer exists. Remove the orphan card for good?`
+            : `Remove ${symbol} runner on ${acctName(accId)} from the Scalp page? Incoming ticks from that terminal will be ignored until you re-enable it.`;
+        if (!window.confirm(msg))
             return;
         setSaving(true);
         try {
@@ -302,6 +305,13 @@ export default function Scalp() {
                                   data-testid="scalp-runner-account">
                                 {acctName(r.account_id)}
                             </span>
+                            {r.account_missing && (
+                                <span data-testid="scalp-runner-account-missing"
+                                      title="The MT5 account behind this runner was deleted — REMOVE deletes the orphan card"
+                                      className="px-2 py-0.5 text-xs border border-[#FF3B30]/40 text-[#FF3B30]">
+                                    ACCOUNT DELETED
+                                </span>
+                            )}
                             <Chip ok={r.enabled} label={r.enabled ? `ON · ${r.mode.toUpperCase()}` : "OFF"}
                                   testid="scalp-runner-enabled" />
                             <Chip ok={r.health?.status === "OK"} label={`HEALTH ${r.health?.status}`}
@@ -323,7 +333,7 @@ export default function Scalp() {
                                 );
                             })()}
                             <button disabled={saving}
-                                    onClick={() => removeRunner(r.account_id, r.symbol)}
+                                    onClick={() => removeRunner(r.account_id, r.symbol, !!r.account_missing)}
                                     data-testid="scalp-runner-remove-btn"
                                     title="Remove this runner from the page"
                                     className="ml-auto flex items-center gap-1 px-2 py-0.5 text-xs border border-[#1F1F1F] text-[#52525B] hover:text-[#FF3B30] hover:border-[#FF3B30]/40">

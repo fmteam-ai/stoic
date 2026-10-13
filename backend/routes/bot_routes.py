@@ -298,7 +298,9 @@ async def get_config(account_id: Optional[str] = None, user=Depends(get_current_
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
     cfg = await _get_or_create_config(db, user["id"], account_id)
-    return _serialize(cfg)
+    out = _serialize(cfg)
+    out["policy_risk_cap_pct"] = await policy_risk_cap(db)        # cap-aware UI: risk levels above the cap are marked on first load, not only after a save
+    return out
 
 
 @router.get("/configs")
@@ -743,6 +745,43 @@ def _cfg_value(cur: dict, field: str):
     return BotConfigUpdate.model_fields[field].default
 
 
+async def policy_risk_cap(db):
+    """Active rules-policy max_risk_pct (None when no policy / no cap)."""
+    import rules_policy as rp
+    return (await rp.risk_caps(db)).get("max_risk_pct")
+
+
+def effective_risk_for(cfg: dict, cap: float) -> float:
+    """Pure — the risk a saved config could actually use under `cap`: risk level / explicit % / adaptive cap, with the
+    active preset (style such as SCALPER / FAST SCALP) overlaid first."""
+    import rules_policy as rp
+    import strategy_presets as sp
+    merged = dict(cfg)
+    preset = sp.get_preset(str(merged.get("active_preset") or "")) if merged.get("active_preset") else None
+    if preset:
+        merged.update(preset.get("config") or {})
+    return rp.effective_max_risk_pct(merged, clamp=cap)
+
+
+async def _refuse_risk_above_policy_cap(db, current_cfg: dict | None, update: dict) -> None:
+    """v1.60.30 — a config whose EFFECTIVE risk exceeds the active policy cap is never saved (the projection would
+    only block it afterwards with "risk per trade above the policy cap")."""
+    cap = await policy_risk_cap(db)
+    if cap is None:
+        return
+    merged = {**(current_cfg or {}), **{k: v for k, v in update.items() if k != "updated_at"}}
+    eff = effective_risk_for(merged, float(cap))
+    try:
+        adaptive_raise = update.get("adaptive_risk_cap_pct") is not None and float(update["adaptive_risk_cap_pct"]) > float(cap) + 1e-9
+    except (TypeError, ValueError):
+        adaptive_raise = False
+    if eff > float(cap) + 1e-9 or adaptive_raise:
+        raise HTTPException(status_code=409, detail={
+            "code": "risk_above_policy_cap", "cap_pct": float(cap), "effective_pct": round(eff, 3),
+            "message": f"Effective risk {eff:g}% exceeds the policy cap {float(cap):g}% — lower the bot's risk to ≤ {float(cap):g}% "
+                       "(Bot Config → Risk level)"})
+
+
 def _is_risk_raise(update: dict, current: dict) -> bool:
     cur = current or {}
     if "risk_level" in update:
@@ -924,6 +963,7 @@ async def update_config(payload: BotConfigUpdate,
     if "auto_preset_enabled" in update:
         update["auto_preset_enabled"] = bool(update["auto_preset_enabled"])
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await _refuse_risk_above_policy_cap(db, current_cfg, update)
 
     # Ensure the target doc exists, then PATCH atomically (correction #4:
     # config change + immutable version + pointer + audit as one unit).
@@ -932,7 +972,9 @@ async def update_config(payload: BotConfigUpdate,
     await apply_config_change(db, user["id"], account_id, update,
                               label="post-update", source="config_update")
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
-    return _serialize(cfg)
+    out = _serialize(cfg)
+    out["policy_risk_cap_pct"] = await policy_risk_cap(db)        # v1.60.30 — shown next to the risk field
+    return out
 
 
 @router.delete("/config")
@@ -1092,11 +1134,29 @@ async def stop_bot(account_id: Optional[str] = None, user=Depends(get_current_us
     return {"active": False, "account_id": None, "stopped_account_ids": owned, "stopped": int(res.modified_count)}
 
 
+def preset_cap_fit(cfg: dict | None, overlay: dict | None, cap: float | None) -> dict | None:
+    """Pure — would this preset, overlaid on the account's current config, still fit under the policy cap?
+    Same arithmetic as the save refusal (`effective_risk_for`), so the UI can never disagree with the server."""
+    if cap is None:
+        return None
+    merged = {**(cfg or {}), **(overlay or {})}
+    merged.pop("active_preset", None)
+    eff = effective_risk_for(merged, float(cap))
+    return {"effective_risk_pct": round(eff, 3), "cap_pct": float(cap), "fits_cap": eff <= float(cap) + 1e-9}
+
+
 @router.get("/presets")
-async def get_strategy_presets(user=Depends(get_current_user)):
-    """Return built-in presets + the user's own saved presets, in one payload."""
+async def get_strategy_presets(account_id: Optional[str] = None, user=Depends(get_current_user)):
+    """Built-in presets + the user's own saved presets, each annotated with `cap_fit` against the active policy cap
+    for the selected account (null when no cap is active)."""
+    db = get_db()
     custom = await list_user_presets(user["id"])
-    return {"presets": list_presets(), "custom": custom}
+    cap = await policy_risk_cap(db)
+    scope = await _resolve_account_scope(db, user["id"], account_id)
+    cfg = (await db.bot_configs.find_one(_config_filter(user["id"], scope))) or {} if cap is not None else {}
+    presets = [{**p, "cap_fit": preset_cap_fit(cfg, p.get("config"), cap)} for p in list_presets()]
+    custom = [{**c, "cap_fit": preset_cap_fit(cfg, c.get("config"), cap)} for c in custom]
+    return {"presets": presets, "custom": custom, "policy_risk_cap_pct": cap}
 
 
 @router.get("/adaptive-status")
@@ -1203,6 +1263,9 @@ async def apply_strategy_preset(key: str, account_id: Optional[str] = None,
         overlay_config = builtin["config"]
 
     account_id = (await _get_or_create_config(db, user["id"], account_id)).get("account_id")   # U11 — resolved scope
+    current_cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
+    # cap-aware presets: a style that lifts the EFFECTIVE risk above the policy cap is refused here, not at SAVE
+    await _refuse_risk_above_policy_cap(db, current_cfg, {**overlay_config, "active_preset": key})
     overlay = {**overlay_config, "active_preset": key,
                "updated_at": datetime.now(timezone.utc).isoformat()}
     await db.bot_configs.update_one(

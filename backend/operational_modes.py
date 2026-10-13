@@ -54,10 +54,15 @@ def mode_gate(cfg: dict, account: dict) -> dict:
     if spec is None:
         return {"mode": "observe", "allow_new": False, "lot_scale": 0.0,
                 "reason": f"unknown mode '{mode}' — failing closed to observe"}
-    if spec.get("demo_only") and str(
-            (account or {}).get("mode") or "").lower() == "live":
-        return {"mode": mode, "allow_new": False, "lot_scale": 0.0,
-                "reason": "demo autopilot — live accounts do not execute"}
+    if spec.get("demo_only"):
+        # BLOCKER (v1.60.30) — `account.mode` is live-vs-PAPER, so every MT5 account (attested DEMO included) is
+        # "live" and demo autopilot never executed anywhere. The capital environment is the attested one:
+        # PAPER / attested DEMO execute, LIVE (or anything not attested DEMO) never does — fail closed.
+        from broker_env import attested_environment
+        env = attested_environment(account or {})
+        if env not in ("DEMO", "PAPER"):
+            return {"mode": mode, "allow_new": False, "lot_scale": 0.0,
+                    "reason": "demo autopilot — only attested DEMO (or paper) accounts execute; this account is LIVE"}
     return {"mode": mode, "allow_new": spec["allow_new"],
             "lot_scale": spec["lot_scale"], "reason": spec["detail"]}
 

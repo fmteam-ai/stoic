@@ -275,15 +275,31 @@ async def scalp_review(user=Depends(get_current_user)):
 async def remove_config(account_id: str, symbol: str = "EURUSD",
                         user=Depends(get_current_user)):
     """Remove a runner from the Scalp page entirely (tombstoned so incoming
-    EA ticks for this account/symbol are ignored until re-enabled)."""
+    EA ticks for this account/symbol are ignored until re-enabled).
+
+    Ownership is the caller's: the account (if it still exists) OR the scalp config / in-memory runner the
+    caller created. An ORPHAN runner — account deleted, config left behind — is hard-deleted instead of
+    tombstoned (prod: three EURUSD cards could never be removed, every attempt answered 404)."""
     db = get_db()
-    account = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"),
-                                          "user_id": user["id"]})
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    sym = (symbol or "EURUSD").upper()
     from scalp.engine import _runners
-    runner = _runners.get(f"{account_id}:{sym}")
+    sym = (symbol or "EURUSD").upper()
+    key = f"{account_id}:{sym}"
+    oid = parse_object_id(account_id, "Account")
+    account = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not account:
+        if await db.accounts.find_one({"_id": oid}, {"_id": 1}):
+            raise HTTPException(status_code=404, detail="Account not found")     # someone else's account
+        runner = _runners.get(key)
+        owned = (runner is not None and runner.user_id == user["id"]) or \
+            await db.scalp_configs.find_one({"account_id": account_id, "user_id": user["id"]}, {"_id": 1}) is not None
+        if not owned:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if runner is not None and len(runner.live_trades) > 0:
+            raise HTTPException(status_code=409, detail="Runner has open live scalps — close them before removing")
+        res = await db.scalp_configs.delete_many({"account_id": account_id, "symbol": sym, "user_id": user["id"]})
+        _runners.pop(key, None)
+        return {"ok": True, "removed": key, "orphan": True, "configs_deleted": res.deleted_count}
+    runner = _runners.get(key)
     if runner is not None and len(runner.live_trades) > 0:
         raise HTTPException(status_code=409,
                             detail="Runner has open live scalps — close them before removing")
@@ -292,8 +308,8 @@ async def remove_config(account_id: str, symbol: str = "EURUSD",
         {"$set": {"user_id": user["id"], "enabled": False, "mode": "shadow",
                   "removed": True}},
         upsert=True)
-    _runners.pop(f"{account_id}:{sym}", None)
-    return {"ok": True, "removed": f"{account_id}:{sym}"}
+    _runners.pop(key, None)
+    return {"ok": True, "removed": key}
 
 
 @router.get("/status")
@@ -348,6 +364,7 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
                 "connected": conn.get("connected")}
         else:
             st["terminal"] = None
+            st["account_missing"] = True        # orphan runner — account deleted; REMOVE hard-deletes it
         out.append(st)
     from scalp.engine import audit_backlog
     return {"runners": out, "audit": audit_backlog()}

@@ -30,12 +30,33 @@ const PRESET_ICONS = {
     Crosshair, Zap, TrendingUp, Rocket, Activity, Flame, Scale, Compass,
 };
 
+// Cap-aware presets: server-computed fit of a preset against the active policy cap (null = no cap active)
+const capFitTitle = (fit) => fit && !fit.fits_cap
+    ? `Over the policy cap — this style would run ${fit.effective_risk_pct}% risk per trade, cap is ${fit.cap_pct}%. Lower the Risk Level or Adaptive Risk Cap first.`
+    : undefined;
+
+function CapFitPill({ fit, testId }) {
+    if (!fit) return null;
+    const ok = fit.fits_cap;
+    return (
+        <span data-testid={testId}
+            title={`This style would run ${fit.effective_risk_pct}% risk per trade · policy cap ${fit.cap_pct}%`}
+            className={`font-mono text-[9px] tracking-widest px-1.5 py-0.5 border whitespace-nowrap shrink-0 ${
+                ok ? "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/10" : "border-[#FF3B30]/50 text-[#FF3B30] bg-[#FF3B30]/10"
+            }`}>
+            {ok ? `FITS CAP ≤ ${fit.cap_pct}%` : `OVER CAP · ${fit.effective_risk_pct}% › ${fit.cap_pct}%`}
+        </span>
+    );
+}
+
+
 export default function BotConfig() {
     const [cfg, setCfg] = useState(null);
     const [profiles, setProfiles] = useState({});
     const [supported, setSupported] = useState([]);
     const [presets, setPresets] = useState([]);
     const [customPresets, setCustomPresets] = useState([]);
+    const [presetCap, setPresetCap] = useState(null);
     // Account selector — null = the user's default profile; otherwise a specific account_id
     const [accounts, setAccounts] = useState([]);
     const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -125,13 +146,14 @@ export default function BotConfig() {
                 api.get(`/bot/config${accountQuery}`),
                 api.get("/market/risk-profiles"),
                 api.get("/market/symbols"),
-                api.get("/bot/presets"),
+                api.get(`/bot/presets${accountQuery}`),
                 api.get("/accounts"),
                 api.get("/bot/configs"),
             ]);
             setCfg(withFlatDefaults(c.data)); setProfiles(p.data.profiles); setSupported(s.data.symbols);
             setPresets(pr.data.presets || []);
             setCustomPresets(pr.data.custom || []);
+            setPresetCap(pr.data.policy_risk_cap_pct ?? null);
             setAccounts(ac.data || []);
             setAllConfigs(cfgs.data || []);
         } catch (e) { setErr(formatApiError(e)); }
@@ -250,8 +272,13 @@ export default function BotConfig() {
                 let_winners_run: cfg.let_winners_run ?? false,
             });
             setCfg(withFlatDefaults(data)); setSaveMsg("Configuration saved.");
-            // refresh allConfigs index so the selector reflects new state
-            try { const c = await api.get("/bot/configs"); setAllConfigs(c.data || []); } catch (_e) { /* non-fatal */ }
+            // refresh allConfigs index + preset cap-fit so the selector/presets reflect the saved risk settings
+            try {
+                const [c, pr] = await Promise.all([api.get("/bot/configs"), api.get(`/bot/presets${accountQuery}`)]);
+                setAllConfigs(c.data || []);
+                setPresets(pr.data.presets || []); setCustomPresets(pr.data.custom || []);
+                setPresetCap(pr.data.policy_risk_cap_pct ?? null);
+            } catch (_e) { /* non-fatal */ }
         } catch (e) {
             const structured = extractBlockerDetail(e, selectedAccountId);
             if (structured) setErrFix(structured); else setErr(formatApiError(e));
@@ -405,34 +432,47 @@ export default function BotConfig() {
                             <div className="font-display font-bold text-lg tracking-tight">Pick a personality for the bot</div>
                         </div>
                     </div>
+                    {presetCap != null && (
+                        <div className="px-5 py-2 border-b border-[#1F1F1F] font-mono text-[10px] tracking-widest text-[#A1A1AA] flex items-center gap-2"
+                             data-testid="presets-policy-cap-banner">
+                            <Shield className="w-3 h-3 text-[#FFD700]" />
+                            POLICY CAP · RISK PER TRADE ≤ {presetCap}% — styles are checked against your current risk settings; over-cap styles can't be applied
+                        </div>
+                    )}
                     <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" data-testid="presets-grid">
                         {presets.map(p => {
                             const Icon = PRESET_ICONS[p.icon] || Sparkles;
                             const active = cfg.active_preset === p.key;
                             const isApplying = applyingPreset === p.key;
                             const isHighlighted = highlightPreset === p.key;
+                            const overCap = !!(p.cap_fit && !p.cap_fit.fits_cap);
                             return (
                                 <button key={p.key} onClick={() => applyPreset(p.key, p.label)}
-                                    disabled={isApplying}
+                                    disabled={isApplying || overCap}
+                                    aria-disabled={overCap || undefined}
+                                    title={capFitTitle(p.cap_fit)}
                                     data-testid={`preset-card-${p.key}`}
-                                    className={`text-left p-4 border transition-colors duration-150 disabled:opacity-50 ${
-                                        active ? "border-[#FFD700] bg-[#FFD700]/5" : "border-[#1F1F1F] hover:border-[#FFD700]/40"
+                                    className={`text-left p-4 border transition-colors duration-150 disabled:cursor-not-allowed ${overCap ? "disabled:opacity-80" : "disabled:opacity-50"} ${
+                                        active ? "border-[#FFD700] bg-[#FFD700]/5" : overCap ? "border-[#FF3B30]/30" : "border-[#1F1F1F] hover:border-[#FFD700]/40"
                                     } ${isHighlighted ? "ring-2 ring-[#00FF41] animate-pulse" : ""}`}>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center gap-2">
-                                            <Icon className="w-4 h-4" style={{ color: p.color }} />
+                                    <div className="flex items-start justify-between gap-2 mb-2 flex-wrap">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <Icon className="w-4 h-4 shrink-0" style={{ color: p.color }} />
                                             <span className="font-display font-bold text-sm tracking-tight">{p.label}</span>
                                         </div>
-                                        {active && (
-                                            <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700] bg-[#FFD700]/10">
-                                                ACTIVE
-                                            </span>
-                                        )}
+                                        <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                                            <CapFitPill fit={p.cap_fit} testId={`preset-cap-fit-${p.key}`} />
+                                            {active && (
+                                                <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700] bg-[#FFD700]/10">
+                                                    ACTIVE
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="font-mono text-[10px] text-[#A1A1AA] tracking-wide mb-2">{p.tagline}</div>
                                     <p className="text-xs text-[#52525B] leading-relaxed line-clamp-3">{p.description}</p>
-                                    <div className="mt-3 font-mono text-[9px] text-[#52525B] tracking-widest">
-                                        {isApplying ? "APPLYING…" : "TAP TO APPLY →"}
+                                    <div className={`mt-3 font-mono text-[9px] tracking-widest ${overCap ? "text-[#FF3B30]" : "text-[#52525B]"}`}>
+                                        {isApplying ? "APPLYING…" : overCap ? "BLOCKED BY POLICY CAP — LOWER RISK FIRST" : "TAP TO APPLY →"}
                                     </div>
                                 </button>
                             );
@@ -460,18 +500,21 @@ export default function BotConfig() {
                                     const active = cfg.active_preset === customKey;
                                     const isApplying = applyingPreset === customKey;
                                     const isHighlighted = highlightPreset === customKey;
+                                    const overCap = !!(p.cap_fit && !p.cap_fit.fits_cap);
                                     return (
                                         <div key={p.id}
                                             data-testid={`custom-preset-${p.id}`}
+                                            title={capFitTitle(p.cap_fit)}
                                             className={`text-left p-4 border transition-colors duration-150 group ${
-                                                active ? "border-[#9B59B6] bg-[#9B59B6]/5" : "border-[#1F1F1F] hover:border-[#9B59B6]/40"
+                                                active ? "border-[#9B59B6] bg-[#9B59B6]/5" : overCap ? "border-[#FF3B30]/30" : "border-[#1F1F1F] hover:border-[#9B59B6]/40"
                                             } ${isHighlighted ? "ring-2 ring-[#00FF41] animate-pulse" : ""}`}>
-                                            <div className="flex items-center justify-between mb-2">
+                                            <div className="flex items-start justify-between gap-2 mb-2 flex-wrap">
                                                 <div className="flex items-center gap-2 min-w-0">
                                                     <Bookmark className="w-4 h-4 text-[#9B59B6] shrink-0" />
                                                     <span className="font-display font-bold text-sm tracking-tight truncate">{p.name}</span>
                                                 </div>
                                                 <div className="flex items-center gap-1.5">
+                                                    <CapFitPill fit={p.cap_fit} testId={`custom-preset-cap-fit-${p.id}`} />
                                                     {active && (
                                                         <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#9B59B6]/40 text-[#9B59B6] bg-[#9B59B6]/10">
                                                             ACTIVE
@@ -489,10 +532,10 @@ export default function BotConfig() {
                                                 {p.description || <span className="text-[#52525B]">No description.</span>}
                                             </p>
                                             <button onClick={() => applyPreset(customKey, p.name)}
-                                                disabled={isApplying}
+                                                disabled={isApplying || overCap}
                                                 data-testid={`apply-custom-${p.id}`}
-                                                className="font-mono text-[9px] text-[#52525B] tracking-widest hover:text-[#9B59B6] disabled:opacity-50">
-                                                {isApplying ? "APPLYING…" : "TAP TO APPLY →"}
+                                                className={`font-mono text-[9px] tracking-widest disabled:opacity-50 disabled:cursor-not-allowed ${overCap ? "text-[#FF3B30]" : "text-[#52525B] hover:text-[#9B59B6]"}`}>
+                                                {isApplying ? "APPLYING…" : overCap ? "BLOCKED BY POLICY CAP — LOWER RISK FIRST" : "TAP TO APPLY →"}
                                             </button>
                                         </div>
                                     );
@@ -564,15 +607,23 @@ export default function BotConfig() {
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SECTION 01</div>
                         <div className="font-display font-bold text-lg tracking-tight">Risk Management Profile</div>
                     </div>
+                    {cfg.policy_risk_cap_pct != null && (
+                        <div className="px-5 pt-3 font-mono text-[10px] tracking-widest text-[#FFB000]" data-testid="policy-risk-cap">
+                            POLICY CAP · RISK PER TRADE ≤ {cfg.policy_risk_cap_pct}% — levels above the cap cannot be saved
+                        </div>
+                    )}
                     <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="risk-grid">
                         {Object.entries(profiles).map(([key, p]) => {
                             const selected = cfg.risk_level === key;
+                            const overCap = cfg.policy_risk_cap_pct != null && Number(p.risk_pct) > Number(cfg.policy_risk_cap_pct);
                             return (
-                                <button key={key} onClick={() => setCfg({ ...cfg, risk_level: key })}
+                                <button key={key} onClick={() => !overCap && setCfg({ ...cfg, risk_level: key })}
                                     data-testid={`risk-option-${key}`}
+                                    disabled={overCap}
+                                    title={overCap ? `Above the policy cap of ${cfg.policy_risk_cap_pct}% — cannot be saved` : undefined}
                                     className={`text-left p-4 border transition-colors duration-150 ${
                                         selected ? "border-[#00FF41] bg-[#00FF41]/5" : "border-[#1F1F1F] hover:border-[#333333]"
-                                    }`}>
+                                    } ${overCap ? "opacity-40 cursor-not-allowed" : ""}`}>
                                     <div className="flex items-center justify-between mb-2">
                                         <div className="flex items-center gap-2">
                                             <div className="font-display font-bold tracking-tight">{p.label}</div>
@@ -585,7 +636,7 @@ export default function BotConfig() {
                                     </div>
                                     <p className="text-xs text-[#A1A1AA] mb-3 leading-relaxed">{RISK_DESCRIPTIONS[key]}</p>
                                     <div className="grid grid-cols-2 gap-1.5 font-mono text-[10px]">
-                                        <div><span className="text-[#52525B]">RISK</span> <span className="text-white">{p.risk_pct}%</span></div>
+                                        <div><span className="text-[#52525B]">RISK</span> <span className={overCap ? "text-[#FF3B30]" : "text-white"}>{p.risk_pct}%</span>{overCap && <span className="ml-1 text-[#FF3B30]" data-testid={`risk-over-cap-${key}`}>› CAP {cfg.policy_risk_cap_pct}%</span>}</div>
                                         <div><span className="text-[#52525B]">CONF≥</span> <span className="text-white">{p.min_confidence}%</span></div>
                                         <div><span className="text-[#52525B]">MAX POS</span> <span className="text-white">{p.max_concurrent}</span></div>
                                         <div><span className="text-[#52525B]">LEV ≤</span> <span className="text-white">{p.leverage_cap}x</span></div>

@@ -169,6 +169,10 @@ services:
     environment:
       <<: *app-env
       SECURITY_AGENT_TELEGRAM_BOT_TOKEN_FILE: /run/secrets/security_telegram_token
+      STOIC_BACKUP_DIR: /backups
+    volumes:
+      # daily report I1 — backup age is checked from the host's backup folder, mounted READ-ONLY
+      - ${BACKUP_DIR:-./backups}:/backups:ro
     secrets:
       - mongo_url
       - jwt_secret
