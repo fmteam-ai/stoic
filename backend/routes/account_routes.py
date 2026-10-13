@@ -1071,7 +1071,7 @@ async def rotate_token(account_id: str, request: Request, user=Depends(get_curre
 
 
 @router.post("/{account_id}/request-sync")
-async def request_broker_sync(account_id: str, user=Depends(get_current_user)):
+async def request_broker_sync(account_id: str, request: Request, user=Depends(get_current_user)):
     """Queue a deep broker-history sync (7-day lookback) for the EA.
 
     The EA (v1.39+) picks the request up on its next poll (~5s), re-scans the
@@ -1080,10 +1080,15 @@ async def request_broker_sync(account_id: str, user=Depends(get_current_user)):
     or missing P&L with the exact broker figures.
     """
     db = get_db()
+    from security import rate_limit
+    await rate_limit(db, "request_sync", user["id"], 6, 3600, request=request,
+                     message="Too many sync requests — a deep history re-read is heavy for the terminal; try again later")  # SEC-025-1
     oid = parse_object_id(account_id)
     acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
+    if acc.get("pending_history_sync"):
+        return {"ok": True, "already_pending": True, **{k: acc["pending_history_sync"].get(k) for k in ("lookback_seconds", "requested_at")}}
     lookback = 7 * 86400
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.accounts.update_one({"_id": oid}, {"$set": {

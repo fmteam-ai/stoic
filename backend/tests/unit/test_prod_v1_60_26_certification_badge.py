@@ -144,3 +144,27 @@ def test_frontend_renders_fix_guidance_with_actions():
     for needle in ("cert-fixes-", "cert-fix-text-", "c.fix?.text", "request_sync", "download_ea", '"certify"',
                    "/request-sync", "HOW TO CLEAR"):
         assert needle in src, needle
+
+
+# ── SEC-025-1 — self-service deep sync is rate-limited and idempotent while one is pending ──────────────
+def test_request_sync_is_rate_limited_and_idempotent(monkeypatch):
+    import routes.account_routes as ar
+    import security
+    db = FakeDb()
+    oid = ObjectId()
+    _run(db.accounts.insert_one({"_id": oid, "user_id": "u1", "label": "Live"}))
+    ar.get_db = lambda: db
+    calls = []
+
+    async def _rl(db_, scope, ident, max_attempts, window, message=None, request=None):
+        calls.append((scope, ident, max_attempts, window))
+    monkeypatch.setattr(security, "rate_limit", _rl)
+    first = _run(ar.request_broker_sync(str(oid), request=None, user={"id": "u1"}))
+    assert first["ok"] and first["lookback_seconds"] == 7 * 86400 and calls == [("request_sync", "u1", 6, 3600)]
+    second = _run(ar.request_broker_sync(str(oid), request=None, user={"id": "u1"}))
+    assert second["already_pending"] is True and second["requested_at"] == first["requested_at"]
+    acc = _run(db.accounts.find_one({"_id": oid}))
+    assert acc["pending_history_sync"]["requested_at"] == first["requested_at"]      # not re-queued
+    with pytest.raises(Exception) as ei:
+        _run(ar.request_broker_sync(str(ObjectId()), request=None, user={"id": "u1"}))
+    assert getattr(ei.value, "status_code", None) == 404
