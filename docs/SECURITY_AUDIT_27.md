@@ -14,6 +14,7 @@ request, no credential used, no secret printed or committed.
 | ID | Sev | Location | Finding | Status |
 |---|---|---|---|---|
 | SEC-027-1 | P3 | `GET /api/infra/artifacts/manifest` | Unauthenticated manifest exposes the EA `.mq5` source URL and version history. Intended client-distribution surface, Ed25519-signed with per-artifact sha256 and content-addressed URLs; agents verify before install. | ACCEPTED — by design (gate behind enrollment only if the EA source is ever meant to be confidential). |
+| SEC-027-3 | P3 | `deploy/cloudflare/render.sh` | The S5 edge security-header block was added only to `deploy/Caddyfile`; production runs the Cloudflare overlay whose Caddyfile is rendered by this script, so the edge guarantee was absent there (headers still came from nginx in the frontend image). | FIXED post-audit — renderer now emits the identical `header { ?Strict-Transport-Security … ?Content-Security-Policy … }` block; `test_edge_sets_security_headers_…` renders it offline and asserts byte-identical header sets. |
 | SEC-027-2 | P3 | `GET /api/status` (public) | 12-char inventory digest + authority version (carried from #25). | ACCEPTED — non-sensitive. |
 
 ## Confirmed safe

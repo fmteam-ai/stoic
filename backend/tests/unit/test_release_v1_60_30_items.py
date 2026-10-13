@@ -116,12 +116,28 @@ def test_installer_prints_both_origins_and_bumps_version():
 
 
 # ── item 5 · daily-report LOW items ────────────────────────────────────────────────────────────────────
-def test_edge_sets_security_headers_and_security_worker_sees_backups_read_only():
+def test_edge_sets_security_headers_and_security_worker_sees_backups_read_only(tmp_path):
     caddy = _read("deploy", "Caddyfile")
     assert "?Strict-Transport-Security \"max-age=31536000; includeSubDomains\"" in caddy
     assert "?Content-Security-Policy \"default-src 'self'" in caddy and "frame-ancestors 'none'" in caddy
     nginx_csp = [ln for ln in _read("deploy", "nginx.conf").splitlines() if "Content-Security-Policy" in ln][0]
     assert "default-src 'self'; script-src 'self' https://challenges.cloudflare.com" in nginx_csp      # same policy both layers
+    # production runs the Cloudflare overlay, whose Caddyfile is RENDERED — render it offline and compare the header block
+    import shutil
+    import subprocess
+    work = tmp_path / "repo"
+    (work / "deploy" / "cloudflare").mkdir(parents=True)
+    shutil.copy(os.path.join(ROOT, "deploy", "cloudflare", "render.sh"), work / "deploy" / "cloudflare" / "render.sh")
+    shutil.copy(os.path.join(ROOT, "deploy", "cloudflare", "ips.txt"), work / "deploy" / "cloudflare" / "ips.txt")
+    env = {**os.environ, "PATH": str(tmp_path / "bin") + os.pathsep + os.environ.get("PATH", "")}
+    (tmp_path / "bin").mkdir(); (tmp_path / "bin" / "curl").write_text("#!/bin/sh\nexit 7\n"); (tmp_path / "bin" / "curl").chmod(0o755)
+    out = subprocess.run(["bash", str(work / "deploy" / "cloudflare" / "render.sh"), "stoicaibot.com", "--cf-only"],
+                         capture_output=True, text=True, env=env, cwd=work)
+    assert out.returncode == 0, out.stdout + out.stderr
+    rendered = (work / "deploy" / "cloudflare" / "Caddyfile").read_text(encoding="utf-8")
+    block = lambda text: [ln.strip() for ln in text.split("header {", 1)[1].split("}", 1)[0].splitlines() if ln.strip()]  # noqa: E731
+    assert "header {" in rendered and block(rendered) == block(caddy)                                  # byte-identical header set
+    assert rendered.index("header {") < rendered.index("reverse_proxy frontend:3000")
     compose = _read("docker-compose.yml")
     sec = compose.split("worker-security:")[1].split("worker-model:")[0]
     assert "STOIC_BACKUP_DIR: /backups" in sec and "${BACKUP_DIR:-./backups}:/backups:ro" in sec
