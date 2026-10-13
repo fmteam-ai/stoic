@@ -66,8 +66,9 @@ def test_rotated_fingerprints_are_informational_and_history_is_clean():
     assert out.returncode == 0, out.stdout + out.stderr
     assert "0 blocking finding(s)" in out.stdout
     # the two known leaks (e17db269 + 6086a7b0) surface as ROTATED/informational only when the clone carries them —
-    # backend-unit runs on a shallow checkout, security-scan on the full history
-    depth = int(subprocess.check_output(["git", "rev-list", "--count", "HEAD"], text=True, cwd=ROOT).strip())
+    # backend-unit runs on a shallow checkout, security-scan on the full history, suite-from-archive on a tarball (no .git)
+    rev = subprocess.run(["git", "rev-list", "--count", "HEAD"], capture_output=True, text=True, cwd=ROOT)
+    depth = int(rev.stdout.strip()) if rev.returncode == 0 and rev.stdout.strip().isdigit() else 0
     has_leak_commit = subprocess.run(["git", "cat-file", "-e", "e17db2695082e8ef98349f83a92c2a874e10c721^{commit}"],
                                      capture_output=True, cwd=ROOT).returncode == 0
     if depth > 400 and has_leak_commit:
