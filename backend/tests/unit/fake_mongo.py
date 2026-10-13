@@ -90,7 +90,7 @@ class FakeCollection:
         self.rows: list[dict] = []
         self.indexes: list = []
 
-    def find(self, q=None, proj=None, sort=None):
+    def find(self, q=None, proj=None, sort=None, session=None):
         for r in self.rows:
             r.setdefault("_id", ObjectId())
         rows = [dict(r) for r in self.rows if _match(r, q or {})]
@@ -98,14 +98,15 @@ class FakeCollection:
             rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=(direction == -1))
         return _Cursor(rows)
 
-    async def find_one(self, q=None, proj=None, sort=None):
+    async def find_one(self, q=None, proj=None, sort=None, projection=None):
         rows = [r for r in self.rows if _match(r, q or {})]
         for key, direction in reversed(list(sort or [])):
             rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=(direction == -1))
         return dict(rows[0]) if rows else None
 
-    async def count_documents(self, q):
-        return len([r for r in self.rows if _match(r, q)])
+    async def count_documents(self, q, **kw):
+        n = len([r for r in self.rows if _match(r, q)])
+        return min(n, kw["limit"]) if kw.get("limit") else n
 
     async def insert_one(self, doc):
         d = dict(doc)
@@ -142,7 +143,7 @@ class FakeCollection:
             if isinstance(v, dict) and "$slice" in v:
                 r[k] = arr[v["$slice"]:]
 
-    async def update_one(self, q, upd, upsert=False):
+    async def update_one(self, q, upd, upsert=False, session=None):
         for r in self.rows:
             if _match(r, q):
                 self._apply(r, upd)
@@ -181,7 +182,7 @@ class FakeCollection:
             return dict(d) if return_document else None
         return None
 
-    async def update_many(self, q, upd):
+    async def update_many(self, q, upd, session=None):
         n = 0
         for r in self.rows:
             if _match(r, q):
@@ -223,6 +224,13 @@ class FakeCollection:
                         if "$sum" in spec:
                             v = spec["$sum"]
                             acc[k] = acc.get(k, 0) + (float(r.get(v[1:]) or 0) if isinstance(v, str) else v)
+                        elif "$first" in spec:
+                            acc.setdefault(k, r.get(spec["$first"][1:]))
+                        elif "$min" in spec or "$max" in spec:
+                            op = "$min" if "$min" in spec else "$max"
+                            v = r.get(spec[op][1:])
+                            if v is not None:
+                                acc[k] = v if acc.get(k) is None else (min if op == "$min" else max)(acc[k], v)
                 rows = list(out.values())
         return _Cursor(rows)
 

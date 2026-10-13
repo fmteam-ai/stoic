@@ -28,11 +28,22 @@ async def ensure_indexes(db) -> None:
 
 
 async def write_tombstone(db, acc: dict, *, deleted_by: str) -> dict:
+    """Also the durable label for the account's broker_deals (the audit trail is never deleted): user, broker,
+    environment as the server CLASSIFIED it at deletion time (attestation / paper / broker trade mode — never the
+    user-typed field alone). A tombstone that labels deals carries no TTL; token-only tombstones still expire."""
+    from broker_env import attested_environment, broker_environment
     now = datetime.now(timezone.utc)
-    doc = {"_id": str(acc["_id"]), "token_hashes": _hashes(acc), "label": acc.get("label"), "broker": acc.get("broker"),
+    aid = str(acc["_id"])
+    has_deals = await db.broker_deals.count_documents({"account_id": aid}, limit=1) > 0
+    expires = datetime.fromtimestamp(now.timestamp() + TOMBSTONE_TTL_DAYS * 86400, tz=timezone.utc)
+    doc = {"_id": aid, "token_hashes": _hashes(acc), "label": acc.get("label"), "broker": acc.get("broker"),
            "account_number": acc.get("account_number"), "deleted_at": now.isoformat(), "deleted_by": deleted_by,
-           "expires_at": datetime.fromtimestamp(now.timestamp() + TOMBSTONE_TTL_DAYS * 86400, tz=timezone.utc),   # C3 — BSON date (TTL index)
-           "expires_at_iso": datetime.fromtimestamp(now.timestamp() + TOMBSTONE_TTL_DAYS * 86400, tz=timezone.utc).isoformat(),
+           "user_id": acc.get("user_id"), "mode": acc.get("mode"), "account_type": acc.get("account_type"),
+           "server": acc.get("broker_server") or acc.get("server"),
+           "environment": attested_environment(acc), "declared_environment": broker_environment(acc),
+           "has_deals": has_deals,
+           "expires_at": None if has_deals else expires,                                 # C3 — BSON date (TTL index); None = never
+           "expires_at_iso": None if has_deals else expires.isoformat(),
            "polls_after_delete": 0, "last_poll_at": None, "finding_recorded": False}
     await db.account_tombstones.replace_one({"_id": doc["_id"]}, doc, upsert=True)
     return doc

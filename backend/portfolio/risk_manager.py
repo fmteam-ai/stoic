@@ -332,17 +332,15 @@ async def execute_deleveraging_actions(db, *, user_id: str, actions: list[dict])
         if res_open["trades_marked_for_close"]:
             closed += 1
             continue
-        # Cancel pending trades (not yet filled — no broker position).
-        res_pending = await db.trades.update_one(
-            {"_id": oid, "user_id": user_id, "status": "pending"},
-            {"$set": {
-                "status": "cancelled",
-                "close_reason": a.get("reason") or "auto_deleverage_cancel_pending",
-                "closed_at": now_iso,
-                "error": "Pending order cancelled by auto-deleverage before fill.",
-            }},
-        )
-        if res_pending.modified_count:
+        # Cancel pending trades (not yet filled — no broker position). prod v1.60.28 — through the unified
+        # cancel path, which also terminalises the execution intent and releases the risk reservation; a
+        # bare status flip left the intent 'submitted' and put the account in CLOSE_ONLY.
+        from close_commands import cancel_pending
+        n = await cancel_pending(db, {"_id": oid, "user_id": user_id},
+                                 reason=a.get("reason") or "auto_deleverage_cancel_pending",
+                                 actor="portfolio_risk_manager",
+                                 stamp={"error": "Pending order cancelled by auto-deleverage before fill."})
+        if n:
             cancelled += 1
         else:
             skipped += 1

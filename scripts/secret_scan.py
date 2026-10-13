@@ -31,6 +31,8 @@ PLACEHOLDERS = re.compile(r"^(<[^>]+>|\$\{[^}]+\}|\$[A-Z_]+|x+|\*+|\.{3}|changem
 CRED_NAME = r"(?:pass(?:word|wd)?|passwd|pwd|secret|token|api[_-]?key|private[_-]?key|credential)s?"
 ASSIGN = re.compile(rf"(?i)\b[A-Z0-9_.\-]*{CRED_NAME}[A-Z0-9_]*\b\s*[:=]\s*['\"]([^'\"\n]{{6,}})['\"]")
 JSON_KEY = re.compile(rf"(?i)['\"][A-Z0-9_\-]*{CRED_NAME}['\"]\s*:\s*['\"]([^'\"\n]{{6,}})['\"]")
+# `ADMIN_PASS = "ab" + "cd" + "#ef"` — fragments assembled only to evade the literal check (2026-10-13)
+CONCAT_ASSIGN = re.compile(rf"(?i)\b([A-Z0-9_.\-]*{CRED_NAME}[A-Z0-9_]*)\b\s*[:=]\s*((?:['\"][^'\"\n]*['\"]\s*\+\s*)+['\"][^'\"\n]*['\"])")
 LOGIN_BODY = re.compile(r"(?i)['\"]?email['\"]?\s*[:=]\s*['\"]([^'\"]+@[^'\"]+)['\"]\s*,\s*['\"]?password['\"]?\s*[:=]\s*['\"]([^'\"\n]{6,})['\"]")
 # fixture-looking values shared by many suites are ALLOWED only when they never authenticate anywhere
 ALLOWED_FIXTURE_VALUES = {"Kd5#Zt9mW2xVpR7c", "Gy6#Vb3kM9zRnD2s", "dummy-secret", "dummy-site", "testkey-testkey-testkey",
@@ -123,6 +125,17 @@ def scan_text(text: str, path: str, findings: list) -> None:
         low = line.lower()
         if "secret_scan" in path and "RETIRED_LITERALS" in line:
             continue
+        # 2026-10-13 — a credential-named assignment ASSEMBLED from string fragments ("ab" + "cd" + …) exists only
+        # to dodge this scanner (backend/tests/test_audit_p3_live_iter228.py carried the live admin password that
+        # way). Blocking in every path, test or not; the assembled value is checked like any literal.
+        m = CONCAT_ASSIGN.search(line)
+        if m and "secret_scan" not in path and not re.search(r"(?i)\bassert\b.*\bnot in\b", line) \
+                and not re.search(r"""['"]\s*\*\s*\d""", line):                       # `"x" * 16` padding is a fixture shape
+            parts = re.findall(r"""['"]([^'"]*)['"]""", m.group(2))
+            if len(parts) >= 2 and sum(len(p) for p in parts) >= 6:
+                findings.append({"path": path, "line": i, "kind": "concatenated-credential-literal",
+                                 "match": m.group(1)})
+                continue
         for lit in RETIRED_LITERALS:
             # a retired literal counts only where it could authenticate or be
             # copied into a config: quoted/assigned, not prose that documents its refusal

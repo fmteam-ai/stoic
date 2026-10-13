@@ -39,6 +39,27 @@ async def _pamm_sweep_loop():
             logger.warning("pamm sweep failed: %s", e)
 
 
+async def _execution_intents_sweep_loop():
+    """prod v1.60.28 — the intent sweep (expire / settle-from-trade / UNKNOWN reconciliation) used to live only
+    inside the PAMM sweep, which runs ONLY in single-process mode; in external-workers mode (production) nothing
+    swept intents, so a cancelled pending trade's 'submitted' intent held the account in CLOSE_ONLY forever.
+    Runs in the reconciliation worker, independent of PAMM programs."""
+    INTERVAL = int(os.environ.get("INTENT_SWEEP_INTERVAL_SEC", "60"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
+            from execution_intents import sweep_intents
+            res = await sweep_intents(get_db())
+            record_progress("_execution_intents_sweep_loop",
+                            processed=res.get("intents_settled_from_trades", 0) + res.get("intents_expired", 0),
+                            started_at=t0, interval_sec=INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("execution intents sweep failed: %s", e)
+
+
 async def _nightly_tuning_loop():
     """iter-141 · Hourly check; each user is swept at most once per 24h
     (guard lives in nightly_tuner.sweep_user via quant_tuning_state)."""

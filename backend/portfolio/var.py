@@ -13,6 +13,7 @@ Returns the absolute dollar VaR plus a per-symbol breakdown.
 """
 import math
 import logging
+import os
 from typing import Iterable
 
 from market import get_history, compute_indicators
@@ -218,6 +219,17 @@ async def calculate_var(
     var_99_usd = Z_99 * sigma_pct * total_notional
     cvar_95_usd = ES_MULT_95 * sigma_pct * total_notional
     cvar_99_usd = ES_MULT_99 * sigma_pct * total_notional
+    # prod v1.60.28 — stop-aware bound: when EVERY priceable position carries a protective stop, the 1-day loss
+    # cannot exceed the sum of stop distances (× STOP_GAP_FACTOR for slippage/gaps). Unbounded parametric VaR on
+    # a single 0.05-lot XAUUSD position on $10k read ~6-7 % and tripped the 5 % cap although the stop risked <1 %.
+    stop_bound = _stop_bounded_loss_usd(positions, rows)
+    if stop_bound is not None and stop_bound < var_95_usd:
+        notes.append(f"VaR bounded by protective stops: ${stop_bound:,.2f} (parametric ${var_95_usd:,.2f}; "
+                     f"gap factor ×{STOP_GAP_FACTOR})")
+        var_95_usd = min(var_95_usd, stop_bound)
+        var_99_usd = min(var_99_usd, stop_bound)
+        cvar_95_usd = min(cvar_95_usd, stop_bound)
+        cvar_99_usd = min(cvar_99_usd, stop_bound)
     return {
         "var_95_usd": round(var_95_usd, 2),
         "var_95_pct_equity": round((var_95_usd / equity) * 100.0, 3) if equity else 0.0,
@@ -228,9 +240,38 @@ async def calculate_var(
         "cvar_99_usd": round(cvar_99_usd, 2),
         "cvar_99_pct_equity": round((cvar_99_usd / equity) * 100.0, 3) if equity else 0.0,
         "portfolio_sigma_pct": round(sigma_pct * 100.0, 3),
+        "stop_bounded_loss_usd": round(stop_bound, 2) if stop_bound is not None else None,
         "horizon_days": horizon_days,
         "equity": equity,
         "positions": rows,
         "correlation_matrix": corr,
         "notes": notes,
     }
+
+
+STOP_GAP_FACTOR = float(os.environ.get("PORTFOLIO_VAR_STOP_GAP_FACTOR", "1.5"))
+
+
+def _stop_bounded_loss_usd(positions: list[dict], rows: list[dict]) -> float | None:
+    """Pure — Σ |entry − stop| / entry × notional × gap factor over the priced rows, or None when any priced position
+    has no (valid, loss-side) stop: then the parametric figure stands unbounded."""
+    priced = [p for p in positions if float(p.get("lot_size") or 0) > 0 and float(p.get("entry_price") or 0) > 0
+              and base_symbol(p.get("symbol"))]
+    if len(priced) != len(rows) or not priced:
+        return None
+    total = 0.0
+    for p, r in zip(priced, rows):
+        entry = float(p.get("entry_price") or 0)
+        try:
+            sl = float(p.get("stop_loss") or 0)
+        except (TypeError, ValueError):
+            return None
+        if sl <= 0 or sl == entry:
+            return None
+        side = str(p.get("action") or p.get("side") or "").upper()
+        if side in ("BUY", "LONG") and sl > entry:
+            return None
+        if side in ("SELL", "SHORT") and sl < entry:
+            return None
+        total += abs(entry - sl) / entry * float(r["notional"])
+    return total * STOP_GAP_FACTOR
