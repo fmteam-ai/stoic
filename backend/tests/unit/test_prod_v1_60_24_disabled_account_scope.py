@@ -184,3 +184,14 @@ def test_frontend_shows_off_accounts_and_per_account_banner_lines():
     assert "a.counted === false" in strip and "OFF · disabled on purpose — not counted" in strip
     banner = _read("frontend", "src", "components", "CloseOnlyBanner.jsx")
     assert "notice.accounts" in banner and "close-only-banner-account-" in banner and "your other accounts are not affected" in banner
+
+
+# ── 6 · SEC-024-1 — the panic hint never ignores an OFF account whose exposure cannot be ruled out ──────
+def test_quick_truth_panic_stays_available_for_off_account_with_unknown_broker_truth():
+    from state_contract import quick_truth
+    db = FakeDb()
+    _run(db.accounts.insert_one({"_id": ObjectId(), "user_id": "u1", "label": "Live ON", "mode": "live", "trading_enabled": True,
+                                 "last_heartbeat": datetime.now(timezone.utc).isoformat(), "open_positions": 0}))
+    _run(db.accounts.insert_one({"_id": ObjectId(), "user_id": "u1", "label": "Old OFF", "mode": "live", "trading_enabled": False}))
+    q = _run(quick_truth(db, "u1", open_local=0))
+    assert q["position_truth"] == "FRESH" and q["panic_available"] is True

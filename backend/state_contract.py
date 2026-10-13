@@ -233,9 +233,11 @@ async def quick_truth(db, user_id: str, open_local: int) -> dict:
                        and r.get("state_reason")), None)
     truth = c["position_truth"]
     broker = tot["open_broker"]
-    # PANIC must be available whenever exposure exists OR cannot be ruled out
+    # PANIC must be available whenever exposure exists OR cannot be ruled out — on ANY account, including one switched
+    # OFF (SEC-024-1: the user-level truth ignores OFF accounts, the panic hint never does)
     panic_available = (open_local > 0 or (broker or 0) > 0
-                       or truth != "FRESH")
+                       or truth != "FRESH"
+                       or any(r["position_truth"] != "FRESH" for r in c["accounts"]))
     return {"position_truth": truth,
             "open_trades_broker": broker,
             "effective_state": eff,
