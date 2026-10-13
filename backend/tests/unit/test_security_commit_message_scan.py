@@ -65,7 +65,21 @@ def test_rotated_fingerprints_are_informational_and_history_is_clean():
                          capture_output=True, text=True, cwd=ROOT)
     assert out.returncode == 0, out.stdout + out.stderr
     assert "0 blocking finding(s)" in out.stdout
-    assert "historical finding(s) match ROTATED credentials" in out.stdout      # e17db269 + 6086a7b0, hashes only
+    # the two known leaks (e17db269 + 6086a7b0) surface as ROTATED/informational only when the clone carries them —
+    # backend-unit runs on a shallow checkout, security-scan on the full history
+    depth = int(subprocess.check_output(["git", "rev-list", "--count", "HEAD"], text=True, cwd=ROOT).strip())
+    has_leak_commit = subprocess.run(["git", "cat-file", "-e", "e17db2695082e8ef98349f83a92c2a874e10c721^{commit}"],
+                                     capture_output=True, cwd=ROOT).returncode == 0
+    if depth > 400 and has_leak_commit:
+        assert "historical finding(s) match ROTATED credentials" in out.stdout
+
+
+def test_known_leaked_values_are_registered_as_rotated_fingerprints():
+    hashes = [ln.split()[0] for ln in open(os.path.join(ROOT, "scripts", "retired_credentials.sha256"), encoding="utf-8")
+              if ln.strip() and not ln.startswith("#")]
+    assert len(hashes) == len(set(hashes)) and all(len(h) == 64 for h in hashes)
+    text = open(os.path.join(ROOT, "scripts", "retired_credentials.sha256"), encoding="utf-8").read()
+    assert "commit message e17db269" in text and "commit message 6086a7b0" in text       # hashes only, with provenance
 
 
 def test_message_file_mode_for_the_commit_msg_hook(tmp_path):
