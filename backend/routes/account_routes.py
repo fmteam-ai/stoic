@@ -1677,6 +1677,7 @@ async def accounts_certification(user=Depends(get_current_user)):
     """Iter-151 · per-account go-live certification checklist, computed from
     the EA's own reported state (heartbeats, specs, clock, history sync)."""
     from routes.diagnostic_routes import LATEST_EA
+    from routes.bridge_routes import broker_offset_sec, position_mode_resolution
     db = get_db()
     now = datetime.now(timezone.utc)
 
@@ -1698,7 +1699,14 @@ async def accounts_certification(user=Depends(get_current_user)):
         spreads_age = _age(a.get("spreads_updated_at"))
         sync_age = _age(a.get("last_full_sync_at"))
         v = a.get("ea_version")
-        acct_type = str(a.get("account_type") or "").lower()
+        # prod v1.60.26 — read the facts where the EA/backend actually store them: `account_type` is the LOT type
+        # (microcent/cent/standard), the hedging/netting verdict is the EA-reported ACCOUNT_MARGIN_MODE
+        # (position_mode_resolution); the broker clock offset is heartbeat `broker_time` (broker_offset_sec).
+        pm = await position_mode_resolution(db, a)
+        clock_off, clock_src = broker_offset_sec(a)
+        pending_sync = a.get("pending_history_sync") or {}
+        pending_age = _age(pending_sync.get("requested_at")) if pending_sync else None
+        sync_stuck = pending_age is not None and pending_age > 900
         checks = [
             {"key": "ea_version", "label": "EA version",
              "value": v or "—", "ok": bool(v) and v == LATEST_EA,
@@ -1709,9 +1717,11 @@ async def accounts_certification(user=Depends(get_current_user)):
             {"key": "heartbeat", "label": "EA heartbeat",
              "value": f"{int(hb_age)}s ago" if hb_age is not None else "never",
              "ok": hb_age is not None and hb_age < HEARTBEAT_FRESH_S},
-            {"key": "account_type", "label": "Account type",
-             "value": acct_type or "unknown",
-             "ok": acct_type in ("hedging", "netting")},
+            {"key": "account_type", "label": "Position mode (hedging / netting)",
+             "value": (f"{pm['mode']} · {pm['source']}" if pm["source"] in ("ea", "admin")
+                       else f"unknown · {pm['source']} assumes {pm['mode']}"),
+             "ok": pm["mode"] in ("hedging", "netting") and pm["source"] in ("ea", "admin"),
+             "hint": "ACCOUNT_MARGIN_MODE reported by the EA on every heartbeat (or set by an admin)"},
             {"key": "symbol_specs", "label": "Symbol / stop-level specs",
              "value": f"{len(specs)} symbols",
              "ok": len(specs) > 0 and specs_age is not None
@@ -1721,14 +1731,15 @@ async def accounts_certification(user=Depends(get_current_user)):
                        if spreads_age is not None else "never"),
              "ok": spreads_age is not None and spreads_age < 600},
             {"key": "clock_sync", "label": "Broker clock offset",
-             "value": (f"{a.get('broker_utc_offset_sec')}s"
-                       if a.get("broker_utc_offset_sec") is not None
-                       else "unknown"),
-             "ok": a.get("broker_utc_offset_sec") is not None},
+             "value": (f"{clock_off:+d}s · {clock_src}" if clock_src != "unknown" else "unknown"),
+             "ok": clock_src != "unknown",
+             "hint": "EA v1.54+ reports the server GMT offset on every heartbeat"},
             {"key": "history_sync", "label": "History synchronization",
-             "value": (f"{int(sync_age / 3600)}h ago"
-                       if sync_age is not None else "never"),
-             "ok": sync_age is not None and sync_age < 86400},
+             "value": ("sync requested, EA has not confirmed" if sync_stuck
+                       else f"{int(sync_age / 3600)}h ago · 60 s sweep keeps it current" if sync_age is not None
+                       else "pending" if pending_sync else "never"),
+             "ok": sync_age is not None and not sync_stuck,
+             "hint": "one deep sync is queued automatically on the first verified heartbeat; the EA sweeps deals every 60 s afterwards"},
             {"key": "identity", "label": "Terminal identity",
              "value": ("mismatch" if a.get("broker_account_mismatch")
                        else "verified"),

@@ -726,6 +726,14 @@ async def heartbeat(payload: BridgeHeartbeat):
                 )
 
     hb_update: dict = {"$set": set_doc}
+    # prod v1.60.26 — certification `history_sync` bootstrap: an account that has NEVER completed a deep history sync
+    # gets exactly ONE queued (EA v1.39+ confirms via /sync-complete); the autonomous 60 s sweep keeps it current.
+    if not mismatch and not acc.get("pending_history_sync") and "pending_history_sync" not in set_doc \
+            and not acc.get("last_full_sync_at") and not acc.get("history_sync_bootstrap_at"):
+        set_doc["history_sync_bootstrap_at"] = now_iso
+        set_doc["pending_history_sync"] = {"lookback_seconds": 7 * 86400, "requested_at": now_iso,
+                                           "requested_by": "certification_bootstrap"}
+        logger.info("Certification bootstrap queued deep broker sync for account=%s", str(acc["_id"]))
     if unset_doc:
         hb_update["$unset"] = unset_doc
     await db.accounts.update_one({"_id": acc["_id"]}, hb_update)
