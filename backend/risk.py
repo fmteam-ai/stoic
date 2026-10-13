@@ -210,6 +210,19 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         "effective_risk_pct": round(effective_risk_pct, 3),
         "sl_pips": round(sl_pips, 1),
         "pip_usd_per_lot": round(pip_usd, 4),
+        "min_lot": min_lot,
+        "min_lot_risk_usd": round(min_lot * sl_pips * pip_usd, 2),
         "equity": round(equity, 2),
     }
+
+
+def min_lot_fits_budget(sized: dict, min_lot: float) -> bool:
+    """Pure (prod v1.60.28 lot→0 fix) — does the broker MINIMUM still sit inside the per-trade risk budget the sizer
+    approved? Downstream trims (meta-decision, portfolio brain, risk engine, execution alpha …) that land under the
+    minimum are floored to it when this holds; the trade is skipped only when even the minimum overshoots the budget."""
+    try:
+        min_risk = float(min_lot) * float(sized["sl_pips"]) * float(sized["pip_usd_per_lot"])
+        return min_risk > 0 and min_risk <= float(sized["risk_amount_usd"]) * RISK_OVERSHOOT_TOLERANCE
+    except (KeyError, TypeError, ValueError):
+        return False
 

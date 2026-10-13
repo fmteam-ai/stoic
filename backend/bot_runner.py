@@ -92,6 +92,23 @@ async def _skip_below_min(db, cfg, sym, lot: float, min_lot: float, stage: str) 
     await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info",
                         reason=f"Below minimum lot after {stage} trim ({lot:.4f} < {min_lot}) — not opened")
 
+
+async def _floor_or_skip(db, cfg, sym, lot: float, min_lot: float, stage: str, sized: dict,
+                         floored: list | None = None) -> float | None:
+    """prod v1.60.28 — a trim that lands under the broker minimum is floored to the minimum when the minimum still
+    fits the per-trade risk budget the sizer approved (OnEquity: base = 0.01 already, every trim → 0 → every signal
+    lost). Skipped only when even the minimum overshoots the budget. Returns the lot to use, or None (skipped)."""
+    from risk import min_lot_fits_budget
+    if min_lot_fits_budget(sized, min_lot):
+        logger.info("Trim floored sym=%s: %s trim → %.4f < minimum %s — using broker minimum "
+                    "(risk $%.2f within the $%.2f budget)", sym, stage, lot, min_lot,
+                    float(sized.get("min_lot_risk_usd") or 0), float(sized.get("risk_amount_usd") or 0))
+        if floored is not None:
+            floored.append(stage)
+        return float(min_lot)
+    await _skip_below_min(db, cfg, sym, lot, min_lot, f"{stage} (minimum lot exceeds the risk budget)")
+    return None
+
 async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int,
                           account_id: str | None = None) -> dict | None:
     """If the most recent trade for (user, symbol) was a stop-out within
@@ -1900,6 +1917,7 @@ async def _process_user_account_locked(db, cfg: dict):
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)
         absolute_lot = float(sized["lot_size"])
+        _floored_trims: list[str] = []          # stages whose trim was floored to the broker minimum (audit)
         _min_lot, _lot_step = lot_spec(target_account, sym)
 
         # Position-sizing strategy when user has set a `max_lot_size`:
@@ -1916,8 +1934,9 @@ async def _process_user_account_locked(db, cfg: dict):
             effective_lot = min(absolute_lot, scaled_lot)
             sizing_method = "max_cap_kelly_scaled"
             if effective_lot < _min_lot:
-                await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "confidence-scaled cap")
-                continue
+                effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "confidence-scaled cap", sized, _floored_trims)
+                if effective_lot is None:
+                    continue
         else:
             effective_lot = absolute_lot
             # Hard-ceiling clamp (fixed-fraction mode or kelly_cap=0)
@@ -1931,8 +1950,9 @@ async def _process_user_account_locked(db, cfg: dict):
         if 0 < _md_mult < 1.0:
             effective_lot = floor_to_lot_step(effective_lot * _md_mult, _lot_step)
             if effective_lot < _min_lot:
-                await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "meta-decision")
-                continue
+                effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "meta-decision", sized, _floored_trims)
+                if effective_lot is None:
+                    continue
             sizing_method = f"{sizing_method}+meta_x{_md_mult}"
         # Portfolio Risk Brain — marginal contribution to the WHOLE
         # portfolio (correlated cluster / currency factor / stress), never
@@ -1983,8 +2003,9 @@ async def _process_user_account_locked(db, cfg: dict):
                     effective_lot = floor_to_lot_step(
                         effective_lot * float(_pv["approved_fraction"]), _lot_step)
                     if effective_lot < _min_lot:
-                        await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "portfolio brain")
-                        continue
+                        effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "portfolio brain", sized, _floored_trims)
+                        if effective_lot is None:
+                            continue
                     sizing_method = (f"{sizing_method}+portfolio_x"
                                      f"{_pv['approved_fraction']}")
             except Exception as e:  # noqa: BLE001
@@ -1998,8 +2019,9 @@ async def _process_user_account_locked(db, cfg: dict):
                     pass
                 effective_lot = floor_to_lot_step(effective_lot * 0.5, _lot_step)
                 if effective_lot < _min_lot:
-                    await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "degraded portfolio 0.5x")
-                    continue
+                    effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "degraded portfolio 0.5x", sized, _floored_trims)
+                    if effective_lot is None:
+                        continue
                 sizing_method = f"{sizing_method}+degraded_portfolio_x0.5"
 
         # Pre-Trade Digital Twin (v60) — simulate before committing
@@ -2038,8 +2060,9 @@ async def _process_user_account_locked(db, cfg: dict):
                     effective_lot = floor_to_lot_step(
                         effective_lot * float(_tw["approved_fraction"]), _lot_step)
                     if effective_lot < _min_lot:
-                        await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "digital twin")
-                        continue
+                        effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "digital twin", sized, _floored_trims)
+                        if effective_lot is None:
+                            continue
                     sizing_method = (f"{sizing_method}+twin_x"
                                      f"{_tw['approved_fraction']}")
             except Exception as e:  # noqa: BLE001
@@ -2083,8 +2106,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 if corr_kelly_scale < 1.0:
                     trimmed = floor_to_lot_step(effective_lot * corr_kelly_scale, _lot_step)
                     if trimmed < _min_lot:
-                        await _skip_below_min(db, cfg, sym, trimmed, _min_lot, "correlation-Kelly")
-                        continue
+                        trimmed = await _floor_or_skip(db, cfg, sym, trimmed, _min_lot, "correlation-Kelly", sized, _floored_trims)
+                        if trimmed is None:
+                            continue
                     logger.info(
                         "Correlation-Kelly trim acct=%s sym=%s lot=%s × scale=%.3f → %s · %s",
                         cfg_account_id or "default", sym, effective_lot,
@@ -2104,8 +2128,9 @@ async def _process_user_account_locked(db, cfg: dict):
         if _rl_scale < 1.0:
             effective_lot = floor_to_lot_step(effective_lot * _rl_scale, _lot_step)
             if effective_lot < _min_lot:
-                await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "RL/news scale")
-                continue
+                effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "RL/news scale", sized, _floored_trims)
+                if effective_lot is None:
+                    continue
             sizing_method = sizing_method + "+rl_scale"
             if signal.get("news_size_scale"):
                 sizing_method = sizing_method + "+narrative"
@@ -2122,8 +2147,9 @@ async def _process_user_account_locked(db, cfg: dict):
             if alloc.get("mode") == "enforce" and float(alloc.get("weight") or 1.0) < 1.0:
                 effective_lot = floor_to_lot_step(effective_lot * float(alloc["weight"]), _lot_step)
                 if effective_lot < _min_lot:
-                    await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "RL allocator")
-                    continue
+                    effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "RL allocator", sized, _floored_trims)
+                    if effective_lot is None:
+                        continue
                 sizing_method = sizing_method + "+allocator"
                 logger.info("RL allocator trim ×%.2f scope=%s user=%s: %s",
                             alloc["weight"], signal.get("scope"), user_id,
@@ -2155,8 +2181,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 if rev["scale"] < 1.0:
                     effective_lot = floor_to_lot_step(effective_lot * rev["scale"], _lot_step)
                     if effective_lot < _min_lot:
-                        await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "risk engine")
-                        continue
+                        effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "risk engine", sized, _floored_trims)
+                        if effective_lot is None:
+                            continue
                     sizing_method = sizing_method + "+risk_engine"
                     logger.info(
                         "Risk engine trim ×%.3f user=%s sym=%s: %s",
@@ -2467,8 +2494,9 @@ async def _process_user_account_locked(db, cfg: dict):
         if _mg.get("lot_scale", 1.0) < 1.0:
             effective_lot = floor_to_lot_step(effective_lot * _mg["lot_scale"], _lot_step)
             if effective_lot < _min_lot:
-                await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "operational mode")
-                continue
+                effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "operational mode", sized, _floored_trims)
+                if effective_lot is None:
+                    continue
             signal["operational_mode"] = _mg["mode"]
 
         engine = engine_for_account(target_account)
@@ -2501,8 +2529,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 if 0 < _pm < 1.0:
                     effective_lot = floor_to_lot_step(effective_lot * _pm, _lot_step)
                     if effective_lot < _min_lot:
-                        await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "execution alpha")
-                        continue
+                        effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "execution alpha", sized, _floored_trims)
+                        if effective_lot is None:
+                            continue
             except Exception as e:  # noqa: BLE001
                 logger.warning("execution alpha failed (fail-open): %s",
                                e)
@@ -2534,6 +2563,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 "symbol": signal["symbol"],
                 "action": signal["action"],
                 "lot_size": effective_lot,
+                "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd")},
                 "entry_price": signal["entry_price"],
                 "stop_loss": signal["stop_loss"],
                 "take_profit": signal["take_profit"],
@@ -2568,6 +2598,7 @@ async def _process_user_account_locked(db, cfg: dict):
             "consumed": True,
             **({"corr_kelly_trim": corr_kelly_info} if corr_kelly_info else {}),
             **({"sector_cap_fit": sector_fit_info} if sector_fit_info else {}),
+            **({"trim_floored_to_min": _floored_trims} if _floored_trims else {}),
             **({"adaptive_risk": adaptive_risk_info} if adaptive_risk_info else {}),
         }})
         await _record_pulse(db, cfg, symbol=sym,

@@ -102,7 +102,28 @@ export default function Infrastructure() {
                 </div>
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="vps-backups">
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-2">BACKUPS</div>
-                    {(overview?.backups || []).length === 0 && <div className="font-mono text-[9px] text-[#3F3F46]">No backups yet.</div>}
+                    {overview?.server_backups && (
+                        <div className="mb-3" data-testid="server-backups">
+                            <div className="font-mono text-[9px] text-[#A1A1AA] tracking-widest">
+                                SERVER · MONGO BACKUPS
+                                {overview.server_backups.mounted && overview.server_backups.newest_age_h != null &&
+                                    <span className={overview.server_backups.newest_age_h > 26 ? " text-[#FF3B30]" : " text-[#00FF41]"}> · NEWEST {overview.server_backups.newest_age_h}h AGO</span>}
+                            </div>
+                            {!overview.server_backups.mounted &&
+                                <div className="font-mono text-[9px] text-[#FFB000]" data-testid="server-backups-unmounted">
+                                    Backup folder not mounted on the API ({overview.server_backups.dir}) — set BACKUP_DIR and `docker compose up -d backend`.
+                                </div>}
+                            {overview.server_backups.mounted && overview.server_backups.files.length === 0 &&
+                                <div className="font-mono text-[9px] text-[#FF3B30]">No server backups in {overview.server_backups.dir}.</div>}
+                            {overview.server_backups.files.map((f, i) => (
+                                <div key={i} className="font-mono text-[9px] text-[#A1A1AA] border-t border-[#141414] py-1" data-testid={`server-backup-${i}`}>
+                                    {f.name} · {(f.size_bytes / 1048576).toFixed(1)} MB · {f.at.slice(0, 19).replace("T", " ")}
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    <div className="font-mono text-[9px] text-[#A1A1AA] tracking-widest">VPS FLEET · PER-DEPLOYMENT BACKUPS</div>
+                    {(overview?.backups || []).length === 0 && <div className="font-mono text-[9px] text-[#3F3F46]">No VPS fleet backups yet.</div>}
                     {(overview?.backups || []).map((b, i) => (
                         <div key={i} className="font-mono text-[9px] text-[#A1A1AA] border-t border-[#141414] py-1">{b.backup_id} · {b.deployment_id} · {b.at}</div>
                     ))}
@@ -119,6 +140,13 @@ export default function Infrastructure() {
                             <div key={k} className="border border-[#141414] p-2" data-testid={`cert-${k}`}>
                                 <div className="font-mono text-[8px] text-[#52525B] uppercase">{k.replace(/_/g, " ")}</div>
                                 <div className={`font-mono text-xs ${v ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{v ? "PASS" : "FAIL"}</div>
+                                {k === "clock_synchronization" && cert.details?.clock_synchronization && (
+                                    <div className="font-mono text-[8px] text-[#52525B] mt-0.5" data-testid="cert-clock-detail">
+                                        {cert.details.clock_synchronization.source === "unknown"
+                                            ? "no broker time on any heartbeat yet — connect EA 1.64+"
+                                            : `${cert.details.clock_synchronization.source} · offset ${cert.details.clock_synchronization.offset_sec}s${cert.details.clock_synchronization.account ? ` · ${cert.details.clock_synchronization.account}` : ""}`}
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>

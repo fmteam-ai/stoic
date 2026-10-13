@@ -2,7 +2,7 @@ import { ChartProvenance } from "@/components/ChartProvenance";
 import {
     ResponsiveContainer, AreaChart, Area, XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
-import { BadgeCheck, ShieldAlert } from "lucide-react";
+import { BadgeCheck, ShieldAlert, Archive } from "lucide-react";
 
 export function IntegrityStamp({ integrity }) {
     if (!integrity) return null;
@@ -21,10 +21,49 @@ export function IntegrityStamp({ integrity }) {
             <span className="font-mono text-[10px] text-[#A1A1AA]" data-testid="integrity-pct">
                 {pct != null ? `${pct}%` : "—"} of {integrity.closed_trades} closed trades broker-verified
                 · {integrity.estimated_or_unknown_excluded} estimates excluded
+                {integrity.archived_accounts_excluded > 0 &&
+                    ` · ${integrity.archived_deals_excluded} deals of ${integrity.archived_accounts_excluded} deleted account${integrity.archived_accounts_excluded === 1 ? "" : "s"} archived`}
                 · source: {integrity.source}
                 {integrity.freshest_heartbeat_age_sec != null &&
                     ` · feed ${integrity.freshest_heartbeat_age_sec}s ago`}
             </span>
+        </div>
+    );
+}
+
+export function ArchivedAccountsTable({ archived }) {
+    if (!archived?.length) return null;
+    const envs = [...new Set(archived.map(a => a.environment || "UNKNOWN"))];
+    return (
+        <div className="border border-[#1F1F1F]/70 bg-[#0A0A0A]/60 overflow-x-auto" data-testid="archived-accounts">
+            <div className="px-3 pt-3 font-mono text-[9px] tracking-widest text-[#52525B] flex items-center gap-2 flex-wrap">
+                <Archive className="w-3 h-3" />
+                ARCHIVED ({envs.join(" / ")}) · DELETED ACCOUNTS · NOT IN THE HEADLINE · KEPT AS AUDIT TRAIL
+            </div>
+            <table className="w-full text-xs opacity-80">
+                <thead>
+                    <tr className="border-b border-[#1F1F1F] font-mono text-[9px] tracking-widest text-[#52525B]">
+                        <th className="p-3 text-left">ACCOUNT</th>
+                        <th className="p-3 text-left">BROKER</th>
+                        <th className="p-3 text-left">ENVIRONMENT</th>
+                        <th className="p-3 text-right">NET P&L</th>
+                        <th className="p-3 text-right">POSITIONS</th>
+                        <th className="p-3 text-right">DELETED</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {archived.map((a, i) => (
+                        <tr key={i} className="border-b border-[#1F1F1F]" data-testid={`archived-row-${i}`}>
+                            <td className="p-3 font-mono text-[#A1A1AA]">{a.label}</td>
+                            <td className="p-3 text-[#52525B]">{a.broker || "—"}</td>
+                            <td className="p-3 uppercase font-mono text-[10px] text-[#52525B]" data-testid={`archived-env-${i}`}>{a.environment || "UNKNOWN"}</td>
+                            <td className="p-3 text-right font-mono text-[#A1A1AA]">{a.net_pnl >= 0 ? "+" : ""}${a.net_pnl}</td>
+                            <td className="p-3 text-right font-mono text-[#52525B]">{a.closed_positions}</td>
+                            <td className="p-3 text-right font-mono text-[#52525B]">{a.deleted_at ? a.deleted_at.slice(0, 10) : "—"}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
         </div>
     );
 }

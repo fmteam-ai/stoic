@@ -138,6 +138,11 @@ services:
       # Dedicated worker services below own the loops — the API must NOT
       # double-run them.
       BACKGROUND_WORKERS_IN_PROCESS: "false"
+      STOIC_BACKUP_DIR: /backups
+    volumes:
+      - ./deploy/state:/app/state:ro
+      # Infrastructure → Backups panel lists the server's own Mongo backups (names/ages only), READ-ONLY
+      - ${BACKUP_DIR:-./backups}:/backups:ro
     ports:
       # loopback-only: clients must go through the frontend/ingress proxy
       # (security headers, normalized X-Forwarded-*, TLS) — never direct.

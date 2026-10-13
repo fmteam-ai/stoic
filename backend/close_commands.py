@@ -200,9 +200,32 @@ async def _acknowledge_close(db, trade, *, broker_deal_id, occurred_at, result, 
 
 
 async def cancel_pending(db, query: dict, *, reason: str, actor: str, session=None, stamp: dict | None = None) -> int:
-    """Pending ORDERS are cancelled, never position-closed."""
+    """Pending ORDERS are cancelled, never position-closed. prod v1.60.28 — the cancel also terminalises the
+    trade's execution intent and releases its risk reservation; an intent left 'submitted' forever put execution
+    authority in CLOSE_ONLY ("broker-accepted execution past settlement SLA") and blocked every new entry."""
+    q = {**query, "status": "pending"}
+    ids = [t["_id"] async for t in db.trades.find(q, {"_id": 1}, session=session)]
+    if not ids:
+        return 0
     res = await db.trades.update_many(
-        {**query, "status": "pending"},
+        {"_id": {"$in": ids}, "status": "pending"},
         {"$set": {"status": "cancelled", "close_reason": reason, "cancelled_by": actor,
                   "closed_at": _now(), **(stamp or {})}}, session=session)
+    await settle_cancelled_trades(db, ids, reason=f"{actor}: {reason}")
     return res.modified_count
+
+
+async def settle_cancelled_trades(db, trade_ids: list, *, reason: str) -> int:
+    """Idempotent tail of every pending-order cancellation: intent → cancelled/expired, reservation → RELEASED."""
+    from execution_intents import settle_intent_from_trade
+    from scalp.risk_reservations import release_for_trade
+    settled = 0
+    for tid in trade_ids:
+        tr = await db.trades.find_one({"_id": tid}, {"status": 1, "execution_intent_id": 1})
+        if not tr or tr.get("status") != "cancelled":
+            continue
+        if tr.get("execution_intent_id"):
+            if await settle_intent_from_trade(db, tr["execution_intent_id"], "cancelled", detail=reason[:200]):
+                settled += 1
+        await release_for_trade(db, str(tid), "cancelled")
+    return settled

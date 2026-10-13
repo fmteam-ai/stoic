@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1297 |
+| unit | pure logic, no external I/O | every CI job | 1317 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4178 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5747 tests across 610 files.**
+**Total: 5767 tests across 613 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -556,6 +556,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_fixplan_main99_phase4.py` | unit | 3 |
 | `backend/tests/unit/test_forecast_status.py` | unit | 3 |
 | `backend/tests/unit/test_host_migrator.py` | unit | 17 |
+| `backend/tests/unit/test_infra_shadow_clock_and_backups.py` | unit | 5 |
 | `backend/tests/unit/test_install_progress.py` | unit | 9 |
 | `backend/tests/unit/test_install_report_healthwatch.py` | unit | 3 |
 | `backend/tests/unit/test_inventory_null_account_profile.py` | unit | 3 |
@@ -589,6 +590,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_prod_v1_60_24_disabled_account_scope.py` | unit | 11 |
 | `backend/tests/unit/test_prod_v1_60_25_ea_count_gate.py` | unit | 4 |
 | `backend/tests/unit/test_prod_v1_60_26_certification_badge.py` | unit | 9 |
+| `backend/tests/unit/test_prod_v1_60_28_execution_bugs.py` | unit | 9 |
 | `backend/tests/unit/test_prod_v1_60_28_status_rules_declared.py` | unit | 4 |
 | `backend/tests/unit/test_public_status_bounded.py` | unit | 2 |
 | `backend/tests/unit/test_r25_close_writers_migrated.py` | unit | 7 |
@@ -624,4 +626,5 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |
 | `backend/tests/unit/test_update_preflight_shell.py` | unit | 7 |
 | `backend/tests/unit/test_v1_60_29_decision_cache.py` | unit | 5 |
+| `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 6 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |

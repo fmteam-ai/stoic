@@ -27,10 +27,16 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
              "last_heartbeat": 1, "last_reconciled_at": 1, "reconciliation_seq": 1}):
         accounts[str(a["_id"])] = a
 
-    per = {}
+    # Headline = deals of the user's CURRENT accounts only. Deals of hard-deleted accounts stay in the ledger (audit
+    # trail) and are reported separately under "archived", labelled from the tombstone — never mixed into the totals.
+    per, archived_per = {}, {}
     daily = {}
     total = {"net": 0.0, "wins": 0, "losses": 0, "deals": 0,
              "first": None, "last": None}
+
+    def _bucket(store, aid):
+        return store.setdefault(aid, {"net": 0.0, "wins": 0, "losses": 0, "deals": 0, "first": None, "last": None})
+
     async for d in db.broker_deals.find(
             {"user_id": user_id},
             {"account_id": 1, "deal_time": 1, "profit": 1, "commission": 1,
@@ -44,14 +50,20 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
         except (TypeError, ValueError, OSError):
             continue
         aid = d.get("account_id")
-        p = per.setdefault(aid, {"net": 0.0, "wins": 0, "losses": 0,
-                                 "deals": 0, "first": None, "last": None})
+        is_out = d.get("deal_entry") == "out"
+        if aid not in accounts:
+            p = _bucket(archived_per, aid)
+            p["net"] += realized; p["deals"] += 1; p["first"] = p["first"] or day; p["last"] = day
+            if is_out:
+                p["wins" if realized > 0 else "losses"] += 1
+            continue
+        p = _bucket(per, aid)
         for row in (p, total):
             row["net"] += realized
             row["deals"] += 1
             row["first"] = row["first"] or day
             row["last"] = day
-        if d.get("deal_entry") == "out":
+        if is_out:
             outcome = "wins" if realized > 0 else "losses"
             p[outcome] += 1
             total[outcome] += 1
@@ -76,7 +88,7 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
     account_rows = []
     for i, (aid, p) in enumerate(sorted(per.items(),
                                         key=lambda kv: -kv[1]["net"])):
-        a = accounts.get(aid, {})
+        a = accounts[aid]
         account_rows.append({
             "label": (f"ACCOUNT-{i + 1}" if mask
                       else (a.get("label") or f"ACCOUNT-{i + 1}")),
@@ -84,18 +96,42 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             "mode": a.get("mode"),
             # audit v5 P0-3 — server-owned environment; never derive "live"
             # from `not paper` on any surface
-            "environment": (_broker_env(a) if a else "UNKNOWN"),
+            "environment": _broker_env(a),
             **_stats(p)})
 
-    # Integrity stamp — how much of the record is broker-verified truth.
-    trades_closed = await db.trades.count_documents(
-        {"user_id": user_id, "status": "closed", "origin": "auto"})
-    verified = await db.trades.count_documents(
-        {"user_id": user_id, "status": "closed", "origin": "auto",
-         "broker_deal_id": {"$ne": None}})
+    # Archived — deals of accounts that no longer exist. Environment comes from the tombstone, which recorded the
+    # server classification at deletion time; no tombstone (pre-U18 deletion / expired) is honestly UNKNOWN.
+    tombs = {}
+    if archived_per:
+        async for t in db.account_tombstones.find({"_id": {"$in": list(archived_per)}},
+                                                  {"label": 1, "broker": 1, "environment": 1, "mode": 1, "deleted_at": 1}):
+            tombs[str(t["_id"])] = t
+    archived_rows = []
+    for i, (aid, p) in enumerate(sorted(archived_per.items(), key=lambda kv: -kv[1]["net"])):
+        t = tombs.get(aid)
+        archived_rows.append({
+            "account_id_suffix": str(aid)[-6:],
+            "label": (f"ARCHIVED-{i + 1}" if mask
+                      else ((t or {}).get("label") or f"DELETED ACCOUNT …{str(aid)[-6:]}")),
+            "broker": (t or {}).get("broker"),
+            "mode": (t or {}).get("mode"),
+            "environment": ((t or {}).get("environment") or "UNKNOWN"),
+            "deleted_at": (t or {}).get("deleted_at"),
+            "tombstone": t is not None,
+            **_stats(p)})
+
+    # Integrity stamp — computed from the SAME deal set as the headline (current accounts only): every headline closed
+    # position is a broker-reported deal; bot-side closed trades on those accounts that never matched a broker deal
+    # are the unverified remainder and are excluded from the record.
+    live_ids = list(accounts)
+    verified = total["wins"] + total["losses"]
+    unmatched = await db.trades.count_documents(
+        {"user_id": user_id, "status": "closed", "origin": "auto", "account_id": {"$in": live_ids},
+         "broker_deal_id": None}) if live_ids else 0
     estimated = await db.trades.count_documents(
-        {"user_id": user_id, "status": "closed", "origin": "auto",
-         "$or": [{"pnl_estimated": True}, {"pnl_unknown": True}]})
+        {"user_id": user_id, "status": "closed", "origin": "auto", "account_id": {"$in": live_ids},
+         "$or": [{"pnl_estimated": True}, {"pnl_unknown": True}]}) if live_ids else 0
+    trades_closed = verified + unmatched
     hb_age = None
     for a in accounts.values():
         try:
@@ -113,6 +149,9 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
         "verified_pct": (round(verified / trades_closed * 100, 1)
                          if trades_closed else None),
         "estimated_or_unknown_excluded": estimated,
+        "accounts_included": len(live_ids),
+        "archived_accounts_excluded": len(archived_per),
+        "archived_deals_excluded": sum(p["deals"] for p in archived_per.values()),
         "freshest_heartbeat_age_sec": hb_age,
     }
 
@@ -159,6 +198,7 @@ async def _verified_payload(db, user_id: str, mask: bool = False) -> dict:
             "max_drawdown": round(max_dd, 2),
             "equity_curve": curve[-365:],
             "accounts": account_rows,
+            "archived": archived_rows,
             "integrity": integrity,
             "share_allowed": prov["share_allowed"],
             "provenance": prov}
@@ -209,12 +249,14 @@ async def _attestation_gate(db, user_id: str) -> list:
         reasons.append("POSITION_TRUTH_UNAVAILABLE")
     from synthetic_data import is_synthetic_account
     envs = set()
+    current_ids = []
     async for a in db.accounts.find(
             {"user_id": user_id, "status": {"$ne": "deleted"}},
             {"label": 1, "user_id": 1, "synthetic": 1, "mode": 1,
              "account_type": 1, "server": 1, "broker_server": 1,
              "broker_environment": 1, "trading_enabled": 1,
              "verified_identity": 1}):
+        current_ids.append(str(a["_id"]))
         if is_synthetic_account(a):
             reasons.append("SYNTHETIC_ACCOUNT_DATA")
         if a.get("trading_enabled") is True:
@@ -222,8 +264,9 @@ async def _attestation_gate(db, user_id: str) -> list:
     if envs - {"LIVE"}:
         reasons.append("NON_LIVE_ENVIRONMENT:" + ",".join(
             sorted(envs - {"LIVE"})))
+    # freshness is judged on the deals that back the headline — a deleted account's ledger never counts
     newest = await db.broker_deals.find_one(
-        {"user_id": user_id}, {"deal_time": 1}, sort=[("deal_time", -1)])
+        {"user_id": user_id, "account_id": {"$in": current_ids}}, {"deal_time": 1}, sort=[("deal_time", -1)])
     if not newest:
         reasons.append("NO_BROKER_DEALS")
     else:

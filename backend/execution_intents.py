@@ -298,6 +298,65 @@ async def mark_unknown_stale(db, older_than_sec: int = 300) -> int:
     return r.modified_count
 
 
+# trade status → intent terminal states to try, in order (first LEGAL from the intent's current state wins)
+_TRADE_TO_INTENT = {"cancelled": ("cancelled", "expired"), "failed": ("rejected", "failed_confirmed"),
+                    "rejected": ("rejected", "failed_confirmed"), "open": ("filled", "reconciled"),
+                    "closed": ("filled", "reconciled")}
+
+
+async def settle_intent_from_trade(db, intent_id: str, trade_status: str, detail: str = "") -> str | None:
+    """prod v1.60.28 — the trade reached a terminal/broker status, so its intent must leave the in-flight set.
+    Picks the first LEGAL terminal transition for the intent's current state; terminal intents are left alone."""
+    it = await db.execution_intents.find_one({"intent_id": intent_id}, {"status": 1})
+    if not it or it.get("status") in TERMINAL:
+        return None
+    for to in _TRADE_TO_INTENT.get(trade_status, ()):
+        if to in _TRANSITIONS.get(it["status"], set()):
+            return to if await transition(db, intent_id, to, detail=detail) else None
+    return None
+
+
+async def reconcile_terminal_trades(db, limit: int = 500) -> dict:
+    """Sweep safety net (prod v1.60.28): an in-flight intent whose trade is already cancelled / failed / open /
+    closed is settled from trade truth and its reservation released — a cancellation that forgot the intent can no
+    longer hold execution authority in CLOSE_ONLY. Pending trades are untouched (still genuinely in flight)."""
+    from bson import ObjectId
+    from scalp.risk_reservations import release_for_trade
+    out = {"checked": 0, "settled": 0}
+    async for it in db.execution_intents.find({"status": {"$in": sorted(_IN_FLIGHT)}}).limit(limit):
+        out["checked"] += 1
+        tid = (it.get("result") or {}).get("trade_id")
+        trade = None
+        if tid:
+            try:
+                trade = await db.trades.find_one({"_id": ObjectId(tid)}, {"status": 1, "mt5_ticket": 1})
+            except Exception:
+                trade = None
+        if trade is None:
+            trade = await db.trades.find_one({"execution_intent_id": it["intent_id"]}, {"status": 1, "mt5_ticket": 1})
+            tid = str(trade["_id"]) if trade else tid
+        status = (trade or {}).get("status")
+        if status not in _TRADE_TO_INTENT:
+            continue
+        to = await settle_intent_from_trade(db, it["intent_id"], status,
+                                            detail=f"sweep: trade already {status}" + (f", ticket {trade.get('mt5_ticket')}" if trade.get("mt5_ticket") else ""))
+        if to:
+            out["settled"] += 1
+        if status in ("cancelled", "failed", "rejected") and tid:
+            await release_for_trade(db, str(tid), status)
+    return out
+
+
+async def sweep_intents(db) -> dict:
+    """The one intent sweep (PAMM sweep and the reconciliation worker both call it — idempotent)."""
+    expired = await expire_stale(db)
+    terminal = await reconcile_terminal_trades(db)
+    unknown = await mark_unknown_stale(db)
+    recon = await reconcile_unknown_intents(db)
+    return {"intents_expired": expired, "intents_settled_from_trades": terminal["settled"],
+            "intents_unknown": unknown, "unknown_recon": recon}
+
+
 async def reconcile_unknown_intents(db, alert_after_sec: int = 900) -> dict:
     """UNKNOWN → query broker truth (the trade document carries the
     broker-reported outcome) → match identity → reconcile → decide.
