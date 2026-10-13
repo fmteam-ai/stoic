@@ -104,7 +104,9 @@ export function AuthorityStrip() {
                     ))}
                     {(dec.accounts || []).map(a => (
                         <div key={a.account_id} className="font-mono text-[10px] text-[#52525B]" data-testid={`authority-account-${a.account_id}`}>
-                            {a.label || a.account_id} · {a.environment} → <span className="text-[#A1A1AA]">{a.state}</span>{a.reason_codes.length ? ` (${a.reason_codes.join(", ")})` : ""}
+                            {a.label || a.account_id} · {a.environment} → {a.counted === false
+                                ? <span className="text-[#3F3F46]" data-testid={`authority-account-off-${a.account_id}`}>OFF · disabled on purpose — not counted</span>
+                                : <><span className="text-[#A1A1AA]">{a.state}</span>{a.reason_codes.length ? ` (${a.reason_codes.join(", ")})` : ""}</>}
                         </div>
                     ))}
                     <span className="font-mono text-[9px] text-[#3F3F46]">computed {dec.computed_at} · stability window {dec.stability_window_seconds}s · dominance {dec.dominance.join(" > ")}</span>

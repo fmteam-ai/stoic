@@ -229,7 +229,9 @@ async def _compute_status(now: float, timings: dict | None = None):
         proj = await projection(db)
         exp_declared = all(proj["counts"].get(k) is not None
                            for k in ("expected_accounts", "expected_enabled", "expected_bots"))
-        exact = (exp_declared and not proj["violations"] and not proj["structural_defects"]
+        # prod v1.60.24 — only PLATFORM-wide violations / structural defects break the attestation; a defect scoped to
+        # one account (e.g. a bot still active on an account switched OFF) closes that account, never INFRA.
+        exact = (exp_declared and not proj["platform_violations"] and not proj["structural_defects"]
                  and proj["approved_hash"] is not None and proj["approved_hash"] == proj["inventory_hash"])
         all_ready = False
         if exact:

@@ -548,26 +548,39 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
 
 @router.get("/close-only-notice")
 async def close_only_notice(user=Depends(get_current_user)):
-    """main128 — "why am I close-only": the caller's own rule breaches from the inventory projection
-    (`per_user_blocks`), one line + what fixes it. Never another user's data. {"blocked": false} when clean."""
+    """main128 — "why am I close-only": the caller's own rule breaches from the inventory projection, one line + what
+    fixes it. prod v1.60.24 — built from `per_account_blocks`, so the line names ONLY the blocked account(s); accounts
+    switched OFF on purpose are never mentioned. Never another user's data. {"blocked": false} when clean."""
     from inventory_projection import projection
     import rules_policy as rp
     db = get_db()
     proj = await projection(db, user["id"])       # SEC-021 — caller-scoped projection: cheaper, and nothing foreign is even computed
-    mine = (proj.get("per_user_blocks") or {}).get(str(user["id"])) or []
-    if not mine:
-        return {"blocked": False, "reasons": [], "line": None, "fix": None, "policy_version": proj["counts"].get("rules_policy")}
+    blocks = proj.get("per_account_blocks") or {}
+    accounts = []
+    async for a in db.accounts.find({"user_id": user["id"]}, {"label": 1, "trading_enabled": 1}):
+        texts = blocks.get(str(a["_id"])) or []
+        if texts and a.get("trading_enabled") is True:
+            accounts.append({"account_id": str(a["_id"]), "label": a.get("label") or str(a["_id"]), "reasons": texts})
+    policy_version = proj["counts"].get("rules_policy")
+    if not accounts:
+        return {"blocked": False, "reasons": [], "accounts": [], "line": None, "fix": None, "policy_version": policy_version}
+    mine = [f"{acc['label']}: {t}" for acc in accounts for t in acc["reasons"]]
     rules = await rp.active(db) or {}
     cap = int(rules.get("max_accounts_per_user") or 0)
-    if any("above the policy cap" in r for r in mine):
+    if any("policy cap" in r for r in mine):
         fix = {"action": "remove_account", "label": f"Keep {cap} account{'s' if cap != 1 else ''} — delete or disable the rest"}
     elif any("not attested DEMO" in r for r in mine):
         fix = {"action": "demo_only", "label": "Demo-only policy — connect a DEMO account or ask the operator"}
     else:
         fix = {"action": "admission", "label": "Open the account's status line and follow its one fix"}
-    return {"blocked": True, "reasons": mine, "policy_version": rules.get("policy_version"),
-            "line": f"Your accounts are close-only (no new trades): {mine[0]}" + (f" (+{len(mine) - 1} more)" if len(mine) > 1 else ""),
-            "fix": fix}
+    if len(accounts) == 1:
+        acc = accounts[0]
+        line = (f"Account «{acc['label']}» is close-only (no new trades): {acc['reasons'][0]}"
+                + (f" (+{len(acc['reasons']) - 1} more)" if len(acc["reasons"]) > 1 else ""))
+    else:
+        line = f"{len(accounts)} accounts are close-only (no new trades): " + ", ".join(a["label"] for a in accounts)
+    return {"blocked": True, "reasons": mine, "accounts": accounts, "policy_version": rules.get("policy_version") or policy_version,
+            "line": line, "fix": fix}
 
 
 @router.get("/{account_id}/status-line")

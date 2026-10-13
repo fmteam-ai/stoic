@@ -208,7 +208,11 @@ async def contract(db, user_id: str) -> dict:
             broker_known = False
         else:
             tot["open_broker"] += truth["open_positions_broker"]
-        if TRUTH_RANK[truth["position_truth"]] > TRUTH_RANK[worst]:
+        # prod v1.60.24 — the user-level truth is the worst of the accounts that CAN trade or still carry
+        # exposure; an account switched OFF on purpose (no open positions) never paints the others STALE/UNKNOWN.
+        counted = enabled or open_local > 0 or (truth["open_positions_broker"] or 0) > 0
+        rows[-1]["counted"] = counted
+        if counted and TRUTH_RANK[truth["position_truth"]] > TRUTH_RANK[worst]:
             worst = truth["position_truth"]
     if not broker_known:
         tot["open_broker"] = None      # UNKNOWN must never collapse to 0

@@ -184,21 +184,27 @@ def test_close_only_notice_is_user_scoped(monkeypatch):
     import routes.account_routes as ar
     import inventory_projection as ip
     import rules_policy as rp
+    db = FakeDb()
+    first, second = ObjectId(), ObjectId()
+    _run(db.accounts.insert_one({"_id": first, "user_id": "u1", "label": "first", "trading_enabled": True}))
+    _run(db.accounts.insert_one({"_id": second, "user_id": "u1", "label": "second", "trading_enabled": True}))
 
     async def _proj(db, scope):
-        return {"per_user_blocks": {"u1": ["3 accounts above the policy cap of 1", "second: enabled but not admitted by the rules policy"]},
+        return {"per_account_blocks": {str(second): ["beyond the policy cap of 1 enabled account(s) — disable it or an older one",
+                                                     "enabled but not admitted by the rules policy"]},
                 "counts": {"rules_policy": "demo-rules-v1"}}
 
     async def _active(db):
         return {"policy_version": "demo-rules-v1", "max_accounts_per_user": 1}
     monkeypatch.setattr(ip, "projection", _proj)
     monkeypatch.setattr(rp, "active", _active)
-    ar.get_db = lambda: FakeDb()
+    ar.get_db = lambda: db
     mine = _run(ar.close_only_notice(user={"id": "u1"}))
     assert mine["blocked"] is True and mine["fix"]["action"] == "remove_account" and "(+1 more)" in mine["line"]
-    assert mine["line"].startswith("Your accounts are close-only (no new trades): 3 accounts above the policy cap")
+    assert mine["line"].startswith("Account «second» is close-only (no new trades): beyond the policy cap")   # v1.60.24 — names ONLY the blocked account
+    assert "first" not in mine["line"]
     other = _run(ar.close_only_notice(user={"id": "u2"}))
-    assert other == {"blocked": False, "reasons": [], "line": None, "fix": None, "policy_version": "demo-rules-v1"}
+    assert other == {"blocked": False, "reasons": [], "accounts": [], "line": None, "fix": None, "policy_version": "demo-rules-v1"}
     src = _read("backend", "routes", "account_routes.py")
     assert src.index('@router.get("/close-only-notice")') < src.index('@router.get("/{account_id}/status-line")')
     fe = _read("frontend", "src", "components", "CloseOnlyBanner.jsx")

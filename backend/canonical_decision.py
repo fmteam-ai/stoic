@@ -191,13 +191,37 @@ async def decide_user(db, user_id: str, *, fresh: bool = False) -> dict:
     return out
 
 
+async def account_has_exposure(db, acc: dict) -> bool:
+    """Open positions locally OR as last reported by the broker — exposure is never invisible."""
+    if int(acc.get("open_positions") or 0) > 0:
+        return True
+    return await db.trades.count_documents({"account_id": str(acc["_id"]), "status": "open"}) > 0
+
+
 async def _decide_user_uncached(db, user_id: str) -> dict:
     platform = await decide_platform(db)
     per_account = []
     async for acc in db.accounts.find({"user_id": user_id}):
+        enabled = acc.get("trading_enabled") is True
+        label = acc.get("label") or acc.get("account_login")
+        env = acc.get("mode") or "demo"
+        # prod v1.60.24 — an account switched OFF on purpose is not a blocker for the user's other accounts: it is
+        # listed (OFF · not counted) but never dominates the user decision. Only while it still carries exposure
+        # (open positions) do its position-truth / safety blockers keep counting — never the OFF state itself.
+        if not enabled and not await account_has_exposure(db, acc):
+            per_account.append({"account_id": str(acc["_id"]), "label": label, "environment": env, "enabled": False,
+                                "counted": False, "state": "OFF", "reason_codes": [], "blockers": [], "dominant_code": "OFF"})
+            continue
         d = await decide_account(db, acc)
-        d["label"] = acc.get("label") or acc.get("account_login")
-        d["environment"] = acc.get("mode") or "demo"
+        if not enabled:
+            d["blockers"] = [b for b in d["blockers"] if b["code"] != "ACCOUNT_DISABLED"]
+            d["reason_codes"] = [b["code"] for b in d["blockers"]]
+            d["state"] = dominant("READY", *(b["state"] for b in d["blockers"]))
+            d["dominant_code"] = d["blockers"][0]["code"] if d["blockers"] else "READY"
+        d["label"] = label
+        d["environment"] = env
+        d["enabled"] = enabled
+        d["counted"] = True
         per_account.append(d)
     # ONE flattened blocker list, sorted by severity (round 10 P1-03): state,
     # dominant_code, reason_codes and top-level blockers all derive from it.
@@ -206,7 +230,7 @@ async def _decide_user_uncached(db, user_id: str) -> dict:
         flat += [{**b, "account_id": d["account_id"], "account_label": d.get("label"), "scope": "account"}
                  for b in d["blockers"]]
     flat.sort(key=lambda b: -severity(b["state"]))
-    state = dominant(platform["state"], *(d["state"] for d in per_account))
+    state = dominant(platform["state"], *(d["state"] for d in per_account if d.get("counted", True)))
     codes = list(dict.fromkeys(b["code"] for b in flat))
     return {**platform, "decision_id": f"dec_{uuid.uuid4().hex[:12]}", "scope": "user",
             "state": state, "new_exposure_allowed": state in NEW_EXPOSURE_ALLOWED,
