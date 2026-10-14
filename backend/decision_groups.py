@@ -29,7 +29,9 @@ def _ts(v) -> float | None:
 
 
 def entry_time(doc: dict) -> float | None:
-    return _ts(doc.get("opened_at") or doc.get("entry_time") or doc.get("created_at"))
+    # NO created_at fallback: a post-mortem's created_at is its generation time (bulk regenerations land within
+    # seconds of each other) and would over-group unrelated losses. Docs without an entry time stay singletons.
+    return _ts(doc.get("opened_at") or doc.get("entry_time"))
 
 
 def group_decisions(docs: list, window_sec: int = DECISION_WINDOW_SEC) -> list:

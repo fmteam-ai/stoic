@@ -6,6 +6,13 @@ All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed 
 - **Mirrored-trade dedupe is now symbol + direction + entry within ±2 min** (`decision_groups.group_decisions`). Each account writes its own signal doc (OnEquity 13:46:43 vs RoboForex 13:46:44), so grouping by `signal_id` still double-counted. Used by `loss_advisor._decisions()` (aggregates, loss counts, shadow evidence / auto-apply sample), `strategy_report.decisions_from()` and `/postmortem/patterns` (now clustered in Python over the bounded window; post-mortems store `opened_at`). Signals only supply MC / range-position features.
 - **Entry context reads the FRED cache only** (`entry_context.cached_fred_series`): the signal path never waits on a FRED fetch; the analytics worker (`background_loops._analytics_loop`) keeps the 6 h snapshot warm.
 - Tests: `test_v1_60_36_scalp_exits.py` updated (+ grouping boundary test).
+- **Ack loosen flag** (`/bridge/modification-ack`): when the EA/broker-confirmed stop is LOOSER than the stored one, the trade gets `ack_loosened_stop` + an `ack_loosen_events[{from,to,requested,at}]` entry, a warning log and an execution-health `ack_loosened_stop` event; the broker fact is still recorded. Loss Lab cards show "BROKER / EA LOOSENED THE STOP".
+- **Report significance**: every Strategy Report band and engine carries a two-sided 95 % Wilson interval (`win_rate_ci`) and the UI shows "actual (lo–hi %), n=…" plus `×trades` when a band spans mirrored accounts.
+- **Decision badge**: `/postmortem` list annotates `mirrored_accounts` per post-mortem (same clustering) and now returns the stop trails (`sl_loosen_refusals`, `ack_loosen_events`, previously not serialised); cards show "×N ACCOUNTS · 1 DECISION".
+- **EA v1.65 `new_tp`**: deferred to the next EA release (ROADMAP §1); server side already forward-compatible.
+- Tests: `tests/unit/test_v1_60_37_scope.py` (3).
+- **Telegram save keeps the handshake** (`PUT /notifications/telegram`): `telegram_verified` resets only when the token (decrypted compare) or chat_id actually changes; a plain "enable alerts" save after verifying no longer un-verifies the binding. Tests `test_v1_60_37_telegram_save.py` (2).
+- **Decision grouping never falls back to `created_at`** (post-mortem generation time would over-group); legacy post-mortems get `opened_at` backfilled from the trade on first list.
 
 ## v1.60.36 — scalp exits + evidence (revised; no risk settings or trading on/off changed)
 - **Trend-ride stays ON for scalps** (the 14 Oct winner reached +217 pips). Every trade now records `trend_ride_applied` (and the ride details in `trend_ride`) so both arms can be compared in the Strategy Report.

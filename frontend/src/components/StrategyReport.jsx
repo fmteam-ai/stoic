@@ -15,7 +15,7 @@ function Bands({ title, rows, testid, showPredicted }) {
                         <th className="text-left font-normal py-0.5">band</th>
                         <th className="text-right font-normal">n</th>
                         {showPredicted && <th className="text-right font-normal">pred.</th>}
-                        <th className="text-right font-normal">actual</th>
+                        <th className="text-right font-normal">actual (95% CI)</th>
                         <th className="text-right font-normal">avg $</th>
                     </tr>
                 </thead>
@@ -24,9 +24,14 @@ function Bands({ title, rows, testid, showPredicted }) {
                     {rows.map((r) => (
                         <tr key={r.band} className="border-t border-[#141414]">
                             <td className="py-0.5 text-[#A1A1AA]">{r.band}</td>
-                            <td className="text-right text-[#E4E4E7]">{r.n}</td>
+                            <td className="text-right text-[#E4E4E7]" title={`${r.trades ?? r.n} trades across accounts`}>
+                                {r.n}{r.trades > r.n && <span className="text-[#52525B]"> ×{r.trades}</span>}
+                            </td>
                             {showPredicted && <td className="text-right text-[#71717A]">{pct(r.predicted_win_rate)}</td>}
-                            <td className={`text-right ${r.win_rate >= 50 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{pct(r.win_rate)}</td>
+                            <td className={`text-right ${r.win_rate >= 50 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
+                                {pct(r.win_rate)}
+                                {Array.isArray(r.win_rate_ci) && <span className="text-[#52525B]"> {r.win_rate_ci[0]}–{r.win_rate_ci[1]}%</span>}
+                            </td>
                             <td className={`text-right ${r.avg_pnl >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{usd(r.avg_pnl)}</td>
                         </tr>
                     ))}
@@ -49,7 +54,7 @@ export function StrategyReport() {
                 <FlaskConical className="w-3.5 h-3.5 text-[#00FF41]" />
                 <span className="font-display font-bold text-sm">Strategy Report</span>
                 <span className="font-mono text-[9px] tracking-widest text-[#52525B]">
-                    PREDICTED VS ACTUAL · ENTRY IN DAY RANGE · TREND-RIDE · ONE DECISION PER SIGNAL
+                    PREDICTED VS ACTUAL · ENTRY IN DAY RANGE · TREND-RIDE · ONE DECISION PER SYMBOL+SIDE+ENTRY (±2 MIN) · WILSON 95% CI
                 </span>
                 <div className="ml-auto flex gap-1">
                     {[7, 30, 90].map((n) => (
@@ -71,7 +76,8 @@ export function StrategyReport() {
                         <div className="flex items-baseline gap-3 mb-2 flex-wrap">
                             <span className="font-display font-bold text-sm text-[#FAFAFA]">{e.label}</span>
                             <span className="font-mono text-[10px] text-[#71717A]">
-                                {e.decisions} decisions · {e.trades} trades · win {pct(e.win_rate)} · {usd(e.pnl)}
+                                {e.decisions} decisions · {e.trades} trades · win {pct(e.win_rate)}
+                                {Array.isArray(e.win_rate_ci) && <span className="text-[#52525B]"> ({e.win_rate_ci[0]}–{e.win_rate_ci[1]}%, n={e.decisions})</span>} · {usd(e.pnl)}
                             </span>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

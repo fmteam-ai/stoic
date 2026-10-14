@@ -17,7 +17,7 @@ from bson import ObjectId
 from auth import get_current_user
 from database import get_db
 from route_utils import parse_object_id
-from loss_postmortem import maybe_record_postmortem, _user_doc
+from loss_postmortem import maybe_record_postmortem, _user_doc, backfill_postmortem_opened_at
 from entitlements import require_feature
 
 # iter-60: Loss Lab is a Pro+ feature. All endpoints below require the
@@ -110,6 +110,7 @@ async def list_patterns(days: int = 30, user=Depends(get_current_user)):
     # v1.60.37 — decisions = symbol + direction + entry within ±2 min (each account writes its own signal doc, so a
     # signal_id $addToSet still double-counted mirrored trades). Cluster in Python over the bounded window.
     from decision_groups import group_decisions
+    await backfill_postmortem_opened_at(db, user["id"])
     docs = await db.loss_postmortems.find(
         {"user_id": user["id"], "created_at": {"$gte": cutoff}},
         {"pattern_key": 1, "symbol": 1, "action": 1, "opened_at": 1, "created_at": 1, "pnl": 1, "trade_id": 1,
@@ -197,9 +198,23 @@ async def list_postmortems(limit: int = 50, pattern_key: Optional[str] = None,
     q = {"user_id": user["id"]}
     if pattern_key:
         q["pattern_key"] = pattern_key
+    await backfill_postmortem_opened_at(db, user["id"])
     cur = db.loss_postmortems.find(q).sort("created_at", -1).limit(min(limit, 200))
     docs = await cur.to_list(length=200)
-    return {"items": [_serialize(d) for d in docs]}
+    # v1.60.37 — decision badge: how many of the user's accounts mirrored this decision (symbol+direction+entry ±2 min)
+    from decision_groups import group_decisions
+    size_by_id = {}
+    for cluster in group_decisions(docs):
+        for d in cluster:
+            size_by_id[str(d.get("_id"))] = len(cluster)
+    items = []
+    for d in docs:
+        row = _serialize(d)
+        row["mirrored_accounts"] = size_by_id.get(str(d.get("_id")), 1)
+        row["sl_loosen_refusals"] = d.get("sl_loosen_refusals") or []
+        row["ack_loosen_events"] = d.get("ack_loosen_events") or []
+        items.append(row)
+    return {"items": items}
 
 
 @router.get("/{trade_id}")

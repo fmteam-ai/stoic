@@ -2019,6 +2019,7 @@ async def modification_ack(payload: BridgeModificationAck):
         payload.netting_volume_limited = True
 
     update = {"pending_modification": None}
+    push_ops: dict = {}
     # Round 11 item 9 — protection-ack policy lives in a dependency-free
     # function (protection_guard.apply_protection_ack) so it is unit-testable
     # without FastAPI/BSON/Mongo.
@@ -2045,6 +2046,24 @@ async def modification_ack(payload: BridgeModificationAck):
         # EA v1.50 — prefer the broker-CONFIRMED position SL over the intent
         actual_sl = payload.confirmed_position_sl or payload.new_sl
         if payload.type == "MODIFY_SL" and actual_sl is not None:
+            # v1.60.37 — ack loosen flag: the stored stop may only move AGAINST the position by the EA/broker (the
+            # server never asks for it). Record it as a self-account anomaly signal instead of silently adopting it.
+            prev_sl = float(trade.get("stop_loss") or 0)
+            if prev_sl > 0 and float(actual_sl) != prev_sl and (
+                    (trade.get("action") == "BUY" and float(actual_sl) < prev_sl)
+                    or (trade.get("action") == "SELL" and float(actual_sl) > prev_sl)):
+                loosen = {"from": prev_sl, "to": float(actual_sl), "requested": payload.new_sl,
+                          "intent_id": payload.intent_id, "at": datetime.now(timezone.utc).isoformat()}
+                update["ack_loosened_stop"] = True
+                push_ops["ack_loosen_events"] = loosen
+                logger.warning("ACK LOOSENED STOP trade=%s %s %s: %s → %s (requested %s)", str(trade["_id"]),
+                               trade.get("symbol"), trade.get("action"), prev_sl, actual_sl, payload.new_sl)
+                try:
+                    from execution_health import record_event
+                    await record_event(get_db(), str(acc["_id"]), acc.get("user_id"), "ack_loosened_stop",
+                                       trade_id=trade["_id"], detail=f"{prev_sl} → {actual_sl}")
+                except Exception as _sw:  # noqa: BLE001
+                    record_swallow("bridge", "exec_health_ack_loosen", _sw)
             update["stop_loss"] = float(actual_sl)
             update["confirmed_stop_loss"] = float(actual_sl)
             # v1.60.36 — fill re-base: when the EA confirms the TP moved, the trade's tp fields follow the broker TP
@@ -2125,6 +2144,8 @@ async def modification_ack(payload: BridgeModificationAck):
         # ack after pending_modification is cleared can never re-apply
         upd_ops["$push"] = {"executed_intents": {
             "$each": [payload.intent_id], "$slice": -50}}
+    if push_ops:
+        upd_ops.setdefault("$push", {}).update(push_ops)
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, upd_ops)
     # EA v1.50 — enqueue the Tier-1 combo stop move as its OWN durable,
     # fenced command now that the partial close is broker-confirmed — only if it still TIGHTENS the stop.
