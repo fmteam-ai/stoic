@@ -11,13 +11,17 @@ Run with:
   STOIC_TESTS_ALLOW_DB_NAME=1 DB_NAME=ai_trading_bot \
     python -m pytest backend/tests/test_iter233_main97_http.py -v
 """
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 import os
 import pytest
 import requests
 
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "").rstrip("/")
 if not BASE_URL:
-    with open("/app/frontend/.env", encoding="utf-8") as f:
+    with open(_ENV_FE, encoding="utf-8") as f:
         for line in f:
             if line.startswith("REACT_APP_BACKEND_URL="):
                 BASE_URL = line.split("=", 1)[1].strip().rstrip("/")
@@ -28,7 +32,7 @@ ADMIN_PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD")
 if not ADMIN_PASSWORD:
     # fall back to backend/.env
     try:
-        with open("/app/backend/.env", encoding="utf-8") as f:
+        with open(_ENV_BE, encoding="utf-8") as f:
             for line in f:
                 if line.startswith("TEST_ADMIN_PASSWORD="):
                     ADMIN_PASSWORD = line.split("=", 1)[1].strip().strip('"')

@@ -953,7 +953,7 @@ class ScalpRunner:
         # pullback setup, chosen per regime from realised performance
         _sel = strategy_select.get_cached(self.symbol,
                                           perms.get("regime") or "UNKNOWN")
-        cand = setup.detect(feats, self.state, params=_sel["params"])
+        cand = setup.detect(feats, self.state, params=_sel["params"], symbol=self.symbol)
         if cand is None:
             return
         _lt["t2_ms"] = now_ms()   # T2 — opportunity detected
@@ -2917,8 +2917,10 @@ class ScalpRunner:
                 kill.clock_drift_residual_ms(self.state.clock_drift_ms)),
             "clock_drift_samples": len(getattr(self.state, "_offsets", ()) or ()),
             "clock_drift_limit_ms": kill.MAX_CLOCK_DRIFT_MS,
-            "features": ({k: round(v, 3) for k, v in feats.items()
-                          if not k.startswith("_")} if feats else None),
+            # v1.60.31 hotfix — the 5-minute features (range_5m_pips, break_*_pips, twap_dev_pips, ret_5m) are None
+            # until five minutes of ticks exist; round(None) made every /scalp/status poll a 500.
+            "features": ({k: (round(v, 3) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+                          for k, v in feats.items() if not k.startswith("_")} if feats else None),
             "risk": {
                 "consecutive_losses": self.risk_state.consecutive_losses,
                 "daily_loss_usd": round(self.risk_state.daily_loss_usd, 2),

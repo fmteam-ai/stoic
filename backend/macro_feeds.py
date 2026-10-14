@@ -69,8 +69,8 @@ async def _fetch_series(series_id: str) -> dict | None:
                 logger.error("FRED %s returned %d", series_id, r.status_code)
                 return None
             data = r.json()
-    except Exception as e:  # noqa: BLE001
-        logger.error("FRED fetch %s failed: %s", series_id, e)
+    except Exception as e:  # noqa: BLE001 — never str(e): an httpx error message carries the keyed URL
+        logger.error("FRED fetch %s failed: %s", series_id, type(e).__name__)
         return None
 
     # FRED returns "." for bank-holiday gaps — strip them

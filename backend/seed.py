@@ -542,6 +542,24 @@ async def ensure_indexes():
         await db.signal_history.create_index([("user_symbol", 1), ("ts", -1)])
     except Exception:
         pass
+    try:
+        from trade_decisions import ensure_decision_indexes
+        await ensure_decision_indexes(db)
+    except Exception:
+        pass
+    try:
+        # v1.60.32 — one dedicated settings doc per user (kind: telegram_settings) + webhook lookup
+        await db.notifications.create_index([("user_id", 1), ("kind", 1)])
+        await db.notifications.create_index("webhook_secret", sparse=True)
+    except Exception:
+        pass
+    try:
+        from loss_postmortem import ensure_pattern_keys_canonical
+        n = await ensure_pattern_keys_canonical(db)
+        if n:
+            logging.getLogger("seed").info("loss post-mortem pattern keys canonicalised: %d", n)
+    except Exception:
+        pass
 
     # --- iter-91 · Heal stale panic / circuit-breaker trip flags ---------
     # Background: the original POST /api/bot/start endpoint flipped

@@ -1,6 +1,10 @@
 """Iteration 254 — live preview checks (GET only, non-destructive):
 Verified Performance headline/archived split, Infra shadow clock detail + server backups, presets cap-fit regression.
 Creds come from backend/.env (TEST_ADMIN_EMAIL / TEST_ADMIN_PASSWORD) — never hardcoded."""
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 import os
 import pytest
 import requests
@@ -8,8 +12,8 @@ from dotenv import dotenv_values
 
 pytestmark = pytest.mark.http
 
-_FE = dotenv_values("/app/frontend/.env")
-_BE = dotenv_values("/app/backend/.env")
+_FE = dotenv_values(_ENV_FE)
+_BE = dotenv_values(_ENV_BE)
 BASE = (os.environ.get("REACT_APP_BACKEND_URL") or _FE["REACT_APP_BACKEND_URL"]).rstrip("/")
 EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or _BE.get("TEST_ADMIN_EMAIL") or "admin@trading.bot"
 PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD") or _BE.get("TEST_ADMIN_PASSWORD")

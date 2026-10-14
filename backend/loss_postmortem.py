@@ -51,7 +51,10 @@ Be terse. Do NOT use markdown. Do NOT prefix the JSON. Only output the JSON obje
 
 
 def _pattern_key(trade: dict, signal: dict) -> str:
-    """Stable cluster key per loss-pattern. Lets us count recurrences."""
+    """Stable cluster key per loss-pattern. Lets us count recurrences.
+    v1.60.32 A4 — the symbol is the CANONICAL one (GOLD# / XAUUSD.fx / XAUUSD-ECN → XAUUSD): broker tickers used
+    to split one pattern into several keys, so recurrence (and the ≥3 auto-tighten) under-counted."""
+    from pip_utils import base_symbol
     regime = (signal.get("regime") or {})
     if isinstance(regime, dict):
         regime_label = regime.get("regime") or "UNKNOWN"
@@ -62,7 +65,29 @@ def _pattern_key(trade: dict, signal: dict) -> str:
         session_label = (session.get("primary") or "off").upper()
     else:
         session_label = str(session).upper() or "OFF"
-    return f"{trade.get('symbol','?')}|{regime_label}|{session_label}|{trade.get('action','?')}"
+    raw = trade.get("symbol") or "?"
+    return f"{base_symbol(raw) or raw}|{regime_label}|{session_label}|{trade.get('action','?')}"
+
+
+def normalize_pattern_key(key: str | None) -> str | None:
+    """Legacy key → canonical key (first segment through base_symbol); None/odd shapes pass through."""
+    if not key or "|" not in key:
+        return key
+    from pip_utils import base_symbol
+    sym, rest = key.split("|", 1)
+    return f"{base_symbol(sym) or sym}|{rest}"
+
+
+async def ensure_pattern_keys_canonical(db) -> int:
+    """One-shot startup backfill of broker-ticker pattern keys in loss_postmortems / guardrail_adjustments."""
+    changed = 0
+    for coll in (db.loss_postmortems, db.guardrail_adjustments):
+        async for d in coll.find({"pattern_key": {"$regex": r"^[^|]+\|"}}, {"pattern_key": 1}):
+            canon = normalize_pattern_key(d.get("pattern_key"))
+            if canon and canon != d.get("pattern_key"):
+                await coll.update_one({"_id": d["_id"]}, {"$set": {"pattern_key": canon, "pattern_key_legacy": d["pattern_key"]}})
+                changed += 1
+    return changed
 
 
 async def _is_postmortem_eligible(db, trade: dict) -> tuple[bool, str]:

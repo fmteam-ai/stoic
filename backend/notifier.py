@@ -31,9 +31,9 @@ TELEGRAM_API = "https://api.telegram.org"
 
 async def _get_user_telegram(user_id: str) -> Optional[dict]:
     """Load and decrypt telegram config for a user, or None if disabled/unset."""
-    db = get_db()
-    doc = await db.notifications.find_one({"user_id": user_id})
-    if not doc or not doc.get("telegram_enabled"):
+    from notification_settings import get_settings
+    doc = await get_settings(get_db(), user_id)
+    if not doc.get("telegram_enabled"):
         return None
     token_blob = doc.get("telegram_bot_token")
     chat_id = doc.get("telegram_chat_id")

@@ -4,6 +4,10 @@ Covers P2-04 /api/health release, P2-02 /api/trades/predictions,
 P1-02 /api/ops/go-live-checklist, P1-01 account delete + admin force-delete,
 M3 wizard use-reported-login refusal.
 """
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 import os
 import random
 import string
@@ -17,7 +21,7 @@ pytestmark = pytest.mark.http
 BASE_URL = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
 # Read admin pw from backend .env file at runtime
 _ENV = {}
-with open("/app/backend/.env") as f:
+with open(_ENV_BE) as f:
     for ln in f:
         if "=" in ln and not ln.strip().startswith("#"):
             k, _, v = ln.strip().partition("=")

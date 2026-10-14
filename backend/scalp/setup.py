@@ -19,6 +19,17 @@ DEFAULTS = {
     "max_twap_dev_frac": 0.7,      # |twap_dev| / range above this = overextended
 }
 
+# v1.60.31 item 3 — gold is a different animal in pips (pip = 0.01): spreads run 15–35 pips and a 5-minute range is
+# 50–200 pips, so the EURUSD thresholds (0.8-pip spread cap, 3-pip momentum, 0.3-pip break) could never fire.
+SYMBOL_OVERRIDES = {
+    "XAUUSD": {"momentum_min_pips": 30.0, "break_min_pips": 5.0, "max_spread_pips": 35.0},
+}
+
+
+def params_for(symbol: str | None, params: dict | None = None) -> dict:
+    """DEFAULTS ← per-symbol overrides ← preset params (presets tune selectivity, never the instrument scale)."""
+    return {**DEFAULTS, **SYMBOL_OVERRIDES.get((symbol or "").upper(), {}), **(params or {})}
+
 # legacy micro-pullback thresholds (kept for the shadow dataset's older rows / tests)
 MICRO_PULLBACK_DEFAULTS = {
     "impulse_min_pips": 1.5, "impulse_vol_mult": 1.8,
@@ -26,9 +37,9 @@ MICRO_PULLBACK_DEFAULTS = {
 }
 
 
-def detect(feats: dict, state, params: dict | None = None) -> dict | None:
+def detect(feats: dict, state, params: dict | None = None, symbol: str | None = None) -> dict | None:
     """Range-break-with-momentum candidate {direction, setup, ...} or None."""
-    p = {**DEFAULTS, **(params or {})}
+    p = params_for(symbol, params)
     ret_5m = feats.get("ret_5m")
     rng = feats.get("range_5m_pips")
     if ret_5m is None or rng is None or rng <= 0:

@@ -24,7 +24,12 @@ async def _owner_email(db, user_id: str) -> str | None:
             u = await db.users.find_one({"_id": ObjectId(user_id)})
         except Exception:  # noqa: BLE001
             u = None
-    return (u or {}).get("email")
+    login = (u or {}).get("email")
+    try:
+        from notification_settings import alert_email_for
+        return await alert_email_for(db, str((u or {}).get("_id") or user_id), login, category="outage")
+    except Exception:  # noqa: BLE001
+        return login
 
 
 async def _notify(db, user_id: str, event_type: str, title: str,

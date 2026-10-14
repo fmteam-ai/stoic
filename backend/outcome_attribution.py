@@ -137,6 +137,13 @@ async def _signals(db, trade: dict) -> dict:
         s["concurrent_losers"] = 0
     oc, cc = _dt(trade.get("opened_at")), _dt(trade.get("closed_at"))
     s["session_shift"] = bool(oc and cc and _session(oc) != _session(cc))
+    # v1.60.31 item 6 — the failure taxonomy (failure_classifier) and this attribution must not contradict each
+    # other: when the trade carries operational / data-failure evidence (estimated or unknown P&L, backfill, ghost or
+    # reconciliation close, rejects/timeouts) the residual blame goes to INFRASTRUCTURE, never to the signal.
+    from failure_classifier import classify_failure
+    taxonomy = classify_failure(trade)
+    s["taxonomy_category"] = taxonomy["category"]
+    s["operational_failure"] = taxonomy["category"] in ("operational_failure", "data_failure")
     return s
 
 
@@ -177,6 +184,11 @@ def _weights(sig: dict, r: float, r_source: str = "price") -> dict:
         residual = max(0.0, 0.9 - total)
         unexplained = round(residual * (0.4 if weak else 0.2), 3)
         alpha = max(0.0, round(residual - unexplained, 3))
+        if sig.get("operational_failure"):
+            # the platform (EA link / reconciliation / data) owned this loss — the entry model is not on trial
+            raw["INFRASTRUCTURE_ERROR"] = round(raw.get("INFRASTRUCTURE_ERROR", 0.0) + alpha, 3)
+            total += alpha
+            alpha = 0.0
         out = {**raw, "ALPHA_ERROR": alpha, "UNEXPLAINED": unexplained,
                "NORMAL_VARIANCE": max(0.0, round(1 - total - alpha
                                                  - unexplained, 3))}
@@ -266,7 +278,8 @@ async def attribute_trade(db, trade: dict) -> dict:
                "risk_snapshot_id": trade.get("pamm_risk_snapshot_id"),
                "attribution_confidence": confidence,
                "unexplained_fraction": round(unexplained, 3),
-               "alpha_clean": noise <= 0.3, "signals": sig,
+               "alpha_clean": noise <= 0.3 and not sig.get("operational_failure"),
+               "taxonomy_category": sig.get("taxonomy_category"), "signals": sig,
                "engine_version": ENGINE_VERSION, "at": _now()}
     await db.trade_outcomes.update_one(
         {"trade_id": trade_id}, {"$set": outcome}, upsert=True)

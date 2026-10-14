@@ -133,7 +133,9 @@ def scan_text(text: str, path: str, findings: list) -> None:
                 and not re.search(r"""['"]\s*\*\s*\d""", line):                       # `"x" * 16` padding is a fixture shape
             parts = re.findall(r"""['"]([^'"]*)['"]""", m.group(2))
             if len(parts) >= 2 and sum(len(p) for p in parts) >= 6:
-                findings.append({"path": path, "line": i, "kind": "concatenated-credential-literal",
+                assembled = "".join(parts)
+                findings.append({"path": path, "line": i,
+                                 "kind": "retired-rotated" if _rotated(assembled) else "concatenated-credential-literal",
                                  "match": m.group(1)})
                 continue
         for lit in RETIRED_LITERALS:

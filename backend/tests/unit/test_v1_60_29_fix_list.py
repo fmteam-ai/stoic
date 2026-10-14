@@ -46,8 +46,9 @@ def test_a2_scalp_engines_use_a_single_tp_and_the_mc_gate_no_longer_blocks_them(
         h, l = max(o, px) + abs(random.gauss(0, 0.6)), min(o, px) - abs(random.gauss(0, 0.6))
         bars.append({"o": o, "h": h, "l": l, "c": px, "t": i})
     sl = 4000.0 - 4.0
-    old = simulate_trade("BUY", 4000.0, sl, 4000.0 + 4.0 * 1.25, bars, n_paths=4000, cost_price=0.4)
-    new = simulate_trade("BUY", 4000.0, sl, 4000.0 + 4.0 * 2.0, bars, n_paths=4000, cost_price=0.4)
+    # seeded paths — the simulator draws its own RNG; an unseeded run made this assertion flaky in CI
+    old = simulate_trade("BUY", 4000.0, sl, 4000.0 + 4.0 * 1.25, bars, n_paths=4000, cost_price=0.4, seed=11)
+    new = simulate_trade("BUY", 4000.0, sl, 4000.0 + 4.0 * 2.0, bars, n_paths=4000, cost_price=0.4, seed=11)
     assert old and new
     # the blended 1.25 R geometry is the one that produced the −0.1R verdicts; the designed 2 R is materially better
     assert new["ev_r_net"] > old["ev_r_net"] and new["ev_r"] > old["ev_r"]
@@ -240,9 +241,9 @@ def test_d9_tips_backs_off_after_failures_and_falls_back_to_fred(monkeypatch):
     monkeypatch.setattr(tips, "get_db", lambda: db)
     monkeypatch.setattr(tips, "_fetch_year", AsyncMock(side_effect=httpx.ConnectTimeout("timeout")))
     fred = AsyncMock(return_value=[(f"2026-10-{d:02d}", 1.9 + d * 0.01) for d in range(1, 10)])
-    monkeypatch.setattr("macro.fred._fetch_series", fred)
+    monkeypatch.setattr("macro.fred.fetch_series", fred)
     out = _run(tips.get_real_yield())
-    assert out and out["source"] == "fred:DFII10" and out["regime"] == "bearish_gold"
+    assert out and out["source"].startswith("fred:DFII10") and out["regime"] == "bearish_gold"
     # both sources down → ONE warning, then silence until retry_after
     fred.side_effect = httpx.ConnectTimeout("fred down")
     db.tips_cache.rows = [r for r in db.tips_cache.rows if r.get("key") != "10Y_REAL"]

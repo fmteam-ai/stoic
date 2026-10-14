@@ -733,6 +733,21 @@ async def _close_txn_unavailable(_request: Request, exc: TransactionsUnavailable
         "reason": str(exc)[:300]}})
 
 
+# v1.60.32 — validation-error hygiene: FastAPI's default 422 echoes the offending request body back in
+# `input`, so a mistyped login / step-up / password-change payload returned the password to the caller (and to
+# anything logging the response). Keep loc / msg / type, drop the body.
+from fastapi.exceptions import RequestValidationError
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_without_echo(_request: Request, exc: RequestValidationError):
+    errors = []
+    for e in exc.errors():
+        errors.append({"loc": list(e.get("loc") or []), "msg": str(e.get("msg") or ""), "type": str(e.get("type") or "")})
+    return JSONResponse(status_code=422, content={"detail": errors})
+
+
+
 # Security headers (iter-155) — defense-in-depth on every API response.
 # The browser-facing HTML gets its headers from the Cloudflare edge
 # (Transform Rules — see docs/CLOUDFLARE_EDGE.md); these cover direct API

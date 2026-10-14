@@ -937,6 +937,7 @@ async def heartbeat(payload: BridgeHeartbeat):
                 if sib and await adopt_sibling(db, sib, ticket=p.ticket, price=p.price_open, via="heartbeat"):
                     logger.warning("heartbeat: adopted fill ticket=%s into bot trade %s", p.ticket, sib["_id"])
                     await handle_late_fill(db, sib, acc, "heartbeat")
+                    await notify_adopted_open(db, acc["user_id"], sib["_id"], "heartbeat")
                     continue
             # H5 — the ticket was matched above regardless of leg; a backfill row is unkeyed
             # (one row per netted position) so it can never sit beside a bot row for the same ticket.
@@ -951,6 +952,8 @@ async def heartbeat(payload: BridgeHeartbeat):
             if p.magic == STOIC_MAGIC_HB and panic_locked(acc):
                 # H4 — a bot position surfacing under PANIC with no adoptable sibling
                 await close_late_fill_after_panic(db, ins.inserted_id, acc, "heartbeat")
+            elif p.magic == STOIC_MAGIC_HB:
+                await notify_adopted_open(db, acc["user_id"], ins.inserted_id, "heartbeat_backfill")
         if backfilled > 0:
             await ws_manager.broadcast(acc["user_id"], "trades_backfilled", {
                 "account_id": account_id, "count": backfilled,
@@ -1264,6 +1267,23 @@ async def adopt_sibling(db, sibling: dict, *, ticket: int, price: float, via: st
         await record_late_fill(db, sibling["execution_intent_id"], ticket=int(ticket), via=via,
                                prior=sibling.get("error") or sibling.get("status"))
     return True
+
+
+async def notify_adopted_open(db, user_id: str, trade_id, via: str) -> bool:
+    """v1.60.32 — a bot trade that lands through deal ingestion or heartbeat adoption/backfill gets the same
+    'Trade Opened' alert as one reported by /report. notified_opened is the single idempotency flag, so whichever
+    path fires first wins and /report never double-sends."""
+    try:
+        row = await db.trades.find_one({"_id": trade_id})
+        if not row or row.get("notified_opened") or row.get("status") != "open":
+            return False
+        from notifier import notify_trade_opened
+        sent = await notify_trade_opened(user_id, row)
+        await db.trades.update_one({"_id": trade_id}, {"$set": {"notified_opened": True, "notified_via": via}})
+        return bool(sent)
+    except Exception as _sw:  # noqa: BLE001
+        record_swallow("bridge", f"notify_adopted_open:{via}", _sw)
+        return False
 
 
 async def dispatch_lock_reason(db, acc: dict) -> str | None:
@@ -2996,6 +3016,7 @@ async def external_deal(payload: BridgeExternalDeal):
                     extra={"broker_deal_id": payload.deal_id}):
                 await _mark_deal_reconciled(db, payload.deal_id, account_id, note="adopted_sibling")
                 await handle_late_fill(db, sibling, acc, "external_deal")
+                await notify_adopted_open(db, user_id, sibling["_id"], "external_deal")
                 await ws_manager.broadcast(user_id, "trade_updated", {
                     "trade_id": str(sibling["_id"]),
                     "status": "open",
@@ -3108,6 +3129,9 @@ async def external_deal(payload: BridgeExternalDeal):
                 await notify_trade_opened(user_id, trade_doc)
             except Exception as _sw:  # noqa: BLE001
                 record_swallow("bridge", "external_deal", _sw)
+        else:
+            # a STOIC-magic fill that reached us through deal ingestion before /report — same alert as /report
+            await notify_adopted_open(db, user_id, result.inserted_id, "external_deal_ingest")
         return {"ok": True, "created": tid, "external_open": is_external}
 
     # deal_entry == "out" or "inout" → CLOSE event

@@ -161,6 +161,30 @@ async def readiness(db, user_id: str) -> dict:
     level = dominant(level, dec["state"]) if level in STATES else dec["state"]
     reasons.sort(key=lambda r: STATES.index(r["level"]) if r["level"] in STATES else 0, reverse=True)
 
+    # v1.60.31 item 5 — scope: a blocker that names specific accounts (stale EA, position truth, reconciliation on ONE
+    # terminal) blocks THOSE accounts; execution gating is per account (compute_authority(db, account)), so the other
+    # enabled accounts keep trading. The strip says so instead of announcing a platform-wide block.
+    enabled_ids = {str(r["account_id"]) for r in rows}
+    labels = {str(r["account_id"]): r.get("label") for r in rows}
+    blocked_ids: set = set()
+    platform_wide = False
+    hard = [r for r in reasons if r["level"] in ("BLOCKED", "EMERGENCY")]
+    for r in hard:
+        ids = {str(a.get("account_id")) for a in (r.get("accounts") or [])
+               if isinstance(a, dict) and a.get("account_id")}
+        if ids:
+            blocked_ids |= ids
+        else:
+            platform_wide = True
+    blocked_ids &= enabled_ids
+    clear_ids = enabled_ids - blocked_ids
+    if not hard:
+        scope = "none"
+    elif platform_wide or not clear_ids:
+        scope = "platform"
+    else:
+        scope = "accounts"
+
     # first-seen persistence per user+code (cleared on recovery) — stored AFTER merge
     doc = await db.trading_readiness.find_one({"_id": user_id}) or {}
     seen = doc.get("first_seen") or {}
@@ -180,6 +204,9 @@ async def readiness(db, user_id: str) -> dict:
             "dominant_code": dec["dominant_code"],
             "new_exposure_allowed": level in ("READY", "DEGRADED"),
             "reasons": reasons,
+            "scope": scope,
+            "blocked_accounts": [{"account_id": i, "label": labels.get(i)} for i in sorted(blocked_ids)],
+            "clear_accounts": len(clear_ids),
             "accounts_enabled": len(rows),
             "accounts_total": len(sc["accounts"]),
             "checked_at": now,
