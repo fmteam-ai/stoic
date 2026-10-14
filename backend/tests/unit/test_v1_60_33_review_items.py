@@ -90,10 +90,10 @@ def test_legacy_tp1_path_still_moves_the_stop_when_it_tightens():
 def test_every_sl_write_in_the_manager_goes_through_the_guard():
     src = _read("backend", "trade_manager.py")
     assert '"new_sl": round(entry, 5)' not in src and "def tightened_sl(" in src
-    assert "tightened_sl(trade, new_sl) is not None" in src                         # scalp BE path
+    assert "tightened_sl(trade, new_sl) is None" in src                             # scalp BE path (refusal recorded)
     assert "be_sl = tightened_sl(trade, round(entry, 5))" in src                    # legacy TP1 paths
     br = _read("backend", "routes", "bridge_routes.py")
-    assert "combo_new_sl = tightened_sl(trade, float(combo_new_sl))" in br           # Tier-1 combo follow-up
+    assert "combo_new_sl = tightened_sl(trade, requested)" in br                      # Tier-1 combo follow-up
 
 
 # ── 8 ──────────────────────────────────────────────────────────────────────────────────────────────────────────

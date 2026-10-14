@@ -2,6 +2,20 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.35 — ops cards + stop audit trail (no risk settings or trading on/off changed)
+- **Release Gate card** (Bot Health, admin): renders `release_gate.evaluate()` from `GET /admin/release-gate` verbatim — verdict, failing checks, running vs locked digest, lock↔build binding, close-only accounts. One source of truth, no client-side re-derivation.
+- **Lock freeze guard**: `scripts/regen_release_artifacts.py` regenerates TEST_MANIFEST → rc_lock → RELEASE_SUMMARY in one command (refuses to run in CI). CI is unchanged and still FAILS on a stale manifest/lock.
+- **Stop audit trail**: every refused stop-loosen (`tightened_sl` → None) is persisted on the trade as `sl_loosen_refusals[{source, requested_sl, current_sl, action, at}]` — once per trade + requested SL + source (deduped across manager cycles), with a single warning log. Sources: `scalp_breakeven_0_5r`, `tp1_let_winners_run`, `tp1_partial_close`, `tier1_combo_followup`. Loss Lab postmortems carry the trail and show a "STOP GUARD · LOOSEN REFUSED" section.
+- **EA Release Channel card** (Bot Health, admin): `release_channels.promotion_readiness()` is the single gate for manual AND auto-soak promotion — candidate exists · unpinned · soak window elapsed · no corroborated deploy failures · signed EX5 record. `promote()` refuses server-side until eligible; the button is disabled until then. `POST /ops/releases/promote|rollback` keep admin + step-up (`release_promote` / `release_rollback`) and now write an `audit_log` entry (who · when · from → to); one-click rollback to the previous stable pins the channel.
+- Tests: `tests/unit/test_v1_60_35_ops_cards.py` (8); legacy `test_iter160_release_ops` promotion test updated for the readiness gate.
+
+## v1.60.34 — release_gate image-digest compare (no risk settings or trading on/off changed)
+- **Bug**: `release_gate.evaluate()` compared the bare `STOIC_IMAGE_DIGEST` (`sha256:8d7b…`) with the full rc_lock reference (`ghcr.io/…/stoic-backend@sha256:8d7b…`) → "running image digest differs from the locked backend digest" on the SAME image → LIVE accounts CLOSE_ONLY (`RELEASE_NOT_AUTHORITATIVE`); demo exempt.
+- Fix 1 — `_bare_digest()` compares only the `sha256:` part on both sides.
+- Fix 2 — `deploy/lib.sh build_with_provenance` pins the registry digest (`RepoDigests[0]`, what release.yml writes into the lock) instead of the local `.Id` content hash; `.Id` is only the fallback for a never-pushed image. The registry path already pinned `${be#*@}`.
+- Fix 3 — `deploy/update.sh` now also runs `release_gate.evaluate()` on the running container after the lock-binding check: production → rollback on failure; elsewhere informational.
+- Tests: `tests/unit/test_v1_60_34_release_gate_digest.py` (bare vs full reference match, genuine mismatch still fails, lib.sh/update.sh contracts).
+
 ## v1.60.33 — 14 Oct review items 7–10 (no risk settings or trading on/off changed)
 - **Never loosen a stop** (`trade_manager.tightened_sl`): on 14 Oct 15:13 the legacy TP1 / `let_winners_run` path wrote `MODIFY_SL new_sl = entry` on two SELL scalps whose stop already sat at entry − costs (set by the 0.5R breakeven) — a LOOSER stop. Every stop write now goes through one guard: SELL only if `new_sl < current SL`, BUY only if `new_sl > current SL`. When the stop is already at/beyond entry the TP1 path still banks the partial (or marks the tier) but sends no stop move; the Tier-1 combo follow-up in `bridge_routes` re-checks before enqueuing.
 - **Scalp single TP no longer re-split by the pip caps** (`ai_signals.py`): the MTF caps (TP1 ≤ 100, TP2/TP3 ≤ 200) are skipped for `SCALP_ENGINES` — capping tp1 alone turned the designed single target (tp1 = tp2 = tp3 = 2R) back into 100 / 200 / 200 and re-armed the partial-at-TP1 logic on scalp trades.

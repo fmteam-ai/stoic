@@ -163,6 +163,19 @@ function PostmortemCard({ pm }) {
             </div>
 
             <div className="p-4 space-y-3 text-sm leading-relaxed">
+                {Array.isArray(pm.sl_loosen_refusals) && pm.sl_loosen_refusals.length > 0 && (
+                    <div data-testid={`postmortem-stop-guard-${pm.trade_id}`}>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">STOP GUARD · LOOSEN REFUSED</div>
+                        <ul className="space-y-1 font-mono text-[11px]">
+                            {pm.sl_loosen_refusals.map((r, i) => (
+                                <li key={i} className="text-[#A1A1AA]">
+                                    <span className="text-[#FFB000]">{r.source}</span> asked SL {r.requested_sl} — kept {r.current_sl}
+                                    <span className="text-[#52525B]"> · {new Date(r.at).toLocaleString()}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
                 {n.summary && (
                     <div className="text-white">
                         <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-2">TL;DR</span>

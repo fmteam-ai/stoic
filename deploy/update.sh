@@ -246,6 +246,14 @@ verify_running_sha || rollback
 verify_stack_images || rollback   # M121-5 — no mixed stack: every app container runs the provisioned image
 echo "-- verifying the release gate reads the adopted lock of THIS build (audit 14 Oct: RC_LOCK_PATH mount)"
 docker compose exec -T backend python -c 'import json,sys; from release_gate import lock_matches_build as f; r=f(); print("   lock binding:", json.dumps(r)); sys.exit(0 if r["ok"] and r["authoritative"] else 1)' || rollback
+# v1.60.34 — the FULL release gate (authoritative lock · locked digests · running digest == locked backend digest ·
+# signed EX5) must pass in production, or LIVE accounts come up CLOSE_ONLY (RELEASE_NOT_AUTHORITATIVE). Elsewhere: report only.
+echo "-- verifying release_gate.evaluate() on the running container"
+if [ "$(app_env)" = "production" ]; then
+  docker compose exec -T backend python -c 'import json,sys; from release_gate import evaluate; g=evaluate(); print("   release gate:", json.dumps({k: g[k] for k in ("ok","failures","image_digest","locked_backend_digest")})); sys.exit(0 if g["ok"] else 1)' || rollback
+else
+  docker compose exec -T backend python -c 'import json; from release_gate import evaluate; g=evaluate(); print("   release gate (non-production, informational):", json.dumps({k: g[k] for k in ("ok","failures")}))' || true
+fi
 
 echo "-- verifying frontend"
 wait_frontend 30 || rollback

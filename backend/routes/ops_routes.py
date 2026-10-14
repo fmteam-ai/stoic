@@ -69,6 +69,7 @@ async def _ops_admin_step_up(request: Request, action: str):
     await require_step_up(db, u, request, action)
     await audit_event(db, u["id"], action, {"path": str(request.url.path)},
                       request, step_up=True)
+    request.state.ops_actor_id = u["id"]
     return True, u.get("email") or "admin"
 
 
@@ -641,13 +642,22 @@ async def releases_state(request: Request):
     allowed, _actor = await _ops_actor(request)
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
-    from release_channels import sync_channels
+    from release_channels import promotion_readiness, sync_channels
     db = get_db()
     st = await sync_channels(db)
     st.pop("_id", None)
     history = await db.release_history.find(
         {}, {"_id": 0}, sort=[("at", -1)]).limit(10).to_list(10)
-    return {"state": st, "history": history}
+    return {"state": st, "history": history, "readiness": await promotion_readiness(db)}
+
+
+async def _channel_audit(request: Request, actor, action: str, before: dict, after: dict):
+    """v1.60.35 — who / when / from → to for every manual channel change (append-only audit_log)."""
+    from step_up import audit_event
+    await audit_event(get_db(), getattr(request.state, "ops_actor_id", None) or actor, action,
+                      {"by": actor, "from": before.get("stable"), "to": after.get("stable"),
+                       "candidate_before": before.get("candidate"), "pinned_after": bool(after.get("pinned"))},
+                      request, step_up=True)
 
 
 @router.post("/ops/releases/canary")
@@ -670,11 +680,14 @@ async def releases_promote(request: Request):
     allowed, actor = await _ops_admin_step_up(request, "release_promote")
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
-    from release_channels import promote
+    from release_channels import _state, promote
+    db = get_db()
+    before = await _state(db)
     try:
-        st = await promote(get_db(), actor=actor or "admin")
+        st = await promote(db, actor=actor or "admin")
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": error_detail(400, "release_promote_invalid", e)})
+    await _channel_audit(request, actor, "release_promote_done", before, st)
     st.pop("_id", None)
     return st
 
@@ -684,11 +697,14 @@ async def releases_rollback(request: Request):
     allowed, actor = await _ops_admin_step_up(request, "release_rollback")
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
-    from release_channels import rollback
+    from release_channels import _state, rollback
+    db = get_db()
+    before = await _state(db)
     try:
-        st = await rollback(get_db(), actor=actor or "admin")
+        st = await rollback(db, actor=actor or "admin")
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": error_detail(400, "release_rollback_invalid", e)})
+    await _channel_audit(request, actor, "release_rollback_done", before, st)
     st.pop("_id", None)
     return st
 

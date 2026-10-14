@@ -16,6 +16,8 @@ import { CalibrationHealthCard } from "../components/CalibrationHealthCard";
 import { ReadinessCard } from "../components/ReadinessCard";
 import { AiLatencyCard } from "../components/AiLatencyCard";
 import { ReleaseIdentityCard } from "../components/ReleaseIdentityCard";
+import { ReleaseGateCard } from "../components/ReleaseGateCard";
+import { EaChannelCard } from "../components/EaChannelCard";
 import { ChaosDrillsCard } from "../components/ChaosDrillsCard";
 import { StressTestCard } from "../components/StressTestCard";
 import { SoakReportCard } from "../components/DemoReadinessPanels";
@@ -641,6 +643,8 @@ export default function BotHealth() {
                 <SubsystemHealthCard />
                 <AiLatencyCard />
                 {user?.role === "admin" && <ReleaseIdentityCard />}
+                {user?.role === "admin" && <ReleaseGateCard />}
+                {user?.role === "admin" && <EaChannelCard />}
                 <RealtimeRiskCard />
                 <OperatorConsole onAction={load} />
                 <ModeGuardianCard />
