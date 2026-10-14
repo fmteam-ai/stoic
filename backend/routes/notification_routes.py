@@ -12,6 +12,8 @@ import httpx
 from auth import get_current_user
 from database import get_db
 from secrets_vault import encrypt as vault_encrypt, decrypt as vault_decrypt
+from notification_settings import get_settings, update_settings, alert_email_for, valid_email
+import notification_settings as ns
 
 # Telegram MarkdownV2 bodies — raw strings so "\." is a literal escape (audit r16 P2-06)
 TELEGRAM_VERIFY_TEXT = ("🔐 STOIC chat verification code: *{code}*\n\n"
@@ -44,6 +46,7 @@ class TelegramConfigIn(BaseModel):
     telegram_chat_id: Optional[str] = None       # "" clears
     telegram_enabled: bool = True
     alerts: Optional[Dict[str, bool]] = None
+    alert_email: Optional[str] = None            # "" clears → alerts fall back to the login e-mail
 
 
 def _serialize(doc: dict) -> dict:
@@ -57,6 +60,8 @@ def _serialize(doc: dict) -> dict:
         "telegram_verified": bool(doc.get("telegram_verified")),
         "email_configured": email_sender.is_configured(),
         "last_test": doc.get("last_test") or {},
+        "alert_email": doc.get("alert_email"),
+        "alert_email_verified": bool(doc.get("alert_email_verified")),
         "alerts": alerts,
         "updated_at": doc.get("updated_at"),
     }
@@ -71,13 +76,9 @@ def _mask_email(addr: str) -> str:
 
 async def _stamp_test(db, user_id: str, channel: str, ok: bool, error: str | None = None,
                       receipt: str | None = None):
-    await db.notifications.update_one(
-        {"user_id": user_id},
-        {"$set": {"user_id": user_id,
-                  f"last_test.{channel}": {
-                      "ok": ok, "error": error, "provider_receipt": receipt,
-                      "at": datetime.now(timezone.utc).isoformat()}}},
-        upsert=True)
+    await update_settings(db, user_id, {"$set": {
+        f"last_test.{channel}": {"ok": ok, "error": error, "provider_receipt": receipt,
+                                 "at": datetime.now(timezone.utc).isoformat()}}})
 
 
 async def _test_safeguards(db, user: dict, request: Request, channel: str) -> None:
@@ -85,13 +86,21 @@ async def _test_safeguards(db, user: dict, request: Request, channel: str) -> No
     MFA-enrolled users, need a verified destination, and are audit-chained."""
     full = await db.users.find_one({"_id": ObjectId(user["id"])},
                                    {"two_factor_enabled": 1, "email_verified": 1, "role": 1})
-    # affirmative destination verification (r15 P2-02): missing/legacy state is NOT verified
-    if channel == "email" and (full or {}).get("email_verified") is not True:
-        raise HTTPException(status_code=403, detail={
-            "code": "destination_unverified",
-            "message": "Verify your email address before sending a test alert to it."})
+    # affirmative destination verification (r15 P2-02): missing/legacy state is NOT verified.
+    # A separate alert e-mail must itself be verified; otherwise the login e-mail must be.
+    if channel == "email":
+        s = await get_settings(db, user["id"])
+        if s.get("alert_email"):
+            if s.get("alert_email_verified") is not True:
+                raise HTTPException(status_code=403, detail={
+                    "code": "destination_unverified",
+                    "message": "Verify the alert e-mail address first (send the one-time code from this page)."})
+        elif (full or {}).get("email_verified") is not True:
+            raise HTTPException(status_code=403, detail={
+                "code": "destination_unverified",
+                "message": "Verify your email address before sending a test alert to it."})
     if channel == "telegram":
-        cfg = await db.notifications.find_one({"user_id": user["id"]}, {"telegram_verified": 1})
+        cfg = await get_settings(db, user["id"])
         if not (cfg or {}).get("telegram_verified"):
             raise HTTPException(status_code=403, detail={
                 "code": "destination_unverified",
@@ -134,17 +143,16 @@ def _test_email_html(name: str, sent_at: str) -> str:
 @router.get("/settings")  # alias — legacy frontend callers
 async def get_telegram(user=Depends(get_current_user)):
     db = get_db()
-    doc = await db.notifications.find_one({"user_id": user["id"]}) or {}
+    doc = await get_settings(db, user["id"])
     return _serialize(doc)
 
 
 @router.put("/telegram")
 async def update_telegram(payload: TelegramConfigIn, user=Depends(get_current_user)):
     db = get_db()
-    existing = await db.notifications.find_one({"user_id": user["id"]}) or {}
+    existing = await get_settings(db, user["id"])
 
     update = {
-        "user_id": user["id"],
         "telegram_enabled": payload.telegram_enabled,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -166,10 +174,16 @@ async def update_telegram(payload: TelegramConfigIn, user=Depends(get_current_us
         merged.update(payload.alerts)
         update["alerts"] = merged
 
-    await db.notifications.update_one(
-        {"user_id": user["id"]}, {"$set": update}, upsert=True
-    )
-    doc = await db.notifications.find_one({"user_id": user["id"]})
+    # v1.60.32 item 3 — separate alert e-mail; a new address needs a fresh verification code
+    if payload.alert_email is not None:
+        addr = payload.alert_email.strip().lower()
+        if addr and not valid_email(addr):
+            raise HTTPException(status_code=422, detail={"code": "invalid_email", "message": "That does not look like an e-mail address."})
+        if addr != (existing.get("alert_email") or ""):
+            update.update({"alert_email": addr or None, "alert_email_verified": False, "alert_email_verify": None})
+
+    await update_settings(db, user["id"], {"$set": update})
+    doc = await get_settings(db, user["id"])
     return _serialize(doc)
 
 
@@ -180,8 +194,8 @@ TEST_ALERT_WINDOW_SEC = 900
 
 async def _telegram_send(db, user_id: str, text: str) -> tuple[bool, str | None, str | None]:
     """Send MarkdownV2 text to the user's bound chat → (ok, message_id, error)."""
-    doc = await db.notifications.find_one({"user_id": user_id})
-    if not doc or not doc.get("telegram_bot_token") or not doc.get("telegram_chat_id"):
+    doc = await get_settings(db, user_id)
+    if not doc.get("telegram_bot_token") or not doc.get("telegram_chat_id"):
         return False, None, "telegram_not_configured"
     try:
         token = vault_decrypt(doc["telegram_bot_token"])
@@ -219,7 +233,7 @@ async def telegram_verify_start(request: Request, user=Depends(get_current_user)
     if not ok:
         raise HTTPException(status_code=400 if err == "telegram_not_configured" else 503,
                             detail={"code": err or "telegram_failed", "message": "Could not deliver the verification code."})
-    await db.notifications.update_one({"user_id": user["id"]}, {"$set": {
+    await update_settings(db, user["id"], {"$set": {
         "telegram_verified": False,
         "telegram_verify": {"hash": hashlib.sha256(f"{user['id']}:{code}".encode()).hexdigest(),
                             "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat(),
@@ -231,7 +245,7 @@ async def telegram_verify_start(request: Request, user=Depends(get_current_user)
 async def telegram_verify_confirm(payload: dict, request: Request, user=Depends(get_current_user)):
     db = get_db()
     code = re.sub(r"\D", "", str(payload.get("code") or ""))
-    doc = await db.notifications.find_one({"user_id": user["id"]}) or {}
+    doc = await get_settings(db, user["id"])
     ch = doc.get("telegram_verify") or {}
     if not ch or not code:
         raise HTTPException(status_code=400, detail={"code": "no_pending_challenge", "message": "Request a code first."})
@@ -240,9 +254,9 @@ async def telegram_verify_confirm(payload: dict, request: Request, user=Depends(
     if int(ch.get("attempts") or 0) >= 5:
         raise HTTPException(status_code=429, detail={"code": "too_many_attempts", "message": "Too many attempts — request a new code."})
     if not hmac.compare_digest(ch["hash"], hashlib.sha256(f"{user['id']}:{code}".encode()).hexdigest()):
-        await db.notifications.update_one({"user_id": user["id"]}, {"$inc": {"telegram_verify.attempts": 1}})
+        await update_settings(db, user["id"], {"$inc": {"telegram_verify.attempts": 1}})
         raise HTTPException(status_code=400, detail={"code": "wrong_code", "message": "That code is not correct."})
-    await db.notifications.update_one({"user_id": user["id"]}, {"$set": {
+    await update_settings(db, user["id"], {"$set": {
         "telegram_verified": True, "telegram_verified_at": datetime.now(timezone.utc).isoformat(),
         "telegram_verified_chat_id": doc.get("telegram_chat_id"), "telegram_verify": None}})
     await _audit_test(db, user, "telegram_verify", True, None, None)
@@ -267,8 +281,9 @@ async def test_email(request: Request, user=Depends(get_current_user)):
             "message": "Email delivery is not configured on this server."})
     sent_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     from html import escape as _esc
+    dest = await alert_email_for(db, user["id"], user.get("email"))
     res = await email_sender.send_email(
-        user["email"],
+        dest,
         "[TEST] STOIC · Test alert — no action required",
         _test_email_html(_esc(str(user.get("name") or "trader"))[:80], sent_at),
         text=f"STOIC test alert sent {sent_at} UTC. Email alerts reach this inbox.")
@@ -282,8 +297,47 @@ async def test_email(request: Request, user=Depends(get_current_user)):
             "reason": str(res.get("error") or "")[:240]})
     await _stamp_test(db, user["id"], "email", True, receipt=res.get("id"))
     await _audit_test(db, user, "email", True, res.get("id"), None)
-    return {"ok": True, "channel": "email", "delivered_to": _mask_email(user["email"]),
+    return {"ok": True, "channel": "email", "delivered_to": _mask_email(dest),
             "provider_receipt": res.get("id"), "message": "Test email sent"}
+
+
+@router.post("/email/verify/start")
+async def alert_email_verify_start(request: Request, user=Depends(get_current_user)):
+    """One-time code to the separate alert e-mail (v1.60.32 item 3) — alerts only go there once it is proven."""
+    import email_sender
+    from security import rate_limit
+    db = get_db()
+    await rate_limit(db, "alert_email_verify_start", user["id"], 3, 900, request=request,
+                     message="Too many verification codes — try again later.")
+    if not email_sender.is_configured():
+        raise HTTPException(status_code=503, detail={"code": "email_not_configured",
+                                                     "message": "Email delivery is not configured on this server."})
+    try:
+        addr, code = await ns.start_email_verification(db, user["id"])
+    except ValueError:
+        raise HTTPException(status_code=400, detail={"code": "no_alert_email", "message": "Save an alert e-mail address first."})
+    res = await email_sender.send_email(
+        addr, "STOIC · alert e-mail verification code",
+        f"<p>Your STOIC alert e-mail verification code is <b style='font-size:20px'>{code}</b>.</p>"
+        "<p>Enter it on the Notifications page. It expires in 10 minutes.</p>",
+        text=f"STOIC alert e-mail verification code: {code} (expires in 10 minutes)")
+    if not res.get("ok"):
+        raise HTTPException(status_code=503, detail={"code": "email_send_failed",
+                                                     "message": "The email provider rejected the message."})
+    return {"ok": True, "sent": True, "delivered_to": _mask_email(addr), "expires_in_sec": 600}
+
+
+@router.post("/email/verify/confirm")
+async def alert_email_verify_confirm(payload: dict, user=Depends(get_current_user)):
+    db = get_db()
+    err = await ns.confirm_email_verification(db, user["id"], str(payload.get("code") or ""))
+    if err:
+        status = 429 if err == "too_many_attempts" else 400
+        msgs = {"no_pending_challenge": "Request a code first.", "challenge_expired": "Code expired — request a new one.",
+                "too_many_attempts": "Too many attempts — request a new code.", "wrong_code": "That code is not correct."}
+        raise HTTPException(status_code=status, detail={"code": err, "message": msgs[err]})
+    await _audit_test(db, user, "alert_email_verify", True, None, None)
+    return {"ok": True, "alert_email_verified": True}
 
 
 @router.post("/telegram/test")
@@ -295,8 +349,8 @@ async def test_telegram(request: Request, user=Depends(get_current_user)):
                      TEST_ALERT_WINDOW_SEC, request=request,
                      message="Too many test messages — try again in a few minutes.")
     await _test_safeguards(db, user, request, "telegram")
-    doc = await db.notifications.find_one({"user_id": user["id"]})
-    if not doc or not doc.get("telegram_bot_token") or not doc.get("telegram_chat_id"):
+    doc = await get_settings(db, user["id"])
+    if not doc.get("telegram_bot_token") or not doc.get("telegram_chat_id"):
         await _stamp_test(db, user["id"], "telegram", False, "telegram_not_configured")
         raise HTTPException(status_code=400, detail="Telegram not configured")
     try:

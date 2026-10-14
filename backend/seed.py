@@ -547,6 +547,12 @@ async def ensure_indexes():
         await ensure_decision_indexes(db)
     except Exception:
         pass
+    try:
+        # v1.60.32 — one dedicated settings doc per user (kind: telegram_settings) + webhook lookup
+        await db.notifications.create_index([("user_id", 1), ("kind", 1)])
+        await db.notifications.create_index("webhook_secret", sparse=True)
+    except Exception:
+        pass
 
     # --- iter-91 · Heal stale panic / circuit-breaker trip flags ---------
     # Background: the original POST /api/bot/start endpoint flipped

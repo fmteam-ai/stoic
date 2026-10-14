@@ -366,8 +366,9 @@ async def _check_ea_config(db, user_id: str) -> dict:
                           fix_label="Add EMERGENT_LLM_KEY in backend/.env"))
 
     # Per-user Telegram (notifications collection)
-    tg = await db.notifications.find_one({"user_id": user_id, "kind": "telegram"})
-    if tg and tg.get("chat_id"):
+    from notification_settings import get_settings
+    tg = await get_settings(db, user_id)
+    if tg.get("telegram_enabled") and tg.get("telegram_chat_id"):
         checks.append(_mk("Telegram alerts", "pass", "Configured for this user"))
     else:
         checks.append(_mk("Telegram alerts", "warn",

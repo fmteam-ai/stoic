@@ -104,8 +104,8 @@ async def notify_owner(db, acc: dict, info: dict, url: str) -> None:
     try:
         from bson import ObjectId
         from email_sender import send_email
-        user = await db.users.find_one({"_id": ObjectId(uid)}, {"email": 1}) if ObjectId.is_valid(uid) else None
-        email = (user or {}).get("email")
+        from notification_settings import alert_email_for
+        email = await alert_email_for(db, uid) if ObjectId.is_valid(uid) else None
         if email:
             from html import escape
             html = "<p>" + "</p><p>".join(escape(ln) for ln in lines) + "</p>"   # audit #10 — host/label are client-supplied

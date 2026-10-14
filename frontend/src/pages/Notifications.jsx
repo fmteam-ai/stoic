@@ -6,7 +6,7 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { AlertTestPanel } from "@/components/AlertTestPanel";
 import {
     Bell, Send, Save as FloppyDisk, CheckCircle2, ExternalLink, KeyRound,
-    AlertTriangle, MessageSquare, Webhook, Power,
+    AlertTriangle, MessageSquare, Webhook, Power, Mail,
 } from "lucide-react";
 
 const EVENT_LABELS = {
@@ -28,6 +28,7 @@ export default function Notifications() {
     const [cfg, setCfg] = useState(null);
     const [token, setToken] = useState("");
     const [chatId, setChatId] = useState("");
+    const [alertEmail, setAlertEmail] = useState("");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
@@ -43,6 +44,7 @@ export default function Notifications() {
             ]);
             setCfg(a.data);
             setChatId(a.data.telegram_chat_id || "");
+            setAlertEmail(a.data.alert_email || "");
             setWebhook(b.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
@@ -55,6 +57,7 @@ export default function Notifications() {
             const payload = {
                 telegram_enabled: cfg.telegram_enabled,
                 telegram_chat_id: chatId.trim() || null,
+                alert_email: alertEmail.trim(),
                 alerts: cfg.alerts,
             };
             if (token.trim()) payload.telegram_bot_token = token.trim();
@@ -184,6 +187,21 @@ export default function Notifications() {
                                 className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
                         </div>
                         <div>
+                            <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5 flex items-center gap-2">
+                                <Mail className="w-3 h-3" /> ALERT E-MAIL <span className="text-[#3F3F46]">· optional, separate from your login e-mail</span>
+                            </label>
+                            <input value={alertEmail} onChange={e => setAlertEmail(e.target.value)} type="email"
+                                data-testid="alert-email-input"
+                                placeholder={user?.email ? `blank = login e-mail (${user.email})` : "alerts@example.com"}
+                                className="w-full bg-[#050505] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                            {cfg?.alert_email && (
+                                <div className={`font-mono text-[10px] tracking-widest mt-1.5 ${cfg.alert_email_verified ? "text-[#00FF41]" : "text-[#FFB000]"}`}
+                                    data-testid="alert-email-status">
+                                    {cfg.alert_email_verified ? `VERIFIED · alerts go to ${cfg.alert_email}` : `UNVERIFIED · alerts still go to ${user?.email || "your login e-mail"} until you verify`}
+                                </div>
+                            )}
+                        </div>
+                        <div>
                             <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">ENABLE TELEGRAM ALERTS</label>
                             <button onClick={() => setCfg({ ...cfg, telegram_enabled: !cfg.telegram_enabled })}
                                 data-testid="telegram-enabled-toggle"
@@ -211,7 +229,8 @@ export default function Notifications() {
 
                 {/* Channel check */}
                 <AlertTestPanel cfg={cfg} userEmail={user?.email} onResult={onTestResult}
-                    onVerified={() => setCfg(c => ({ ...c, telegram_verified: true }))} />
+                    onVerified={() => setCfg(c => ({ ...c, telegram_verified: true }))}
+                    onEmailVerified={() => setCfg(c => ({ ...c, alert_email_verified: true }))} />
 
                 {/* Alert types */}
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A]">
