@@ -3,6 +3,8 @@ import { ClosedBetaBanner } from "@/components/ClosedBetaBanner";
 import axios from "axios";
 import { BACKEND_URL } from "@/lib/api";
 import { StoicMark } from "@/components/StoicLogo";
+import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { useAuth } from "@/context/AuthContext";
 import {
     Activity, Database, Cpu, Plug, CreditCard, Mail, RefreshCw, Loader2,
 } from "lucide-react";
@@ -36,6 +38,7 @@ const OVERALL = {
 };
 
 export default function StatusPage() {
+    const { user } = useAuth();
     const [data, setData] = useState(null);
     const [err, setErr] = useState(false);
     const [checkedAt, setCheckedAt] = useState(null);        // A16-2 — time of the last result (success or failure)
@@ -65,10 +68,13 @@ export default function StatusPage() {
         ? { text: `Status unavailable (checked ${utc(checkedAt)})`, cls: "text-[#FF3B30] border-[#FF3B30]/40" }
         : OVERALL[data?.overall] || null;
 
-    return (
-        <div className="min-h-screen bg-[#050505] text-[#FAFAFA]">
-            <ClosedBetaBanner />
-            <div className="max-w-3xl mx-auto px-4 py-12">
+    // Logged-in users get the normal app shell (sidebar + strips); visitors keep the public standalone page.
+    const inApp = !!user;
+    const body = (
+            <div className={inApp ? "max-w-3xl px-4 md:px-8 py-8" : "max-w-3xl mx-auto px-4 py-12"} data-testid="status-page">
+                {inApp ? (
+                    <PageHeader title="System Status" subtitle="Live component health and trading readiness." testid="status-page-header" />
+                ) : (
                 <div className="flex items-center gap-3 mb-10">
                     <StoicMark className="w-8 h-8" />
                     <div>
@@ -76,6 +82,7 @@ export default function StatusPage() {
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SYSTEM STATUS</div>
                     </div>
                 </div>
+                )}
 
                 {!data && !err && !timedOut ? (
                     <div className="flex items-center justify-center gap-3 py-20 font-mono text-xs text-[#71717A] tracking-widest" data-testid="status-checking">
@@ -156,6 +163,13 @@ export default function StatusPage() {
                     </>
                 )}
             </div>
+    );
+
+    if (inApp) return <AppLayout>{body}</AppLayout>;
+    return (
+        <div className="min-h-screen bg-[#050505] text-[#FAFAFA]">
+            <ClosedBetaBanner />
+            {body}
         </div>
     );
 }
