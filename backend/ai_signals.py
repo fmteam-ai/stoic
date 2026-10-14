@@ -503,9 +503,15 @@ async def analyze_symbol(symbol: str, risk_level: str,
         tp_dist_price = tp_mult_of_sl * sl_dist_price
     elif tp_dist_price <= 0:
         tp_dist_price = sl_dist_price * 2.5
-    tp1_dist = tp_dist_price * 0.4
-    tp2_dist = tp_dist_price * 0.7
-    tp3_dist = tp_dist_price * 1.0
+    if engine in SCALP_ENGINES:
+        # v1.60.29 item 2 — scalp engines use a SINGLE TP: the 0.4/0.7/1.0 split (50/25/25) reshaped the designed
+        # TP = 2×SL into a blended R:R of 1.25, so the Monte Carlo gate saw P(TP first) ≈ 44 % and −0.1R EV and
+        # blocked every scalp. All three legs sit on the full target → rr_ratio 2.0, no reshaping downstream.
+        tp1_dist = tp2_dist = tp3_dist = tp_dist_price
+    else:
+        tp1_dist = tp_dist_price * 0.4
+        tp2_dist = tp_dist_price * 0.7
+        tp3_dist = tp_dist_price * 1.0
     # user policy (2026-07-16): hard TP pip caps (TP1 ≤ 100, TP2/TP3 ≤ 200)
     tp1_dist = min(tp1_dist, pips_to_price(symbol, MTF_TP1_MAX_PIPS))
     tp2_dist = min(tp2_dist, pips_to_price(symbol, MTF_TP2_MAX_PIPS))

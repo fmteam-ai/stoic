@@ -63,7 +63,7 @@ function BrokerScreen({ onCreated }) {
             const { data } = await api.post("/accounts", { label, broker: brokerName, server: "", account_number: f.login, account_type: f.env === "demo" ? "demo" : "standard", account_role: "STANDARD",
                 base_currency: "USD", mode: "live", initial_balance: 10000, pamm_provider: null, pamm_program_id: null, pamm_broker_program_id: null,
                 declared_environment: f.env, algo_trading_consent: true });
-            await api.put("/config", { risk_level: "medium" }, { params: { account_id: data.id } }).catch(() => {});   // bound bot, Balanced
+            await api.put("/bot/config", { risk_level: "medium" }, { params: { account_id: data.id } }).catch(() => {});   // bound bot, Balanced
             onCreated(data);
         } catch (e) { setErr(formatApiError(e)); } finally { setBusy(false); }
     };
@@ -171,7 +171,7 @@ function ActivateScreen({ account, state, refresh }) {
         setBusy(true);
         try {
             if (b.action === "disable_account") { await api.patch(`/accounts/${b.account_id}`, { trading_enabled: false }); toast.success(`${b.account_label || "Account"} disabled`); }
-            else if (b.action === "lower_risk") await api.put("/config", { risk_level: "low" }, { params: { account_id: account.id } });
+            else if (b.action === "lower_risk") await api.put("/bot/config", { risk_level: "low" }, { params: { account_id: account.id } });
             await refresh();
         } catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
     };
@@ -196,7 +196,7 @@ function StartScreen({ account, state, refresh, onDone }) {
         setBusy(true); setErr(null);
         try {
             const card = s.risk_cards.find((c) => c.id === risk);
-            await api.put("/config", { risk_level: card?.apply_level || risk }, { params: { account_id: account.id } });
+            await api.put("/bot/config", { risk_level: card?.apply_level || risk }, { params: { account_id: account.id } });
             await api.patch(`/accounts/${account.id}`, { trading_enabled: true }).catch(() => {});
             await api.post("/bot/start", null, { params: { account_id: account.id } });
             await refresh(); onDone();

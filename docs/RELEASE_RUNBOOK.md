@@ -61,6 +61,26 @@ with the EX5 committed, so the ea-release bot commit MUST be the tagged commit (
 - A fixed tree needs a NEW tag (`v1.60.4`): Save to GitHub → merge → ea-release on main → tag → publish release.
 
 
+### 2b. Cutting **v1.60.29** (14 Oct fix list) — exact order
+
+1. Platform → **Save to GitHub** (all v1.60.29 changes are on the branch; `docs/TEST_MANIFEST.md`, `release/rc_lock.json`
+   and `docs/RELEASE_SUMMARY.md` are regenerated and consistent — `python3 scripts/generate_release_summary.py --check`).
+2. From a local clone of that commit:
+   ```bash
+   git tag -a v1.60.29 -m "v1.60.29 — scalp fast path redesign (range-break v2, ≥5-pip targets, code-enforced live gate, XAUUSD config), single-TP scalp engines, DEFERRED/HOLD ledger, cert panel live refresh, bot-config 404 + default mode + drift fix, LIVE pill = attested env, encrypted-backup I4, watchdog 1 s heartbeat, TIPS backoff/FRED, preflight guidance"
+   git push origin v1.60.29
+   ```
+   (if the tip commit carries `[skip ci]`, trigger `Release` manually: Actions → Release → Run workflow → tag `v1.60.29`).
+3. `Release` produces the **release zip/tarball** `stoic-v1.60.29.tar.gz` + `rc_lock.json` (authoritative, both image
+   digests) + `SHA256SUMS(.sig)` + cosign signatures. This is the only artefact that satisfies **Deploy Preflight**
+   ("rc_lock is not authoritative" / "carries no image digests" = the host is on a developer snapshot or an on-host build).
+4. On the VPS: `deploy/update.sh` in registry/auto mode (pulls by digest; `STOIC_IMAGE_DIGEST` is injected by the compose
+   overlay). Then `docker compose up -d worker-reconciliation backend caddy` picks up the intent-sweep worker, the
+   read-only backup mount and the Cloudflare header block.
+5. Risk settings / trading ON-OFF are **not** changed by this release. The scalp fast path stays SHADOW until
+   `scalp.live_gate` passes (≥ 300 labeled v2 samples, net expectancy after costs > 0, PF > 1) — visible in the Scalp
+   panel as `requested_mode` vs `mode` + `live_gate.reasons`.
+
 ## 3. What the run does, in order (each step is a hard gate)
 1. `hermetic-verify` — exports the exact tag tree, writes `BUILD_SHA`, re-signs the model manifest for that commit, runs
    `model_manifest verify --build <commit>` and the full `verify_release.sh` (declared test lanes, frontend build/E2E,

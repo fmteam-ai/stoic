@@ -15,6 +15,9 @@ x-app-common: &app-common
   env_file:
     - backend/.env
   environment: &app-env
+    # hf_xet 1.5.x native downloader aborts the whole uvicorn worker (Fatal Python error) on a cold Chronos
+    # model fetch → every route 502. Plain HTTP download is used instead (found by the v1.60.29 smoke test).
+    HF_HUB_DISABLE_XET: "1"
     MONGO_URL_FILE: /run/secrets/mongo_url
     JWT_SECRET_FILE: /run/secrets/jwt_secret
     KEY_VAULT_MASTER_FILE: /run/secrets/key_vault_master

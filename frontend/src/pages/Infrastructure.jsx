@@ -144,7 +144,7 @@ export default function Infrastructure() {
                                     <div className="font-mono text-[8px] text-[#52525B] mt-0.5 break-words leading-tight" data-testid="cert-clock-detail">
                                         {cert.details.clock_synchronization.source === "unknown"
                                             ? "no broker time on any heartbeat yet — connect EA 1.64+"
-                                            : `${cert.details.clock_synchronization.source} · offset ${cert.details.clock_synchronization.offset_sec}s${cert.details.clock_synchronization.account ? ` · ${cert.details.clock_synchronization.account}` : ""}`}
+                                            : `broker clock known via ${cert.details.clock_synchronization.source.replace(/_/g, " ")} · server UTC${cert.details.clock_synchronization.offset_sec >= 0 ? "+" : "−"}${Math.abs(cert.details.clock_synchronization.offset_sec / 3600).toFixed(1).replace(/\.0$/, "")}h${cert.details.clock_synchronization.account ? ` · ${cert.details.clock_synchronization.account}` : ""}`}
                                     </div>
                                 )}
                             </div>

@@ -34,6 +34,8 @@ from database import get_db
 logger = logging.getLogger("tips")
 
 CACHE_TTL_HOURS = 12
+FAIL_BACKOFF_MIN = int(os.environ.get("TIPS_FAIL_BACKOFF_MIN", "30"))
+FAIL_BACKOFF_MAX_MIN = int(os.environ.get("TIPS_FAIL_BACKOFF_MAX_MIN", "360"))
 HTTP_TIMEOUT = float(os.environ.get("TIPS_HTTP_TIMEOUT", "12"))
 
 
@@ -106,17 +108,47 @@ async def get_real_yield(*, force_refresh: bool = False) -> Optional[dict]:
                 pass
 
     year = datetime.now(timezone.utc).year
+    # v1.60.29 item 9 — negative cache: after a failure, don't hit Treasury again for FAIL_BACKOFF_MIN (grows ×2 per
+    # consecutive failure, capped). ~57 warnings/hour came from every tick retrying a host that times out from the VPS.
+    neg = await db.tips_cache.find_one({"key": "10Y_REAL_FAIL"})
+    if neg and not force_refresh:
+        try:
+            until = datetime.fromisoformat(str(neg.get("retry_after")).replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) < until:
+                cached = await db.tips_cache.find_one({"key": "10Y_REAL"})
+                if cached:
+                    cached.pop("_id", None)
+                return cached
+        except (ValueError, TypeError):
+            pass
+    rows: list[dict] = []
+    source = "treasury"
     try:
         rows = await _fetch_year(year)
         if len(rows) < 2:
             rows = (await _fetch_year(year - 1)) + rows
     except httpx.HTTPError as e:
-        logger.warning("TIPS fetch failed: %s", e)
-        cached = await db.tips_cache.find_one({"key": "10Y_REAL"})
-        if cached:
-            cached.pop("_id", None)
-            return cached
-        return None
+        # secondary source: FRED DFII10 (10-year TIPS constant maturity, keyless fredgraph.csv)
+        try:
+            from macro.fred import _fetch_series
+            rows = [{"date": d, "real_yield_10y": v} for d, v in (await _fetch_series("DFII10"))[-60:]]
+            source = "fred:DFII10"
+            logger.info("TIPS: Treasury unreachable (%s) — using FRED DFII10 (%d rows)", type(e).__name__, len(rows))
+        except Exception as e2:  # noqa: BLE001
+            fails = int((neg or {}).get("consecutive_failures") or 0) + 1
+            backoff_min = min(FAIL_BACKOFF_MIN * (2 ** (fails - 1)), FAIL_BACKOFF_MAX_MIN)
+            await db.tips_cache.update_one({"key": "10Y_REAL_FAIL"}, {"$set": {
+                "key": "10Y_REAL_FAIL", "consecutive_failures": fails, "last_error": f"{type(e).__name__} / {type(e2).__name__}",
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "retry_after": (datetime.now(timezone.utc) + timedelta(minutes=backoff_min)).isoformat()}}, upsert=True)
+            (logger.warning if fails <= 2 else logger.info)(
+                "TIPS fetch failed (treasury: %s; fred: %s) — retry in %d min (failure #%d)", e, e2, backoff_min, fails)
+            cached = await db.tips_cache.find_one({"key": "10Y_REAL"})
+            if cached:
+                cached.pop("_id", None)
+                return cached
+            return None
+    await db.tips_cache.delete_many({"key": "10Y_REAL_FAIL"})
 
     if not rows:
         return None
@@ -139,6 +171,7 @@ async def get_real_yield(*, force_refresh: bool = False) -> Optional[dict]:
         "delta_5d": round(delta_5d, 4),
         "regime": regime,
         "sample_size": len(rows),
+        "source": source,
         "fetched_at": datetime.now(timezone.utc).isoformat(),
     }
     await db.tips_cache.update_one({"key": "10Y_REAL"}, {"$set": doc}, upsert=True)

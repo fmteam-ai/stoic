@@ -35,24 +35,26 @@ function FixAction({ check, accountId, onCertify, onRequestSync, busy }) {
     return null;
 }
 
-export function AccountCertification({ accountId }) {
+export function AccountCertification({ accountId, item = null, onChanged = null }) {
     const [items, setItems] = useState(null);
     const [busy, setBusy] = useState(false);
 
     const reload = async () => {
+        if (onChanged) { await onChanged(); return; }
         const { data } = await api.get("/accounts/certification");
         setItems(data.items || []);
     };
 
     useEffect(() => {
+        if (item) return undefined;                 // page-owned data (Accounts.jsx polls every 30 s and passes it down)
         let dead = false;
         api.get("/accounts/certification")
             .then(({ data }) => { if (!dead) setItems(data.items || []); })
             .catch(() => { if (!dead) setItems([]); });
         return () => { dead = true; };
-    }, [accountId]);
+    }, [accountId, item]);
 
-    const cert = items?.find(i => i.account_id === accountId);
+    const cert = item || items?.find(i => i.account_id === accountId);
     if (!cert) return null;
 
     const certify = async () => {

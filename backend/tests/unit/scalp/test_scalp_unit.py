@@ -64,8 +64,11 @@ def _tick(ms, bid, ask):
 class TestInstruments:
     def test_eurusd_only(self):
         assert CFG is not None and CFG.contract_size == 100_000.0
-        for s in ("XAUUSD", "BTCUSD", "US30", "EURTRY", "GBPUSD"):
+        for s in ("BTCUSD", "US30", "EURTRY", "GBPUSD"):
             assert approved(s) is None
+        # v1.60.29 A1(d) — XAUUSD is configured separately (contract 100 oz, pip 0.01) and gated by scalp.live_gate
+        x = approved("XAUUSD")
+        assert x is not None and x.contract_size == 100.0 and x.pip_size == 0.01 and x.max_spread_pips >= 15
 
 
 class TestFeatures:
@@ -84,8 +87,9 @@ class TestFeatures:
 
 class TestSetup:
     def test_micro_pullback_detected(self):
+        from scalp.setup import detect_micro_pullback
         st = _mk_state(_impulse_pullback_path())
-        cand = detect(snapshot(st), st)
+        cand = detect_micro_pullback(snapshot(st), st)
         assert cand and cand["direction"] == "BUY"
         assert 0.15 <= cand["pullback_frac"] <= 0.60
 
@@ -146,10 +150,25 @@ class TestCommission:
         assert r._commission_pips() == 0.0
 
 
+def _range_break_path():
+    """v1.60.29 A1 — 6 minutes @ 500 ms: 2 min quiet range (±2 pips), then a steady +4-pip grind over 3.5 min
+    (not a last-minute spike), ending with a fresh 0.5-pip break above the prior range high."""
+    base = 1.08000
+    path = []
+    for i in range(240):                                # 2 min range 1.0798–1.0802
+        path.append(base + (0.0002 if (i // 20) % 2 == 0 else -0.0002) * ((i % 20) / 20))
+    for i in range(420):                                # 3.5 min grind +4 pips (≈1.1 pip/min)
+        path.append(base + 0.0002 * (i / 60) + 0.00005 * ((i % 6) - 3) / 3)
+    top = path[-1]
+    for i in range(40):                                 # last 20 s: push 0.5 pip above everything before
+        path.append(top + 0.00005 * (1 + i / 40))
+    return path
+
+
 # ---------------- forecast + edge ----------------
 class TestEdge:
     def _forecast(self, spread=0.6, commission=0.0):
-        st = _mk_state(_impulse_pullback_path(), spread_pips=spread)
+        st = _mk_state(_range_break_path(), spread_pips=min(spread, 0.7))   # detection needs a tight spread; the edge test widens it below
         f = snapshot(st)
         cand = detect(f, st)
         assert cand
@@ -161,7 +180,14 @@ class TestEdge:
         assert fc.target_pips > fc.stop_pips
 
     def test_wide_spread_kills_edge(self):
-        assert edge.evaluate(self._forecast(spread=3.0))["ok"] is False
+        # the redesigned setup refuses to fire at all when spread > 0.8 pip — that IS the kill; and a forced wide
+        # spread on an otherwise-valid forecast still fails the edge check
+        st = _mk_state(_range_break_path(), spread_pips=3.0)
+        assert detect(snapshot(st), st) is None
+        from dataclasses import replace
+        fc = replace(self._forecast(), expected_spread_cost_pips=3.0, spread_pips=3.0) if hasattr(self._forecast(), "spread_pips") \
+            else replace(self._forecast(), expected_spread_cost_pips=3.0)
+        assert edge.evaluate(fc)["ok"] is False
 
     def test_commission_reduces_edge(self):
         base = edge.evaluate(self._forecast())["net_edge_pips"]
@@ -365,7 +391,7 @@ class TestEngineBehaviors:
         """Review item 14 — CLOSE_REQUESTED stays in the book."""
         r = ScalpRunner("accZ", "u1", "EURUSD")
         r.live_trades["t1"] = {"state": "OPEN",
-                               "opened_ms": int(time.time() * 1000) - 10 * 60_000,
+                               "opened_ms": int(time.time() * 1000) - 20 * 60_000,   # beyond the 15-min hold (v1.60.29)
                                "direction": "BUY", "entry_px": 1.08,
                                "stop_px": 1.079, "target_px": 1.082,
                                "est_cost_usd": 1.0}
@@ -2645,7 +2671,7 @@ class TestRound17Presubmit:
         instruments outside the approved scalp universe."""
         from scalp.engine import margin_audit
         out = margin_audit({"free_margin": 10_000.0, "leverage": 30},
-                           "XAUUSD", 0.5, 4000.0)
+                           "BTCUSD", 0.5, 60000.0)
         assert out["margin_check_passed"] is None
         assert "not approved" in out["reason"]
         ok = margin_audit({"free_margin": 10_000.0, "leverage": 30},

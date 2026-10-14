@@ -109,9 +109,23 @@ async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = No
         new_cfg["_id"] = None
         new_cfg["virtual"] = True
         return new_cfg
+    new_cfg["operational_mode"] = await default_operational_mode(db, account_id)
     result = await db.bot_configs.insert_one(new_cfg)
     new_cfg["_id"] = result.inserted_id
     return new_cfg
+
+
+async def default_operational_mode(db, account_id: str) -> str:
+    """v1.60.29 item 5(b) — a new bot starts in `demo_autopilot` on PAPER / attested-DEMO accounts and in `shadow`
+    on anything that could be real money. `active` stays False — the mode never turns trading on by itself."""
+    from broker_env import attested_environment
+    try:
+        acc = await db.accounts.find_one({"_id": ObjectId(account_id)})
+    except Exception:
+        acc = None
+    if not acc:
+        return "shadow"
+    return "demo_autopilot" if acc.get("mode") == "paper" or attested_environment(acc) in ("PAPER", "DEMO") else "shadow"
 
 
 def _serialize(cfg: dict) -> dict:
@@ -1325,16 +1339,17 @@ async def safety_status(user=Depends(get_current_user)):
 
     live_accounts, stale_feeds = [], []
     paper_count, max_hb_age = 0, None
+    from broker_env import attested_environment
     async for a in db.accounts.find(
-            {"user_id": user["id"], "status": {"$ne": "deleted"}},
-            {"label": 1, "mode": 1, "trading_enabled": 1,
-             "last_heartbeat": 1, "dormant": 1}):
+            {"user_id": user["id"], "status": {"$ne": "deleted"}}):
         if a.get("dormant") or a.get("trading_enabled") is not True:  # P0: missing = OFF
             continue
-        if str(a.get("mode") or "").lower() == "live":
-            live_accounts.append(a.get("label"))
-        elif str(a.get("mode") or "").lower() == "paper":
+        # v1.60.29 item 6 — `mode == "live"` means "MT5-connected" (demo included); LIVE = attested environment only
+        env = attested_environment(a)
+        if str(a.get("mode") or "").lower() == "paper" or env == "PAPER":
             paper_count += 1
+        elif env == "LIVE":
+            live_accounts.append(a.get("label"))
         age = _age(a.get("last_heartbeat"))
         if age is not None:
             max_hb_age = age if max_hb_age is None else max(max_hb_age, age)
@@ -1401,6 +1416,7 @@ async def safety_status(user=Depends(get_current_user)):
                                          if max_hb_age is not None else None),
             "panic_active": panic_active,
             "live_accounts": live_accounts,
+            "paper_accounts": paper_count,
             "unprotected_open": unprotected,
             "unresolved_submissions": unresolved,
             "stale_feeds": stale_feeds,

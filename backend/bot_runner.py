@@ -212,6 +212,22 @@ async def _record_pulse(
                 db, user_id=str(cfg.get("user_id") or ""), symbol=symbol or "",
                 status="rejected", stage=infer_stage(reason), reason=reason,
                 cfg=cfg, signal=_sig)
+        # v1.60.29 item 3 — DEFERRED (execution optimizer: off-hours gold / spread) and engine HOLDs were invisible:
+        # 62 deferred signals in one night showed nowhere. They are now ledger rows too (status deferred | held).
+        elif action == "HOLD":
+            from trade_decisions import record_decision
+            _sig = signal or _CURRENT_SIGNAL.get(None)
+            if _sig is not None and _sig.get("symbol") and symbol and _sig.get("symbol") != symbol:
+                _sig = None
+            if _sig is not None and _sig.get("execution_deferred"):
+                await record_decision(
+                    db, user_id=str(cfg.get("user_id") or ""), symbol=symbol or "", status="deferred",
+                    stage="execution_optimizer",
+                    reason=str(_sig.get("execution_defer_reason") or reason), cfg=cfg, signal=_sig)
+            elif not is_routine:
+                await record_decision(
+                    db, user_id=str(cfg.get("user_id") or ""), symbol=symbol or "", status="held",
+                    stage="engine", reason=reason, cfg=cfg, signal=_sig)
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to persist pulse cfg=%s: %s", cfg.get("_id"), e)
 
