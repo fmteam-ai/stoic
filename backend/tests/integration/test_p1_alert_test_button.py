@@ -128,7 +128,8 @@ def test_telegram_test_requires_verified_chat_then_unconfigured(user):
     with pytest.raises(HTTPException) as ei:
         _run(nr.test_telegram(_Req(), user=user))
     assert ei.value.status_code == 403 and ei.value.detail["code"] == "destination_unverified"
-    _run(_db().notifications.update_one({"user_id": user["id"]}, {"$set": {"telegram_verified": True}}, upsert=True))
+    from notification_settings import update_settings
+    _run(update_settings(_db(), user["id"], {"$set": {"telegram_verified": True}}))
     with pytest.raises(HTTPException) as ei2:
         _run(nr.test_telegram(_Req(), user=user))
     assert ei2.value.status_code == 400
@@ -154,7 +155,8 @@ def test_telegram_verify_handshake(monkeypatch, user):
         sent["text"] = text
         return True, "42", None
     monkeypatch.setattr(nr, "_telegram_send", _fake_send)
-    _run(_db().notifications.update_one({"user_id": user["id"]}, {"$set": {"telegram_bot_token": "x", "telegram_chat_id": "1"}}, upsert=True))
+    from notification_settings import update_settings
+    _run(update_settings(_db(), user["id"], {"$set": {"telegram_bot_token": "x", "telegram_chat_id": "1"}}))
     r = _run(nr.telegram_verify_start(_Req(), user=user))
     assert r["sent"] is True and r["provider_receipt"] == "42"
     import re as _re

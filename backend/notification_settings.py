@@ -42,7 +42,7 @@ async def get_settings(db, user_id: str) -> dict:
     legacy = await db.notifications.find_one({
         "user_id": user_id, "kind": {"$ne": KIND},
         "$or": [{k: {"$exists": True}} for k in ("telegram_bot_token", "telegram_chat_id", "telegram_enabled",
-                                                 "alerts", "webhook_secret", "last_test")]})
+                                                 "telegram_verified", "alerts", "webhook_secret", "last_test")]})
     if not legacy:
         return {}
     payload = {k: legacy[k] for k in SETTINGS_FIELDS if k in legacy}
