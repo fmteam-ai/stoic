@@ -147,6 +147,13 @@ function PostmortemCard({ pm }) {
                         <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border border-[#FF3B30]/40 text-[#FF3B30]">
                             {pm.trigger === "sl_hit" ? "SL HIT" : "CONSECUTIVE LOSS"}
                         </span>
+                        {pm.mirrored_accounts > 1 && (
+                            <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border border-[#52525B] text-[#A1A1AA]"
+                                  title="Same decision (symbol + direction + entry within ±2 min) mirrored on several accounts — counted once"
+                                  data-testid={`postmortem-mirrored-${pm.trade_id}`}>
+                                ×{pm.mirrored_accounts} ACCOUNTS · 1 DECISION
+                            </span>
+                        )}
                         {adj && (
                             <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border border-[#FFB000]/40 text-[#FFB000]"
                                   title={`Auto-tightened min_confidence ${adj.from}→${adj.to}`}>
@@ -164,6 +171,17 @@ function PostmortemCard({ pm }) {
             </div>
 
             <div className="p-4 space-y-3 text-sm leading-relaxed">
+                {Array.isArray(pm.ack_loosen_events) && pm.ack_loosen_events.length > 0 && (
+                    <div data-testid={`postmortem-ack-loosen-${pm.trade_id}`}
+                        className="border border-[#FF3B30]/40 bg-[#FF3B30]/5 px-2 py-1.5">
+                        <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-1">BROKER / EA LOOSENED THE STOP</div>
+                        <ul className="space-y-0.5 font-mono text-[11px] text-[#A1A1AA]">
+                            {pm.ack_loosen_events.map((e, i) => (
+                                <li key={i}>{e.from} → {e.to}<span className="text-[#52525B]"> · requested {e.requested ?? "—"} · {new Date(e.at).toLocaleString()}</span></li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
                 {Array.isArray(pm.sl_loosen_refusals) && pm.sl_loosen_refusals.length > 0 && (
                     <div data-testid={`postmortem-stop-guard-${pm.trade_id}`}>
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">STOP GUARD · LOOSEN REFUSED</div>

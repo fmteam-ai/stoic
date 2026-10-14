@@ -160,15 +160,25 @@ async def update_telegram(payload: TelegramConfigIn, user=Depends(get_current_us
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
 
+    # v1.60.37 — only a CHANGED token or chat_id resets the handshake. The form always sends chat_id, so a plain
+    # "enable alerts" save after verifying used to un-verify the binding.
+    binding_changed = False
     if payload.telegram_bot_token is not None:
-        if payload.telegram_bot_token == "":
-            update["telegram_bot_token"] = None
-        else:
-            update["telegram_bot_token"] = vault_encrypt(payload.telegram_bot_token.strip())
+        new_token = payload.telegram_bot_token.strip()
+        try:
+            cur_token = vault_decrypt(existing["telegram_bot_token"]) if existing.get("telegram_bot_token") else ""
+        except Exception:  # noqa: BLE001 — undecryptable stored token: treat as changed
+            cur_token = None
+        if new_token != (cur_token or ""):
+            binding_changed = True
+            update["telegram_bot_token"] = vault_encrypt(new_token) if new_token else None
 
     if payload.telegram_chat_id is not None:
-        update["telegram_chat_id"] = payload.telegram_chat_id.strip() or None
-    if payload.telegram_bot_token is not None or payload.telegram_chat_id is not None:
+        new_chat = payload.telegram_chat_id.strip() or None
+        if new_chat != (existing.get("telegram_chat_id") or None):
+            binding_changed = True
+            update["telegram_chat_id"] = new_chat
+    if binding_changed:
         update["telegram_verified"] = False        # r15 P2-02 — a new binding needs a fresh handshake
         update["telegram_verify"] = None
 

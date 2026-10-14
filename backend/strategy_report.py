@@ -9,6 +9,7 @@ signal (pnl = per-account average):
 """
 from __future__ import annotations
 
+import math
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -35,38 +36,47 @@ def _engine_of(trade: dict, sig: dict) -> str:
 
 
 def decisions_from(trades: list, signals: dict) -> list:
-    """One row per signal_id (mirrored accounts averaged); trades without a signal stay individual."""
-    groups: dict = {}
-    order = []
-    for t in trades:
-        key = str(t.get("signal_id") or f"trade:{t.get('_id')}")
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(t)
+    """One row per decision = symbol + direction + entry within ±2 min (mirrored accounts averaged). Each account
+    writes its own signal doc, so signal_id is NOT the grouping key; it only supplies MC / range-position features."""
+    from decision_groups import decision_key, group_decisions
     out = []
-    for key in order:
-        rows = groups[key]
-        sig = signals.get(str(rows[0].get("signal_id") or "")) or {}
+    for rows in group_decisions(trades):
+        sig = {}
+        for r in rows:                                   # first row that has a stored signal supplies the features
+            sig = signals.get(str(r.get("signal_id") or "")) or {}
+            if sig:
+                break
         pnls = [float(r.get("pnl") or 0) for r in rows]
         pnl = sum(pnls) / len(pnls)
         mc = (sig.get("monte_carlo") or {}).get("p_tp_first")
         feats = sig.get("session_feats") or {}
         ride = any(r.get("trend_ride_applied") or r.get("trend_ride") for r in rows) or bool(sig.get("trend_ride"))
-        out.append({"key": key, "engine": _engine_of(rows[0], sig), "symbol": rows[0].get("symbol"),
+        out.append({"key": decision_key(rows), "engine": _engine_of(rows[0], sig), "symbol": rows[0].get("symbol"),
                     "pnl": round(pnl, 2), "win": pnl > 0, "mirrored_accounts": len(rows),
                     "mc_p": None if mc is None else float(mc), "range_pos_pct": feats.get("range_pos_pct"),
                     "trend_ride": ride, "closed_at": rows[0].get("closed_at")})
     return out
 
 
+def wilson_interval(wins: int, n: int, z: float = 1.96) -> tuple[float, float]:
+    """Two-sided 95 % Wilson score interval for a win rate, in percent."""
+    if n <= 0:
+        return (0.0, 0.0)
+    p = wins / n
+    denom = 1 + z * z / n
+    centre = p + z * z / (2 * n)
+    margin = z * math.sqrt((p * (1 - p) + z * z / (4 * n)) / n)
+    return (round(100.0 * max(0.0, (centre - margin) / denom), 1), round(100.0 * min(1.0, (centre + margin) / denom), 1))
+
+
 def _bucket_rows(decisions: list, key_fn, order: list) -> list:
-    acc: dict = defaultdict(lambda: {"n": 0, "wins": 0, "pnl": 0.0, "pred": []})
+    acc: dict = defaultdict(lambda: {"n": 0, "wins": 0, "pnl": 0.0, "pred": [], "accounts": 0})
     for d in decisions:
         b = acc[key_fn(d)]
         b["n"] += 1
         b["wins"] += d["win"]
         b["pnl"] += d["pnl"]
+        b["accounts"] += d["mirrored_accounts"]
         if d["mc_p"] is not None:
             b["pred"].append(d["mc_p"])
     rows = []
@@ -74,8 +84,9 @@ def _bucket_rows(decisions: list, key_fn, order: list) -> list:
         if label not in acc:
             continue
         b = acc[label]
-        rows.append({"band": label, "n": b["n"], "wins": b["wins"],
-                     "win_rate": round(100.0 * b["wins"] / b["n"], 1),
+        lo, hi = wilson_interval(b["wins"], b["n"])
+        rows.append({"band": label, "n": b["n"], "wins": b["wins"], "trades": b["accounts"],
+                     "win_rate": round(100.0 * b["wins"] / b["n"], 1), "win_rate_ci": [lo, hi],
                      "predicted_win_rate": round(100.0 * sum(b["pred"]) / len(b["pred"]), 1) if b["pred"] else None,
                      "pnl": round(b["pnl"], 2), "avg_pnl": round(b["pnl"] / b["n"], 2)})
     return rows
@@ -91,10 +102,11 @@ def build_report(decisions: list, window_days: int) -> dict:
     for eng, rows in sorted(by_engine.items(), key=lambda kv: -len(kv[1])):
         n = len(rows)
         wins = sum(r["win"] for r in rows)
+        lo, hi = wilson_interval(wins, n)
         engines.append({
             "engine": eng, "label": ENGINE_LABELS.get(eng, eng), "decisions": n,
             "trades": sum(r["mirrored_accounts"] for r in rows),
-            "win_rate": round(100.0 * wins / n, 1), "pnl": round(sum(r["pnl"] for r in rows), 2),
+            "win_rate": round(100.0 * wins / n, 1), "win_rate_ci": [lo, hi], "pnl": round(sum(r["pnl"] for r in rows), 2),
             "mc_bands": _bucket_rows(rows, lambda d: _band(d["mc_p"], MC_BANDS), mc_order),
             "range_position": _bucket_rows(rows, lambda d: _band(d["range_pos_pct"], RANGE_BANDS), range_order),
             "trend_ride": _bucket_rows(rows, lambda d: "with trend-ride" if d["trend_ride"] else "without",
@@ -102,7 +114,7 @@ def build_report(decisions: list, window_days: int) -> dict:
         })
     return {"window_days": window_days, "decisions": len(decisions),
             "trades": sum(d["mirrored_accounts"] for d in decisions), "engines": engines,
-            "dedupe": "one decision per signal across mirrored accounts; $ = per-account average",
+            "dedupe": "one decision per symbol + direction + entry within ±2 min across mirrored accounts; $ = per-account average",
             "generated_at": datetime.now(timezone.utc).isoformat()}
 
 

@@ -4,6 +4,11 @@ Cleaned into four buckets (iter-212). An item lives in exactly ONE
 bucket; "production blocker" means live real-money scale-up waits on it.
 
 ## 1 · Production blockers
+- [ ] **EA v1.65 — `new_tp` on MODIFY_SL** (deferred 14 Oct, bundle with the next EA release that is needed anyway;
+  candidate → soak → promote). Server side is ready: the fill re-base command already carries `new_tp`, and the ack
+  model accepts `confirmed_position_tp`; until the EA honours it the broker TP stays and the trade's tp fields
+  deliberately keep the broker TP. The shipped mq5 is hash-bound to its signed release record, so no source edit
+  without a signed build.
 - [ ] **Signed Host Agent MSI** — pipeline is live
       (`.github/workflows/msi-release.yml`); BLOCKED on the code-signing
       certificate (`CODESIGN_PFX_BASE64` / `CODESIGN_PFX_PASSWORD`

@@ -138,27 +138,19 @@ def _crossed_weekend(t: dict) -> bool:
 
 
 def _decisions(ds: dict) -> list:
-    """v1.60.36 — mirrored trades of the SAME signal across accounts are ONE decision. Returns one representative
-    row per signal_id (first trade), with `pnl` = per-account AVERAGE (the decision's outcome, not × accounts),
-    `mirrored_accounts` = how many rows collapsed. Trades without a signal_id stay individual decisions."""
+    """v1.60.36/37 — mirrored trades of the SAME decision across accounts are ONE decision. Each account writes its
+    own signal doc, so grouping is symbol + direction + entry within ±2 min (`decision_groups`). One representative
+    row per cluster (first trade), `pnl` = per-account AVERAGE, `mirrored_accounts` = rows collapsed."""
     if "_decisions" in ds:
         return ds["_decisions"]
-    groups: dict = {}
-    order = []
-    for t in ds["trades"]:
-        key = str(t.get("signal_id") or f"trade:{t.get('_id')}")
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(t)
+    from decision_groups import decision_key, group_decisions
     out = []
-    for key in order:
-        rows = groups[key]
+    for rows in group_decisions(ds["trades"]):
         pnls = [float(r.get("pnl") or 0) for r in rows]
         rep = dict(rows[0])
         rep["pnl"] = round(sum(pnls) / len(pnls), 2)
         rep["mirrored_accounts"] = len(rows)
-        rep["decision_key"] = key
+        rep["decision_key"] = decision_key(rows)
         out.append(rep)
     ds["_decisions"] = out
     return out
@@ -203,7 +195,7 @@ def _aggregates(ds: dict) -> dict:
         "segments_worst_first": seg_rows[:12],
         "loss_reasons": {k: {"n": v["n"], "pnl": round(v["pnl"], 2)} for k, v in reasons.items()},
         "weekend_gap_loss_pnl": round(weekend_losses, 2),
-        "dedupe": "one decision per signal across mirrored accounts; $ per decision = per-account average",
+        "dedupe": "one decision per symbol + direction + entry within ±2 min across mirrored accounts; $ per decision = per-account average",
     }
 
 

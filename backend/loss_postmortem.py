@@ -235,6 +235,21 @@ async def _user_doc(db, user_id: str) -> dict | None:
             or await db.users.find_one({"id": user_id}))
 
 
+async def backfill_postmortem_opened_at(db, user_id: str) -> int:
+    """v1.60.37 — legacy post-mortems carry no `opened_at`; copy it from the trade so decision grouping works."""
+    missing = await db.loss_postmortems.find({"user_id": user_id, "opened_at": {"$exists": False}},
+                                             {"trade_id": 1}).to_list(length=2000)
+    n = 0
+    for d in missing:
+        try:
+            t = await db.trades.find_one({"_id": ObjectId(str(d.get("trade_id")))}, {"opened_at": 1})
+        except Exception:  # noqa: BLE001
+            t = None
+        await db.loss_postmortems.update_one({"_id": d["_id"]}, {"$set": {"opened_at": (t or {}).get("opened_at")}})
+        n += 1
+    return n
+
+
 async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | None:
     """Run a post-mortem if the trade is eligible. Idempotent — skips if a
     postmortem for this trade already exists.
@@ -318,8 +333,10 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
         "account_id": trade.get("account_id"),
         "origin": trade.get("origin"),
         "pattern_key": pattern_key,
-        "signal_id": str(sig_id) if sig_id else None,    # v1.60.36 — mirrored accounts collapse to one decision
+        "signal_id": str(sig_id) if sig_id else None,
+        "opened_at": trade.get("opened_at"),            # v1.60.37 — decision grouping (symbol+direction+entry ±2 min)
         "sl_loosen_refusals": trade.get("sl_loosen_refusals") or [],   # stop audit trail (v1.60.35)
+        "ack_loosen_events": trade.get("ack_loosen_events") or [],     # EA/broker loosened the stop (v1.60.37)
         "trigger": trigger,
         "diff": diff,
         "narrative": narrative,

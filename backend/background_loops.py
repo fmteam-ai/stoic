@@ -176,6 +176,12 @@ async def _analytics_loop():
             _analytics_loop._last = _t.time()
             t0 = datetime.now(timezone.utc)
             await run_daily_aggregates(get_db())
+            # v1.60.37 — keep the FRED snapshot warm here so the SIGNAL path (entry_context) only ever reads cache
+            try:
+                from macro.fred import get_macro_snapshot as _warm_fred
+                await _warm_fred()
+            except Exception as _fe:  # noqa: BLE001
+                logger.debug("fred warm-up skipped: %s", _fe)
             record_progress("_analytics_loop", processed=1,
                             started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
