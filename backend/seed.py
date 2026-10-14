@@ -560,6 +560,13 @@ async def ensure_indexes():
             logging.getLogger("seed").info("loss post-mortem pattern keys canonicalised: %d", n)
     except Exception:
         pass
+    try:
+        from strategy_engines import backfill_trade_engines
+        n = await backfill_trade_engines(db)
+        if n:
+            logging.getLogger("seed").info("trade rows: engine persisted from scope on %d row(s)", n)
+    except Exception:
+        pass
 
     # --- iter-91 · Heal stale panic / circuit-breaker trip flags ---------
     # Background: the original POST /api/bot/start endpoint flipped

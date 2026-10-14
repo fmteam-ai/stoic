@@ -312,6 +312,21 @@ async def remove_config(account_id: str, symbol: str = "EURUSD",
     return {"ok": True, "removed": key}
 
 
+@router.get("/exit-rules")
+async def exit_rules(days: int = 30, user=Depends(get_current_user)):
+    """v1.60.32 — Exit Rule Scoreboard: what the 0.5R breakeven and the 90-min time-stop did to closed scalp trades."""
+    from scalp.reports import exit_rule_scoreboard
+    return await exit_rule_scoreboard(get_db(), user["id"], days=max(1, min(int(days), 365)))
+
+
+@router.get("/expectancy")
+async def expectancy(user=Depends(get_current_user)):
+    """v1.60.32 — Shadow Expectancy Report per approved symbol (gate verdict + shadow and live-mode outcomes)."""
+    from scalp.instruments import APPROVED
+    from scalp.reports import shadow_expectancy_report
+    return await shadow_expectancy_report(get_db(), user["id"], list(APPROVED))
+
+
 @router.get("/status")
 async def status(account_id: str = None, user=Depends(get_current_user)):
     db = get_db()
