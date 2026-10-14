@@ -103,7 +103,9 @@ async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_u
                 _free_slot_filter(trade_id),
                 {"$set": {"pending_modification": {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "scalp_breakeven_0_5r",
                                                    "requested_at": datetime.now(timezone.utc).isoformat()},
-                          "be_target_sl": new_sl}})
+                          "be_target_sl": new_sl, "scalp_exit_rule": "breakeven_0_5r",
+                          "scalp_be_armed_at": datetime.now(timezone.utc).isoformat(),
+                          "scalp_be_armed_pips": round(pips_up, 1)}})
             if not res.matched_count:
                 return True
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
@@ -113,7 +115,8 @@ async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_u
             return True
     if scalp_time_stop_due(trade):
         await request_close(db, {"_id": trade_id}, reason="time_stop", actor="trade_manager", stamp={
-            "time_stop_minutes": SCALP_TIME_STOP_MIN,
+            "time_stop_minutes": SCALP_TIME_STOP_MIN, "scalp_exit_rule": "time_stop_90m",
+            "scalp_time_stop_pips": round(pips_up, 1),
             "pending_modification": {"type": "FULL_CLOSE", "reason": "scalp_time_stop",
                                      "requested_at": datetime.now(timezone.utc).isoformat()}})
         await ws_manager.broadcast(trade["user_id"], "trade_management", {

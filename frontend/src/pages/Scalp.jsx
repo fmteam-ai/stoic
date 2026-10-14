@@ -3,6 +3,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { ScalpExecutions } from "@/components/ScalpExecutions";
 import { ScalpReview } from "@/components/ScalpReview";
+import { ExitRuleScoreboard, ShadowExpectancyReport } from "@/components/ScalpReports";
 import { DriftGauge } from "@/components/DriftGauge";
 import { RefreshCw, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
@@ -287,6 +288,10 @@ export default function Scalp() {
                     </div>
                 )}
             </div>
+
+            {/* v1.60.32 — per-symbol live-gate progress + what the scalp exit rules did */}
+            <ShadowExpectancyReport />
+            <ExitRuleScoreboard days={30} />
 
             {/* Runners */}
             <div className="grid gap-4 mb-6">

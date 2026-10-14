@@ -63,6 +63,24 @@ ENGINE_LABELS = {
     "regime_adaptive": "ADAPTIVE · Regime Dispatch",
 }
 
+def engine_for_signal(signal: dict) -> str | None:
+    """v1.60.32 — the engine name persisted on every trade row. Falls back to `scope` when the signal carries the
+    engine there (real bot rows had engine=None and scope="hf_scalp_fast"); unknown scopes stay None."""
+    eng = (signal or {}).get("engine")
+    if eng:
+        return eng
+    scope = (signal or {}).get("scope")
+    return scope if scope in ENGINE_LABELS else None
+
+
+async def backfill_trade_engines(db) -> int:
+    """One-shot: rows written before v1.60.32 carry the engine only in `scope`."""
+    res = await db.trades.update_many(
+        {"engine": None, "scope": {"$in": list(ENGINE_LABELS)}},
+        [{"$set": {"engine": "$scope", "engine_backfilled": True}}])
+    return int(getattr(res, "modified_count", 0) or 0)
+
+
 # Regime-adaptive dispatch — the ADAPTIVE engine routes each evaluation to
 # the engine built for the CURRENT regime instead of holding for days when
 # a pinned engine's regime never shows up. CHOP/unknown stand down: None.
