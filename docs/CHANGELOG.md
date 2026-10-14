@@ -2,6 +2,11 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.37 — decision grouping + cache-only entry context (no risk settings or trading on/off changed)
+- **Mirrored-trade dedupe is now symbol + direction + entry within ±2 min** (`decision_groups.group_decisions`). Each account writes its own signal doc (OnEquity 13:46:43 vs RoboForex 13:46:44), so grouping by `signal_id` still double-counted. Used by `loss_advisor._decisions()` (aggregates, loss counts, shadow evidence / auto-apply sample), `strategy_report.decisions_from()` and `/postmortem/patterns` (now clustered in Python over the bounded window; post-mortems store `opened_at`). Signals only supply MC / range-position features.
+- **Entry context reads the FRED cache only** (`entry_context.cached_fred_series`): the signal path never waits on a FRED fetch; the analytics worker (`background_loops._analytics_loop`) keeps the 6 h snapshot warm.
+- Tests: `test_v1_60_36_scalp_exits.py` updated (+ grouping boundary test).
+
 ## v1.60.36 — scalp exits + evidence (revised; no risk settings or trading on/off changed)
 - **Trend-ride stays ON for scalps** (the 14 Oct winner reached +217 pips). Every trade now records `trend_ride_applied` (and the ride details in `trend_ride`) so both arms can be compared in the Strategy Report.
 - **tp fields in sync** (`exit_sync.py`): trend-ride widens `take_profit`, `tp1/tp2/tp3` and `tp_pips` together (per-tier caps) so tp3 == broker TP; the adaptive "TP ladder rescaled" rewrites `tp1/tp2/tp3` from the new `tp_pips`.

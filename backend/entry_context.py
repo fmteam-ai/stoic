@@ -50,11 +50,17 @@ def context_from_signal(signal: dict, fred_series: dict | None = None) -> dict:
     }
 
 
-async def build_entry_context(signal: dict) -> dict:
-    series = {}
+async def cached_fred_series() -> dict:
+    """v1.60.37 — CACHE ONLY. The signal path must never wait on a FRED fetch; the macro worker refreshes the
+    snapshot. A missing/expired cache simply yields None context values."""
     try:
-        from macro.fred import get_macro_snapshot
-        series = (await get_macro_snapshot() or {}).get("series") or {}
+        from database import get_db
+        doc = await get_db().fred_cache.find_one({"_id": "snapshot"}, {"payload.series": 1})
+        return ((doc or {}).get("payload") or {}).get("series") or {}
     except Exception as e:  # noqa: BLE001 — context must never block an entry
-        logger.debug("entry context: FRED snapshot unavailable: %s", e)
-    return context_from_signal(signal, series)
+        logger.debug("entry context: FRED cache unavailable: %s", e)
+        return {}
+
+
+async def build_entry_context(signal: dict) -> dict:
+    return context_from_signal(signal, await cached_fred_series())

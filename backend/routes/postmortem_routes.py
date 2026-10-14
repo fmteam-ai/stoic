@@ -107,36 +107,33 @@ async def list_patterns(days: int = 30, user=Depends(get_current_user)):
     """
     db = get_db()
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    pipeline = [
-        {"$match": {"user_id": user["id"], "created_at": {"$gte": cutoff}}},
-        {"$group": {
-            "_id": "$pattern_key",
-            "trades": {"$sum": 1},
-            # v1.60.36 — mirrored accounts: one decision per signal (legacy docs without signal_id count per trade)
-            "decisions": {"$addToSet": {"$ifNull": ["$signal_id", "$trade_id"]}},
-            "total_pnl": {"$sum": "$pnl"},
-            "last_at": {"$max": "$created_at"},
-            "sample_trade_id": {"$last": "$trade_id"},
-            "last_narrative": {"$last": "$narrative.summary"},
-            "last_suggestion": {"$last": "$narrative.suggested_guardrail"},
-        }},
-        {"$addFields": {"count": {"$size": "$decisions"}}},
-        {"$sort": {"count": -1}},
-        {"$limit": 25},
-    ]
+    # v1.60.37 — decisions = symbol + direction + entry within ±2 min (each account writes its own signal doc, so a
+    # signal_id $addToSet still double-counted mirrored trades). Cluster in Python over the bounded window.
+    from decision_groups import group_decisions
+    docs = await db.loss_postmortems.find(
+        {"user_id": user["id"], "created_at": {"$gte": cutoff}},
+        {"pattern_key": 1, "symbol": 1, "action": 1, "opened_at": 1, "created_at": 1, "pnl": 1, "trade_id": 1,
+         "narrative.summary": 1, "narrative.suggested_guardrail": 1},
+    ).sort("created_at", 1).to_list(length=5000)
+    by_key: dict = {}
+    for d in docs:
+        by_key.setdefault(d.get("pattern_key"), []).append(d)
     out = []
-    async for row in db.loss_postmortems.aggregate(pipeline):
+    for key, rows in by_key.items():
+        last = rows[-1]
         out.append({
-            "pattern_key": row["_id"],
-            "count": row["count"],
-            "trades": row.get("trades"),
-            "total_pnl": round(float(row.get("total_pnl") or 0), 2),
-            "last_at": row.get("last_at"),
-            "sample_trade_id": row.get("sample_trade_id"),
-            "last_narrative": row.get("last_narrative"),
-            "last_suggestion": row.get("last_suggestion"),
+            "pattern_key": key,
+            "count": len(group_decisions(rows)),
+            "trades": len(rows),
+            "total_pnl": round(sum(float(r.get("pnl") or 0) for r in rows), 2),
+            "last_at": last.get("created_at"),
+            "sample_trade_id": last.get("trade_id"),
+            "last_narrative": (last.get("narrative") or {}).get("summary"),
+            "last_suggestion": (last.get("narrative") or {}).get("suggested_guardrail"),
         })
-    return {"items": out, "window_days": days}
+    out.sort(key=lambda r: -r["count"])
+    return {"items": out[:25], "window_days": days,
+            "dedupe": "count = decisions (symbol + direction + entry within ±2 min); trades = post-mortems"}
 
 
 def _serialize_review(d: dict) -> dict:

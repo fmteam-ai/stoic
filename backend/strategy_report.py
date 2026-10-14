@@ -35,25 +35,22 @@ def _engine_of(trade: dict, sig: dict) -> str:
 
 
 def decisions_from(trades: list, signals: dict) -> list:
-    """One row per signal_id (mirrored accounts averaged); trades without a signal stay individual."""
-    groups: dict = {}
-    order = []
-    for t in trades:
-        key = str(t.get("signal_id") or f"trade:{t.get('_id')}")
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(t)
+    """One row per decision = symbol + direction + entry within ±2 min (mirrored accounts averaged). Each account
+    writes its own signal doc, so signal_id is NOT the grouping key; it only supplies MC / range-position features."""
+    from decision_groups import decision_key, group_decisions
     out = []
-    for key in order:
-        rows = groups[key]
-        sig = signals.get(str(rows[0].get("signal_id") or "")) or {}
+    for rows in group_decisions(trades):
+        sig = {}
+        for r in rows:                                   # first row that has a stored signal supplies the features
+            sig = signals.get(str(r.get("signal_id") or "")) or {}
+            if sig:
+                break
         pnls = [float(r.get("pnl") or 0) for r in rows]
         pnl = sum(pnls) / len(pnls)
         mc = (sig.get("monte_carlo") or {}).get("p_tp_first")
         feats = sig.get("session_feats") or {}
         ride = any(r.get("trend_ride_applied") or r.get("trend_ride") for r in rows) or bool(sig.get("trend_ride"))
-        out.append({"key": key, "engine": _engine_of(rows[0], sig), "symbol": rows[0].get("symbol"),
+        out.append({"key": decision_key(rows), "engine": _engine_of(rows[0], sig), "symbol": rows[0].get("symbol"),
                     "pnl": round(pnl, 2), "win": pnl > 0, "mirrored_accounts": len(rows),
                     "mc_p": None if mc is None else float(mc), "range_pos_pct": feats.get("range_pos_pct"),
                     "trend_ride": ride, "closed_at": rows[0].get("closed_at")})
@@ -102,7 +99,7 @@ def build_report(decisions: list, window_days: int) -> dict:
         })
     return {"window_days": window_days, "decisions": len(decisions),
             "trades": sum(d["mirrored_accounts"] for d in decisions), "engines": engines,
-            "dedupe": "one decision per signal across mirrored accounts; $ = per-account average",
+            "dedupe": "one decision per symbol + direction + entry within ±2 min across mirrored accounts; $ = per-account average",
             "generated_at": datetime.now(timezone.utc).isoformat()}
 
 

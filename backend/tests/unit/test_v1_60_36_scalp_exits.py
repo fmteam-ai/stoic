@@ -119,9 +119,11 @@ def test_slippage_is_measured_against_the_signal_price_too():
 
 
 # ── 5 ──────────────────────────────────────────────────────────────────────────────────────────────────────────
-def _closed(sig, pnl, acct, **kw):
-    t = {"_id": ObjectId(), "user_id": "u1", "status": "closed", "origin": "auto", "symbol": "XAUUSD", "pnl": pnl,
-         "signal_id": sig, "account_id": acct, "scope": "hf_scalp_fast", "engine": None, "closed_at": "2026-10-14T18:00:00+00:00"}
+def _closed(sig, pnl, acct, opened="2026-10-14T13:46:43+00:00", action="SELL", **kw):
+    # v1.60.37 — each account has its OWN signal doc; mirrored rows share symbol + direction + entry (±2 min)
+    t = {"_id": ObjectId(), "user_id": "u1", "status": "closed", "origin": "auto", "symbol": "XAUUSD", "action": action,
+         "pnl": pnl, "signal_id": str(ObjectId()) if sig == "own" else sig, "account_id": acct, "scope": "hf_scalp_fast",
+         "engine": None, "opened_at": opened, "closed_at": "2026-10-14T18:00:00+00:00"}
     t.update(kw)
     return t
 
@@ -132,11 +134,16 @@ def test_strategy_report_bands_dedupe_mirrored_accounts_and_split_trend_ride():
     signals = {s1: {"monte_carlo": {"p_tp_first": 0.35}, "session_feats": {"range_pos_pct": 6.0}, "trend_ride": None},
                s2: {"monte_carlo": {"p_tp_first": 0.55}, "session_feats": {"range_pos_pct": 55.0}, "trend_ride": {"direction": "down"}},
                s3: {"monte_carlo": {"p_tp_first": 0.33}, "session_feats": {"range_pos_pct": 8.0}, "trend_ride": None}}
-    trades = [_closed(s1, -40, "a"), _closed(s1, -44, "b"), _closed(s1, -36, "c"),          # one losing decision, 3 accounts
-              _closed(s2, 120, "a", trend_ride_applied=True), _closed(s2, 110, "b", trend_ride_applied=True),
-              _closed(s3, -30, "a")]
+    # OnEquity 13:46:43 / RoboForex 13:46:44 / third account 13:47:30 → ONE decision although 3 signal docs
+    trades = [_closed(s1, -40, "a"), _closed("own", -44, "b", opened="2026-10-14T13:46:44+00:00"),
+              _closed("own", -36, "c", opened="2026-10-14T13:47:30+00:00"),
+              _closed(s2, 120, "a", opened="2026-10-14T15:10:00+00:00", action="BUY", trend_ride_applied=True),
+              _closed("own", 110, "b", opened="2026-10-14T15:10:05+00:00", action="BUY", trend_ride_applied=True),
+              _closed(s3, -30, "a", opened="2026-10-14T13:50:00+00:00")]          # 3 min 17 s later → separate decision
     dec = decisions_from(trades, signals)
-    assert len(dec) == 3 and dec[0]["pnl"] == -40.0 and dec[0]["mirrored_accounts"] == 3 and dec[1]["trend_ride"] is True
+    assert len(dec) == 3 and dec[0]["pnl"] == -40.0 and dec[0]["mirrored_accounts"] == 3
+    buy = next(d for d in dec if d["key"].startswith("XAUUSD|BUY"))
+    assert buy["trend_ride"] is True and buy["mirrored_accounts"] == 2 and buy["pnl"] == 115.0
     rep = build_report(dec, 30)
     assert rep["decisions"] == 3 and rep["trades"] == 6
     eng = rep["engines"][0]
@@ -174,7 +181,9 @@ def test_routine_broker_confirmed_backfill_is_not_an_operational_failure():
 def test_loss_review_counts_one_decision_per_signal_and_requires_20_signals_to_auto_apply():
     import loss_advisor as la
     s1 = str(ObjectId())
-    ds = {"trades": [_closed(s1, -40, "a"), _closed(s1, -44, "b"), _closed(s1, -36, "c"), _closed(None, 20, "a")],
+    ds = {"trades": [_closed(s1, -40, "a"), _closed("own", -44, "b", opened="2026-10-14T13:46:44+00:00"),
+                     _closed("own", -36, "c", opened="2026-10-14T13:47:00+00:00"),
+                     _closed(None, 20, "a", opened="2026-10-14T16:00:00+00:00")],
           "signals": {s1: {"confidence": 50, "regime": "CHOP", "session": "london"}}, "losses": [], "since_loss": "2026-10-01"}
     agg = la._aggregates(ds)
     assert agg["trades"] == 4 and agg["decisions"] == 2 and agg["loss_decisions"] == 1
@@ -186,8 +195,21 @@ def test_loss_review_counts_one_decision_per_signal_and_requires_20_signals_to_a
     strong["evidence"]["distinct_signals"] = 20
     assert la._qualifies(strong) is True
     pm = _read("backend", "routes", "postmortem_routes.py")
-    assert '"decisions": {"$addToSet": {"$ifNull": ["$signal_id", "$trade_id"]}}' in pm and '{"$size": "$decisions"}' in pm
-    assert '"signal_id": str(sig_id) if sig_id else None' in _read("backend", "loss_postmortem.py")
+    assert '"count": len(group_decisions(rows))' in pm and '"$addToSet"' not in pm
+    assert '"opened_at": trade.get("opened_at")' in _read("backend", "loss_postmortem.py")
+
+
+def test_decision_grouping_is_symbol_direction_and_entry_within_two_minutes():
+    from decision_groups import group_decisions
+    rows = [_closed("own", -40, "a"), _closed("own", -44, "b", opened="2026-10-14T13:46:44+00:00"),
+            _closed("own", -36, "c", opened="2026-10-14T13:48:43+00:00"),                 # exactly +120 s → same
+            _closed("own", 10, "a", opened="2026-10-14T13:48:44+00:00"),                  # +121 s → new decision
+            _closed("own", 5, "a", action="BUY"),                                          # other direction
+            _closed("own", 5, "a", **{"symbol": "GOLD#"}),                                 # broker alias → same symbol
+            _closed("own", 5, "a", **{"symbol": "EURUSD"})]
+    clusters = group_decisions(rows)
+    sizes = sorted(len(c) for c in clusters)
+    assert sizes == [1, 1, 1, 4] and len(clusters) == 4
 
 
 # ── 9 ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -206,4 +228,8 @@ def test_entry_context_records_dxy_vix_10y_mtf_and_setup_score_for_scalps():
     assert diff["dxy_at_entry"] == 103.2 and diff["vix_at_entry"] == 18.4 and diff["y10y_at_entry"] == 4.12
     assert diff["mtf_aligned_at_entry"] is True and diff["setup_score_at_entry"] == 71.0 and diff["aplus_evaluated_at_entry"] is False
     assert 'signal["entry_context"] = await build_entry_context(signal)' in _read("backend", "bot_runner.py")
+    # v1.60.37 — the signal path reads the FRED cache only; the analytics worker keeps it warm
+    ec = _read("backend", "entry_context.py")
+    assert "get_macro_snapshot" not in ec and 'fred_cache.find_one({"_id": "snapshot"}' in ec
+    assert "_warm_fred" in _read("backend", "background_loops.py")
     assert '"entry_context": _ectx' in _read("backend", "scalp", "engine.py")

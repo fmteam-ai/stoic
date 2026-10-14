@@ -318,7 +318,8 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
         "account_id": trade.get("account_id"),
         "origin": trade.get("origin"),
         "pattern_key": pattern_key,
-        "signal_id": str(sig_id) if sig_id else None,    # v1.60.36 — mirrored accounts collapse to one decision
+        "signal_id": str(sig_id) if sig_id else None,
+        "opened_at": trade.get("opened_at"),            # v1.60.37 — decision grouping (symbol+direction+entry ±2 min)
         "sl_loosen_refusals": trade.get("sl_loosen_refusals") or [],   # stop audit trail (v1.60.35)
         "trigger": trigger,
         "diff": diff,
