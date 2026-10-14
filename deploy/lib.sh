@@ -292,9 +292,14 @@ build_with_provenance() {
   resolve_git_sha || return 1
   disable_registry_compose_file   # a build never runs under the registry overlay (pull_policy: never + pinned images)
   docker compose build || { echo "ERROR: image build failed — see the build log above (nothing was restarted)"; return 1; }
-  local img
+  local img repo_digest
   img=$(docker compose config --images 2>/dev/null | grep -m1 backend || true)
-  STOIC_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' "${img}" 2>/dev/null || true)
+  # v1.60.34 — pin the REGISTRY digest (RepoDigests, what release.yml writes into rc_lock), not the local .Id content
+  # hash: the two differ, so the release gate's digest compare failed even on the right image. A never-pushed local
+  # build has no RepoDigests → fall back to .Id (build mode can never satisfy the gate anyway).
+  repo_digest=$(docker inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "${img}" 2>/dev/null || true)
+  if [ -n "${repo_digest}" ]; then STOIC_IMAGE_DIGEST="${repo_digest#*@}"
+  else STOIC_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' "${img}" 2>/dev/null || true); fi
   if [ -z "${STOIC_IMAGE_DIGEST}" ]; then
     echo "ERROR: could not resolve the built backend image digest (${img})"
     return 1

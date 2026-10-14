@@ -39,6 +39,12 @@ def lock_matches_build(lock: dict | None = None, build_sha: str | None = None) -
                                            "(mount the adopted release/rc_lock.json or set RC_LOCK_PATH)")}
 
 
+def _bare_digest(ref) -> str:
+    """`ghcr.io/org/stoic-backend@sha256:8d7b…` and a bare `sha256:8d7b…` name the same image — compare the digest only
+    (v1.60.34: the full repo@digest reference in rc_lock vs the bare STOIC_IMAGE_DIGEST never matched)."""
+    return str(ref or "").strip().split("@")[-1]
+
+
 def evaluate(lock: dict | None = None, env: dict | None = None, ea_signed: bool | None = None) -> dict:
     """Pure check. Returns {ok, failures[], lock_commit, image_digest}."""
     env = env if env is not None else os.environ
@@ -56,10 +62,11 @@ def evaluate(lock: dict | None = None, env: dict | None = None, ea_signed: bool 
     if not (images.get("backend") and images.get("frontend")):
         fails.append("rc_lock carries no image digests — only release.yml writes them (GHCR push → --backend-digest/--frontend-digest); "
                      "a build-mode / on-host build deploy can never satisfy this gate")
-    running = env.get("STOIC_IMAGE_DIGEST") or ""
+    running = _bare_digest(env.get("STOIC_IMAGE_DIGEST"))
+    locked = _bare_digest(images.get("backend"))
     if not running:
         fails.append("STOIC_IMAGE_DIGEST not injected — running image identity unknown")
-    elif images.get("backend") and running != images["backend"]:
+    elif locked and running != locked:
         fails.append("running image digest differs from the locked backend digest")
     if not ea_signed:
         fails.append("no signed EX5 release record for the shipped EA")
