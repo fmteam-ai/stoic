@@ -47,6 +47,7 @@ class TelegramConfigIn(BaseModel):
     telegram_enabled: bool = True
     alerts: Optional[Dict[str, bool]] = None
     alert_email: Optional[str] = None            # "" clears → alerts fall back to the login e-mail
+    alert_email_categories: Optional[Dict[str, bool]] = None   # which categories go to the alert address
 
 
 def _serialize(doc: dict) -> dict:
@@ -62,6 +63,8 @@ def _serialize(doc: dict) -> dict:
         "last_test": doc.get("last_test") or {},
         "alert_email": doc.get("alert_email"),
         "alert_email_verified": bool(doc.get("alert_email_verified")),
+        "alert_email_categories": {c: bool((doc.get("alert_email_categories") or {}).get(c, True))
+                                   for c in ns.ALERT_EMAIL_CATEGORIES},
         "alerts": alerts,
         "updated_at": doc.get("updated_at"),
     }
@@ -181,6 +184,9 @@ async def update_telegram(payload: TelegramConfigIn, user=Depends(get_current_us
             raise HTTPException(status_code=422, detail={"code": "invalid_email", "message": "That does not look like an e-mail address."})
         if addr != (existing.get("alert_email") or ""):
             update.update({"alert_email": addr or None, "alert_email_verified": False, "alert_email_verify": None})
+    if payload.alert_email_categories is not None:
+        update["alert_email_categories"] = {c: bool(payload.alert_email_categories.get(c, True))
+                                            for c in ns.ALERT_EMAIL_CATEGORIES}
 
     await update_settings(db, user["id"], {"$set": update})
     doc = await get_settings(db, user["id"])
@@ -281,7 +287,7 @@ async def test_email(request: Request, user=Depends(get_current_user)):
             "message": "Email delivery is not configured on this server."})
     sent_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     from html import escape as _esc
-    dest = await alert_email_for(db, user["id"], user.get("email"))
+    dest = await alert_email_for(db, user["id"], user.get("email"), category="trading")
     res = await email_sender.send_email(
         dest,
         "[TEST] STOIC · Test alert — no action required",

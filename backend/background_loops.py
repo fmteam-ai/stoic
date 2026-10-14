@@ -511,8 +511,10 @@ async def renewal_reminder_sweep(db, now=None):
                         u = None
                     if u and u.get("email"):
                         plan_label = (sub.get("current_plan_id") or "plan").replace("_", " ").title()
+                        from notification_settings import alert_email_for
+                        rcpt = await alert_email_for(db, str(sub["user_id"]), u["email"], category="renewal")
                         await email_sender.send_email(
-                            recipient=u["email"],
+                            recipient=rcpt,
                             subject=f"Your STOIC plan ends in {days} day{'s' if days > 1 else ''} — renew to keep trading",
                             html=_renewal_email_html(
                                 u.get("name") or "trader", plan_label,

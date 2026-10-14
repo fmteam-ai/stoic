@@ -298,6 +298,8 @@ async def email_weekly_digest(days: int = 7, user=Depends(get_current_user)):
     recipient = user.get("email")
     if not recipient:
         raise HTTPException(status_code=400, detail="User has no email on file")
+    from notification_settings import alert_email_for
+    recipient = await alert_email_for(get_db(), user["id"], recipient, category="digest")
 
     # Build the same payload as the GET, with AI reflection enabled.
     payload = await weekly_digest(days=days, include_ai=True, user=user)

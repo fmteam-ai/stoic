@@ -17,10 +17,12 @@ from datetime import datetime, timedelta, timezone
 from pymongo.errors import DuplicateKeyError
 
 KIND = "telegram_settings"
+ALERT_EMAIL_CATEGORIES = ("trading", "outage", "renewal", "support", "digest")
 SETTINGS_FIELDS = ("telegram_enabled", "telegram_bot_token", "telegram_chat_id", "telegram_verified",
                    "telegram_verified_at", "telegram_verified_chat_id", "telegram_verify", "alerts", "last_test",
                    "webhook_secret", "webhook_url", "webhook_enabled_at", "updated_at",
-                   "alert_email", "alert_email_verified", "alert_email_verified_at", "alert_email_verify")
+                   "alert_email", "alert_email_verified", "alert_email_verified_at", "alert_email_verify",
+                   "alert_email_categories")
 _EMAIL_RE = re.compile(r"^[^@\s]{1,64}@[^@\s]+\.[^@\s]+$")
 
 
@@ -72,10 +74,15 @@ def valid_email(addr: str) -> bool:
     return bool(_EMAIL_RE.match((addr or "").strip())) and len(addr.strip()) <= 254
 
 
-async def alert_email_for(db, user_id: str, login_email: str | None = None) -> str | None:
-    """Verified alert address first, login e-mail otherwise."""
+async def alert_email_for(db, user_id: str, login_email: str | None = None, category: str = "trading") -> str | None:
+    """Verified alert address when the category is routed there, login e-mail otherwise.
+
+    Categories: trading (test + trade alerts) · outage (VPS/EA silent) · renewal (subscription) · support (ticket
+    replies) · digest (weekly digest). Security mail (login OTP, new-login, password reset) never leaves the login
+    address and does not go through here."""
     s = await get_settings(db, user_id)
-    if s.get("alert_email") and s.get("alert_email_verified") is True:
+    routed = (s.get("alert_email_categories") or {}).get(category, True)
+    if s.get("alert_email") and s.get("alert_email_verified") is True and routed:
         return s["alert_email"]
     if login_email:
         return login_email

@@ -27,7 +27,7 @@ async def _owner_email(db, user_id: str) -> str | None:
     login = (u or {}).get("email")
     try:
         from notification_settings import alert_email_for
-        return await alert_email_for(db, str((u or {}).get("_id") or user_id), login)
+        return await alert_email_for(db, str((u or {}).get("_id") or user_id), login, category="outage")
     except Exception:  # noqa: BLE001
         return login
 

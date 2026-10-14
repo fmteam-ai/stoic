@@ -9,6 +9,14 @@ import {
     AlertTriangle, MessageSquare, Webhook, Power, Mail,
 } from "lucide-react";
 
+const EMAIL_CATEGORIES = [
+    { id: "trading", label: "TRADING", hint: "Test alerts and trade e-mails" },
+    { id: "outage", label: "OUTAGE", hint: "VPS / EA silent, heartbeat lost" },
+    { id: "renewal", label: "RENEWAL", hint: "Subscription ending reminders" },
+    { id: "support", label: "SUPPORT", hint: "Replies to your support tickets" },
+    { id: "digest", label: "DIGEST", hint: "Weekly performance digest" },
+];
+
 const EVENT_LABELS = {
     trade_opened: { label: "Trade Opened", desc: "When a new trade is filled on MT5 / paper engine", color: "#00FF41" },
     trade_closed: { label: "Trade Closed", desc: "When SL/TP hits or manual close", color: "#A1A1AA" },
@@ -29,6 +37,7 @@ export default function Notifications() {
     const [token, setToken] = useState("");
     const [chatId, setChatId] = useState("");
     const [alertEmail, setAlertEmail] = useState("");
+    const [emailCats, setEmailCats] = useState({});
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
@@ -45,6 +54,7 @@ export default function Notifications() {
             setCfg(a.data);
             setChatId(a.data.telegram_chat_id || "");
             setAlertEmail(a.data.alert_email || "");
+            setEmailCats(a.data.alert_email_categories || {});
             setWebhook(b.data);
         } catch (e) { setErr(formatApiError(e)); }
         finally { setLoading(false); }
@@ -58,6 +68,7 @@ export default function Notifications() {
                 telegram_enabled: cfg.telegram_enabled,
                 telegram_chat_id: chatId.trim() || null,
                 alert_email: alertEmail.trim(),
+                alert_email_categories: emailCats,
                 alerts: cfg.alerts,
             };
             if (token.trim()) payload.telegram_bot_token = token.trim();
@@ -198,6 +209,21 @@ export default function Notifications() {
                                 <div className={`font-mono text-[10px] tracking-widest mt-1.5 ${cfg.alert_email_verified ? "text-[#00FF41]" : "text-[#FFB000]"}`}
                                     data-testid="alert-email-status">
                                     {cfg.alert_email_verified ? `VERIFIED · alerts go to ${cfg.alert_email}` : `UNVERIFIED · alerts still go to ${user?.email || "your login e-mail"} until you verify`}
+                                </div>
+                            )}
+                            {cfg?.alert_email && (
+                                <div className="mt-2.5 flex flex-wrap gap-1.5" data-testid="alert-email-categories">
+                                    {EMAIL_CATEGORIES.map(c => {
+                                        const on = emailCats[c.id] !== false;
+                                        return (
+                                            <button key={c.id} type="button" onClick={() => setEmailCats(m => ({ ...m, [c.id]: !on }))}
+                                                data-testid={`alert-email-cat-${c.id}`} aria-pressed={on} title={c.hint}
+                                                className={`px-2.5 py-1 border font-mono text-[10px] tracking-widest transition-colors ${on ? "border-[#00FF41]/50 text-[#00FF41] bg-[#00FF41]/5" : "border-[#1F1F1F] text-[#52525B] hover:text-[#A1A1AA]"}`}>
+                                                {c.label}
+                                            </button>
+                                        );
+                                    })}
+                                    <span className="font-mono text-[9px] text-[#3F3F46] self-center ml-1">lit = alert e-mail · dim = login e-mail · security mail always goes to the login e-mail</span>
                                 </div>
                             )}
                         </div>

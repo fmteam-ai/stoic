@@ -98,7 +98,7 @@ def test_alert_email_is_separate_verifiable_and_falls_back_to_login_email():
 def test_routes_and_ui_expose_the_alert_email():
     src = open(os.path.join(BACKEND, "routes", "notification_routes.py"), encoding="utf-8").read()
     assert '"/email/verify/start"' in src and '"/email/verify/confirm"' in src
-    assert "dest = await alert_email_for(db, user[\"id\"], user.get(\"email\"))" in src
+    assert "dest = await alert_email_for(db, user[\"id\"], user.get(\"email\"), category=\"trading\")" in src
     assert '"alert_email": doc.get("alert_email")' in src
     root = os.path.dirname(BACKEND)
     page = open(os.path.join(root, "frontend", "src", "pages", "Notifications.jsx"), encoding="utf-8").read()

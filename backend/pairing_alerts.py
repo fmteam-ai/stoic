@@ -105,7 +105,7 @@ async def notify_owner(db, acc: dict, info: dict, url: str) -> None:
         from bson import ObjectId
         from email_sender import send_email
         from notification_settings import alert_email_for
-        email = await alert_email_for(db, uid) if ObjectId.is_valid(uid) else None
+        email = await alert_email_for(db, uid, category="outage") if ObjectId.is_valid(uid) else None
         if email:
             from html import escape
             html = "<p>" + "</p><p>".join(escape(ln) for ln in lines) + "</p>"   # audit #10 — host/label are client-supplied
