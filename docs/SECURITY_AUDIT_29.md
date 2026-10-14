@@ -13,7 +13,7 @@ regression re-check of the #28 execution items (`workers/reconciliation.py`, `ex
 plus a READ-ONLY unauthenticated perimeter sweep of the DEPLOYED app (https://stoicaibot.com) compared with the preview.
 Source traced end-to-end; no mutating request, no credential used, no secret printed or committed.
 
-**Verdict: PASS — no P0/P1/P2. Two carried P3 items, two P3 hardening notes.**
+**Verdict: PASS — no P0/P1/P2. Two carried P3 items, two P3 hardening notes.** _Update 2026-10-14: SEC-029-1 CLOSED — production password rotated by the operator, preview re-hashed, sessions revoked, old fingerprint retired in `scripts/retired_credentials.sha256`._
 
 | ID | Sev | Location | Finding | Status |
 |---|---|---|---|---|
