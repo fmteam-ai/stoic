@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { StrategyReport } from "@/components/StrategyReport";
 import { FailureTaxonomyCard } from "@/components/FailureTaxonomyCard";
 import { AttributionPanel } from "@/components/AttributionPanel";
 import { VerdictEffectivenessPanel } from "@/components/VerdictEffectivenessPanel";
@@ -499,6 +500,9 @@ export default function LossLab() {
                         {settings?.auto_tighten_enabled ? "● ENABLED" : "○ DISABLED"}
                     </button>
                 </div>
+
+                {/* v1.60.36 — evidence table before anyone changes a setting */}
+                <StrategyReport />
 
                 {/* Empty state */}
                 {patterns.length === 0 && postmortems.length === 0 && (

@@ -131,6 +131,20 @@ def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict)
     entry_sentiment = (signal.get("sentiment") or {}).get("score")
     cur_sentiment = (current_macro.get("sentiment") or {}).get("score")
     cur_summary = current_macro.get("summary") or {}
+    # v1.60.36 — entry-time context stamped on the signal/trade (scalp engines included); legacy fallbacks after
+    ec = signal.get("entry_context") or {}
+    ec_mtf = ec.get("mtf") or {}
+    ec_aplus = ec.get("aplus") or {}
+    dxy_entry = ec.get("dxy")
+    if dxy_entry is None:
+        dxy_entry = ((entry_macro.get("dxy") or {}).get("value") if isinstance(entry_macro.get("dxy"), dict)
+                     else (signal.get("dxy") or {}).get("current_price") if isinstance(signal.get("dxy"), dict) else None)
+    mtf_entry = ec_mtf.get("aligned")
+    if mtf_entry is None:
+        mtf_entry = (signal.get("mtf_gate") or {}).get("aligned")
+    aplus_entry = ec_aplus.get("passed")
+    if aplus_entry is None:
+        aplus_entry = (signal.get("aplus_confluence") or {}).get("passed")
     return {
         "regime_at_entry": (signal.get("regime") or {}).get("regime") if isinstance(signal.get("regime"), dict) else signal.get("regime"),
         "session_at_entry": (entry_session.get("primary") if isinstance(entry_session, dict) else None) or "off",
@@ -143,12 +157,18 @@ def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict)
             entry_sentiment is not None and cur_sentiment is not None
             and ((entry_sentiment > 0) != (cur_sentiment > 0))
         ),
-        "dxy_at_entry": (entry_macro.get("dxy") or {}).get("value") if isinstance(entry_macro.get("dxy"), dict) else None,
+        "dxy_at_entry": dxy_entry,
         "dxy_now": cur_summary.get("dxy"),
+        "vix_at_entry": ec.get("vix"),
         "vix_now": cur_summary.get("vix"),
+        "y10y_at_entry": ec.get("y10y"),
+        "real_yield_10y_at_entry": ec.get("real_yield_10y"),
         "y10y_now": cur_summary.get("y10y"),
-        "mtf_aligned_at_entry": (signal.get("mtf_gate") or {}).get("aligned"),
-        "aplus_passed_at_entry": (signal.get("aplus_confluence") or {}).get("passed"),
+        "mtf_aligned_at_entry": mtf_entry,
+        "mtf_dominant_at_entry": ec_mtf.get("dominant"),
+        "aplus_passed_at_entry": aplus_entry,
+        "aplus_evaluated_at_entry": bool(ec_aplus.get("evaluated")),
+        "setup_score_at_entry": ec_aplus.get("setup_score"),
         "confidence_at_entry": signal.get("confidence"),
     }
 
@@ -263,6 +283,8 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
             signal = await db.signals.find_one({"_id": ObjectId(sig_id)}) or {}
         except Exception:
             pass
+    if not signal.get("entry_context") and trade.get("entry_context"):
+        signal = {**signal, "entry_context": trade["entry_context"]}
 
     # Current market snapshot — best effort, fall back to empty.
     cur_macro = {}
@@ -296,6 +318,7 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
         "account_id": trade.get("account_id"),
         "origin": trade.get("origin"),
         "pattern_key": pattern_key,
+        "signal_id": str(sig_id) if sig_id else None,    # v1.60.36 — mirrored accounts collapse to one decision
         "sl_loosen_refusals": trade.get("sl_loosen_refusals") or [],   # stop audit trail (v1.60.35)
         "trigger": trigger,
         "diff": diff,

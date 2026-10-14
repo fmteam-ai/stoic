@@ -41,6 +41,7 @@ COOLDOWN_HOURS = 24      # min gap between auto reviews per user
 # iter-55 · Daily Auto-Learning — evidence-gated auto-apply (user-consented).
 AUTO_APPLY_MIN_NET = 100.0   # $ net effect over the shadow window
 AUTO_APPLY_RATIO = 2.0       # losses_avoided must be ≥ 2× wins_missed
+AUTO_APPLY_MIN_SIGNALS = 20  # v1.60.36 — ≥ this many DISTINCT signals in the segment before a measure may auto-apply
 GATE_TYPES = {"min_confidence", "velocity_veto", "session_block", "symbol_pause"}
 MAX_ACTIVE_GUARDS = 5
 
@@ -136,17 +137,46 @@ def _crossed_weekend(t: dict) -> bool:
     return False
 
 
+def _decisions(ds: dict) -> list:
+    """v1.60.36 — mirrored trades of the SAME signal across accounts are ONE decision. Returns one representative
+    row per signal_id (first trade), with `pnl` = per-account AVERAGE (the decision's outcome, not × accounts),
+    `mirrored_accounts` = how many rows collapsed. Trades without a signal_id stay individual decisions."""
+    if "_decisions" in ds:
+        return ds["_decisions"]
+    groups: dict = {}
+    order = []
+    for t in ds["trades"]:
+        key = str(t.get("signal_id") or f"trade:{t.get('_id')}")
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(t)
+    out = []
+    for key in order:
+        rows = groups[key]
+        pnls = [float(r.get("pnl") or 0) for r in rows]
+        rep = dict(rows[0])
+        rep["pnl"] = round(sum(pnls) / len(pnls), 2)
+        rep["mirrored_accounts"] = len(rows)
+        rep["decision_key"] = key
+        out.append(rep)
+    ds["_decisions"] = out
+    return out
+
+
 def _aggregates(ds: dict) -> dict:
     segs: dict = defaultdict(lambda: {"n": 0, "wins": 0, "pnl": 0.0})
     reasons: dict = defaultdict(lambda: {"n": 0, "pnl": 0.0})
     weekend_losses = 0.0
-    for t in ds["trades"]:
+    decisions = _decisions(ds)
+    loss_decisions = [d for d in decisions if d["pnl"] < 0 and (d.get("closed_at") or "") >= ds["since_loss"]]
+    for t in decisions:
         pnl = float(t.get("pnl") or 0)
         key = "|".join(_seg(t, ds))
         segs[key]["n"] += 1
         segs[key]["wins"] += pnl > 0
         segs[key]["pnl"] += pnl
-    for t in ds["losses"]:
+    for t in loss_decisions:
         pnl = float(t.get("pnl") or 0)
         r = (t.get("close_reason") or "unknown").split("+")[0]
         reasons[r]["n"] += 1
@@ -165,12 +195,15 @@ def _aggregates(ds: dict) -> dict:
         "window_days": WINDOW_DAYS,
         "shadow_days": SHADOW_DAYS,
         "trades": len(ds["trades"]),
+        "decisions": len(decisions),
         "losses": len(ds["losses"]),
+        "loss_decisions": len(loss_decisions),
         "total_pnl": total_pnl,
         "loss_pnl": loss_pnl,
         "segments_worst_first": seg_rows[:12],
         "loss_reasons": {k: {"n": v["n"], "pnl": round(v["pnl"], 2)} for k, v in reasons.items()},
         "weekend_gap_loss_pnl": round(weekend_losses, 2),
+        "dedupe": "one decision per signal across mirrored accounts; $ per decision = per-account average",
     }
 
 
@@ -230,7 +263,7 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
         return None
     blocked = 0
     losses_avoided = wins_missed = 0.0
-    for t in ds["trades"]:
+    for t in _decisions(ds):                      # v1.60.36 — one decision per signal, not per mirrored account
         try:
             if not pred(t, _sig_of(t, ds)):
                 continue
@@ -246,6 +279,8 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
         "testable": True,
         "shadow_days": SHADOW_DAYS,
         "trades_blocked": blocked,
+        "distinct_signals": blocked,
+        "min_signals_required": AUTO_APPLY_MIN_SIGNALS,
         "losses_avoided": round(losses_avoided, 2),
         "wins_missed": round(wins_missed, 2),
         "net_effect": round(losses_avoided - wins_missed, 2),
@@ -285,6 +320,9 @@ def _qualifies(m: dict) -> bool:
     net = float(ev.get("net_effect") or 0)
     saved = float(ev.get("losses_avoided") or 0)
     missed = float(ev.get("wins_missed") or 0)
+    sample = int(ev.get("distinct_signals") if ev.get("distinct_signals") is not None else ev.get("trades_blocked") or 0)
+    if sample < AUTO_APPLY_MIN_SIGNALS:
+        return False
     return net >= AUTO_APPLY_MIN_NET and saved >= AUTO_APPLY_RATIO * missed
 
 

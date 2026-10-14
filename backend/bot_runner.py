@@ -1103,10 +1103,10 @@ async def _process_user_account_locked(db, cfg: dict):
                             signal=signal)
                         await inc_intel_counter(user_id, "exhaustion_chase_veto")
                         continue
-                # v1.60.36 — scalp engines keep TP = 2×SL: trend-ride never widens them (14 Oct 18:15: a 139-pip
-                # gold scalp TP was widened ×1.8 and capped to 200 at the broker).
-                from strategy_engines import SCALP_ENGINES as _ride_exempt, engine_for_signal as _eng_of
-                if cfg.get("trend_ride_enabled", True) and _eng_of(signal) not in _ride_exempt:
+                # v1.60.36 (revised) — trend-ride STAYS on for scalp engines (the 14 Oct winner reached +217 pips);
+                # every trade records whether it applied (`trend_ride_applied`) so both arms can be compared later
+                # in the Strategy Report before anyone changes a setting.
+                if cfg.get("trend_ride_enabled", True):
                     ride = trend_ride_check(signal["action"], _feats, _base)
                     if ride:
                         try:
@@ -1556,6 +1556,12 @@ async def _process_user_account_locked(db, cfg: dict):
             await stamp_lineage(db, signal)
         except Exception as e:  # noqa: BLE001
             logger.debug("model lineage skipped: %s", e)
+        # v1.60.36 — DXY / VIX / 10Y / MTF / setup score at entry, for every engine (scalps included)
+        try:
+            from entry_context import build_entry_context
+            signal["entry_context"] = await build_entry_context(signal)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("entry context skipped: %s", e)
         result = await db.signals.insert_one(signal)
         signal_id = str(result.inserted_id)
         broadcast_payload = {**signal, "id": signal_id}
@@ -2572,6 +2578,8 @@ async def _process_user_account_locked(db, cfg: dict):
                 "origin": "auto",
                 "scope": signal.get("scope"),
                 "trend_ride": signal.get("trend_ride"),
+                "trend_ride_applied": bool(signal.get("trend_ride")),
+                "entry_context": signal.get("entry_context"),
                 "versions": version_stamp(signal.get("scope")),
             },
             max_concurrent=max_concurrent,

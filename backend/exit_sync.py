@@ -58,7 +58,9 @@ def signal_slippage(action: str, signal_price: float, fill: float, symbol: str) 
 
 
 def fill_rebase(trade: dict, fill: float) -> dict | None:
-    """Stop re-based to the actual fill at the designed sl_pips, or None when not needed / would loosen."""
+    """SL/TP re-based to the actual fill (same pip distances as the signal), or None when not needed / the stop
+    would loosen. `new_tp` / `tp_fields` are applied at the broker only by an EA that honours `new_tp` on MODIFY_SL
+    (the ack then carries `confirmed_position_tp`); older EAs keep the broker TP and the trade's tp fields stay as is."""
     from trade_manager import tightened_sl
     symbol = trade.get("symbol") or ""
     signal_price = float(trade.get("entry_price") or 0)
@@ -72,5 +74,8 @@ def fill_rebase(trade: dict, fill: float) -> dict | None:
     new_sl = round(fill + sign * pips_to_price(symbol, sl_pips), 5)
     if tightened_sl(trade, new_sl) is None:
         return None
-    return {"new_sl": new_sl, "gap_pips": round(gap_pips, 2), "signal_price": signal_price, "fill": fill,
+    delta = fill - signal_price
+    tp_fields = {k: round(float(trade[k]) + delta, 5) for k in ("take_profit", "tp1", "tp2", "tp3") if trade.get(k)}
+    return {"new_sl": new_sl, "new_tp": tp_fields.get("take_profit"), "tp_fields": tp_fields,
+            "gap_pips": round(gap_pips, 2), "signal_price": signal_price, "fill": fill,
             "sl_pips": sl_pips, "previous_sl": float(trade.get("stop_loss") or 0)}

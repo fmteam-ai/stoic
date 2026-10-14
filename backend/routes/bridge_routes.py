@@ -1944,6 +1944,7 @@ class BridgeModificationAck(BaseModel):
     requested_sl: float | None = None            # EA v1.50 — SL as commanded
     applied_sl: float | None = None              # EA v1.50 — SL post clamp
     confirmed_position_sl: float | None = None   # EA v1.50 — live POSITION_SL
+    confirmed_position_tp: float | None = None   # EA v1.65+ — live POSITION_TP after a MODIFY_SL carrying new_tp
     remaining_volume: float | None = None        # EA v1.50 — actual broker vol
     replay: bool | None = None                   # EA v1.50 — fence re-ack
     superseded: bool | None = None               # EA v1.50 — stale-seq terminal
@@ -2046,6 +2047,12 @@ async def modification_ack(payload: BridgeModificationAck):
         if payload.type == "MODIFY_SL" and actual_sl is not None:
             update["stop_loss"] = float(actual_sl)
             update["confirmed_stop_loss"] = float(actual_sl)
+            # v1.60.36 — fill re-base: when the EA confirms the TP moved, the trade's tp fields follow the broker TP
+            rbf = (trade.get("fill_rebase") or {}).get("tp_fields") or {}
+            if payload.confirmed_position_tp and rbf.get("take_profit") and \
+                    abs(float(payload.confirmed_position_tp) - float(rbf["take_profit"])) < 1e-6:
+                update.update(rbf)
+                update["fill_rebase.tp_applied_at"] = datetime.now(timezone.utc).isoformat()
             if payload.stop_confirmed is not None:
                 # broker ACCEPTED vs position now SHOWS the expected stop
                 update["stop_confirmed"] = bool(payload.stop_confirmed)
@@ -2411,11 +2418,11 @@ async def report_trade(payload: BridgeTradeReport):
             rb = None
         if rb and not trade.get("pending_modification") and not trade.get("close_requested"):
             update["pending_modification"] = {
-                "type": "MODIFY_SL", "new_sl": rb["new_sl"], "reason": "fill_rebase",
+                "type": "MODIFY_SL", "new_sl": rb["new_sl"], "new_tp": rb.get("new_tp"), "reason": "fill_rebase",
                 "requested_at": datetime.now(timezone.utc).isoformat()}
             update["fill_rebase"] = {**rb, "at": datetime.now(timezone.utc).isoformat()}
-            logger.info("fill rebase trade=%s %s gap=%.1f pips → SL %.5f (was %.5f)", payload.trade_id, symbol,
-                        rb["gap_pips"], rb["new_sl"], rb["previous_sl"])
+            logger.info("fill rebase trade=%s %s gap=%.1f pips → SL %.5f (was %.5f) TP %s", payload.trade_id, symbol,
+                        rb["gap_pips"], rb["new_sl"], rb["previous_sl"], rb.get("new_tp"))
         try:  # iter-153 — broker/server/symbol/session segmented evidence
             from execution_segments import record_fill
             await record_fill(db, trade=trade, account=acc, symbol=symbol,
@@ -3275,6 +3282,10 @@ async def external_deal(payload: BridgeExternalDeal):
             )
             update["backfilled"] = True
             update["backfilled_at"] = datetime.now(timezone.utc).isoformat()
+            # v1.60.36 — was this a REAL reconciliation gap, or just the routine deal confirming a known close?
+            update["backfill_gap"] = bool(existing.get("pnl_unknown") or existing.get("pnl_estimated")
+                                          or existing.get("status") == "closed" or existing.get("adopted_at")
+                                          or is_external)
             update["pnl_unknown"] = False   # real P&L recovered
             update["pnl_estimated"] = False  # exact broker figures now
             # Distinguish "auto-repaired from reconciler ghost" vs "first-time

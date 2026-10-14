@@ -2,12 +2,17 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
-## v1.60.36 — scalp exits (no risk settings or trading on/off changed)
-- **Trend-ride skips `SCALP_ENGINES`** (`bot_runner`): a scalp keeps TP = 2×SL. 14 Oct 18:15: an hf_scalp/hf_scalp_fast SELL XAUUSD with TP 139 pips was widened ×1.8 and capped to 200 at the broker. Engine resolved via `engine_for_signal` (scope fallback) so real bot rows are exempt too.
-- **tp fields stay in sync** (`exit_sync.py`): trend-ride now widens `take_profit`, `tp1/tp2/tp3` and `tp_pips` together (per-tier caps), so the trade's tp3 equals the broker TP (was 4077.12 vs 4071.01). The adaptive-exits "TP ladder rescaled" also rewrites `tp1/tp2/tp3` from the new `tp_pips` (broker TP is untouched by that path, as before).
-- **Fill re-base** (`exit_sync.fill_rebase`, `/bridge/report` first open): when |fill − signal price| > 2 pips the stop is moved to fill ± designed `sl_pips` via a fenced `MODIFY_SL` (`reason: fill_rebase`), so the fill-to-SL distance equals the sizing distance (today 74 pips instead of 69.5). Goes through `tightened_sl` — a favourable fill keeps the original, tighter stop. Recorded on the trade as `fill_rebase{gap_pips, new_sl, previous_sl, …}`.
-- **Slippage vs signal** (`exit_sync.signal_slippage`): `signal_slippage_pips` (adverse-only) and `signal_gap_pips` (signed) stored next to the existing requested-price `slippage_pips` (which read 0 while the real gap was 5–6 pips).
-- Tests: `tests/unit/test_v1_60_36_scalp_exits.py` (7).
+## v1.60.36 — scalp exits + evidence (revised; no risk settings or trading on/off changed)
+- **Trend-ride stays ON for scalps** (the 14 Oct winner reached +217 pips). Every trade now records `trend_ride_applied` (and the ride details in `trend_ride`) so both arms can be compared in the Strategy Report.
+- **tp fields in sync** (`exit_sync.py`): trend-ride widens `take_profit`, `tp1/tp2/tp3` and `tp_pips` together (per-tier caps) so tp3 == broker TP; the adaptive "TP ladder rescaled" rewrites `tp1/tp2/tp3` from the new `tp_pips`.
+- **Fill re-base** (`exit_sync.fill_rebase`, first open report): when |fill − signal| > 2 pips, SL and TP are re-based to the fill with the same pip distances. The fenced `MODIFY_SL` carries `new_sl` **and** `new_tp`; the stop moves now (guarded by `tightened_sl`). The broker TP moves only once the EA honours `new_tp` on MODIFY_SL and acks `confirmed_position_tp` (EA v1.65 work item — the shipped mq5 is hash-bound to its signed release, so it was not edited here); until then the trade's tp fields intentionally keep the broker TP.
+- **Slippage vs signal**: `signal_slippage_pips` (adverse) + `signal_gap_pips` (signed) alongside the requested-price `slippage_pips`.
+- **Strategy Report** (`strategy_report.py`, `GET /postmortem/strategy-report`, Loss Lab card): per engine — Monte-Carlo predicted chance vs actual win rate in bands; win rate by entry position in the day's range (0–10 / 10–20 / 20–40 / 40 %+); with vs without trend-ride. Mirrored accounts = one decision per signal ($ = per-account average).
+- **failure_classifier**: a routine broker-confirmed backfill is no longer an operational failure (14 Oct: 5/5 losses). `/bridge/external-deal` stamps `backfill_gap` (P&L unknown/estimated before, ghost/reconcile repair, adopted or external); legacy rows fall back to ghost/reconcile/adopted markers.
+- **Loss Lab / Auto Loss Review / shadow tests dedupe by signal id**: `loss_advisor._decisions()` collapses mirrored trades to one decision (per-account average $) for aggregates, loss counts and shadow evidence; `/postmortem/patterns` counts distinct decisions (`count`) and still reports `trades`; post-mortems store `signal_id`.
+- **Auto-apply evidence bar**: `AUTO_APPLY_MIN_SIGNALS = 20` distinct signals in the segment, in addition to net ≥ $100 and 2× ratio.
+- **Entry context for every engine** (`entry_context.py`): DXY, VIX, nominal 10Y, real 10Y, MTF dominant/aligned and setup score stamped on the signal and trade at entry (scalp fast-path too); post-mortems show `*_at_entry` values instead of null and flag that the legacy A+ gate is not evaluated.
+- Tests: `tests/unit/test_v1_60_36_scalp_exits.py` (11).
 
 ## v1.60.35 — ops cards + stop audit trail (no risk settings or trading on/off changed)
 - **Release Gate card** (Bot Health, admin): renders `release_gate.evaluate()` from `GET /admin/release-gate` verbatim — verdict, failing checks, running vs locked digest, lock↔build binding, close-only accounts. One source of truth, no client-side re-derivation.
