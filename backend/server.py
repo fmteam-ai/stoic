@@ -874,6 +874,18 @@ _scheduled_drills_task = None
 
 async def on_startup():
     global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task, _scalp_reconcile_task
+    # audit 14 Oct — the release gate must read the lock of THIS build (production mounts the adopted signed lock)
+    try:
+        from release_gate import lock_matches_build
+        _lb = lock_matches_build()
+        if _lb["ok"]:
+            logger.info("release lock bound to this build: commit %s authoritative=%s (%s)", _lb["lock_commit"], _lb["authoritative"], _lb["path"])
+        elif is_production():
+            logger.error("RELEASE LOCK MISMATCH: %s (lock=%s build=%s path=%s)", _lb["reason"], _lb["lock_commit"], _lb["build_sha"], _lb["path"])
+        else:
+            logger.info("release lock not bound to this build (%s) — expected outside production", _lb["reason"])
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("release lock startup check skipped: %s", type(_e).__name__)
     # review item 5 / iter-182 — Origin enforcement is AUTOMATIC in
     # production (no CSRF_ENFORCE_ORIGIN secret needed) and localhost /
     # preview entries are filtered out of CORS_ORIGINS automatically.

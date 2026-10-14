@@ -244,6 +244,8 @@ wait_api_health 30 || rollback
 echo "   API healthy"
 verify_running_sha || rollback
 verify_stack_images || rollback   # M121-5 — no mixed stack: every app container runs the provisioned image
+echo "-- verifying the release gate reads the adopted lock of THIS build (audit 14 Oct: RC_LOCK_PATH mount)"
+docker compose exec -T backend python -c 'import json,sys; from release_gate import lock_matches_build as f; r=f(); print("   lock binding:", json.dumps(r)); sys.exit(0 if r["ok"] and r["authoritative"] else 1)' || rollback
 
 echo "-- verifying frontend"
 wait_frontend 30 || rollback

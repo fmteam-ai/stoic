@@ -19,6 +19,15 @@ def worse(a: str, b: str) -> str:
     return a if LEVELS.index(a) >= LEVELS.index(b) else b
 
 
+async def _policy(db) -> dict:
+    """P1-04 — the active policy id/version rides on every readiness payload (strip + /status)."""
+    try:
+        from policy_summary import active_policy_summary
+        return await active_policy_summary(db)
+    except Exception:  # noqa: BLE001
+        return {"policy_version": None, "label": "policy unknown", "scope": "unknown", "demo_only": True}
+
+
 async def readiness(db, user_id: str) -> dict:
     from state_contract import contract
     sc = await contract(db, user_id)
@@ -209,6 +218,7 @@ async def readiness(db, user_id: str) -> dict:
             "clear_accounts": len(clear_ids),
             "accounts_enabled": len(rows),
             "accounts_total": len(sc["accounts"]),
+            "policy": await _policy(db),
             "checked_at": now,
             "source": "canonical_decision + readiness enrichment",
             "note": "Trading readiness is independent of infrastructure "
