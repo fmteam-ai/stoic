@@ -77,7 +77,9 @@ def test_tips_fetch_is_single_flight_under_concurrency(monkeypatch):
 
 # ── C8 / C9 ────────────────────────────────────────────────────────────────────────────────────────────────────
 def _scalp_trade(**kw):
-    t = {"_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD", "action": "BUY", "engine": "hf_scalp_fast",
+    # shaped like execution.py really writes a bot row: engine None, the engine name lives in `scope`
+    t = {"_id": ObjectId(), "user_id": "u1", "symbol": "XAUUSD", "action": "BUY", "engine": None, "scope": "hf_scalp_fast",
+         "origin": "auto",
          "entry_price": 4000.0, "stop_loss": 3996.0, "sl_pips": 400, "tp_pips": [800, 800, 800], "lot_size": 0.05,
          "original_lot_size": 0.05, "mt5_ticket": 123456789, "status": "open", "mode": "demo", "spread_pips": 2.2,
          "opened_at": (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()}
@@ -124,4 +126,32 @@ def test_scalp_time_stop_closes_a_trade_that_never_reached_half_r_within_90_minu
     assert closed.await_args.kwargs["stamp"]["pending_modification"]["reason"] == "scalp_time_stop"
     # non-scalp engines are untouched by the new step
     src = open(os.path.join(os.path.dirname(tm.__file__), "trade_manager.py"), encoding="utf-8").read()
-    assert 'if trade.get("engine") in SCALP_ENGINES:' in src and tm.SCALP_BE_TRIGGER_R == 0.5 and tm.SCALP_TIME_STOP_MIN == 90
+    assert "if is_scalp_engine_trade(trade):" in src and tm.SCALP_BE_TRIGGER_R == 0.5 and tm.SCALP_TIME_STOP_MIN == 90
+
+
+def test_scalp_detection_matches_real_bot_rows_engine_none_scope_set():
+    import trade_manager as tm
+    assert tm.is_scalp_engine_trade({"engine": None, "scope": "hf_scalp"})
+    assert tm.is_scalp_engine_trade({"engine": None, "scope": "hf_scalp_fast", "origin": "auto"})
+    assert tm.is_scalp_engine_trade({"engine": "hf_scalp", "scope": None})
+    assert not tm.is_scalp_engine_trade({"engine": None, "scope": "breakout_m15"})
+    assert not tm.is_scalp_engine_trade({"engine": None, "scope": None, "origin": "auto"})
+    assert not tm.is_scalp_engine_trade({"engine": None, "scope": "scalp_fast"})      # Scalp Fast Path has its own exits
+    # the manager's scalp step must never key on `engine` alone again
+    src = open(os.path.join(os.path.dirname(tm.__file__), "trade_manager.py"), encoding="utf-8").read()
+    assert 'trade.get("engine") in SCALP_ENGINES' not in src
+
+
+def test_manage_one_trade_arms_the_scalp_breakeven_on_a_real_shaped_bot_row():
+    """Through the real entry point (_manage_one_trade): engine None, scope hf_scalp_fast, demo, ticket set."""
+    import trade_manager as tm
+    db = FakeDb()
+    t = _scalp_trade()
+    assert t["engine"] is None and t["scope"] == "hf_scalp_fast"
+    db.trades.rows.append(t)
+    quote = AsyncMock(return_value={"price": 4000.0 + 0.1 * 400 * 0.6})      # +0.6R
+    with patch.object(tm, "get_db", lambda: db), patch.object(tm, "get_quote", quote), patch.object(tm, "ws_manager") as ws:
+        ws.broadcast = AsyncMock()
+        _run(tm._manage_one_trade(t, {}))
+    pm = db.trades.rows[0]["pending_modification"]
+    assert pm and pm["type"] == "MODIFY_SL" and pm["reason"] == "scalp_breakeven_0_5r" and pm["new_sl"] == 4000.22

@@ -48,6 +48,12 @@ SCALP_DEFAULT_COST_PIPS = {"XAUUSD": 2.5, "XAGUSD": 3.0, "USDJPY": 1.2}   # pip_
 SCALP_DEFAULT_COST_PIPS_FX = 1.5
 
 
+def is_scalp_engine_trade(trade: dict) -> bool:
+    """Bot trades carry the engine in `scope` ("hf_scalp" / "hf_scalp_fast"); `engine` is usually None on real rows
+    (review of v1.60.32 on live tickets) — honour either."""
+    return (trade.get("engine") or trade.get("scope")) in SCALP_ENGINES
+
+
 def scalp_cost_pips(trade: dict) -> float:
     """Round-trip cost in pips: the spread recorded at entry when known, a conservative per-symbol default otherwise."""
     from pip_utils import base_symbol
@@ -202,7 +208,7 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     pips_up = _pips_in_profit(entry, current, action, symbol)
 
     # v1.60.32 C8/C9 — hf_scalp / hf_scalp_fast exits (demo engines): breakeven at +0.5R, 90-minute time-stop.
-    if trade.get("engine") in SCALP_ENGINES:
+    if is_scalp_engine_trade(trade):
         if await _scalp_engine_exits(db, trade, cfg, current, pips_up):
             return
 
