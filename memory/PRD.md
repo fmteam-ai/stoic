@@ -3723,3 +3723,4 @@ PENDING USER: SECURITY_AGENT_PROTECTED_IPS + mode; rotate the Telegram bot token
 
 ## 2026-10-14 — /status inside the app shell
 - `pages/StatusPage.jsx`: when a session exists (`useAuth().user`) the page renders inside `AppLayout` (sidebar, readiness strip, PageHeader "System Status"); logged-out visitors keep the public standalone layout (ClosedBetaBanner + STOIC mark). Public reachability from /login and the outage screen is unchanged.
+- Security Audit #31 (deployed preview, read-only): PASS — NO MAJOR ISSUE FOUND. Report persisted at docs/SECURITY_AUDIT_31.md. P3 hardening backlog: scope /scalp/broker-stats to caller's brokers; add route-level throttle on alert-email verify-confirm; run pip/yarn advisory scan in CI.
