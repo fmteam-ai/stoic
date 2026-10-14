@@ -905,7 +905,7 @@ function Advanced() {
                 </div>
                 <div>
                     <div className="font-display font-bold text-base mb-1.5">✋ Manual override</div>
-                    <P>The yellow <strong>MANUAL TRADE</strong> button on Signals lets you place a position that bypasses every veto — useful for discretionary trades after news. Use sparingly; you&apos;re trading without the safety net.</P>
+                    <P>The yellow <strong>MANUAL TRADE</strong> button on Signals is a <strong>paper-only manual test</strong>. It bypasses the AI signal / confidence selection, but the server-side risk, account, rate and execution controls still apply — it is not a way around the safety checks.</P>
                 </div>
             </div>
         </section>
@@ -924,8 +924,9 @@ function GoingLive() {
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Scale only after Analytics shows positive expectancy.</strong> 30 trades minimum. Don&apos;t scale on luck.</li>
             </ol>
             <Callout kind="warn">
-                <strong>Realistic expectation:</strong> STOIC aims for ~55–65% win rate at 1.5–2.5 R:R — that translates to
-                ~6–12% monthly when sized correctly. Anything claiming &quot;200% / month consistently&quot; is selling fantasy.
+                <strong>Realistic expectation:</strong> STOIC does not promise a win rate or a monthly return. It enforces
+                risk-based position sizing, a stop on every trade, a 1.5–2.5 R:R target and server-side risk caps — results depend on
+                market regime and your settings, and losses are part of trading. Anything claiming &quot;200% / month consistently&quot; is selling fantasy.
             </Callout>
             <Callout kind="info">
                 <strong>Note — the mode ladder applies here too:</strong> going live isn&apos;t just a subscription toggle.

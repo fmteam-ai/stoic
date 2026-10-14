@@ -13,11 +13,11 @@ const SCENES = [
         kicker: "Trading is hard",
         render: () => (
             <h1 className="headline">
-                <span className="strike">85%</span> of retail traders blow up<br/>
-                their accounts. <em>85 percent!</em>
+                <span className="strike">Most</span> retail traders lose money.<br/>
+                <em>Broker risk disclosures put it at 70–80%+.</em>
             </h1>
         ),
-        sub: "And the bots they trusted? They made it happen faster.",
+        sub: "Figure: the loss-rate range EU/UK brokers must publish for retail CFD accounts. And the bots they trusted? They made it happen faster.",
     },
     {
         id: "pain", start: 8560, end: 23400,

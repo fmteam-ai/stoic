@@ -2497,8 +2497,11 @@ async def get_bot_status(account_id: Optional[str] = None,
     })
 
     intelligence = await intel_window_24h(user["id"])
+    from policy_summary import active_policy_summary
+    policy = await active_policy_summary(db)
 
     return {
+        "policy": policy,
         "active": cfg.get("active", False),
         "panic_locked": bool(panic_lock),
         "panic_lock": panic_lock,

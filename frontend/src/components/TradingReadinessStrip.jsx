@@ -84,6 +84,12 @@ export function TradingReadinessStrip() {
                             {scopedNames} · {data.clear_accounts} other account{data.clear_accounts === 1 ? "" : "s"} READY — trading continues there
                         </span>
                     )}
+                    {data.policy?.label && (
+                        <span className={`hidden md:inline-block font-mono text-[10px] tracking-widest shrink-0 px-1.5 py-0.5 border ${data.policy.expired ? "border-[#FF3B30]/50 text-[#FF3B30]" : "border-[#1F1F1F] text-[#A1A1AA]"}`}
+                            title={data.policy.live_target || ""} data-testid="trading-readiness-policy">
+                            POLICY {data.policy.label}
+                        </span>
+                    )}
                     {top ? (
                         <span className={`font-mono text-[10px] text-[#A1A1AA] truncate ${scoped ? "hidden lg:inline" : ""}`}
                             data-testid="trading-readiness-reason">

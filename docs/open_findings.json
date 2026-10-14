@@ -55,9 +55,10 @@
   {
     "id": "P0-01-r17-infra",
     "severity": "P0",
-    "title": "Production MongoDB must run as a replica set (transactions) — fenced NL effects fail closed without it; EA v1.57 must be compiled, hash-recorded and rolled to every terminal so close_idem_key/close_fence are enforced at the destination.",
+    "title": "Production MongoDB must run as a replica set (transactions) — fenced NL effects fail closed without it; the shipped EA (≥ 1.57 — production runs the current signed EA, see /api/health ea_version) must be hash-recorded and rolled to every terminal so close_idem_key/close_fence are enforced at the destination.",
     "owner": "operations",
-    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag"
+    "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag",
+    "status_2026_10_14": "replica set rs0 DONE in production; EA rollout DONE (current signed EA on every terminal); remaining: close-writer migration (P2-01-r20-close-writers)"
   },
   {
     "id": "P2-06-r17",
@@ -83,7 +84,7 @@
   {
     "id": "P1-03-r18",
     "severity": "P1",
-    "title": "Live capital-safety acceptance pack (AT-P1-03..06) on the promoted digest in one canonical input version — 6/3/3 identity-bound inventory, EA counts agree everywhere, reconciliation in SLA, position truth FRESH+matching, zero UNKNOWN executions, blocker dominance across Start Trader/Safety Blocks/Bot Health/readiness/authority, performance reconciled to signed statements. Authority stays BLOCKED/CLOSE_ONLY until proved.",
+    "title": "Live capital-safety acceptance pack (AT-P1-03..06) on the promoted digest in one canonical input version — 6/3/3 identity-bound inventory (= the FUTURE live-capital policy target; the single ACTIVE policy is demo-rules-v2, demo-only), EA counts agree everywhere, reconciliation in SLA, position truth FRESH+matching, zero UNKNOWN executions, blocker dominance across Start Trader/Safety Blocks/Bot Health/readiness/authority, performance reconciled to signed statements. Authority stays BLOCKED/CLOSE_ONLY until proved.",
     "owner": "operations",
     "tag_waiver": "pre-live infrastructure/acceptance backlog — demo-only tags permitted (production runs STOIC_READINESS_POLICY=onboarding-close-only, trading CLOSE_ONLY); must be closed or re-waived in writing before the first real-money tag",
     "risk": "live-capital-safety-acceptance",
@@ -93,7 +94,8 @@
       "P1-07-r15",
       "P1-05-r16",
       "P1-03-r17"
-    ]
+    ],
+    "production_state_2026_10_14": "v1.60.32 healthy · MongoDB rs0 (transactions) · EA 1.64 signed · active policy demo-rules-v2 (demo_only=true) · live authority CLOSE_ONLY until P0-01/P0-02/P1-01/P1-03"
   },
   {
     "id": "P1-04-r18",
@@ -144,12 +146,6 @@
     "severity": "P3",
     "title": "EA binary proof is now admitted only over a verified installation chain (r21); a signed server-nonce challenge from the terminal/installer would additionally prove possession of the binary rather than the hash value.",
     "owner": "engineering"
-  },
-  {
-    "id": "SEC-002-r21-old-live-build",
-    "severity": "P3",
-    "title": "www.stoicaibot.com still serves the OLD build (health 500, legacy status); resolved only by the pending redeploy (hosted signer + replica-set Mongo).",
-    "owner": "operator"
   },
   {
     "id": "P3-r22-pairing-rate-limit-review",

@@ -59,7 +59,7 @@ def _email_html(*, name: str, link: str) -> str:
 <html><body style="margin:0;padding:0;background:#050505;font-family:-apple-system,Segoe UI,Roboto,sans-serif;">
   <div style="max-width:560px;margin:0 auto;padding:40px 24px;color:#E5E5E5;">
     <div style="font-size:13px;color:#FFD700;letter-spacing:0.3em;font-family:monospace;margin-bottom:24px;">
-      STOIC · STEADY WEALTH
+      STOIC · AI TRADING ASSISTANT
     </div>
     <h1 style="color:#FFFFFF;font-size:22px;margin:0 0 16px;">Welcome, {safe_name}.</h1>
     <p style="color:#A1A1AA;line-height:1.6;font-size:15px;margin:0 0 24px;">
