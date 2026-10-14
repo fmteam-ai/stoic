@@ -131,7 +131,11 @@ export default function Accounts() {
 
     useEffect(() => { load(); }, [load]);
     // v1.60.29 item 4 — certification map / status lines follow the live heartbeat (30 s), not the first paint
-    useEffect(() => { const id = setInterval(load, 30000); return () => clearInterval(id); }, [load]);
+    useEffect(() => {
+        const id = setInterval(load, 30000);
+        window.addEventListener("focus", load);
+        return () => { clearInterval(id); window.removeEventListener("focus", load); };
+    }, [load]);
 
     // Fix-It Shortcuts: ?focus=<accountId> scrolls to and highlights the card
     useEffect(() => {
@@ -942,7 +946,7 @@ export default function Accounts() {
                                         </div>
                                     )}
 
-                                    <AccountCertification accountId={a.id} />
+                                    <AccountCertification accountId={a.id} item={certMap[a.id] || null} onChanged={load} />
                                 </div>
                             );
                         })}

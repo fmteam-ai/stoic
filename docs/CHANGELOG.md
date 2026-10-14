@@ -2,6 +2,20 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.31 — 14 Oct fix list (A1–E10; no risk settings or trading on/off changed)
+- **A1 Scalp Fast Path redesigned** (`backend/scalp/setup.py`, `engine.py`, `live_gate.py`): targets ≥ 5 pips, 15-min hold horizon; XAUUSD runs in **shadow mode** until the live gate proves positive net expectancy after costs over ≥ 300 labeled samples. `/api/scalp/status` exposes `requested_mode` + `live_gate` per symbol.
+- **A2 Single TP for scalp engines** — no more Monte Carlo gate vetoes caused by multi-TP ladders.
+- **B3 DEFERRED / HOLD outcomes** are written to `trade_decisions` and appear in the Scoreboard funnel (`/api/trades/scoreboard`).
+- **B4 Go-live certification panel** refreshes from the live heartbeat (30 s poll + window focus); EA version read from `ea_version` / `ea_identity.ea_version`.
+- **C5 Easy Start config**: `PUT /api/config` 404 fixed, default modes applied per environment, 1-click drift fix.
+- **C6 "LIVE" labels on DEMO accounts** fixed — safety status checks `attested_environment`; payload now also carries `paper_accounts`.
+- **D7 Backup verification** accepts `.archive.gz.enc` (false HIGH security alert removed).
+- **D8 Runtime watchdog** tick decoupled to 1 s — "EVENT LOOP BLOCKED" false alarms removed.
+- **D9 TIPS macro** — backoff caching + FRED `DFII10` fallback (no more timeout alarms).
+- **E10 Release scripts** — `scripts/freeze_rc_lock.py` freezes the authoritative `rc_lock` with image digests.
+- Also: execution lot sizing uses risk % (not fixed minimum), cancelled execution intents release their risk reservation, `workers/reconciliation.py` runs the intent/PAMM sweeps in external-worker mode, Performance dashboard masks deleted accounts into an "Archived" section, `HF_HUB_DISABLE_XET=1` in docker-compose (hf_xet native downloader crashed the worker on a cold Chronos fetch).
+- Tests: `tests/unit/test_v1_60_29_fix_list.py`, `test_prod_v1_60_28_execution_bugs.py`, `test_verified_performance_deleted_accounts.py`, `test_infra_shadow_clock_and_backups.py` + HTTP smoke `tests/test_v16029_smoke_http.py`.
+
 ## Unreleased — M122 + Simple Onboarding Phases 1–4 (EA v1.64, installer v1.9)
 - **Easy Start Wizard** (`docs/EASY_START_WIZARD.md`): 4-screen user wizard (Broker → Connect → Activate → Start, 2 s live checklist, auto-advance, one-sentence/one-button errors, resume), `GET /api/setup/wizard/{id}`; operator A1 `rules-policy` workflow + one-click **Load latest signed policy**, A2 `RECONCILE_EXPECT=rules` default (deploy checks the rules, fail closed), A3 **Replace account list with rules policy**, A4 7-day renewal banner/Telegram with pre-filled form, A5 Go-Live checklist. Cap counts only enabled accounts ("Disable it" is a real fix).
 - **Security audit #21** (`docs/SECURITY_AUDIT_21.md`, scope main128): PASS. Two P3s fixed — cross-owner admin account edits now go through the MFA-enrolled `require_admin` gate and are fully audited (`account_edited_by_admin`); close-only banner uses a caller-scoped projection. One P3 accepted by design (own-token real-money heartbeat voids a DEMO attestation — restrictive direction).

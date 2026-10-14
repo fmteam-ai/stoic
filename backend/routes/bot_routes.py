@@ -1416,6 +1416,7 @@ async def safety_status(user=Depends(get_current_user)):
                                          if max_hb_age is not None else None),
             "panic_active": panic_active,
             "live_accounts": live_accounts,
+            "paper_accounts": paper_count,
             "unprotected_open": unprotected,
             "unresolved_submissions": unresolved,
             "stale_feeds": stale_feeds,

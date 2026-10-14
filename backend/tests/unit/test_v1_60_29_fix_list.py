@@ -142,9 +142,9 @@ def test_b3_hold_and_deferred_outcomes_reach_the_decision_ledger():
 # ── B4 · certification panel refreshes from the live heartbeat ─────────────────────────────────────────────────
 def test_b4_certification_panel_polls_and_reads_identity_version():
     comp = _src("frontend", "src", "components", "AccountCertification.jsx")
-    assert "setInterval(pull, 30000)" in comp and 'addEventListener("focus", pull)' in comp
+    assert "item={certMap[a.id] || null} onChanged={load}" in _src("frontend", "src", "pages", "Accounts.jsx") and "if (item) return undefined;" in comp
     acc = _src("frontend", "src", "pages", "Accounts.jsx")
-    assert "setInterval(load, 30000)" in acc
+    assert "setInterval(load, 30000)" in acc and 'addEventListener("focus", load)' in acc
     assert 'v = a.get("ea_version") or (a.get("ea_identity") or {}).get("ea_version")' in _src("backend", "routes", "account_routes.py")
 
 
