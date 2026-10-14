@@ -1103,39 +1103,19 @@ async def _process_user_account_locked(db, cfg: dict):
                             signal=signal)
                         await inc_intel_counter(user_id, "exhaustion_chase_veto")
                         continue
-                if cfg.get("trend_ride_enabled", True):
+                # v1.60.36 — scalp engines keep TP = 2×SL: trend-ride never widens them (14 Oct 18:15: a 139-pip
+                # gold scalp TP was widened ×1.8 and capped to 200 at the broker).
+                from strategy_engines import SCALP_ENGINES as _ride_exempt, engine_for_signal as _eng_of
+                if cfg.get("trend_ride_enabled", True) and _eng_of(signal) not in _ride_exempt:
                     ride = trend_ride_check(signal["action"], _feats, _base)
                     if ride:
                         try:
-                            _entry = float(signal.get("entry_price") or 0)
-                            _tp = float(signal.get("take_profit") or 0)
                             _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)
-                            if _entry and _tp and _mult > 1.0:
-                                # user policy (2026-07-16): trend-ride may
-                                # widen the TP but NEVER past the hard cap —
-                                # this is what produced 450-pip gold TPs.
-                                from ai_signals import MTF_TP3_MAX_PIPS
-                                from pip_utils import pips_to_price
-                                _cap = pips_to_price(_base, MTF_TP3_MAX_PIPS)
-                                _dist = min(abs(_tp - _entry) * _mult, _cap)
-                                _sign = 1 if _tp >= _entry else -1
-                                signal["take_profit"] = round(
-                                    _entry + _sign * _dist, 5)
-                                _tps = signal.get("tp_pips")
-                                if isinstance(_tps, (int, float)):
-                                    signal["tp_pips"] = round(min(
-                                        float(_tps) * _mult,
-                                        MTF_TP3_MAX_PIPS), 1)
-                                elif isinstance(_tps, list) and _tps:
-                                    from ai_signals import (
-                                        MTF_TP1_MAX_PIPS, MTF_TP2_MAX_PIPS)
-                                    _caps = [MTF_TP1_MAX_PIPS,
-                                             MTF_TP2_MAX_PIPS,
-                                             MTF_TP3_MAX_PIPS]
-                                    signal["tp_pips"] = [
-                                        round(min(float(v) * _mult,
-                                                  _caps[min(i, 2)]), 1)
-                                        for i, v in enumerate(_tps)]
+                            # user policy (2026-07-16): trend-ride may widen the TP but NEVER past the hard cap —
+                            # this is what produced 450-pip gold TPs. v1.60.36: take_profit, tp1/tp2/tp3 and
+                            # tp_pips are widened TOGETHER so the trade's tp fields match the broker TP.
+                            from exit_sync import widen_signal_targets
+                            if widen_signal_targets(signal, _mult, _base):
                                 signal["trend_ride"] = ride
                                 await inc_intel_counter(user_id, "trend_ride_applied")
                                 await _record_pulse(db, cfg, symbol=sym,

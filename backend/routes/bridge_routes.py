@@ -2396,7 +2396,26 @@ async def report_trade(payload: BridgeTradeReport):
         if requested > 0:
             update["requested_price"] = requested
         update["slippage_pips"] = round(slip_pips, 2)
+        # v1.60.36 — ALSO measure against the SIGNAL price (adverse-only, direction-aware) and keep the signed gap:
+        # 14 Oct fills were 5–6 pips worse than the signal while slippage_pips (vs requested) read 0.
+        from exit_sync import fill_rebase, signal_slippage
+        if intended > 0:
+            update["signal_slippage_pips"], update["signal_gap_pips"] = signal_slippage(action, intended, actual, symbol)
         update["slippage_checked"] = True
+        # v1.60.36 — re-base the stop to the actual fill at the designed sl_pips when the fill is > 2 pips off the
+        # signal price (today: stop 74 pips instead of 69.5). Only ever tightens; the EA keeps the broker TP.
+        try:
+            rb = fill_rebase(trade, actual)
+        except Exception as _rb:  # noqa: BLE001 — geometry must never block the fill report
+            logger.warning("fill rebase skipped trade=%s: %s", payload.trade_id, _rb)
+            rb = None
+        if rb and not trade.get("pending_modification") and not trade.get("close_requested"):
+            update["pending_modification"] = {
+                "type": "MODIFY_SL", "new_sl": rb["new_sl"], "reason": "fill_rebase",
+                "requested_at": datetime.now(timezone.utc).isoformat()}
+            update["fill_rebase"] = {**rb, "at": datetime.now(timezone.utc).isoformat()}
+            logger.info("fill rebase trade=%s %s gap=%.1f pips → SL %.5f (was %.5f)", payload.trade_id, symbol,
+                        rb["gap_pips"], rb["new_sl"], rb["previous_sl"])
         try:  # iter-153 — broker/server/symbol/session segmented evidence
             from execution_segments import record_fill
             await record_fill(db, trade=trade, account=acc, symbol=symbol,
