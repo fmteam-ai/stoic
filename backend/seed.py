@@ -553,6 +553,13 @@ async def ensure_indexes():
         await db.notifications.create_index("webhook_secret", sparse=True)
     except Exception:
         pass
+    try:
+        from loss_postmortem import ensure_pattern_keys_canonical
+        n = await ensure_pattern_keys_canonical(db)
+        if n:
+            logging.getLogger("seed").info("loss post-mortem pattern keys canonicalised: %d", n)
+    except Exception:
+        pass
 
     # --- iter-91 · Heal stale panic / circuit-breaker trip flags ---------
     # Background: the original POST /api/bot/start endpoint flipped

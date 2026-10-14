@@ -9,6 +9,10 @@ Covers:
   · GET /api/setup/install-progress/{account_id} → heartbeat step status reflects flags
 """
 from __future__ import annotations
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 import os, re, uuid
 from datetime import datetime, timezone
 import pytest, requests
@@ -21,7 +25,7 @@ def _base_url():
     v = os.environ.get("REACT_APP_BACKEND_URL")
     if v:
         return v.rstrip("/")
-    with open("/app/frontend/.env") as f:
+    with open(_ENV_FE) as f:
         for ln in f:
             if ln.startswith("REACT_APP_BACKEND_URL="):
                 return ln.split("=", 1)[1].strip().rstrip("/")
@@ -34,7 +38,7 @@ TIMEOUT = 30
 
 def _mongo():
     env = {}
-    with open("/app/backend/.env") as f:
+    with open(_ENV_BE) as f:
         for ln in f:
             if "=" in ln:
                 k, v = ln.split("=", 1)

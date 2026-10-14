@@ -11,6 +11,10 @@ Scope:
 - Cleanup inserted docs.
 """
 from __future__ import annotations
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 
 import os
 import random
@@ -33,7 +37,7 @@ ADMIN_EMAIL, ADMIN_PASSWORD = admin_credentials(strict=True)
 RATE_LIMIT_BYPASS = os.environ.get("RATE_LIMIT_BYPASS_TOKEN") or ""
 if not RATE_LIMIT_BYPASS:
     try:
-        with open("/app/backend/.env", "r") as f:
+        with open(_ENV_BE, "r") as f:
             for line in f:
                 if line.startswith("RATE_LIMIT_BYPASS_TOKEN="):
                     RATE_LIMIT_BYPASS = line.split("=", 1)[1].strip().strip('"')
@@ -57,7 +61,7 @@ def mongo_db():
     db_name = os.environ.get("DB_NAME") or ""
     if not url or not db_name:
         try:
-            with open("/app/backend/.env", "r") as f:
+            with open(_ENV_BE, "r") as f:
                 for line in f:
                     if line.startswith("MONGO_URL=") and not url:
                         url = line.split("=", 1)[1].strip().strip('"')

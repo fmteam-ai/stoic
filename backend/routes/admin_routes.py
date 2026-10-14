@@ -1162,7 +1162,7 @@ async def deploy_latest_release(request: Request, user=Depends(get_current_user)
     except urllib.error.HTTPError as e:
         raise HTTPException(status_code=502, detail={"code": "github_error", "status": e.code, "message": e.read().decode()[:300]})
     except (urllib.error.URLError, TimeoutError, KeyError, ValueError) as e:
-        raise HTTPException(status_code=502, detail={"code": "github_unreachable", "message": str(e)[:200]})
+        raise HTTPException(status_code=502, detail={"code": "github_unreachable", "message": f"GitHub unreachable ({type(e).__name__})"})
     await audit_event(db, user["id"], "deploy_latest_release_dispatched", {"tag": tag, "repo": repo, "ok": ok}, request)
     return {"ok": ok, "tag": tag, "workflow": "deploy-production.yml",
             "watch": f"https://github.com/{repo}/actions/workflows/deploy-production.yml"}

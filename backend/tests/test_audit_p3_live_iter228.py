@@ -2,6 +2,10 @@
 
 Non-destructive: never calls /api/panic*, never changes security-agent mode/rules.
 """
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 import os
 import re
 import pytest
@@ -11,7 +15,7 @@ pytestmark = pytest.mark.http
 
 BASE = os.environ.get("REACT_APP_BACKEND_URL", "https://stoic-trading-bot.preview.emergentagent.com").rstrip("/")
 from dotenv import dotenv_values as _dv
-_BE = _dv("/app/backend/.env")
+_BE = _dv(_ENV_BE)
 ADMIN_EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or _BE.get("TEST_ADMIN_EMAIL") or "admin@trading.bot"
 # never hardcode credentials (secret previously embedded here — rotate)
 ADMIN_PASS = os.environ.get("TEST_ADMIN_PASSWORD") or _BE.get("TEST_ADMIN_PASSWORD")

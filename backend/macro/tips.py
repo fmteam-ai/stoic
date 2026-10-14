@@ -21,6 +21,7 @@ We extract the most-recent two values and compute a delta. Surface:
   - delta_5d   (rough — uses last 5 datapoints)
   - regime    ("bullish_gold" | "bearish_gold" | "neutral")
 """
+import asyncio
 import os
 import logging
 from datetime import datetime, timezone, timedelta
@@ -91,8 +92,28 @@ def _parse_xml(body: str) -> list[dict]:
     return out
 
 
+_FETCH_LOCK: tuple | None = None       # (loop, lock)
+
+
+def _fetch_lock() -> asyncio.Lock:
+    """One lock per event loop — created lazily so import never binds to a loop."""
+    global _FETCH_LOCK
+    loop = asyncio.get_event_loop()
+    if _FETCH_LOCK is None or _FETCH_LOCK[0] is not loop:
+        _FETCH_LOCK = (loop, asyncio.Lock())
+    return _FETCH_LOCK[1]
+
+
 async def get_real_yield(*, force_refresh: bool = False) -> Optional[dict]:
-    """Latest 10Y TIPS real yield + delta + gold-regime classification."""
+    """Latest 10Y TIPS real yield + delta + gold-regime classification.
+
+    v1.60.32 B7 — single-flight: concurrent callers on a cold/expired cache wait for ONE fetch instead of each
+    hitting Treasury/FRED and each logging "failure #1" at the same moment; the followers re-read the cache."""
+    async with _fetch_lock():
+        return await _get_real_yield_locked(force_refresh=force_refresh)
+
+
+async def _get_real_yield_locked(*, force_refresh: bool = False) -> Optional[dict]:
     db = get_db()
     if not force_refresh:
         cached = await db.tips_cache.find_one({"key": "10Y_REAL"})

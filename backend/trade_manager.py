@@ -21,6 +21,7 @@ from close_commands import request_close
 from market import get_quote
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips
+from strategy_engines import SCALP_ENGINES
 from notifier import notify_circuit_breaker
 
 logger = logging.getLogger("trade-manager")
@@ -36,6 +37,84 @@ def _free_slot_filter(trade_id) -> dict:
 # user policy (2026-07-16): TP1 100 / TP2 200, bank half at TP1, rest at TP2
 DEFAULT_SL_PIPS = 120
 DEFAULT_TP_PIPS = (100, 200, 200)   # (TP1, TP2, TP3) — tp3<=tp2 → 2-tier
+
+# v1.60.32 C8/C9 — hf_scalp / hf_scalp_fast exit rules (owner request, demo engines). Before the single-TP change
+# the breakeven rode on TP1 = 0.4 × 2R = 0.8R; a trade reached +0.72R and then took the full stop. Now: stop to
+# entry (+ round-trip costs) at +0.5R, and a trade that has not reached +0.5R within 90 minutes is closed — the
+# momentum burst has failed (all three losses so far were held 1–3 h after a failed burst).
+SCALP_BE_TRIGGER_R = float(os.environ.get("SCALP_BE_TRIGGER_R", "0.5"))
+SCALP_TIME_STOP_MIN = int(os.environ.get("SCALP_TIME_STOP_MIN", "90"))
+SCALP_DEFAULT_COST_PIPS = {"XAUUSD": 2.5, "XAGUSD": 3.0, "USDJPY": 1.2}   # pip_utils convention (gold pip = 0.1)
+SCALP_DEFAULT_COST_PIPS_FX = 1.5
+
+
+def scalp_cost_pips(trade: dict) -> float:
+    """Round-trip cost in pips: the spread recorded at entry when known, a conservative per-symbol default otherwise."""
+    from pip_utils import base_symbol
+    spread = trade.get("spread_pips") or trade.get("entry_spread_pips") or trade.get("spread_at_entry_pips")
+    try:
+        spread = float(spread or 0)
+    except (TypeError, ValueError):
+        spread = 0.0
+    if spread <= 0:
+        spread = SCALP_DEFAULT_COST_PIPS.get(base_symbol(trade.get("symbol")), SCALP_DEFAULT_COST_PIPS_FX)
+    return spread + float(trade.get("commission_pips") or 0)
+
+
+def scalp_breakeven_sl(trade: dict) -> float:
+    """Entry plus costs, on the profitable side — the trade can never close negative after this stop is live."""
+    from pip_utils import pips_to_price
+    entry = float(trade["entry_price"])
+    off = pips_to_price(trade["symbol"], scalp_cost_pips(trade))
+    return round(entry + off if trade.get("action") == "BUY" else entry - off, 5)
+
+
+def scalp_time_stop_due(trade: dict, now=None) -> bool:
+    """True when the trade is older than SCALP_TIME_STOP_MIN and never armed the +0.5R breakeven."""
+    if trade.get("breakeven_set") or trade.get("be_target_sl") or trade.get("tp1_closed"):
+        return False
+    opened = trade.get("opened_at") or trade.get("created_at")
+    try:
+        dt = datetime.fromisoformat(str(opened).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    return ((now or datetime.now(timezone.utc)) - dt).total_seconds() >= SCALP_TIME_STOP_MIN * 60
+
+
+async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_up: float) -> bool:
+    """C8 breakeven at +0.5R (stop → entry + costs) and C9 90-min time-stop. Returns True when it acted."""
+    sl_pips, *_ = _trade_targets(trade)
+    trade_id = trade["_id"]
+    if sl_pips > 0 and pips_up >= SCALP_BE_TRIGGER_R * sl_pips \
+            and not trade.get("breakeven_set") and not trade.get("be_target_sl"):
+        new_sl = scalp_breakeven_sl(trade)
+        cur_sl = float(trade.get("stop_loss") or 0)
+        already = cur_sl and ((trade["action"] == "BUY" and cur_sl >= new_sl) or (trade["action"] == "SELL" and cur_sl <= new_sl))
+        if not already:
+            res = await db.trades.update_one(
+                _free_slot_filter(trade_id),
+                {"$set": {"pending_modification": {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "scalp_breakeven_0_5r",
+                                                   "requested_at": datetime.now(timezone.utc).isoformat()},
+                          "be_target_sl": new_sl}})
+            if not res.matched_count:
+                return True
+            await ws_manager.broadcast(trade["user_id"], "trade_management", {
+                "trade_id": str(trade_id), "action": "SCALP_BE_0_5R", "new_sl": new_sl,
+                "from_lot": float(trade.get("lot_size") or 0), "to_lot": float(trade.get("lot_size") or 0),
+                "pips": round(pips_up, 1)})
+            return True
+    if scalp_time_stop_due(trade):
+        await request_close(db, {"_id": trade_id}, reason="time_stop", actor="trade_manager", stamp={
+            "time_stop_minutes": SCALP_TIME_STOP_MIN,
+            "pending_modification": {"type": "FULL_CLOSE", "reason": "scalp_time_stop",
+                                     "requested_at": datetime.now(timezone.utc).isoformat()}})
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {
+            "trade_id": str(trade_id), "action": "SCALP_TIME_STOP", "pips": round(pips_up, 1),
+            "from_lot": float(trade.get("lot_size") or 0), "to_lot": 0.0})
+        return True
+    return False
 DEFAULT_BE_TRIGGER_PIPS = 100        # move SL to entry at +100 pips
 
 
@@ -121,6 +200,11 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
 
     _, tp1_pips, tp2_pips, tp3_pips = _trade_targets(trade)
     pips_up = _pips_in_profit(entry, current, action, symbol)
+
+    # v1.60.32 C8/C9 — hf_scalp / hf_scalp_fast exits (demo engines): breakeven at +0.5R, 90-minute time-stop.
+    if trade.get("engine") in SCALP_ENGINES:
+        if await _scalp_engine_exits(db, trade, cfg, current, pips_up):
+            return
 
     # Tier 3 — close remaining at +tp3 pips
     if (not trade.get("tp3_closed")

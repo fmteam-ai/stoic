@@ -1,3 +1,7 @@
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 # v1.60.29 HTTP smoke: safety-status, trades/stats funnel, scalp status, account certification
 import os
 import pytest
@@ -6,8 +10,8 @@ from dotenv import dotenv_values
 
 pytestmark = pytest.mark.http
 
-_env = dotenv_values("/app/backend/.env")
-_fe = dotenv_values("/app/frontend/.env")
+_env = dotenv_values(_ENV_BE)
+_fe = dotenv_values(_ENV_FE)
 BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _fe.get("REACT_APP_BACKEND_URL")).rstrip("/")
 EMAIL = os.environ.get("TEST_ADMIN_EMAIL") or _env.get("TEST_ADMIN_EMAIL")
 PASSWORD = os.environ.get("TEST_ADMIN_PASSWORD") or _env.get("TEST_ADMIN_PASSWORD")
