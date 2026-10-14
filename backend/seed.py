@@ -542,6 +542,11 @@ async def ensure_indexes():
         await db.signal_history.create_index([("user_symbol", 1), ("ts", -1)])
     except Exception:
         pass
+    try:
+        from trade_decisions import ensure_decision_indexes
+        await ensure_decision_indexes(db)
+    except Exception:
+        pass
 
     # --- iter-91 · Heal stale panic / circuit-breaker trip flags ---------
     # Background: the original POST /api/bot/start endpoint flipped

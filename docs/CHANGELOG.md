@@ -2,6 +2,16 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.32 — hotfix for v1.60.31 (no risk settings or trading on/off changed)
+- **HOTFIX `GET /api/scalp/status` 500**: the status serializer rounded every feature; the 5-minute features (`range_5m_pips`, `break_up/dn_pips`, `twap_dev_pips`, `ret_5m`) are `None` until five minutes of ticks exist → `TypeError`. Non-numeric values now pass through (`scalp/engine.py status()`); regression test with a < 5-minute tape.
+- **FRED keyed API** (`macro/fred.py`): `api.stlouisfed.org/fred/series/observations` with `FRED_API_KEY` whenever the key is set (VIXCLS, DFF, DFII10 and the whole snapshot); keyless `fredgraph.csv` only as the no-key fallback. An EMPTY fetch is never cached for 6 h — it arms a 10-min negative cache and the previous snapshot is served `stale: true`. Error text never carries the request URL (the key). TIPS fallback (`macro/tips.py`) uses the same transport (`source: fred:DFII10:<transport>`).
+- **Admin → Integrations: FRED macro data card** — `FRED_API_KEY` (sealed secret, 32-hex validator, TEST LIVE pulls DFF through the keyed API).
+- **XAUUSD scalp thresholds/geometry** (`scalp/setup.py SYMBOL_OVERRIDES`, `scalp/forecast.py GEOMETRY`): gold uses max spread 35 pips, momentum ≥ 30 pips, break ≥ 5 pips; stop 40–120 pips, target ≥ 60 pips (1.6 R). EURUSD unchanged (0.8-pip spread cap, stop 3–6, target ≥ 5).
+- **`trade_decisions` retention**: `held` / `deferred` rows carry `expires_at` (TTL index, `TRADE_DECISIONS_HOLD_RETENTION_DAYS` = 30, startup backfill of older rows); rejected / executed rows stay forever.
+- **Readiness strip scoped to the affected account**: `/api/state/readiness` returns `scope` (`accounts` | `platform` | `none`), `blocked_accounts`, `clear_accounts`; the strip reads "TRADING BLOCKED · ACCOUNT — «label» · N other account(s) READY — trading continues there" when only named accounts are blocked. Execution gating was already per account.
+- **Loss Lab consistency**: outcome attribution consults the failure taxonomy — a loss the taxonomy calls `operational_failure` / `data_failure` routes its residual blame to INFRASTRUCTURE instead of "SIGNAL WRONG" (`alpha_clean` false, `taxonomy_category` stored); the verdict lesson no longer says "SAVING money" over a $0 ledger.
+- Tests: `tests/unit/test_v1_60_31_hotfix.py` (10).
+
 ## v1.60.31 — 14 Oct fix list (A1–E10; no risk settings or trading on/off changed)
 - **A1 Scalp Fast Path redesigned** (`backend/scalp/setup.py`, `engine.py`, `live_gate.py`): targets ≥ 5 pips, 15-min hold horizon; XAUUSD runs in **shadow mode** until the live gate proves positive net expectancy after costs over ≥ 300 labeled samples. `/api/scalp/status` exposes `requested_mode` + `live_gate` per symbol.
 - **A2 Single TP for scalp engines** — no more Monte Carlo gate vetoes caused by multi-TP ladders.

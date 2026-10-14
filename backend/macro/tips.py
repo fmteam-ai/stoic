@@ -128,11 +128,11 @@ async def get_real_yield(*, force_refresh: bool = False) -> Optional[dict]:
         if len(rows) < 2:
             rows = (await _fetch_year(year - 1)) + rows
     except httpx.HTTPError as e:
-        # secondary source: FRED DFII10 (10-year TIPS constant maturity, keyless fredgraph.csv)
+        # secondary source: FRED DFII10 (10-year TIPS constant maturity) — keyed API when FRED_API_KEY is set
         try:
-            from macro.fred import _fetch_series
-            rows = [{"date": d, "real_yield_10y": v} for d, v in (await _fetch_series("DFII10"))[-60:]]
-            source = "fred:DFII10"
+            from macro.fred import fetch_series, transport
+            rows = [{"date": d, "real_yield_10y": v} for d, v in (await fetch_series("DFII10", lookback_days=120))[-60:]]
+            source = f"fred:DFII10:{transport()}"
             logger.info("TIPS: Treasury unreachable (%s) — using FRED DFII10 (%d rows)", type(e).__name__, len(rows))
         except Exception as e2:  # noqa: BLE001
             fails = int((neg or {}).get("consecutive_failures") or 0) + 1

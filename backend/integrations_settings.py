@@ -32,6 +32,8 @@ REGISTRY = {
     "SECURITY_AGENT_TELEGRAM_BOT_TOKEN": ("security_telegram", True, "BotFather token of the security-alerts bot (123456789:AA…)"),
     "SECURITY_AGENT_TELEGRAM_CHAT_ID": ("security_telegram", False, "Chat id the bot posts to (your private chat, or -100… for a group)"),
     "VPS_REFERRAL_URL": ("vps", False, "Recommended VPS link shown to users (ForexVPS partner/referral URL)"),
+    "FRED_API_KEY": ("fred", True, "FRED API key (api.stlouisfed.org, free) — keyed observations for VIXCLS, DFF, DFII10 "
+                                   "and the macro snapshot; without it the keyless fredgraph.csv endpoint is used"),
 }
 DEFAULT_VPS_REFERRAL_URL = "https://www.forexvps.net/partner/stoicaibot"
 
@@ -45,13 +47,14 @@ def vps_offer() -> dict:
             "blurb": "Windows VPS tuned for MT5 — 2 vCPU / 4 GB runs up to 4 terminals; pick the datacentre closest to your broker (London for most)."}
 PROVIDERS = {
     "stripe": "Stripe payments", "turnstile": "Cloudflare Turnstile", "email": "E-mail (Resend)", "ai": "AI (Emergent)",
-    "security_telegram": "Security alerts (Telegram)", "vps": "VPS provider (ForexVPS)"}
+    "security_telegram": "Security alerts (Telegram)", "vps": "VPS provider (ForexVPS)", "fred": "FRED macro data"}
 # keys workers re-read from the vault between restarts (alert channels must follow an admin change at once)
 SECURITY_TELEGRAM_KEYS = ("SECURITY_AGENT_TELEGRAM_BOT_TOKEN", "SECURITY_AGENT_TELEGRAM_CHAT_ID")
 VALIDATORS = {
     "SECURITY_AGENT_TELEGRAM_BOT_TOKEN": (r"^\d{6,12}:[A-Za-z0-9_-]{30,}$", "expected a BotFather token like 123456789:AAH… (no 'bot' prefix)"),
     "SECURITY_AGENT_TELEGRAM_CHAT_ID": (r"^-?\d{5,20}$", "expected a numeric chat id (groups start with -100)"),
     "VPS_REFERRAL_URL": (r"^https://[A-Za-z0-9.-]+(/[^\s]*)?$", "expected an https:// URL"),
+    "FRED_API_KEY": (r"^[a-f0-9]{32}$", "expected a 32-character lowercase hex FRED API key"),
 }
 _VAULT_LOADED: dict[str, str] = {}   # key → value this process last took from the vault (refresh_keys bookkeeping)
 _AAD = b"stoic-secrets-vault-v1"
@@ -401,6 +404,18 @@ async def test_provider(db, provider: str, actor: dict) -> dict:
     if provider == "vps":
         o = vps_offer()
         return {"ok": True, "detail": f"users are sent to {o['url']}"}
+    if provider == "fred":
+        from macro.fred import api_key, fetch_series
+        if not api_key():
+            return {"ok": False, "detail": "FRED_API_KEY not configured — macro series use the keyless fredgraph.csv "
+                                           "endpoint, which times out from some VPS networks"}
+        try:
+            rows = await fetch_series("DFF", lookback_days=30)
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "detail": f"keyed FRED API failed: {e if type(e).__name__ == 'FredError' else type(e).__name__}"}
+        if not rows:
+            return {"ok": False, "detail": "keyed FRED API answered without observations for DFF"}
+        return {"ok": True, "detail": f"keyed API works — DFF {rows[-1][1]:.2f}% on {rows[-1][0]}"}
     if provider == "security_telegram":
         from security import rate_limit
         import security_alert_test as sat

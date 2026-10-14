@@ -1,11 +1,11 @@
 # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
 
-- Source commit: `89c1f0feca1226298923b2ee4b9877bba03d9a80`
-- rc_lock: `89c1f0feca1226298923b2ee4b9877bba03d9a80` authoritative=False
+- Source commit: `cb9480b1b283e3d844f1cae502e35ae7666a06e2`
+- rc_lock: `cb9480b1b283e3d844f1cae502e35ae7666a06e2` authoritative=False
 - Model manifest sha256: `f04d8e4799590c3c80e2f346295e966b2876b49c8803eb04fe1e88a0cf535cb4`
-- Test manifest sha256: `9232acdd71d3276d15f9f56f5f2e84ed4d79adbb40895b8023dff2313bf9fb61`
+- Test manifest sha256: `fbf68d11838aff94bb3c0772e615889dab9b5e6b5f5437ccad375b111808731d`
 - Uvicorn keepalive (container): 75s (application cap 300s)
-- Test manifest: 5795 tests (docs/TEST_MANIFEST.md)
+- Test manifest: 5805 tests (docs/TEST_MANIFEST.md)
 - Readiness verdict: **NOT RELEASABLE**
 
 ## Open findings (docs/open_findings.json)
@@ -45,4 +45,4 @@
 - OPS-r24-turnstile-hostnames [P3] TURNSTILE_EXPECTED_HOSTNAMES in Secrets includes the preview host so the shared .env works in both environments
 - tighten to the production hosts only in the Secrets tab. — owner: operator
 
-_generated 2026-10-14T08:28:24.765510+00:00 — regenerate on every release commit_
+_generated 2026-10-14T11:05:08.737434+00:00 — regenerate on every release commit_

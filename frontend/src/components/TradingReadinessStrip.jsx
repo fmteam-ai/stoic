@@ -64,6 +64,9 @@ export function TradingReadinessStrip() {
     const st = LEVEL_STYLE[data.level] || LEVEL_STYLE.DEGRADED;
     const top = (data.reasons || [])[0];
     const calm = data.level === "READY";
+    // v1.60.31 item 5 — a block that names specific accounts is announced for THOSE accounts only
+    const scoped = data.scope === "accounts" && (data.blocked_accounts || []).length > 0;
+    const scopedNames = scoped ? data.blocked_accounts.map(a => a.label || (a.account_id || "").slice(-6)).join(", ") : "";
 
     return (
         <div className={`border-b ${st.border} ${st.bg}`} data-testid="trading-readiness-strip">
@@ -74,10 +77,15 @@ export function TradingReadinessStrip() {
                         : <AlertOctagon className={`w-3.5 h-3.5 shrink-0 ${st.text} ${data.level === "EMERGENCY" ? "animate-pulse" : ""}`} />}
                     <span className={`font-mono text-[11px] font-bold tracking-widest shrink-0 ${st.text}`}
                         data-testid="trading-readiness-level">
-                        TRADING {data.level.replace("_", "-")}
+                        TRADING {data.level.replace("_", "-")}{scoped ? ` · ${data.blocked_accounts.length === 1 ? "ACCOUNT" : `${data.blocked_accounts.length} ACCOUNTS`}` : ""}
                     </span>
+                    {scoped && (
+                        <span className="font-mono text-[10px] text-[#A1A1AA] truncate" data-testid="trading-readiness-scope">
+                            {scopedNames} · {data.clear_accounts} other account{data.clear_accounts === 1 ? "" : "s"} READY — trading continues there
+                        </span>
+                    )}
                     {top ? (
-                        <span className="font-mono text-[10px] text-[#A1A1AA] truncate"
+                        <span className={`font-mono text-[10px] text-[#A1A1AA] truncate ${scoped ? "hidden lg:inline" : ""}`}
                             data-testid="trading-readiness-reason">
                             {top.message}
                             {top.accounts?.length ? ` · ${top.accounts.length} account(s)` : ""}

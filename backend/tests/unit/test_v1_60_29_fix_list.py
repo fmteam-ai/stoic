@@ -240,9 +240,9 @@ def test_d9_tips_backs_off_after_failures_and_falls_back_to_fred(monkeypatch):
     monkeypatch.setattr(tips, "get_db", lambda: db)
     monkeypatch.setattr(tips, "_fetch_year", AsyncMock(side_effect=httpx.ConnectTimeout("timeout")))
     fred = AsyncMock(return_value=[(f"2026-10-{d:02d}", 1.9 + d * 0.01) for d in range(1, 10)])
-    monkeypatch.setattr("macro.fred._fetch_series", fred)
+    monkeypatch.setattr("macro.fred.fetch_series", fred)
     out = _run(tips.get_real_yield())
-    assert out and out["source"] == "fred:DFII10" and out["regime"] == "bearish_gold"
+    assert out and out["source"].startswith("fred:DFII10") and out["regime"] == "bearish_gold"
     # both sources down → ONE warning, then silence until retry_after
     fred.side_effect = httpx.ConnectTimeout("fred down")
     db.tips_cache.rows = [r for r in db.tips_cache.rows if r.get("key") != "10Y_REAL"]

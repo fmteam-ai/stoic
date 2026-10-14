@@ -6,11 +6,17 @@ executed trades) the final order result. Never overwritten — unlike the
 bot-pulse, which only keeps the latest verdict.
 """
 import logging
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 
 from versioning import version_stamp
 
 logger = logging.getLogger(__name__)
+
+# v1.60.31 item 4 — HOLD / DEFERRED rows are written on every evaluation and are telemetry, not ledger truth:
+# they expire after HOLD_RETENTION_DAYS (TTL index on expires_at). rejected / executed / advisory rows stay forever.
+HOLD_RETENTION_DAYS = int(os.environ.get("TRADE_DECISIONS_HOLD_RETENTION_DAYS", "30"))
+EXPIRING_STATUSES = ("held", "deferred")
 
 SNAPSHOT_FIELDS = ("action", "entry_price", "stop_loss", "take_profit",
                    "tp1", "tp2", "tp3", "confidence", "rr_ratio", "scope",
@@ -52,9 +58,24 @@ async def record_decision(db, *, user_id: str, symbol: str, status: str,
         }
         if execution:
             doc["execution"] = execution
+        if status in EXPIRING_STATUSES:
+            doc["expires_at"] = datetime.now(timezone.utc) + timedelta(days=HOLD_RETENTION_DAYS)
         await db.trade_decisions.insert_one(doc)
     except Exception as e:  # noqa: BLE001
         logger.warning("decision ledger write failed: %s", e)
+
+
+async def ensure_decision_indexes(db) -> None:
+    """TTL on expires_at (held/deferred only) + one-shot backfill of rows written before the field existed."""
+    await db.trade_decisions.create_index("expires_at", expireAfterSeconds=0)
+    await db.trade_decisions.create_index([("user_id", 1), ("ts", -1)])
+    try:
+        await db.trade_decisions.update_many(
+            {"status": {"$in": list(EXPIRING_STATUSES)}, "expires_at": {"$exists": False}},
+            [{"$set": {"expires_at": {"$dateAdd": {"startDate": {"$dateFromString": {"dateString": "$ts"}},
+                                                   "unit": "day", "amount": HOLD_RETENTION_DAYS}}}}])
+    except Exception as e:  # noqa: BLE001 — pipeline updates need MongoDB ≥ 5; the TTL still covers new rows
+        logger.info("trade_decisions expires_at backfill skipped: %s", type(e).__name__)
 
 
 def infer_stage(reason: str) -> str:
