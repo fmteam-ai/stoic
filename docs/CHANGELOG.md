@@ -10,7 +10,8 @@ All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed 
 - **`trade_decisions` retention**: `held` / `deferred` rows carry `expires_at` (TTL index, `TRADE_DECISIONS_HOLD_RETENTION_DAYS` = 30, startup backfill of older rows); rejected / executed rows stay forever.
 - **Readiness strip scoped to the affected account**: `/api/state/readiness` returns `scope` (`accounts` | `platform` | `none`), `blocked_accounts`, `clear_accounts`; the strip reads "TRADING BLOCKED · ACCOUNT — «label» · N other account(s) READY — trading continues there" when only named accounts are blocked. Execution gating was already per account.
 - **Loss Lab consistency**: outcome attribution consults the failure taxonomy — a loss the taxonomy calls `operational_failure` / `data_failure` routes its residual blame to INFRASTRUCTURE instead of "SIGNAL WRONG" (`alpha_clean` false, `taxonomy_category` stored); the verdict lesson no longer says "SAVING money" over a $0 ledger.
-- Tests: `tests/unit/test_v1_60_31_hotfix.py` (10).
+- **Step-up MFA**: `alert_test` (Settings → Notifications "Send test" for privileged / MFA users) and `host_migration` are now registered in `step_up.STEP_UP_ACTIONS` — token issuance answered "Unknown step-up action", so an admin could never send a test alert. CI test asserts every `require_step_up(...)` action name is registered.
+- Tests: `tests/unit/test_v1_60_31_hotfix.py` (10), `tests/unit/test_step_up_actions_registered.py` (2).
 
 ## v1.60.31 — 14 Oct fix list (A1–E10; no risk settings or trading on/off changed)
 - **A1 Scalp Fast Path redesigned** (`backend/scalp/setup.py`, `engine.py`, `live_gate.py`): targets ≥ 5 pips, 15-min hold horizon; XAUUSD runs in **shadow mode** until the live gate proves positive net expectancy after costs over ≥ 300 labeled samples. `/api/scalp/status` exposes `requested_mode` + `live_gate` per symbol.
