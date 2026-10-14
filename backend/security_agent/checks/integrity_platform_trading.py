@@ -43,13 +43,42 @@ async def I3(db, cfg):
               {k: v for k, v in res.items() if k != "ok"})]
 
 
+BACKUP_SUFFIXES = (".archive.gz", ".archive.gz.enc")
+
+
+def backup_timestamp(bdir: str, name: str):
+    """Pure-ish — UTC timestamp of one backup entry, or None if `name` is not a backup archive.
+    `<stem>.manifest.json` with `created_at` wins over the archive's mtime."""
+    import json
+    if not name.endswith(BACKUP_SUFFIXES):
+        return None
+    stem = name
+    for suf in BACKUP_SUFFIXES:
+        if stem.endswith(suf):
+            stem = stem[: -len(suf)]
+            break
+    try:
+        with open(os.path.join(bdir, stem + ".manifest.json"), encoding="utf-8") as fh:
+            created = (json.load(fh) or {}).get("created_at")
+        if created:
+            return datetime.fromisoformat(str(created).replace("Z", "+00:00")).astimezone(timezone.utc)
+    except (OSError, ValueError, TypeError):
+        pass
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(os.path.join(bdir, name)), tz=timezone.utc)
+    except OSError:
+        return None
+
+
 async def I4(db, cfg):
     bdir = os.environ.get("STOIC_BACKUP_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backups")
     newest = None
     try:
         for n in os.listdir(bdir):
-            if n.endswith(".archive.gz"):
-                m = datetime.fromtimestamp(os.path.getmtime(os.path.join(bdir, n)), tz=timezone.utc)
+            # v1.60.29 item 7 — backups are encrypted (`.archive.gz.enc` + `.manifest.json`); the manifest's
+            # created_at is authoritative, the archive mtime the fallback. Plain `.archive.gz` still accepted.
+            m = backup_timestamp(bdir, n)
+            if m is not None:
                 newest = m if newest is None or m > newest else newest
     except OSError:
         # S13 — no backup folder mounted: report "no data" (mount it read-only on the worker) instead of silence

@@ -130,6 +130,8 @@ export default function Accounts() {
     }, []);
 
     useEffect(() => { load(); }, [load]);
+    // v1.60.29 item 4 — certification map / status lines follow the live heartbeat (30 s), not the first paint
+    useEffect(() => { const id = setInterval(load, 30000); return () => clearInterval(id); }, [load]);
 
     // Fix-It Shortcuts: ?focus=<accountId> scrolls to and highlights the card
     useEffect(() => {
@@ -368,6 +370,16 @@ export default function Accounts() {
             setOverviewKey(k => k + 1);
         } catch (e) { toast.error(formatApiError(e)); }
     };
+    // v1.60.29 item 5(c) — one-click repair of INVENTORY_DRIFT (account ON, bot off)
+    const enableBot = async (id) => {
+        try {
+            await api.put(`/bot/config?account_id=${encodeURIComponent(id)}`, { active: true });
+            toast.success("Bot turned on — drift repaired");
+            await load();
+            setOverviewKey(k => k + 1);
+        } catch (e) { toast.error(formatApiError(e)); }
+    };
+
     const editGroup = (a) => {
         const g = window.prompt(
             "Group label for this account (e.g. AGGRESSIVE, PROP, FAMILY).\nLeave empty to remove the group.",
@@ -601,6 +613,7 @@ export default function Accounts() {
                                     <StatusLine account={a} onFix={(fix) => {
                                         // U15 — one fix button: Start acts inline, everything else opens its dialog on the card
                                         if (fix.action === "start") patchAccount(a.id, { trading_enabled: true }, "Trading started");
+                                        else if (fix.action === "enable_bot") enableBot(a.id);
                                         else setStatusFix({ account: a, fix });
                                     }} />
                                     {a.broker_account_mismatch && (() => {

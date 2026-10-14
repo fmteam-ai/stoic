@@ -1806,7 +1806,7 @@ async def accounts_certification(user=Depends(get_current_user)):
         specs_age = _age(a.get("symbol_specs_updated_at"))
         spreads_age = _age(a.get("spreads_updated_at"))
         sync_age = _age(a.get("last_full_sync_at"))
-        v = a.get("ea_version")
+        v = a.get("ea_version") or (a.get("ea_identity") or {}).get("ea_version")
         # prod v1.60.26 — read the facts where the EA/backend actually store them: `account_type` is the LOT type
         # (microcent/cent/standard), the hedging/netting verdict is the EA-reported ACCOUNT_MARGIN_MODE
         # (position_mode_resolution); the broker clock offset is heartbeat `broker_time` (broker_offset_sec).

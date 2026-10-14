@@ -25,10 +25,12 @@ def evaluate(lock: dict | None = None, env: dict | None = None, ea_signed: bool 
         ea_signed = bool(_signed_release_record())
     fails = []
     if not lock.get("authoritative"):
-        fails.append("rc_lock is not authoritative (developer snapshot)")
+        fails.append("rc_lock is not authoritative (developer snapshot) — deploy a TAGGED release: `git tag v<version> && git push --tags` "
+                     "(release.yml freezes the authoritative lock), then `deploy/update.sh` in registry/auto mode pulls by digest")
     images = lock.get("images") or {}
     if not (images.get("backend") and images.get("frontend")):
-        fails.append("rc_lock carries no image digests")
+        fails.append("rc_lock carries no image digests — only release.yml writes them (GHCR push → --backend-digest/--frontend-digest); "
+                     "a build-mode / on-host build deploy can never satisfy this gate")
     running = env.get("STOIC_IMAGE_DIGEST") or ""
     if not running:
         fails.append("STOIC_IMAGE_DIGEST not injected — running image identity unknown")

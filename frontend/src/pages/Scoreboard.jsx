@@ -74,9 +74,11 @@ function Metric({ label, value, cls = "text-white" }) {
 
 function Funnel({ funnel }) {
     const rejected = funnel.filter((f) => f.status === "rejected");
+    // v1.60.29 item 3 — deferred (execution optimizer) and held (engine) decisions are now in the ledger
+    const waiting = funnel.filter((f) => f.status === "deferred" || f.status === "held");
     const executed = funnel.filter((f) => f.status === "executed")
         .reduce((a, f) => a + f.count, 0);
-    const max = Math.max(1, ...rejected.map((f) => f.count));
+    const max = Math.max(1, ...rejected.map((f) => f.count), ...waiting.map((f) => f.count));
     return (
         <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4" data-testid="decision-funnel">
             <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-3">
@@ -92,7 +94,22 @@ function Funnel({ funnel }) {
                         <div className="w-10 text-right font-mono text-[10px] text-[#A1A1AA]">{f.count}</div>
                     </div>
                 ))}
-                {!rejected.length && (
+                {waiting.map((f) => (
+                    <div key={`${f.status}-${f.stage}`} className="flex items-center gap-2" data-testid={`funnel-${f.status}-${f.stage}`}
+                         title={f.last_reason || ""}>
+                        <div className="w-44 font-mono text-[10px] text-[#FFB000] truncate">{f.status.toUpperCase()} · {f.stage}</div>
+                        <div className="flex-1 h-3 bg-[#111111]">
+                            <div className="h-3 bg-[#FFB000]/60" style={{ width: `${(f.count / max) * 100}%` }} />
+                        </div>
+                        <div className="w-10 text-right font-mono text-[10px] text-[#FFB000]">{f.count}</div>
+                    </div>
+                ))}
+                {waiting.length > 0 && waiting[0].last_reason && (
+                    <div className="font-mono text-[9px] text-[#FFB000]/80 pl-1" data-testid="funnel-waiting-reason">
+                        latest: {waiting[0].last_reason}
+                    </div>
+                )}
+                {!rejected.length && !waiting.length && (
                     <div className="font-mono text-xs text-[#52525B]">No rejections recorded in this window yet.</div>
                 )}
                 <div className="flex items-center gap-2 pt-2 border-t border-[#1F1F1F]" data-testid="funnel-executed">

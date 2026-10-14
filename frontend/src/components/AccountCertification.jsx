@@ -46,10 +46,15 @@ export function AccountCertification({ accountId }) {
 
     useEffect(() => {
         let dead = false;
-        api.get("/accounts/certification")
+        const pull = () => api.get("/accounts/certification")
             .then(({ data }) => { if (!dead) setItems(data.items || []); })
-            .catch(() => { if (!dead) setItems([]); });
-        return () => { dead = true; };
+            .catch(() => { if (!dead && items === null) setItems([]); });
+        pull();
+        // v1.60.29 item 4 — the panel went stale ("heartbeat never / version — / 0 symbols") while the EA was
+        // already reporting: refresh from the live heartbeat every 30 s and whenever the tab regains focus.
+        const id = setInterval(pull, 30000);
+        window.addEventListener("focus", pull);
+        return () => { dead = true; clearInterval(id); window.removeEventListener("focus", pull); };
     }, [accountId]);
 
     const cert = items?.find(i => i.account_id === accountId);

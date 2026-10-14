@@ -2874,6 +2874,7 @@ class ScalpRunner:
         return {
             "account_id": self.account_id, "symbol": self.symbol,
             "enabled": self.enabled, "mode": self.mode,
+            "requested_mode": getattr(self, "requested_mode", self.mode), "live_gate": getattr(self, "live_gate", None),
             "model_key": self.model_key(),
             "risk_restored": self._risk_restored,
             "health": self.health,
@@ -3478,7 +3479,19 @@ async def apply_config(db, account: dict, symbol: str, enabled: bool, mode: str,
     if r is None:
         return None
     r.enabled = enabled
+    # v1.60.29 A1(c) — `demo_live` is honoured only once the shadow record passes the live gate (≥ 300 labeled
+    # samples, positive net expectancy after costs, PF > 1); otherwise the engine runs SHADOW and says why.
+    requested_mode = mode
+    r.live_gate = None
+    if mode == "demo_live":
+        from scalp.live_gate import live_eligibility
+        r.live_gate = await live_eligibility(db, account["user_id"], symbol.upper())
+        if not r.live_gate["eligible"]:
+            mode = "shadow"
+            logger.warning("scalp %s: demo_live requested but the live gate is closed (%s) — running SHADOW",
+                           symbol, "; ".join(r.live_gate["reasons"]))
     r.mode = mode
+    r.requested_mode = requested_mode
     r.account = account
     r.broker = str(account.get("broker") or "")
     r.account_type = str(account.get("account_type") or "")
@@ -3487,7 +3500,8 @@ async def apply_config(db, account: dict, symbol: str, enabled: bool, mode: str,
     await scalp_model.load_persisted(db, r.model_key())
     await db.scalp_configs.update_one(
         {"account_id": str(account["_id"]), "symbol": symbol.upper()},
-        {"$set": {"user_id": account["user_id"], "enabled": enabled, "mode": mode,
+        {"$set": {"user_id": account["user_id"], "enabled": enabled, "mode": mode, "requested_mode": requested_mode,
+                  "live_gate": r.live_gate,
                   "commission_usd_per_lot_side": r.commission_usd_per_lot_side,
                   "removed": False,
                   "updated_at": datetime.now(timezone.utc).isoformat()}},

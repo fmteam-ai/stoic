@@ -24,7 +24,7 @@ class ScalpRiskLimits:
     cooldown_after_loss_streak_minutes: int = 30
     max_daily_loss_pct: float = 0.5        # scalp-scope daily loss stop
     max_daily_cost_pct: float = 0.35
-    max_holding_ms: int = 300_000          # 5 min hard timeout
+    max_holding_ms: int = 900_000          # 15 min hard timeout (v1.60.29 A1: hold for minutes, not seconds)
 
 
 @dataclass(frozen=True)

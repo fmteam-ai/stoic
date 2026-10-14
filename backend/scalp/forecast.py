@@ -35,9 +35,11 @@ def make(feats: dict, candidate: dict, state, cfg,
     spread = float(feats["spread_pips"])
     vol_short = max(float(feats["vol_short"]), 0.3)
 
-    # geometry — stop wide enough to breathe past spread noise
-    stop_pips = _clamp(max(2.0 * spread, 1.5 * vol_short), 1.0, 5.0)
-    target_pips = round(1.3 * stop_pips, 2)
+    # geometry — v1.60.29 A1: minutes not seconds. Stop sits past the broken range edge (3–6 pips), target ≥ 5 pips
+    # at 1.6 R, so the target is a multiple of the round-trip cost instead of smaller than it.
+    rng = float(feats.get("range_5m_pips") or 0)
+    stop_pips = _clamp(max(3.0, 0.6 * rng, 2.0 * spread), 3.0, 6.0)
+    target_pips = round(max(5.0, 1.6 * stop_pips), 2)
 
     # deterministic probability: conservative base + setup-quality bonuses
     p = 0.48

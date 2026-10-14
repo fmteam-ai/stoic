@@ -237,13 +237,13 @@ async def strategy_scoreboard(days: int = 30, user=Depends(get_current_user)):
     dq = {"user_id": user["id"]}
     if days > 0:
         dq["ts"] = {"$gte": since}
-    pipeline = [{"$match": dq},
+    pipeline = [{"$match": dq}, {"$sort": {"_id": 1}},
                 {"$group": {"_id": {"stage": "$stage", "status": "$status"},
-                            "n": {"$sum": 1}}}]
+                            "n": {"$sum": 1}, "last_reason": {"$last": "$reason"}}}]
     funnel = []
     async for g in db.trade_decisions.aggregate(pipeline):
         funnel.append({"stage": g["_id"]["stage"], "status": g["_id"]["status"],
-                       "count": g["n"]})
+                       "count": g["n"], "last_reason": g.get("last_reason")})
     funnel.sort(key=lambda x: -x["count"])
     return {"days": days, "engines": out, "funnel": funnel,
             "portfolio": portfolio,

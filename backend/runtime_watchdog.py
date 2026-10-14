@@ -104,6 +104,19 @@ async def _record_previous_run(db) -> dict | None:
     return entry
 
 
+HEARTBEAT_TICK_SEC = float(os.environ.get("WATCHDOG_HEARTBEAT_SEC", "1"))
+
+
+async def _heartbeat_task():
+    """v1.60.29 item 8 — the loop-liveness heartbeat on its OWN 1 s tick. It used to be refreshed only every
+    WATCHDOG_SAMPLE_SEC (15 s) while the sentinel alarmed at WATCHDOG_BLOCK_SEC (5 s) → a false
+    'EVENT LOOP BLOCKED' CRITICAL every cycle. Sampling stays on its slow cadence."""
+    global _heartbeat
+    while True:
+        _heartbeat = time.monotonic()
+        await asyncio.sleep(HEARTBEAT_TICK_SEC)
+
+
 async def _watchdog_task():
     global _heartbeat, _max_rss
     from database import get_db
@@ -146,7 +159,9 @@ def start_watchdog():
         threading.Thread(target=_sentinel_thread, daemon=True,
                          name="loop-sentinel").start()
         _thread_started = True
-    return asyncio.get_event_loop().create_task(_watchdog_task())
+    loop = asyncio.get_event_loop()
+    loop.create_task(_heartbeat_task())
+    return loop.create_task(_watchdog_task())
 
 
 async def full_stats(db) -> dict:

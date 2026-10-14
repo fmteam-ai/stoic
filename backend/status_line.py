@@ -75,7 +75,15 @@ def derive(acc: dict, *, bot_active: bool, rules_active: bool, now: datetime | N
     if rules_active and adm.get("state") != "admitted":
         return {"state": "verified", "label": "Verified — admission pending (next heartbeat)",
                 "fix": _fix("wait", "Checking the policy rules"), "internals": internals}
-    # 3/4 · Ready / Trading
+    # 3/4 · Ready / Trading — v1.60.29 item 5(c): an enabled account with an inactive bot (or the reverse) is the
+    # INVENTORY_DRIFT that turns /status DEGRADED; one click repairs the relation instead of leaving a riddle.
+    enabled = acc.get("trading_enabled") is True
+    if enabled and not bot_active:
+        return {"state": "drift", "label": f"Trading is ON but the bot is off — {env} · inventory drift",
+                "fix": _fix("enable_bot", "Turn the bot on"), "internals": internals}
+    if bot_active and acc.get("trading_enabled") is False and acc.get("mode") != "paper":
+        return {"state": "drift", "label": f"Bot is on but trading is OFF — {env} · inventory drift",
+                "fix": _fix("start", "Start"), "internals": internals}
     if bot_active:
         return {"state": "trading", "label": f"Trading — {env} · verified terminal", "fix": None, "internals": internals}
     return {"state": "ready", "label": f"Ready — {env} · verified terminal", "fix": _fix("start", "Start"), "internals": internals}

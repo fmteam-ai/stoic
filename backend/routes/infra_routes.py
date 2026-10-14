@@ -1008,7 +1008,7 @@ def server_backups(now: datetime, limit: int = 10) -> dict:
     sizes only, newest first. Admin-only surface; a missing mount is reported as such, never as 'no backups'."""
     bdir = os.environ.get("STOIC_BACKUP_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backups")
     try:
-        names = [n for n in os.listdir(bdir) if n.endswith(".archive.gz")]
+        names = [n for n in os.listdir(bdir) if n.endswith((".archive.gz", ".archive.gz.enc"))]
     except OSError:
         return {"dir": bdir, "mounted": False, "files": [], "newest_age_h": None}
     files = []
