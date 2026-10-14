@@ -1,8 +1,12 @@
 import { Component } from "react";
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw, Sparkles } from "lucide-react";
+
+export const CHUNK_LOAD_ERROR_RE = /Loading chunk|dynamically imported module|Importing a module script failed/i;
 
 /* Route-level error boundary (iter-158 review P0-6): a crashed lazy chunk
-   or render error must NEVER leave a blank document on a trading surface. */
+   or render error must NEVER leave a blank document on a trading surface.
+   v1.60.33 item 9 — a chunk-load failure means a NEW BUILD was deployed while this tab was open; say so and
+   offer a reload instead of a generic "failed to load". */
 export class RouteErrorBoundary extends Component {
     constructor(props) {
         super(props);
@@ -18,10 +22,11 @@ export class RouteErrorBoundary extends Component {
         console.error("Route render error", this.state.id, error, info);
     }
 
+    isChunkError = () => CHUNK_LOAD_ERROR_RE.test(String(this.state.error?.message || ""));
+
     retry = () => {
-        const msg = String(this.state.error?.message || "");
         // chunk-load failures need a real reload to fetch the new build
-        if (/Loading chunk|Failed to fetch dynamically imported/i.test(msg)) {
+        if (this.isChunkError()) {
             window.location.reload();
             return;
         }
@@ -30,6 +35,26 @@ export class RouteErrorBoundary extends Component {
 
     render() {
         if (!this.state.error) return this.props.children;
+        if (this.isChunkError()) {
+            return (
+                <div className="min-h-[60vh] flex items-center justify-center p-6"
+                    data-testid="route-error-boundary">
+                    <div className="max-w-md w-full border border-[#00FF41]/40 bg-[#00FF41]/5 p-6 text-center"
+                        data-testid="new-version-available">
+                        <Sparkles className="w-8 h-8 text-[#00FF41] mx-auto mb-3" />
+                        <div className="font-display text-lg text-[#FAFAFA] mb-1">New version available</div>
+                        <div className="text-xs text-[#A1A1AA] mb-4">
+                            STOIC was updated while this tab was open. Reload to load the new build — your trading
+                            engine and account are unaffected.
+                        </div>
+                        <button onClick={this.retry} data-testid="new-version-reload"
+                            className="px-4 py-2 text-xs font-mono tracking-widest bg-[#00FF41] text-black inline-flex items-center gap-1.5">
+                            <RefreshCw className="w-3.5 h-3.5" /> RELOAD
+                        </button>
+                    </div>
+                </div>
+            );
+        }
         return (
             <div className="min-h-[60vh] flex items-center justify-center p-6"
                 data-testid="route-error-boundary">

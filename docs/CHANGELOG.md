@@ -2,6 +2,14 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.33 — 14 Oct review items 7–10 (no risk settings or trading on/off changed)
+- **Never loosen a stop** (`trade_manager.tightened_sl`): on 14 Oct 15:13 the legacy TP1 / `let_winners_run` path wrote `MODIFY_SL new_sl = entry` on two SELL scalps whose stop already sat at entry − costs (set by the 0.5R breakeven) — a LOOSER stop. Every stop write now goes through one guard: SELL only if `new_sl < current SL`, BUY only if `new_sl > current SL`. When the stop is already at/beyond entry the TP1 path still banks the partial (or marks the tier) but sends no stop move; the Tier-1 combo follow-up in `bridge_routes` re-checks before enqueuing.
+- **Scalp single TP no longer re-split by the pip caps** (`ai_signals.py`): the MTF caps (TP1 ≤ 100, TP2/TP3 ≤ 200) are skipped for `SCALP_ENGINES` — capping tp1 alone turned the designed single target (tp1 = tp2 = tp3 = 2R) back into 100 / 200 / 200 and re-armed the partial-at-TP1 logic on scalp trades.
+- **Frontend: new build while a tab is open** (`App.jsx lazyImport`, `RouteErrorBoundary`): a chunk-load failure ("Failed to fetch / error loading dynamically imported module", "Loading chunk") reloads the page ONCE per URL to pick up the new hashes; if it still fails the route shows "New version available — RELOAD" instead of a generic error.
+- **FRED snapshot freshness** (`macro/fred.py _fresh`): a cached payload with NO series is never "fresh" — a pre-v1.60.31 empty cache row could suppress refetches for 6 h.
+- **System Status inside the app shell**: `/status` renders in `AppLayout` (sidebar, strips, page header) when signed in; the public standalone page is unchanged for visitors.
+- Security Audit #31 (`docs/SECURITY_AUDIT_31.md`): PASS — no major issue.
+
 ## v1.60.32 — hotfix for v1.60.31 (no risk settings or trading on/off changed)
 - **HOTFIX `GET /api/scalp/status` 500**: the status serializer rounded every feature; the 5-minute features (`range_5m_pips`, `break_up/dn_pips`, `twap_dev_pips`, `ret_5m`) are `None` until five minutes of ticks exist → `TypeError`. Non-numeric values now pass through (`scalp/engine.py status()`); regression test with a < 5-minute tape.
 - **FRED keyed API** (`macro/fred.py`): `api.stlouisfed.org/fred/series/observations` with `FRED_API_KEY` whenever the key is set (VIXCLS, DFF, DFII10 and the whole snapshot); keyless `fredgraph.csv` only as the no-key fallback. An EMPTY fetch is never cached for 6 h — it arms a 10-min negative cache and the previous snapshot is served `stale: true`. Error text never carries the request URL (the key). TIPS fallback (`macro/tips.py`) uses the same transport (`source: fred:DFII10:<transport>`).

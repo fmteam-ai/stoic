@@ -2120,7 +2120,10 @@ async def modification_ack(payload: BridgeModificationAck):
             "$each": [payload.intent_id], "$slice": -50}}
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, upd_ops)
     # EA v1.50 — enqueue the Tier-1 combo stop move as its OWN durable,
-    # fenced command now that the partial close is broker-confirmed.
+    # fenced command now that the partial close is broker-confirmed — only if it still TIGHTENS the stop.
+    if combo_new_sl is not None:
+        from trade_manager import tightened_sl
+        combo_new_sl = tightened_sl(trade, float(combo_new_sl))
     if combo_new_sl is not None:
         from command_fence import stamp_pending_modification
         await stamp_pending_modification(
