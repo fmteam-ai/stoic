@@ -108,6 +108,19 @@ class FakeCollection:
         n = len([r for r in self.rows if _match(r, q)])
         return min(n, kw["limit"]) if kw.get("limit") else n
 
+    async def distinct(self, key, q=None):
+        out = []
+        for r in self.rows:
+            if not _match(r, q or {}):
+                continue
+            cur = r
+            for part in key.split("."):
+                cur = cur.get(part) if isinstance(cur, dict) else None
+            if cur is not None and cur not in out:
+                out.append(cur)
+        return out
+
+
     async def insert_one(self, doc):
         d = dict(doc)
         d.setdefault("_id", ObjectId())

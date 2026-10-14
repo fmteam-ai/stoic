@@ -121,44 +121,66 @@ async def manifest_for_agent(db, agent_id: str | None = None) -> dict:
     return m
 
 
-async def maybe_promote(db) -> dict | None:
-    """Auto-promote candidate → stable after a clean soak window: the
-    candidate must be older than promote_after_hours with ZERO
-    deployment_failed alerts raised since it appeared."""
+async def promotion_readiness(db) -> dict:
+    """v1.60.35 — ONE source of truth for "may the candidate be promoted now?" (manual button AND auto-soak).
+    Criteria: a candidate exists · channel not pinned · soak window elapsed · no corroborated trusted-tenant deploy
+    failures during the soak · a signed EX5 release record for the shipped EA."""
     st = await _state(db)
     cand = st.get("candidate")
-    if not cand or st.get("pinned"):
-        return None
-    since = st.get("candidate_since")
-    if not since:
-        return None
-    since_dt = datetime.fromisoformat(str(since).replace("Z", "+00:00"))
-    if since_dt.tzinfo is None:
-        since_dt = since_dt.replace(tzinfo=timezone.utc)
     hours = float(st.get("promote_after_hours") or DEFAULT_SOAK_HOURS)
-    if _now() - since_dt < timedelta(hours=hours):
+    elapsed = None
+    since = st.get("candidate_since")
+    if since:
+        since_dt = datetime.fromisoformat(str(since).replace("Z", "+00:00"))
+        if since_dt.tzinfo is None:
+            since_dt = since_dt.replace(tzinfo=timezone.utc)
+        elapsed = round((_now() - since_dt).total_seconds() / 3600, 2)
+    fail_tenants = 0
+    if cand and since:
+        from deployment_health import _trusted_user_ids, distinct_fail_tenants
+        trusted_uids = await _trusted_user_ids(db)
+        fail_tenants = await distinct_fail_tenants(db, since, set(cand.values()), only_user_ids=trusted_uids)
+        if not trusted_uids:
+            fail_tenants = 0
+    from deployment_health import MIN_FAIL_TENANTS
+    from ea_capabilities import _signed_release_record
+    ea_rec = _signed_release_record() or {}
+    checks = [
+        {"id": "candidate", "ok": bool(cand), "label": "a candidate build exists"},
+        {"id": "unpinned", "ok": not st.get("pinned"), "label": "channel not pinned (a rollback pins it)"},
+        {"id": "soak", "ok": bool(cand) and elapsed is not None and elapsed >= hours,
+         "label": f"soak window {hours:g} h elapsed", "elapsed_hours": elapsed, "required_hours": hours},
+        {"id": "no_failures", "ok": fail_tenants < MIN_FAIL_TENANTS,
+         "label": "no corroborated deploy failures during soak", "fail_tenants": fail_tenants},
+        {"id": "ea_signed", "ok": bool(ea_rec), "label": "signed EX5 release record for the shipped EA",
+         "ea_version": ea_rec.get("version"), "ex5_sha256": ea_rec.get("ex5_sha256")},
+    ]
+    return {"eligible": all(c["ok"] for c in checks), "checks": checks, "blocking": [c["label"] for c in checks if not c["ok"]],
+            "candidate": cand, "stable": st.get("stable"), "previous_stable": st.get("previous_stable"),
+            "pinned": bool(st.get("pinned")), "can_rollback": bool(st.get("previous_stable"))}
+
+
+async def maybe_promote(db) -> dict | None:
+    """Auto-promote candidate → stable after a clean soak window (same criteria as the manual button)."""
+    st = await _state(db)
+    if not st.get("candidate") or st.get("pinned"):
         return None
-    # SEC (3rd/4th audit) — hold auto-promotion only on CORROBORATED failures
-    # from distinct TRUSTED tenants reporting the CANDIDATE's own digests.
-    # Untrusted tenant telemetry can't freeze the release pipeline.
-    from deployment_health import (MIN_FAIL_TENANTS, _trusted_user_ids,
-                                   distinct_fail_tenants)
-    cand_digests = set(cand.values())
-    trusted_uids = await _trusted_user_ids(db)
-    fail_tenants = await distinct_fail_tenants(
-        db, since, cand_digests, only_user_ids=trusted_uids)
-    if trusted_uids and fail_tenants >= MIN_FAIL_TENANTS:
-        logger.warning("candidate promotion HELD: %s trusted tenants "
-                       "reported deploy failure during soak", fail_tenants)
+    ready = await promotion_readiness(db)
+    if not ready["eligible"]:
+        if any(c["id"] == "no_failures" and not c["ok"] for c in ready["checks"]):
+            logger.warning("candidate promotion HELD: corroborated deploy failures during soak")
         return None
     return await promote(db, actor="auto-soak")
 
 
 async def promote(db, actor: str = "admin") -> dict:
+    ready = await promotion_readiness(db)
+    if not ready["candidate"]:
+        raise ValueError("no candidate release to promote")
+    if not ready["eligible"]:
+        raise ValueError("candidate not eligible for promotion: " + "; ".join(ready["blocking"]))
     st = await _state(db)
     cand = st.get("candidate")
-    if not cand:
-        raise ValueError("no candidate release to promote")
     prev = st.get("stable") or {}
     await db.platform_state.update_one(
         {"_id": STATE_ID},
@@ -166,8 +188,8 @@ async def promote(db, actor: str = "admin") -> dict:
                   "previous_stable": prev, "candidate": None,
                   "candidate_since": None}},
         upsert=True)
-    await _history(db, "promoted", {"artifacts": cand, "by": actor,
-                                    "previous": prev})
+    await _history(db, "promoted", {"artifacts": cand, "by": actor, "previous": prev,
+                                    "from": prev, "to": cand})
     logger.info("release promoted to stable by %s", actor)
     try:
         from deployment_health import start_watch

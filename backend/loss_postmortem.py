@@ -296,6 +296,7 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
         "account_id": trade.get("account_id"),
         "origin": trade.get("origin"),
         "pattern_key": pattern_key,
+        "sl_loosen_refusals": trade.get("sl_loosen_refusals") or [],   # stop audit trail (v1.60.35)
         "trigger": trigger,
         "diff": diff,
         "narrative": narrative,

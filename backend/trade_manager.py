@@ -60,6 +60,25 @@ def tightened_sl(trade: dict, new_sl: float):
     return new_sl if new_sl < cur else None
 
 
+async def record_sl_loosen_refusal(trade: dict, requested_sl: float, source: str) -> bool:
+    """Stop audit trail (v1.60.35): persist each REFUSED stop-loosen on the trade — once per trade + requested SL +
+    source (the manager re-evaluates every cycle; the first refusal is the evidence, repeats are noise). Returns True
+    when a new entry was written."""
+    req = round(float(requested_sl), 5)
+    for r in trade.get("sl_loosen_refusals") or []:
+        if r.get("source") == source and round(float(r.get("requested_sl") or 0), 5) == req:
+            return False
+    entry = {"source": source, "requested_sl": req, "current_sl": float(trade.get("stop_loss") or 0),
+             "action": trade.get("action"), "at": datetime.now(timezone.utc).isoformat()}
+    await get_db().trades.update_one({"_id": trade["_id"]}, {"$push": {"sl_loosen_refusals": entry}})
+    lst = trade.setdefault("sl_loosen_refusals", [])
+    if entry not in lst:
+        lst.append(entry)
+    logger.warning("stop-loosen REFUSED trade=%s %s %s: requested %s vs current %s", trade["_id"], trade.get("symbol"),
+                   source, req, entry["current_sl"])
+    return True
+
+
 def is_scalp_engine_trade(trade: dict) -> bool:
     """Bot trades carry the engine in `scope` ("hf_scalp" / "hf_scalp_fast"); `engine` is usually None on real rows
     (review of v1.60.32 on live tickets) — honour either."""
@@ -108,7 +127,9 @@ async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_u
     if sl_pips > 0 and pips_up >= SCALP_BE_TRIGGER_R * sl_pips \
             and not trade.get("breakeven_set") and not trade.get("be_target_sl"):
         new_sl = scalp_breakeven_sl(trade)
-        if tightened_sl(trade, new_sl) is not None:
+        if tightened_sl(trade, new_sl) is None:
+            await record_sl_loosen_refusal(trade, new_sl, "scalp_breakeven_0_5r")
+        else:
             res = await db.trades.update_one(
                 _free_slot_filter(trade_id),
                 {"$set": {"pending_modification": {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "scalp_breakeven_0_5r",
@@ -304,6 +325,9 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     # running toward TP2/TP3 to raise the average win.
     if not trade.get("tp1_closed") and pips_up >= tp1_pips:
         be_sl = tightened_sl(trade, round(entry, 5))   # None → the stop is already at/beyond entry: leave it alone
+        if be_sl is None:
+            await record_sl_loosen_refusal(trade, round(entry, 5),
+                                           "tp1_let_winners_run" if cfg.get("let_winners_run") else "tp1_partial_close")
         if cfg.get("let_winners_run"):
             if be_sl is None:
                 await db.trades.update_one(_free_slot_filter(trade_id), {"$set": {"tp1_closed": True}})

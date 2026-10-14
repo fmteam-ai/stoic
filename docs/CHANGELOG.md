@@ -2,6 +2,13 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.35 — ops cards + stop audit trail (no risk settings or trading on/off changed)
+- **Release Gate card** (Bot Health, admin): renders `release_gate.evaluate()` from `GET /admin/release-gate` verbatim — verdict, failing checks, running vs locked digest, lock↔build binding, close-only accounts. One source of truth, no client-side re-derivation.
+- **Lock freeze guard**: `scripts/regen_release_artifacts.py` regenerates TEST_MANIFEST → rc_lock → RELEASE_SUMMARY in one command (refuses to run in CI). CI is unchanged and still FAILS on a stale manifest/lock.
+- **Stop audit trail**: every refused stop-loosen (`tightened_sl` → None) is persisted on the trade as `sl_loosen_refusals[{source, requested_sl, current_sl, action, at}]` — once per trade + requested SL + source (deduped across manager cycles), with a single warning log. Sources: `scalp_breakeven_0_5r`, `tp1_let_winners_run`, `tp1_partial_close`, `tier1_combo_followup`. Loss Lab postmortems carry the trail and show a "STOP GUARD · LOOSEN REFUSED" section.
+- **EA Release Channel card** (Bot Health, admin): `release_channels.promotion_readiness()` is the single gate for manual AND auto-soak promotion — candidate exists · unpinned · soak window elapsed · no corroborated deploy failures · signed EX5 record. `promote()` refuses server-side until eligible; the button is disabled until then. `POST /ops/releases/promote|rollback` keep admin + step-up (`release_promote` / `release_rollback`) and now write an `audit_log` entry (who · when · from → to); one-click rollback to the previous stable pins the channel.
+- Tests: `tests/unit/test_v1_60_35_ops_cards.py` (8); legacy `test_iter160_release_ops` promotion test updated for the readiness gate.
+
 ## v1.60.34 — release_gate image-digest compare (no risk settings or trading on/off changed)
 - **Bug**: `release_gate.evaluate()` compared the bare `STOIC_IMAGE_DIGEST` (`sha256:8d7b…`) with the full rc_lock reference (`ghcr.io/…/stoic-backend@sha256:8d7b…`) → "running image digest differs from the locked backend digest" on the SAME image → LIVE accounts CLOSE_ONLY (`RELEASE_NOT_AUTHORITATIVE`); demo exempt.
 - Fix 1 — `_bare_digest()` compares only the `sha256:` part on both sides.
