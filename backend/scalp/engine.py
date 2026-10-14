@@ -1750,6 +1750,12 @@ class ScalpRunner:
                             "final_net_edge_pips": round(final_net_edge, 3)})
         _active_submissions += 1
         try:
+            from entry_context import build_entry_context
+            _ectx = await build_entry_context({"symbol": self.symbol, "action": decision["direction"],
+                                               "strategy_engine": "scalp_fast"})
+        except Exception:  # noqa: BLE001
+            _ectx = None
+        try:
             trade = await engine.execute(
                 user_id=self.user_id, account=account,
                 signal={"symbol": self.symbol, "action": decision["direction"],
@@ -1757,6 +1763,7 @@ class ScalpRunner:
                         "entry_price": round_to_tick(entry, tick),
                         "stop_loss": round_to_tick(sl, tick),
                         "take_profit": round_to_tick(tp, tick),
+                        "entry_context": _ectx,
                         # N99-1 — origin stays "auto" so every auto safety filter (circuit breaker,
                         # EOD flatten, entitlements, adaptive sizing) applies; engine marks the counter
                         "origin": "auto", "engine": "scalp", "scope": "scalp_fast",

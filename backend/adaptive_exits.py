@@ -208,9 +208,12 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
 
     act = vol_retarget(trade, feats, pips_up)
     if act:
+        # v1.60.36 — the trade's tp1/tp2/tp3 follow the rescaled pip ladder (they used to keep the entry-time prices)
+        from exit_sync import tp_fields_from_pips
+        tp_fields = tp_fields_from_pips(float(trade["entry_price"]), trade["action"], trade["symbol"], act["new_tp_pips"])
         await db.trades.update_one(
             {"_id": trade["_id"]},
-            {"$set": {"tp_pips": act["new_tp_pips"],
+            {"$set": {"tp_pips": act["new_tp_pips"], **tp_fields,
                       "exit_vol_retarget": {"atr_ratio": act["atr_ratio"],
                                             "scale": act["scale"],
                                             "at": now_iso}}})

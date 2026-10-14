@@ -92,6 +92,14 @@ async def list_adjustments(limit: int = 50, user=Depends(get_current_user)):
 
 
 # ---- list / patterns / single ----
+@router.get("/strategy-report")
+async def get_strategy_report(days: int = 30, user=Depends(get_current_user)):
+    """v1.60.36 — per-engine evidence table: Monte-Carlo predicted chance vs actual win rate (bands), win rate by
+    entry position in the day's range, with vs without trend-ride. Mirrored accounts = one decision per signal."""
+    from strategy_report import strategy_report
+    return await strategy_report(get_db(), user["id"], days=max(1, min(int(days), 180)))
+
+
 @router.get("/patterns")
 async def list_patterns(days: int = 30, user=Depends(get_current_user)):
     """Aggregate post-mortems by `pattern_key` so the user can spot the
@@ -103,13 +111,16 @@ async def list_patterns(days: int = 30, user=Depends(get_current_user)):
         {"$match": {"user_id": user["id"], "created_at": {"$gte": cutoff}}},
         {"$group": {
             "_id": "$pattern_key",
-            "count": {"$sum": 1},
+            "trades": {"$sum": 1},
+            # v1.60.36 — mirrored accounts: one decision per signal (legacy docs without signal_id count per trade)
+            "decisions": {"$addToSet": {"$ifNull": ["$signal_id", "$trade_id"]}},
             "total_pnl": {"$sum": "$pnl"},
             "last_at": {"$max": "$created_at"},
             "sample_trade_id": {"$last": "$trade_id"},
             "last_narrative": {"$last": "$narrative.summary"},
             "last_suggestion": {"$last": "$narrative.suggested_guardrail"},
         }},
+        {"$addFields": {"count": {"$size": "$decisions"}}},
         {"$sort": {"count": -1}},
         {"$limit": 25},
     ]
@@ -118,6 +129,7 @@ async def list_patterns(days: int = 30, user=Depends(get_current_user)):
         out.append({
             "pattern_key": row["_id"],
             "count": row["count"],
+            "trades": row.get("trades"),
             "total_pnl": round(float(row.get("total_pnl") or 0), 2),
             "last_at": row.get("last_at"),
             "sample_trade_id": row.get("sample_trade_id"),

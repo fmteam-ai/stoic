@@ -1103,39 +1103,19 @@ async def _process_user_account_locked(db, cfg: dict):
                             signal=signal)
                         await inc_intel_counter(user_id, "exhaustion_chase_veto")
                         continue
+                # v1.60.36 (revised) — trend-ride STAYS on for scalp engines (the 14 Oct winner reached +217 pips);
+                # every trade records whether it applied (`trend_ride_applied`) so both arms can be compared later
+                # in the Strategy Report before anyone changes a setting.
                 if cfg.get("trend_ride_enabled", True):
                     ride = trend_ride_check(signal["action"], _feats, _base)
                     if ride:
                         try:
-                            _entry = float(signal.get("entry_price") or 0)
-                            _tp = float(signal.get("take_profit") or 0)
                             _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)
-                            if _entry and _tp and _mult > 1.0:
-                                # user policy (2026-07-16): trend-ride may
-                                # widen the TP but NEVER past the hard cap —
-                                # this is what produced 450-pip gold TPs.
-                                from ai_signals import MTF_TP3_MAX_PIPS
-                                from pip_utils import pips_to_price
-                                _cap = pips_to_price(_base, MTF_TP3_MAX_PIPS)
-                                _dist = min(abs(_tp - _entry) * _mult, _cap)
-                                _sign = 1 if _tp >= _entry else -1
-                                signal["take_profit"] = round(
-                                    _entry + _sign * _dist, 5)
-                                _tps = signal.get("tp_pips")
-                                if isinstance(_tps, (int, float)):
-                                    signal["tp_pips"] = round(min(
-                                        float(_tps) * _mult,
-                                        MTF_TP3_MAX_PIPS), 1)
-                                elif isinstance(_tps, list) and _tps:
-                                    from ai_signals import (
-                                        MTF_TP1_MAX_PIPS, MTF_TP2_MAX_PIPS)
-                                    _caps = [MTF_TP1_MAX_PIPS,
-                                             MTF_TP2_MAX_PIPS,
-                                             MTF_TP3_MAX_PIPS]
-                                    signal["tp_pips"] = [
-                                        round(min(float(v) * _mult,
-                                                  _caps[min(i, 2)]), 1)
-                                        for i, v in enumerate(_tps)]
+                            # user policy (2026-07-16): trend-ride may widen the TP but NEVER past the hard cap —
+                            # this is what produced 450-pip gold TPs. v1.60.36: take_profit, tp1/tp2/tp3 and
+                            # tp_pips are widened TOGETHER so the trade's tp fields match the broker TP.
+                            from exit_sync import widen_signal_targets
+                            if widen_signal_targets(signal, _mult, _base):
                                 signal["trend_ride"] = ride
                                 await inc_intel_counter(user_id, "trend_ride_applied")
                                 await _record_pulse(db, cfg, symbol=sym,
@@ -1576,6 +1556,12 @@ async def _process_user_account_locked(db, cfg: dict):
             await stamp_lineage(db, signal)
         except Exception as e:  # noqa: BLE001
             logger.debug("model lineage skipped: %s", e)
+        # v1.60.36 — DXY / VIX / 10Y / MTF / setup score at entry, for every engine (scalps included)
+        try:
+            from entry_context import build_entry_context
+            signal["entry_context"] = await build_entry_context(signal)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("entry context skipped: %s", e)
         result = await db.signals.insert_one(signal)
         signal_id = str(result.inserted_id)
         broadcast_payload = {**signal, "id": signal_id}
@@ -2592,6 +2578,8 @@ async def _process_user_account_locked(db, cfg: dict):
                 "origin": "auto",
                 "scope": signal.get("scope"),
                 "trend_ride": signal.get("trend_ride"),
+                "trend_ride_applied": bool(signal.get("trend_ride")),
+                "entry_context": signal.get("entry_context"),
                 "versions": version_stamp(signal.get("scope")),
             },
             max_concurrent=max_concurrent,

@@ -429,6 +429,8 @@ class MT5BridgeEngine(ExecutionEngine):
                          or (signal.get("adaptive_sizing") or {}).get("risk_pct")),
             "scalp_lease_epoch": signal.get("scalp_lease_epoch"),
             "trend_ride": signal.get("trend_ride"),
+            "trend_ride_applied": bool(signal.get("trend_ride")),   # v1.60.36 — compare both arms in the Strategy Report
+            "entry_context": signal.get("entry_context"),           # v1.60.36 — DXY/VIX/10Y/MTF/setup score at entry
             "versions": signal.get("versions"),
             "partial_closed": False,
             "breakeven_set": False,
