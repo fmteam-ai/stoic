@@ -48,6 +48,18 @@ SCALP_DEFAULT_COST_PIPS = {"XAUUSD": 2.5, "XAGUSD": 3.0, "USDJPY": 1.2}   # pip_
 SCALP_DEFAULT_COST_PIPS_FX = 1.5
 
 
+def tightened_sl(trade: dict, new_sl: float):
+    """Never loosen a stop (14 Oct 15:13 incident: the legacy TP1 path moved two SELL stops from entry−costs back up
+    to raw entry). Returns `new_sl` only when it is strictly tighter than the current stop — BUY: higher, SELL: lower —
+    or when the trade has no stop yet; otherwise None."""
+    cur = float(trade.get("stop_loss") or 0)
+    if cur <= 0:
+        return new_sl
+    if trade.get("action") == "BUY":
+        return new_sl if new_sl > cur else None
+    return new_sl if new_sl < cur else None
+
+
 def is_scalp_engine_trade(trade: dict) -> bool:
     """Bot trades carry the engine in `scope` ("hf_scalp" / "hf_scalp_fast"); `engine` is usually None on real rows
     (review of v1.60.32 on live tickets) — honour either."""
@@ -96,9 +108,7 @@ async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_u
     if sl_pips > 0 and pips_up >= SCALP_BE_TRIGGER_R * sl_pips \
             and not trade.get("breakeven_set") and not trade.get("be_target_sl"):
         new_sl = scalp_breakeven_sl(trade)
-        cur_sl = float(trade.get("stop_loss") or 0)
-        already = cur_sl and ((trade["action"] == "BUY" and cur_sl >= new_sl) or (trade["action"] == "SELL" and cur_sl <= new_sl))
-        if not already:
+        if tightened_sl(trade, new_sl) is not None:
             res = await db.trades.update_one(
                 _free_slot_filter(trade_id),
                 {"$set": {"pending_modification": {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "scalp_breakeven_0_5r",
@@ -293,17 +303,21 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     # let_winners_run (iter-41): move SL to break-even ONLY — keep full size
     # running toward TP2/TP3 to raise the average win.
     if not trade.get("tp1_closed") and pips_up >= tp1_pips:
+        be_sl = tightened_sl(trade, round(entry, 5))   # None → the stop is already at/beyond entry: leave it alone
         if cfg.get("let_winners_run"):
+            if be_sl is None:
+                await db.trades.update_one(_free_slot_filter(trade_id), {"$set": {"tp1_closed": True}})
+                return
             res = await db.trades.update_one(
                 _free_slot_filter(trade_id),
                 {"$set": {
                     "tp1_closed": True,
                     "pending_modification": {
                         "type": "MODIFY_SL",
-                        "new_sl": round(entry, 5),
+                        "new_sl": be_sl,
                         "requested_at": datetime.now(timezone.utc).isoformat(),
                     },
-                    "be_target_sl": round(entry, 5),
+                    "be_target_sl": be_sl,
                 }},
             )
             if not res.matched_count:
@@ -313,25 +327,19 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                 "action": "BE_ONLY_TP1_WINNERS_RUN",
                 "from_lot": current_lot,
                 "to_lot": current_lot,
-                "new_sl": round(entry, 5),
+                "new_sl": be_sl,
                 "pips": round(pips_up, 1),
             })
             return
         new_lot = round(original_lot * 0.5, 2)
         if new_lot >= 0.01:
-            res = await db.trades.update_one(
-                _free_slot_filter(trade_id),
-                {"$set": {
-                    "pending_modification": {
-                        "type": "PARTIAL_CLOSE",
-                        "new_volume": new_lot,
-                        "new_sl": round(entry, 5),  # also move SL to entry on the EA modification
-                        "requested_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    "tp1_target_lot": new_lot,
-                    "be_target_sl": round(entry, 5),
-                }},
-            )
+            pend = {"type": "PARTIAL_CLOSE", "new_volume": new_lot,
+                    "requested_at": datetime.now(timezone.utc).isoformat()}
+            stamp = {"pending_modification": pend, "tp1_target_lot": new_lot}
+            if be_sl is not None:
+                pend["new_sl"] = be_sl           # also move SL to entry on the EA modification — only if it tightens
+                stamp["be_target_sl"] = be_sl
+            res = await db.trades.update_one(_free_slot_filter(trade_id), {"$set": stamp})
             if not res.matched_count:
                 return
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
@@ -339,7 +347,7 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                 "action": "PARTIAL_CLOSE_TP1_AND_BE",
                 "from_lot": current_lot,
                 "to_lot": new_lot,
-                "new_sl": round(entry, 5),
+                "new_sl": be_sl,
                 "pips": round(pips_up, 1),
             })
             # NOTE: no Telegram here — both partial-close and break-even

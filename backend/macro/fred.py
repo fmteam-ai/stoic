@@ -145,6 +145,10 @@ def _classify(series_id: str, latest: float, prev30: float | None) -> str:
 
 
 def _fresh(doc: dict | None, hours: float) -> bool:
+    """A snapshot is fresh only when it is recent AND carries at least one series — an EMPTY payload (pre-v1.60.31
+    cache rows, or a bad write) must never satisfy the 6 h TTL and suppress a refetch."""
+    if not ((doc or {}).get("payload") or {}).get("series"):
+        return False
     try:
         at = datetime.fromisoformat(str((doc or {}).get("fetched_at") or "").replace("Z", "+00:00"))
     except ValueError:

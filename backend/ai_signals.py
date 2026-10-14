@@ -512,10 +512,12 @@ async def analyze_symbol(symbol: str, risk_level: str,
         tp1_dist = tp_dist_price * 0.4
         tp2_dist = tp_dist_price * 0.7
         tp3_dist = tp_dist_price * 1.0
-    # user policy (2026-07-16): hard TP pip caps (TP1 ≤ 100, TP2/TP3 ≤ 200)
-    tp1_dist = min(tp1_dist, pips_to_price(symbol, MTF_TP1_MAX_PIPS))
-    tp2_dist = min(tp2_dist, pips_to_price(symbol, MTF_TP2_MAX_PIPS))
-    tp3_dist = min(tp3_dist, pips_to_price(symbol, MTF_TP3_MAX_PIPS))
+    # user policy (2026-07-16): hard TP pip caps (TP1 ≤ 100, TP2/TP3 ≤ 200). NOT for scalp engines: capping tp1 alone
+    # re-split the designed single TP (tp1 100 / tp3 200) and re-armed the legacy TP1 partial path on scalp trades.
+    if engine not in SCALP_ENGINES:
+        tp1_dist = min(tp1_dist, pips_to_price(symbol, MTF_TP1_MAX_PIPS))
+        tp2_dist = min(tp2_dist, pips_to_price(symbol, MTF_TP2_MAX_PIPS))
+        tp3_dist = min(tp3_dist, pips_to_price(symbol, MTF_TP3_MAX_PIPS))
     tp2_dist = max(tp2_dist, tp1_dist)
     tp3_dist = max(tp3_dist, tp2_dist)
     if action == "BUY":
