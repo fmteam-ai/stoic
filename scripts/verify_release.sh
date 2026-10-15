@@ -29,7 +29,7 @@ step backend_deps_locked bash -c '
   set -e; grep -v "^emergentintegrations" backend/requirements.txt > /tmp/verify-reqs.txt
   python -m pip install -q -r /tmp/verify-reqs.txt --extra-index-url https://download.pytorch.org/whl/cpu
   if grep -q "^emergentintegrations" backend/requirements.txt && ! python -c "import emergentintegrations" 2>/dev/null; then
-    for i in 1 2 3; do python -m pip download -q --no-deps emergentintegrations==0.2.0 -d /tmp/ei --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ && break; sleep 10; done
+    for i in 1 2 3; do timeout 120 python -m pip download -q --no-deps --timeout 20 --retries 1 emergentintegrations==0.2.0 -d /tmp/ei --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ && break; sleep 10; done
     echo "'"$EI_SHA256"'  /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl" | sha256sum -c -
     python -m pip install -q --no-deps /tmp/ei/emergentintegrations-0.2.0-py3-none-any.whl
   fi'

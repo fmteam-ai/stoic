@@ -124,21 +124,46 @@ async def _is_postmortem_eligible(db, trade: dict) -> tuple[bool, str]:
     return True, "loss"
 
 
-def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict) -> dict:
+def _entry_sentiment(signal: dict) -> tuple:
+    """v1.60.39 — (value, source). news_ai.net (RSS + AI, -3..+3) first; legacy sentiment.score (-1..+1) fallback.
+    Only the sign is compared with "now", so the scales may differ."""
+    na = signal.get("news_ai") or {}
+    if isinstance(na, dict) and na.get("net") is not None:
+        return float(na["net"]), "news_ai"
+    sc = (signal.get("sentiment") or {}).get("score") if isinstance(signal.get("sentiment"), dict) else None
+    return (float(sc), "sentiment") if sc is not None else (None, None)
+
+
+def _entry_dxy(signal: dict):
+    """v1.60.39 — stored signal dxy (dict or number) / entry_context.dxy / legacy macro.dxy."""
+    ec = signal.get("entry_context") or {}
+    if ec.get("dxy") is not None:
+        return ec["dxy"]
+    dxy = signal.get("dxy")
+    if isinstance(dxy, dict):
+        return dxy.get("current_price")
+    if isinstance(dxy, (int, float)):
+        return dxy
+    em = (signal.get("macro") or {}).get("dxy")
+    return em.get("value") if isinstance(em, dict) else None
+
+
+def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict,
+                       current_news: dict | None = None) -> dict:
     """Side-by-side entry vs now snapshot. No LLM — pure numeric diff."""
     entry_macro = signal.get("macro") or {}
     entry_session = signal.get("session") or {}
-    entry_sentiment = (signal.get("sentiment") or {}).get("score")
-    cur_sentiment = (current_macro.get("sentiment") or {}).get("score")
+    entry_sentiment, sentiment_source = _entry_sentiment(signal)
+    if current_news and current_news.get("net") is not None:
+        cur_sentiment = float(current_news["net"])
+    else:
+        cur_sentiment = (current_macro.get("sentiment") or {}).get("score")
     cur_summary = current_macro.get("summary") or {}
     # v1.60.36 — entry-time context stamped on the signal/trade (scalp engines included); legacy fallbacks after
     ec = signal.get("entry_context") or {}
     ec_mtf = ec.get("mtf") or {}
     ec_aplus = ec.get("aplus") or {}
-    dxy_entry = ec.get("dxy")
-    if dxy_entry is None:
-        dxy_entry = ((entry_macro.get("dxy") or {}).get("value") if isinstance(entry_macro.get("dxy"), dict)
-                     else (signal.get("dxy") or {}).get("current_price") if isinstance(signal.get("dxy"), dict) else None)
+    dxy_entry = _entry_dxy(signal)
     mtf_entry = ec_mtf.get("aligned")
     if mtf_entry is None:
         mtf_entry = (signal.get("mtf_gate") or {}).get("aligned")
@@ -152,6 +177,7 @@ def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict)
         "macro_freeze_at_entry": bool(entry_macro.get("frozen")),
         "macro_gate_open_now": cur_summary.get("gate_open"),
         "sentiment_at_entry": entry_sentiment,
+        "sentiment_source_at_entry": sentiment_source,
         "sentiment_now": cur_sentiment,
         "sentiment_flipped": (
             entry_sentiment is not None and cur_sentiment is not None
@@ -298,12 +324,16 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
             signal = await db.signals.find_one({"_id": ObjectId(sig_id)}) or {}
         except Exception:
             pass
-    if not signal.get("entry_context") and trade.get("entry_context"):
-        signal = {**signal, "entry_context": trade["entry_context"]}
+    # v1.60.39 — entry snapshots persisted on the trade (entry_context / dxy / news_ai / sentiment) fill any gap
+    # in the stored signal, so a post-mortem never shows null when the data existed at entry
+    for key in ("entry_context", "dxy", "news_ai", "sentiment"):
+        if signal.get(key) is None and trade.get(key) is not None:
+            signal = {**signal, key: trade[key]}
 
     # Current market snapshot — best effort, fall back to empty.
     cur_macro = {}
     cur_session = {}
+    cur_news = None
     try:
         from macro_feeds import get_macro_snapshot
         cur_macro = await get_macro_snapshot() or {}
@@ -314,8 +344,14 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
         cur_session = current_session()
     except Exception:
         pass
+    try:
+        from news_understanding import cached_news_ai
+        from pip_utils import base_symbol
+        cur_news = await cached_news_ai(base_symbol(trade.get("symbol")) or str(trade.get("symbol") or "").upper())
+    except Exception:
+        pass
 
-    diff = _quantitative_diff(signal, cur_macro, cur_session)
+    diff = _quantitative_diff(signal, cur_macro, cur_session, cur_news)
     narrative = await _claude_narrative(trade, signal, diff)
     # Always derive pattern_key ourselves — Claude's free-text version is
     # unreliable for clustering (varies in case + ordering). Overwrite any

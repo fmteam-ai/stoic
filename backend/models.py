@@ -219,6 +219,15 @@ class BotConfigUpdate(BaseModel):
     gold_off_hours_enabled: bool = True
     gold_off_hours_start_utc: str = "21:00"
     gold_off_hours_end_utc: str = "00:30"
+    # v1.60.39 C8–C10 — macro freeze windows (per account). Gold HIGH-impact freeze is explicit by currency
+    # (was every country: 15 Oct UK GDP froze gold); USD medium-impact prints get a short ±5 min freeze; ≥2 USD
+    # HIGH-impact prints within 5 min ("macro avalanche", e.g. PPI + Retail Sales) extend the after-window to 20 min.
+    macro_freeze_before_min: int = 15
+    macro_freeze_after_min: int = 10
+    macro_freeze_medium_usd_enabled: bool = True
+    macro_freeze_medium_min: int = 5
+    macro_freeze_avalanche_after_min: int = 20
+    gold_freeze_currencies: List[str] = Field(default_factory=lambda: ["USD", "EUR", "GBP", "JPY", "CNY"])
     # Auto-Tune — let the bot raise the min-confidence threshold based on
     # historical win-rates per (symbol, confidence-bucket).
     auto_tune_enabled: bool = True

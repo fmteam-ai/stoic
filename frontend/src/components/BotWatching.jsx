@@ -31,6 +31,7 @@ const SENTIMENT_STYLE = {
     neutral:      { fg: "text-[#A1A1AA]", Icon: Minus,        label: "NEUTRAL" },
     bearish:      { fg: "text-[#FF3B30]", Icon: TrendingDown, label: "BEARISH" },
     very_bearish: { fg: "text-[#FF3B30]", Icon: TrendingDown, label: "VERY BEARISH" },
+    unavailable:  { fg: "text-[#52525B]", Icon: Minus,        label: "UNAVAILABLE" },
 };
 
 function EntropyBar({ entropy, threshold, marketClosed }) {
@@ -139,7 +140,7 @@ function SymbolCard({ s, cooldownMin }) {
                         <span className={`flex items-center gap-1.5 font-mono text-[10px] tracking-widest ${sentStyle.fg}`}>
                             <SentIcon className="w-3 h-3" />
                             {sentStyle.label}
-                            <span className="text-[#52525B]">({s.sentiment.score?.toFixed(2)})</span>
+                            {s.sentiment.score != null && <span className="text-[#52525B]">({s.sentiment.score.toFixed(2)})</span>}
                         </span>
                     </div>
                     {s.sentiment.summary && (

@@ -15,6 +15,8 @@ on:
 jobs:
   backend-unit:
     runs-on: ubuntu-latest
+    # v1.60.39 — normal run ≈ 9 min; Release #61 (v1.60.38) sat 52 min in the pip step on a CDN stall.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
       - name: Materialise env templates from deploy/env
@@ -36,7 +38,7 @@ jobs:
           # dependency-confusion hardening) + sha256 pin of the exact wheel.
           EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+            timeout 120 pip download --no-deps --timeout 20 --retries 1 emergentintegrations==0.2.0 -d /tmp/ei \
               --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
             echo "emergentintegrations download attempt $i failed — retry in 15s"
@@ -119,7 +121,7 @@ jobs:
           # dependency-confusion hardening) + sha256 pin of the exact wheel.
           EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+            timeout 120 pip download --no-deps --timeout 20 --retries 1 emergentintegrations==0.2.0 -d /tmp/ei \
               --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
             echo "emergentintegrations download attempt $i failed — retry in 15s"
@@ -205,7 +207,7 @@ jobs:
           # dependency-confusion hardening) + sha256 pin of the exact wheel.
           EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+            timeout 120 pip download --no-deps --timeout 20 --retries 1 emergentintegrations==0.2.0 -d /tmp/ei \
               --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
             echo "emergentintegrations download attempt $i failed — retry in 15s"
@@ -423,7 +425,7 @@ jobs:
           # dependency-confusion hardening) + sha256 pin of the exact wheel.
           EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+            timeout 120 pip download --no-deps --timeout 20 --retries 1 emergentintegrations==0.2.0 -d /tmp/ei \
               --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
             echo "emergentintegrations download attempt $i failed — retry in 15s"

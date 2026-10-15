@@ -7,8 +7,12 @@ import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AiOptimizerSection from "@/components/AiOptimizerSection";
 import { OperationalModeCard } from "@/components/OperationalModeCard";
 import { ConfigVersionsCard } from "@/components/ConfigVersionsCard";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass, ArrowRight } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, ShieldAlert, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass, ArrowRight } from "lucide-react";
 import { toast } from "sonner";
+
+// v1.60.39 C8 — currencies whose HIGH-impact prints may freeze gold
+const GOLD_FREEZE_DEFAULT = ["USD", "EUR", "GBP", "JPY", "CNY"];
+const GOLD_FREEZE_CHOICES = ["USD", "EUR", "GBP", "JPY", "CNY", "CHF", "AUD", "CAD", "NZD"];
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -141,6 +145,12 @@ export default function BotConfig() {
         gold_off_hours_enabled: d?.gold_off_hours_enabled ?? true,
         gold_off_hours_start_utc: d?.gold_off_hours_start_utc || "21:00",
         gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "00:30",
+        macro_freeze_before_min: d?.macro_freeze_before_min ?? 15,
+        macro_freeze_after_min: d?.macro_freeze_after_min ?? 10,
+        macro_freeze_medium_usd_enabled: d?.macro_freeze_medium_usd_enabled ?? true,
+        macro_freeze_medium_min: d?.macro_freeze_medium_min ?? 5,
+        macro_freeze_avalanche_after_min: d?.macro_freeze_avalanche_after_min ?? 20,
+        gold_freeze_currencies: Array.isArray(d?.gold_freeze_currencies) && d.gold_freeze_currencies.length ? d.gold_freeze_currencies : GOLD_FREEZE_DEFAULT,
     });
 
     const load = useCallback(async () => {
@@ -269,6 +279,12 @@ export default function BotConfig() {
                 gold_off_hours_enabled: cfg.gold_off_hours_enabled ?? true,
                 gold_off_hours_start_utc: cfg.gold_off_hours_start_utc || "21:00",
                 gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "00:30",
+                macro_freeze_before_min: cfg.macro_freeze_before_min ?? 15,
+                macro_freeze_after_min: cfg.macro_freeze_after_min ?? 10,
+                macro_freeze_medium_usd_enabled: cfg.macro_freeze_medium_usd_enabled ?? true,
+                macro_freeze_medium_min: cfg.macro_freeze_medium_min ?? 5,
+                macro_freeze_avalanche_after_min: cfg.macro_freeze_avalanche_after_min ?? 20,
+                gold_freeze_currencies: cfg.gold_freeze_currencies?.length ? cfg.gold_freeze_currencies : GOLD_FREEZE_DEFAULT,
                 min_confidence_override: cfg.min_confidence_override,
                 paper_shadow_mode: cfg.paper_shadow_mode,
                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
@@ -934,6 +950,47 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                             ))}
                         </div>
                     )}
+                </div>
+
+                {/* v1.60.39 C8–C10 — macro freeze windows (per account) */}
+                <div className="border border-[#1F1F1F] p-4 bg-[#050505] space-y-3" data-testid="macro-freeze-config">
+                    <div className="flex items-center gap-2">
+                        <ShieldAlert className="w-4 h-4 text-[#FF3B30]" />
+                        <span className="font-display font-bold text-sm">Macro Freeze Windows</span>
+                    </div>
+                    <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                        No new entries around scheduled prints. HIGH-impact events freeze before/after; a “macro avalanche” (2+ USD HIGH-impact prints within 5 min, e.g. PPI + Retail Sales) extends the after-window; USD medium-impact prints (Jobless Claims, ISM, Philly Fed) get a short freeze when they are not already inside a HIGH window.
+                    </p>
+                    <div className="grid grid-cols-3 gap-3">
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="macro_freeze_before_min" label="HIGH · BEFORE" suffix="min" step={1} min={0} max={120} fallback={15} />
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="macro_freeze_after_min" label="HIGH · AFTER" suffix="min" step={1} min={0} max={120} fallback={10} />
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="macro_freeze_avalanche_after_min" label="AVALANCHE · AFTER" suffix="min" step={1} min={0} max={120} fallback={20} />
+                    </div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="macro_freeze_medium_usd_enabled" label="USD Medium-Impact Short Freeze" icon={CalendarClock} color="#FFB000"
+                        desc="±N minutes around USD medium-impact prints (default 5) — only when the print is not already inside a HIGH-impact window." />
+                    {(cfg.macro_freeze_medium_usd_enabled ?? true) && (
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="macro_freeze_medium_min" label="MEDIUM · BEFORE & AFTER" suffix="min" step={1} min={0} max={60} fallback={5} />
+                    )}
+                    <div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1.5">CURRENCIES THAT FREEZE GOLD (HIGH-IMPACT)</div>
+                        <div className="flex flex-wrap gap-2" data-testid="gold-freeze-currencies">
+                            {GOLD_FREEZE_CHOICES.map((c) => {
+                                const on = (cfg.gold_freeze_currencies || GOLD_FREEZE_DEFAULT).includes(c);
+                                return (
+                                    <button key={c} type="button" data-testid={`gold-freeze-currency-${c}`}
+                                        onClick={() => {
+                                            const cur = cfg.gold_freeze_currencies || GOLD_FREEZE_DEFAULT;
+                                            const next = on ? cur.filter((x) => x !== c) : [...cur, c];
+                                            if (next.length) setCfg({ ...cfg, gold_freeze_currencies: next });
+                                        }}
+                                        className={`font-mono text-[11px] px-2.5 py-1 border transition-colors ${on ? "border-[#FFD700]/50 text-[#FFD700] bg-[#FFD700]/10" : "border-[#1F1F1F] text-[#52525B] hover:text-[#A1A1AA]"}`}>
+                                        {c}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <p className="text-[11px] text-[#52525B] mt-1.5">Default USD · EUR · GBP · JPY · CNY. Previously every country's HIGH-impact print froze gold (15 Oct: UK GDP froze XAUUSD 05:45–06:10).</p>
+                    </div>
                 </div>
 
                 {/* iter-39 — Paper-Shadow Mode */}

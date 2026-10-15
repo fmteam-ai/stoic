@@ -51,6 +51,7 @@ class StrategyAgent:
             strategy=cfg.get("active_preset"),
             engine_params=eng_params,
             user_id=cfg.get("user_id"),            # fix plan A1 — own candle stream
+            freeze_cfg=cfg,                        # v1.60.39 — per-account macro freeze windows
         )
         if canary_used and isinstance(signal, dict):
             signal["canary"] = canary_used

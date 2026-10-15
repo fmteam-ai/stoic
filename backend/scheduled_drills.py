@@ -93,6 +93,7 @@ async def scheduled_drill_loop():
         try:
             await asyncio.sleep(CHECK_INTERVAL_SEC)
             db = get_db()
+            _iter_t0 = datetime.now(timezone.utc)
             try:
                 from release_channels import maybe_promote
                 promoted = await maybe_promote(db)
@@ -130,6 +131,13 @@ async def scheduled_drill_loop():
                 except Exception:  # noqa: BLE001
                     pass
                 await run_nightly_suite(db)
+            # v1.60.39 — loop_progress heartbeat so Admin → Bot Health shows when the safety loop last completed
+            try:
+                from workers.base import persist_progress, record_progress
+                record_progress("scheduled_drill_loop", processed=1, started_at=_iter_t0, interval_sec=CHECK_INTERVAL_SEC)
+                await persist_progress(db, "scheduled_drill_loop")
+            except Exception as e:  # noqa: BLE001
+                logger.debug("scheduled drill heartbeat skipped: %s", e)
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001

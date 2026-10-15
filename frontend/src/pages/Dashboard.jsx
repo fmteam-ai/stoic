@@ -687,9 +687,24 @@ export default function Dashboard() {
                     <div className="border border-[#FF3B30]/40 bg-[#FF3B30]/10 p-4 flex items-start gap-3" data-testid="macro-freeze-banner">
                         <ShieldAlert className="w-5 h-5 text-[#FF3B30] shrink-0 mt-0.5" />
                         <div>
-                            <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-1">MACRO FREEZE · BOT WILL NOT TRADE</div>
+                            <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-1">MACRO FREEZE · BOT WILL NOT TRADE{macro.freeze.kind ? ` · ${String(macro.freeze.kind).toUpperCase()}` : ""}</div>
                             <div className="text-sm">{macro.freeze.reason}</div>
                         </div>
+                    </div>
+                )}
+
+                {/* v1.60.39 C10 — next freeze window */}
+                {macro.freeze?.next_freeze && (
+                    <div className="border border-[#1F1F1F] bg-[#0A0A0A] px-4 py-2.5 flex items-center gap-3 font-mono text-[11px]" data-testid="next-freeze-line">
+                        <CalendarClock className="w-3.5 h-3.5 text-[#FFB000] shrink-0" />
+                        <span className="text-[#52525B] tracking-widest">NEXT FREEZE</span>
+                        <span className="text-[#A1A1AA] truncate">
+                            {macro.freeze.next_freeze.country} · {macro.freeze.next_freeze.title}
+                        </span>
+                        <span className="ml-auto text-[#FFB000] whitespace-nowrap">
+                            {new Date(macro.freeze.next_freeze.freeze_start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                            <span className="text-[#52525B]"> → {new Date(macro.freeze.next_freeze.freeze_end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {String(macro.freeze.next_freeze.freeze_kind).toUpperCase()}</span>
+                        </span>
                     </div>
                 )}
 

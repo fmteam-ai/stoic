@@ -138,7 +138,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
                          strategy: str | None = None,
                          engine_params: dict | None = None,
-                         user_id: str | None = None) -> dict:
+                         user_id: str | None = None,
+                         freeze_cfg: dict | None = None) -> dict:
     profile = get_profile(risk_level)
     quote = await get_quote(symbol)
     history = await get_history(symbol)
@@ -166,8 +167,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
     session = current_session()
     session_bias = session_bias_for(symbol, session)
     regime = classify_regime(indicators)
-    macro = await macro_freeze_check(symbol)
-    upcoming_macro = await upcoming_for(symbol, hours=24)
+    macro = await macro_freeze_check(symbol, freeze_cfg)   # v1.60.39 C8–C10 — per-account freeze windows
+    upcoming_macro = await upcoming_for(symbol, hours=24, cfg=freeze_cfg)
     # Shannon entropy noise filter — closes used for distribution analysis
     entropy = classify_noise([c["close"] for c in history]) if history else {
         "entropy": 0, "label": "ORGANIZED", "traffic_light": "green", "tradeable": True, "threshold": 0.9
