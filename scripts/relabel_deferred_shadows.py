@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
-"""v1.60.40 — one-off: re-label the pre-M1 deferred_shadow rows (15 Oct) with the M1 replay.
+"""Re-label deferred_shadow rows (trade_decisions.status == "deferred").
 
-Rows stamped before v1.60.39 carry no `shadow.timeframe`; their M15 verdict ("both touched in one bar → SL first",
-211/211 on 15 Oct) is replaced by the M1 replay wherever the tick store / EA M1 feed covers them, otherwise they are
-tagged M15 and the Strategy Report no longer counts them as verdicts. Idempotent — the analytics sweep runs the same
-pass every cycle after deploy; this script just does it now and prints what changed.
+v1.60.40 — rows stamped before the M1 replay (no `shadow.timeframe`) were re-run on M1 bars.
+v1.60.49 — two label bugs invalidated EVERY pre-v2 label: the Execution Optimizer stored the deferred signal with
+action HOLD and ablation.replay_outcome replayed HOLD as SELL (#33), and scalp_ticks.tm is broker time (UTC+3) but
+was bucketed as UTC (#34). Labels now carry `shadow.label_version` (2). Default run re-scores every label below the
+current version; `--all` re-scores EVERY shadow. The previous label is always kept in `shadow.rescored_from`; rows
+without M1 coverage are marked `shadow.invalid` (never scored) instead of keeping a wrong verdict.
 
-  python3 scripts/relabel_deferred_shadows.py            # all users
+  python3 scripts/relabel_deferred_shadows.py            # labels below the current version (idempotent)
+  python3 scripts/relabel_deferred_shadows.py --all      # re-score every deferred shadow
   python3 scripts/relabel_deferred_shadows.py --dry-run  # count only
 
+Shipped in the backend image (/app/scripts) since v1.60.49:
+  docker compose exec backend python /app/scripts/relabel_deferred_shadows.py --all
 Runs against MONGO_URL / DB_NAME from backend/.env. Touches only trade_decisions.shadow — no trading or risk state.
 """
 import argparse
@@ -17,38 +22,49 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "backend"))
+sys.path.insert(0, os.path.join(ROOT, "backend") if os.path.isdir(os.path.join(ROOT, "backend")) else "/app/backend")
 
 
-async def main(dry_run: bool) -> int:
+async def main(dry_run: bool, rescore_all: bool) -> int:
     from dotenv import load_dotenv
-    load_dotenv(os.path.join(ROOT, "backend", ".env"))
+    for env in (os.path.join(ROOT, "backend", ".env"), "/app/backend/.env"):
+        if os.path.exists(env):
+            load_dotenv(env)
+            break
     from database import get_db
-    from deferred_shadow import rescore_legacy_shadows
+    from deferred_shadow import LABEL_VERSION, _legacy_q, rescore_legacy_shadows
     db = get_db()
-    q = {"status": "deferred", "shadow": {"$exists": True}, "shadow.timeframe": {"$exists": False}}
+    base_q = {"status": "deferred", "shadow": {"$exists": True}}
+    q = base_q if rescore_all else {k: v for k, v in _legacy_q("").items() if k != "user_id"}
     users = await db.trade_decisions.distinct("user_id", q)
     total = await db.trade_decisions.count_documents(q)
-    print(f"legacy (pre-M1) shadows: {total} across {len(users)} user(s)")
+    print(f"{'ALL' if rescore_all else f'below label v{LABEL_VERSION}'}: {total} shadow(s) across {len(users)} user(s)")
     if dry_run:
         return 0
     rescored = tagged = 0
     for uid in users:
+        seen = 0
         while True:
-            out = await rescore_legacy_shadows(db, uid, limit=500)
+            out = await rescore_legacy_shadows(db, uid, limit=500, rescore_all=rescore_all)
             rescored += out["rescored"]
             tagged += out["tagged_m15"]
-            if out["rescored"] + out["tagged_m15"] == 0:
+            seen += out["rescored"] + out["tagged_m15"]
+            # --all re-scores an already-current label too, so stop once every row of this user was visited once
+            if out["rescored"] + out["tagged_m15"] == 0 or (rescore_all and seen >= await db.trade_decisions.count_documents({**base_q, "user_id": uid})):
                 break
         print(f"  user {uid}: done")
     flipped = await db.trade_decisions.count_documents(
         {"status": "deferred", "shadow.rescored_from": {"$exists": True},
          "$expr": {"$ne": ["$shadow.outcome", "$shadow.rescored_from.outcome"]}})
-    print(f"rescored on M1: {rescored} (verdict changed: {flipped}) · tagged M15 (no M1 tape): {tagged}")
+    invalid = await db.trade_decisions.count_documents({"status": "deferred", "shadow.invalid": True})
+    print(f"rescored on M1: {rescored} (verdict changed: {flipped}) · no M1 tape → marked invalid: {tagged} "
+          f"(total invalid now: {invalid})")
     return 0
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
-    sys.exit(asyncio.run(main(ap.parse_args().dry_run)))
+    ap.add_argument("--all", action="store_true", help="re-score every deferred shadow, not only pre-v2 labels")
+    a = ap.parse_args()
+    sys.exit(asyncio.run(main(a.dry_run, a.all)))

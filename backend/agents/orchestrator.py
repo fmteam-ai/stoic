@@ -207,6 +207,7 @@ class Orchestrator:
                 if not eo.get("approved"):
                     signal["execution_deferred"] = True
                     signal["execution_defer_reason"] = eo.get("deferred_reason")
+                    signal["deferred_action"] = signal.get("action")   # v1.60.49 (#33) — keep the pre-defer direction
                     # Convert to HOLD so downstream callers respect the defer
                     signal["action"] = "HOLD"
                     signal["tradeable"] = False
@@ -224,6 +225,7 @@ class Orchestrator:
                 logger.exception("ExecutionOptimizer failed: %s", e)
                 # FAIL CLOSED (quant review C3): execution shaping errors must
                 # not allow a live order to proceed unshaped.
+                signal["deferred_action"] = signal.get("action")
                 signal["action"] = "HOLD"
                 signal["tradeable"] = False
                 signal["pipeline_safe_to_execute"] = False

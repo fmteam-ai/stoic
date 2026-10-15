@@ -27,6 +27,9 @@ def replay_outcome(action: str, entry: float, sl: float, tp: float,
     if sl_dist <= 0:
         return None
     horizon = int(horizon_bars or HORIZON_BARS)
+    action = str(action or "").upper()
+    if action not in ("BUY", "SELL"):
+        return None          # v1.60.49 (#33) — HOLD was silently replayed as SELL (233/233 deferred rows)
     is_buy = action == "BUY"
     for i, b in enumerate(bars[:horizon]):
         hi, lo = float(b["h"]), float(b["l"])

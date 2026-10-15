@@ -112,10 +112,10 @@ def test_strategy_report_has_asian_hours_band_and_deferred_shadow_rows():
             "range_pos_pct": None, "trend_ride": False, "closed_at": None, "utc_band": "Asian hours (00:30–06:00 UTC)"},
            {"engine": "hf_scalp", "symbol": "XAUUSD", "pnl": 8.0, "win": True, "mirrored_accounts": 1, "mc_p": None,
             "range_pos_pct": None, "trend_ride": False, "closed_at": None, "utc_band": "London (06:00–13:00 UTC)"}]
-    deferred = [{"ts": _t(22, 0).isoformat(), "signal": {"scope": "hf_scalp"}, "shadow": {"outcome": "tp_first", "r": 2.0, "utc_band": "Rollover (21:00–00:30 UTC)", "timeframe": "M1"}},
-                {"ts": _t(23, 0).isoformat(), "signal": {"scope": "hf_scalp"}, "shadow": {"outcome": "sl_first", "r": -1.0, "utc_band": "Rollover (21:00–00:30 UTC)", "timeframe": "M1"}},
+    deferred = [{"ts": _t(22, 0).isoformat(), "signal": {"scope": "hf_scalp"}, "shadow": {"outcome": "tp_first", "r": 2.0, "utc_band": "Rollover (21:00–00:30 UTC)", "timeframe": "M1", "label_version": 2}},
+                {"ts": _t(23, 0).isoformat(), "signal": {"scope": "hf_scalp"}, "shadow": {"outcome": "sl_first", "r": -1.0, "utc_band": "Rollover (21:00–00:30 UTC)", "timeframe": "M1", "label_version": 2}},
                 {"ts": _t(23, 30).isoformat(), "signal": {"scope": "hf_scalp"}},                                   # not labelled yet
-                {"ts": _t(3, 0).isoformat(), "signal": {"scope": "hf_scalp"}, "shadow": {"outcome": "tp_first", "r": 1.5, "utc_band": "Asian hours (00:30–06:00 UTC)", "timeframe": "M1"}}]
+                {"ts": _t(3, 0).isoformat(), "signal": {"scope": "hf_scalp"}, "shadow": {"outcome": "tp_first", "r": 1.5, "utc_band": "Asian hours (00:30–06:00 UTC)", "timeframe": "M1", "label_version": 2}}]
     rep = build_report(dec, 30, deferred)
     eng = rep["engines"][0]
     sess = {r["band"]: r for r in eng["sessions"]}
