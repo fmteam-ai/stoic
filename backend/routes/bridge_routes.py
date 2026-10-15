@@ -1367,6 +1367,18 @@ def validate_bars(raw: list, timeframe: str) -> tuple[list[dict], int]:
     return [out[t] for t in sorted(out)], dropped
 
 
+def retention_bars(timeframe: str) -> int:
+    """EA 1.65 — M1 keeps 26 h (the deferred-shadow horizon is 24 h); everything else keeps the iter-125 800."""
+    return 1600 if str(timeframe).upper() == "M1" else 800
+
+
+def gap_count(bars: list[dict], timeframe: str) -> int:
+    """Missing bar slots between consecutive stored bars (weekend/closed-market gaps count too — diagnostics only)."""
+    tf_s = timeframe_seconds(timeframe)
+    ts = sorted(int(b["t"]) for b in bars)
+    return sum(max(0, (b - a) // tf_s - 1) for a, b in zip(ts, ts[1:]))
+
+
 def split_forming_bar(bars: list[dict], timeframe: str, now_ts: int) -> tuple[list[dict], int]:
     """H10 (roadmap step 6): a bar whose close time (t + tf) is still in the future
     is the CURRENTLY FORMING candle — its O/H/L/C keep changing until it closes.
@@ -1437,10 +1449,10 @@ async def receive_candles(payload: BridgeCandles):
             old_bars = [dict(b, t=int(b["t"]) - offset) for b in old_bars]
         merged = {int(b["t"]): b for b in old_bars}
         merged.update({int(b["t"]): b for b in bars})
-        bars = [merged[t] for t in sorted(merged)][-800:]
+        bars = [merged[t] for t in sorted(merged)][-retention_bars(payload.timeframe):]
     write_ok = True
     try:
-        set_doc = {"bars": bars, "source_symbol": payload.symbol,
+        set_doc = {"bars": bars, "source_symbol": payload.symbol, "gap_bars": gap_count(bars[-120:], payload.timeframe),
                    "account_id": str(account["_id"]),
                    "updated_at": now_iso,
                    # main92 P9 — only claim UTC once the offset is known, so a
@@ -1831,6 +1843,9 @@ async def poll_trades(payload: PollRequest):
     netting = bool(mods) and any((m.get("pending_modification") or {}).get("type") == "FULL_CLOSE" for m in mods) \
         and (netting_acc or await is_netting_account(db, acc))
     modifications = list(netting_mods)
+    # EA 1.65 — new_tp only for EAs that declare modify_tp_v1; older EAs get the plain MODIFY_SL (TP untouched)
+    from ea_capabilities import capabilities_for as _ea_caps
+    _send_tp = "modify_tp_v1" in _ea_caps(acc.get("ea_version"))
     for t in mods:
         m = t.get("pending_modification") or {}
         if netting:
@@ -1847,7 +1862,7 @@ async def poll_trades(payload: PollRequest):
             "symbol": t["symbol"],
             "type": m.get("type"),
             "new_sl": m.get("new_sl"),
-            "new_tp": m.get("new_tp"),
+            "new_tp": m.get("new_tp") if _send_tp else None,
             "new_volume": m.get("new_volume"),
             # audit r4 P0 · EA v1.50 command fence: immutable intent + seq
             "intent_id": m.get("intent_id"),
@@ -2072,6 +2087,12 @@ async def modification_ack(payload: BridgeModificationAck):
                     abs(float(payload.confirmed_position_tp) - float(rbf["take_profit"])) < 1e-6:
                 update.update(rbf)
                 update["fill_rebase.tp_applied_at"] = datetime.now(timezone.utc).isoformat()
+            # EA 1.65 — when the command carried new_tp, the broker-confirmed TP is the truth for the trade's TP
+            _pm = trade.get("pending_modification") or {}
+            if payload.confirmed_position_tp and _pm.get("new_tp") and payload.success:
+                update["take_profit"] = float(payload.confirmed_position_tp)
+                update["confirmed_take_profit"] = float(payload.confirmed_position_tp)
+                update["tp_confirmed_at"] = datetime.now(timezone.utc).isoformat()
             if payload.stop_confirmed is not None:
                 # broker ACCEPTED vs position now SHOWS the expected stop
                 update["stop_confirmed"] = bool(payload.stop_confirmed)

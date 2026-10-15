@@ -3,6 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { TrackRecord } from "@/components/TrackRecord";
 import { extractBlockerDetail } from "@/lib/fixShortcuts";
+import { diffSavedConfig, fmtValue } from "@/lib/configDrift";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AiOptimizerSection from "@/components/AiOptimizerSection";
 import { OperationalModeCard } from "@/components/OperationalModeCard";
@@ -76,6 +77,7 @@ export default function BotConfig() {
     const [errFix, setErrFix] = useState(null);
     const [msg, setMsg] = useState("");
     const [saveMsg, setSaveMsg] = useState("");
+    const [drift, setDrift] = useState([]);          // v1.60.40 — fields the server did not echo back after SAVE
     const [newSym, setNewSym] = useState("");
 
     const accountQuery = selectedAccountId ? `?account_id=${selectedAccountId}` : "";
@@ -229,13 +231,14 @@ export default function BotConfig() {
     };
 
     const save = async () => {
-        setSaving(true); setErr(""); setErrFix(null); setSaveMsg("");
+        setSaving(true); setErr(""); setErrFix(null); setSaveMsg(""); setDrift([]);
         try {
-            const { data } = await api.put(`/bot/config${accountQuery}`, {
+            const payload = {
                 risk_level: cfg.risk_level,
                 symbols: cfg.symbols,
                 active: cfg.active,
                 max_concurrent_trades: cfg.max_concurrent_trades,
+                signal_cooldown_minutes: cfg.signal_cooldown_minutes,
                 max_lot_size: cfg.max_lot_size || 0,
                 auto_execute: cfg.auto_execute,
                 breakeven_enabled: cfg.breakeven_enabled,
@@ -292,8 +295,19 @@ export default function BotConfig() {
                 soft_stop_loss_fraction: cfg.soft_stop_loss_fraction ?? 0.6,
                 soft_stop_min_minutes: cfg.soft_stop_min_minutes ?? 10,
                 let_winners_run: cfg.let_winners_run ?? false,
-            });
-            setCfg(withFlatDefaults(data)); setSaveMsg("Configuration saved.");
+            };
+            const { data } = await api.put(`/bot/config${accountQuery}`, payload);
+            setCfg(withFlatDefaults(data));
+            // v1.60.40 — Config Drift Check: every field we sent must come back unchanged
+            const drifted = diffSavedConfig(payload, data);
+            setDrift(drifted);
+            if (drifted.length) {
+                // v1.60.40 — Drift Telemetry: server-side count on Bot Health (best-effort, never blocks the save)
+                api.post("/bot/config/drift", { fields: drifted, account_id: selectedAccountId || null }).catch(() => {});
+            }
+            setSaveMsg(drifted.length ? "" : data.cooldown_clamped_to_plan_floor
+                ? `Configuration saved. Minutes between signals raised to your plan floor (${data.cooldown_clamped_to_plan_floor} min).`
+                : "Configuration saved.");
             // refresh allConfigs index + preset cap-fit so the selector/presets reflect the saved risk settings
             try {
                 const [c, pr] = await Promise.all([api.get("/bot/configs"), api.get(`/bot/presets${accountQuery}`)]);
@@ -732,6 +746,32 @@ export default function BotConfig() {
                                 {cfg.auto_execute ? "● ENABLED" : "○ DISABLED"}
                             </button>
                         </div>
+                        {/* v1.60.39 — per-account signal cooldown, floored by the plan */}
+                        <div className="md:col-span-2" data-testid="signal-cooldown-field">
+                            <label htmlFor="signal-cooldown-input" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2 flex items-center gap-2">
+                                <Timer className="w-3 h-3 text-[#FFD700]" />
+                                MINUTES BETWEEN SIGNALS
+                                <span className="font-mono text-[9px] text-[#52525B] normal-case tracking-normal ml-auto">
+                                    per symbol · plan floor <span className="text-[#FFD700]" data-testid="signal-cooldown-floor">{cfg.plan_min_signal_cooldown_minutes ?? 1} min</span>
+                                </span>
+                            </label>
+                            <div className="flex items-center gap-3">
+                                <input type="number" min={cfg.plan_min_signal_cooldown_minutes ?? 1} max="1440" step="1"
+                                    value={cfg.signal_cooldown_minutes ?? 5}
+                                    onChange={e => setCfg({ ...cfg, signal_cooldown_minutes: Math.max(1, parseInt(e.target.value) || 1) })}
+                                    onBlur={() => {
+                                        const floor = cfg.plan_min_signal_cooldown_minutes ?? 1;
+                                        if ((cfg.signal_cooldown_minutes ?? 5) < floor) setCfg({ ...cfg, signal_cooldown_minutes: floor });
+                                    }}
+                                    data-testid="signal-cooldown-input" id="signal-cooldown-input" name="signal_cooldown_minutes"
+                                    className="w-40 bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
+                                <span className="font-mono text-[11px] text-[#52525B]">
+                                    {(cfg.signal_cooldown_minutes ?? 5) < (cfg.plan_min_signal_cooldown_minutes ?? 1)
+                                        ? <span className="text-[#FFB000]" data-testid="signal-cooldown-floor-warning">below your plan floor — will be saved as {cfg.plan_min_signal_cooldown_minutes} min</span>
+                                        : <>the bot waits this long after a signal before it re-evaluates the same symbol</>}
+                                </span>
+                            </div>
+                        </div>
                         <div className="md:col-span-2">
                             <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2 flex items-center gap-2">
                                 <Layers className="w-3 h-3 text-[#FFD700]" />
@@ -774,6 +814,22 @@ export default function BotConfig() {
                 {/* Autopilot #15 — Operational Mode */}
                 <OperationalModeCard cfg={cfg} setCfg={setCfg} accountQuery={accountQuery} />
                 <ConfigVersionsCard accountQuery={accountQuery} />
+
+                {drift.length > 0 && (
+                    <div className="border border-[#FF3B30]/50 bg-[#FF3B30]/10 p-4" data-testid="config-drift-warning" role="alert">
+                        <div className="flex items-center gap-2 font-mono text-[10px] text-[#FF3B30] tracking-widest mb-2">
+                            <AlertTriangle className="w-3.5 h-3.5" /> CONFIG DRIFT · {drift.length} FIELD{drift.length > 1 ? "S" : ""} CAME BACK DIFFERENT FROM WHAT YOU SAVED
+                        </div>
+                        <ul className="space-y-1 font-mono text-[11px]">
+                            {drift.map((d) => (
+                                <li key={d.field} data-testid={`config-drift-${d.field}`} className="text-[#E4E4E7]">
+                                    <span className="text-[#FF3B30]">{d.field}</span>: saved <span className="text-[#FFD700]">{fmtValue(d.sent)}</span>, server has <span className="text-[#FFD700]">{fmtValue(d.server)}</span>
+                                </li>
+                            ))}
+                        </ul>
+                        <p className="text-[11px] text-[#A1A1AA] mt-2">The form now shows the server's values. A plan floor or policy cap can legitimately change a value; anything else is a bug — please report it.</p>
+                    </div>
+                )}
 
                 <div className="flex items-center justify-end gap-3 flex-wrap" data-testid="bot-save-row">
                     {saveMsg && (

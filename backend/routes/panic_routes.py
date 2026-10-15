@@ -240,10 +240,13 @@ async def ops_outbox_health(db) -> dict:
 async def ops_outbox_loop():
     """Background sweeper (in-process workers): recovers stuck/expired outbox rows."""
     import asyncio
+    from workers.base import record_progress
     while True:
         try:
             await asyncio.sleep(20)
-            await sweep_ops_outbox(get_db())
+            t0 = datetime.now(timezone.utc)
+            n = await sweep_ops_outbox(get_db())
+            record_progress("ops_outbox_loop", processed=1 + int(n or 0), started_at=t0, interval_sec=20)   # v1.60.40
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001

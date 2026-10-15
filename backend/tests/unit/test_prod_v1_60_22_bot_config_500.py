@@ -45,6 +45,10 @@ def _wire(monkeypatch, db):
         calls["applied"].append(update)
         await db_.bot_configs.update_one({"user_id": uid, "account_id": account_id}, {"$set": update})
     monkeypatch.setattr("config_promotion.apply_config_change", _apply)
+
+    async def _floor(user):                                  # v1.60.39 _attach_cooldown_floor → entitlements → real Mongo; CI has no MONGO_URL
+        return 1
+    monkeypatch.setattr("entitlements.cooldown_floor", _floor)
     return calls
 
 

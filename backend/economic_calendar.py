@@ -212,28 +212,171 @@ async def _fetch_events() -> list:
     return events
 
 
+# ---------------------------------------------------------------------------
+# v1.60.40 — second source + merge + staleness + fail-safe
+# ---------------------------------------------------------------------------
+FC_FEED = "https://www.financecalendar.com/wp-json/fc/v1/calendar"
+FC_ATTRIBUTION = {"source": "financecalendar.com", "url": "https://www.financecalendar.com",
+                  "terms": "Free for any use with attribution (link to financecalendar.com)"}
+SOURCE_ORDER = ("forexfactory", "financecalendar")
+STALE_AFTER_SEC = 2 * 3600          # Bot Health alert: active source older than this
+FAILSAFE_AFTER_SEC = 6 * 3600       # both sources older than this → conservative default freeze
+_sources: dict = {name: {"events": None, "fetched_at": 0, "last_error": None} for name in SOURCE_ORDER}
+_last_merge: dict = {"at": 0, "events": None, "failsafe": False}
+
+# Fail-safe schedule (UTC). 12:30 = CPI/PPI/NFP/Retail Sales/GDP/claims; 14:00 = ISM/Michigan/home sales;
+# 18:00 on FOMC statement days. FOMC dates per the Fed's published calendars (second meeting day).
+FAILSAFE_TIMES_UTC = ((12, 30), (14, 0))
+FOMC_STATEMENT_DAYS = {
+    "2026-01-28", "2026-03-18", "2026-04-29", "2026-06-17", "2026-07-29", "2026-09-16", "2026-10-28", "2026-12-09",
+    "2027-01-27", "2027-03-17", "2027-04-28", "2027-06-16", "2027-07-28", "2027-09-15", "2027-10-27", "2027-12-08",
+}
+
+_FC_COUNTRY_PREFIX = (("US ", "USD"), ("UK ", "GBP"), ("ECB", "EUR"), ("Eurozone", "EUR"), ("Euro ", "EUR"),
+                      ("Germany", "EUR"), ("France", "EUR"), ("Italy", "EUR"), ("Spain", "EUR"), ("FOMC", "USD"),
+                      ("Fed ", "USD"), ("Japan", "JPY"), ("BoJ", "JPY"), ("China", "CNY"), ("PBoC", "CNY"),
+                      ("Bank of Canada", "CAD"), ("Canada", "CAD"), ("Australia", "AUD"), ("RBA", "AUD"),
+                      ("RBNZ", "NZD"), ("New Zealand", "NZD"), ("Switzerland", "CHF"), ("SNB", "CHF"),
+                      ("Bank of England", "GBP"), ("BoE", "GBP"))
+
+
+def _fc_country(name: str) -> str:
+    n = (name or "").strip().lower()
+    for prefix, cur in _FC_COUNTRY_PREFIX:
+        p = prefix.lower()
+        if (n.startswith(p) if p.endswith(" ") else p in n):
+            return cur
+    return "USD"   # Finance Calendar is US-centric; un-prefixed prints (PPI, Jobless claims, PCE…) are US
+
+
+def parse_financecalendar(payload: dict) -> list:
+    """Finance Calendar JSON → the internal event shape (country derived from the name prefix; all-day rows skipped)."""
+    out = []
+    for e in (payload or {}).get("events") or []:
+        if e.get("all_day") or not e.get("time_utc") or not e.get("name"):
+            continue
+        try:
+            when = datetime.fromisoformat(str(e["time_utc"]).replace("Z", "+00:00")).astimezone(timezone.utc)
+        except (TypeError, ValueError):
+            continue
+        impact = str(e.get("impact") or "").lower()
+        out.append({"title": str(e["name"]).strip(), "country": _fc_country(e["name"]),
+                    "impact": impact if impact in ("high", "medium", "low") else "low",
+                    "when": when.isoformat(), "when_ts": when.timestamp(),
+                    "forecast": str(e.get("consensus") or ""), "previous": str(e.get("prior") or ""),
+                    "source": "financecalendar"})
+    return out
+
+
+async def _fetch_financecalendar() -> list:
+    async with httpx.AsyncClient(timeout=20.0, headers=UA, follow_redirects=True) as c:
+        r = await c.get(FC_FEED)
+        r.raise_for_status()
+        return parse_financecalendar(r.json())
+
+
+def merge_events(primary: list, secondary: list) -> list:
+    """Merge by (currency, minute). A secondary print at a time+currency the primary already covers is dropped
+    (same freeze window either way); everything else is added. Sorted by time."""
+    seen = {(e["country"], int(e["when_ts"] // 60)) for e in primary}
+    out = [dict(e, source=e.get("source") or "forexfactory") for e in primary]
+    for e in secondary:
+        key = (e["country"], int(e["when_ts"] // 60))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(e)
+    return sorted(out, key=lambda x: x["when_ts"])
+
+
+def failsafe_events(now: float | None = None, days: int = 3) -> list:
+    """Synthetic USD HIGH-impact prints at the standard US release times (+18:00 UTC on FOMC days) for the next
+    `days` weekdays — used only while every source is > FAILSAFE_AFTER_SEC stale."""
+    now = time.time() if now is None else now
+    day = datetime.fromtimestamp(now, tz=timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    out = []
+    for d in range(days + 1):
+        dt = day + timedelta(days=d)
+        if dt.weekday() >= 5:
+            continue
+        times = list(FAILSAFE_TIMES_UTC) + ([(18, 0)] if dt.strftime("%Y-%m-%d") in FOMC_STATEMENT_DAYS else [])
+        for h, m in times:
+            when = dt.replace(hour=h, minute=m)
+            if when.timestamp() + 3600 < now:
+                continue
+            label = "FOMC statement (fail-safe)" if (h, m) == (18, 0) else f"US {h:02d}:{m:02d} release slot (fail-safe)"
+            out.append({"title": label, "country": "USD", "impact": "high", "when": when.isoformat(),
+                        "when_ts": when.timestamp(), "forecast": "", "previous": "", "source": "failsafe"})
+    return out
+
+
+async def _refresh_source(name: str, fetch) -> None:
+    st = _sources[name]
+    try:
+        evts = await fetch()
+        if evts is None:
+            raise RuntimeError("empty response")
+        st["events"], st["fetched_at"], st["last_error"] = evts, time.time(), None
+    except Exception as e:  # noqa: BLE001
+        st["last_error"] = f"{type(e).__name__}: {e}"
+
+
+def _source_age(name: str, now: float) -> float | None:
+    f = _sources[name]["fetched_at"] or 0
+    return (now - f) if f else None
+
+
+def active_source(now: float | None = None) -> str | None:
+    """Freshest source that has events, primary first on ties within the stale window."""
+    now = time.time() if now is None else now
+    best = None
+    for name in SOURCE_ORDER:
+        st = _sources[name]
+        if not st["events"]:
+            continue
+        age = _source_age(name, now)
+        if age is not None and age <= STALE_AFTER_SEC:
+            return name
+        if best is None or (age or 1e18) < (_source_age(best, now) or 1e18):
+            best = name
+    return best
+
+
+def failsafe_active(now: float | None = None) -> bool:
+    now = time.time() if now is None else now
+    ages = [_source_age(n, now) for n in SOURCE_ORDER]
+    return all(a is None or a > FAILSAFE_AFTER_SEC for a in ages)
+
+
+def _assemble(now: float) -> list:
+    ff = _sources["forexfactory"]["events"] or []
+    fc = _sources["financecalendar"]["events"] or []
+    merged = merge_events(ff, fc)
+    if failsafe_active(now):
+        merged = merge_events(merged, failsafe_events(now))     # union: stale real prints + conservative defaults
+    return merged
+
+
 async def get_events() -> list:
-    """Cached weekly events list."""
+    """Merged events from both sources (cached 1 h; 10 min back-off after failures). Fail-safe windows are
+    added when both sources are > 6 h stale."""
     if time.time() < _cache["expires_at"] and _cache["events"] is not None:
         return _cache["events"]
     async with _lock:
         if time.time() < _cache["expires_at"] and _cache["events"] is not None:
             return _cache["events"]
-        try:
-            evts = await _fetch_events()
-            _cache["events"] = evts
-            _cache["expires_at"] = time.time() + 3600  # 1h
-            _cache["fetched_at"] = time.time()
-            _cache["last_error"] = None
-            await _persist_status()
-            return evts
-        except Exception as e:
-            # Failure backoff (e.g. HTTP 429 rate limit): keep stale events and
-            # stop hammering the feed for 10 min so the limit can reset.
-            _cache["expires_at"] = time.time() + 600
-            _cache["last_error"] = f"{type(e).__name__}: {e}"
-            await _persist_status()
-            return _cache["events"] or []
+        await _refresh_source("forexfactory", _fetch_events)
+        await _refresh_source("financecalendar", _fetch_financecalendar)
+        now = time.time()
+        any_ok = any(_sources[n]["last_error"] is None and _sources[n]["events"] is not None for n in SOURCE_ORDER)
+        _cache["events"] = _assemble(now)
+        _cache["expires_at"] = now + (3600 if any_ok else 600)
+        if any_ok:
+            _cache["fetched_at"] = now
+        _cache["last_error"] = None if any_ok else " | ".join(
+            f"{n}: {_sources[n]['last_error']}" for n in SOURCE_ORDER if _sources[n]["last_error"])
+        await _persist_status()
+        return _cache["events"]
 
 
 async def _persist_status() -> None:
@@ -246,19 +389,37 @@ async def _persist_status() -> None:
 
 
 def feed_status() -> dict:
-    """Diagnostics for UIs: provider health of the calendar feed."""
+    """Diagnostics for UIs: per-source health, active source, staleness alert (> 2 h) and fail-safe state (> 6 h)."""
     now = time.time()
-    fetched = _cache.get("fetched_at") or 0
+    act = active_source(now)
+    act_age = _source_age(act, now) if act else None
+    fs = failsafe_active(now)
+    srcs = {}
+    for name in SOURCE_ORDER:
+        st = _sources[name]
+        age = _source_age(name, now)
+        srcs[name] = {"events": len(st["events"] or []), "last_error": st["last_error"],
+                      "last_fetch_at": (datetime.fromtimestamp(st["fetched_at"], tz=timezone.utc).isoformat()
+                                        if st["fetched_at"] else None),
+                      "age_min": round(age / 60.0, 1) if age is not None else None,
+                      "status": ("DOWN" if not st["events"] else "STALE" if age is not None and age > STALE_AFTER_SEC
+                                 else "DEGRADED" if st["last_error"] else "OK")}
+    status = ("FAILSAFE" if fs else "DOWN" if not act else "STALE" if act_age and act_age > STALE_AFTER_SEC
+              else "DEGRADED" if any(_sources[n]["last_error"] for n in SOURCE_ORDER) else "OK")
     return {
-        "provider": "ForexFactory (weekly XML)",
-        "last_fetch_at": (datetime.fromtimestamp(fetched, tz=timezone.utc).isoformat()
-                          if fetched else None),
-        "last_fetch_age_min": round((now - fetched) / 60.0, 1) if fetched else None,
+        "provider": "ForexFactory (weekly XML) + Finance Calendar (JSON)",
+        "active_source": act,
+        "sources": srcs,
+        "stale": bool(act_age is not None and act_age > STALE_AFTER_SEC) or act is None,
+        "failsafe_active": fs,
+        "stale_after_min": STALE_AFTER_SEC // 60, "failsafe_after_min": FAILSAFE_AFTER_SEC // 60,
+        "attribution": FC_ATTRIBUTION,
+        "last_fetch_at": (datetime.fromtimestamp(_cache["fetched_at"], tz=timezone.utc).isoformat()
+                          if _cache.get("fetched_at") else None),
+        "last_fetch_age_min": round((now - _cache["fetched_at"]) / 60.0, 1) if _cache.get("fetched_at") else None,
         "cached_events": len(_cache.get("events") or []),
         "last_error": _cache.get("last_error"),
-        "status": ("OK" if _cache.get("events") and not _cache.get("last_error")
-                   else "DEGRADED" if _cache.get("events")
-                   else "DOWN"),
+        "status": status,
         "timezone": "UTC (feed times parsed verbatim, iter-131)",
     }
 

@@ -118,26 +118,39 @@ async def _compute_veto_counts(db, user_id: str, since: datetime) -> dict:
 
 
 @router.get("/watch-status")
-async def watch_status(user=Depends(get_current_user)):
+async def watch_status(account_id: Optional[str] = None, user=Depends(get_current_user)):
     """Bot patient-watching status — "why the bot isn't trading right now."
 
-    Returns the latest signal per symbol the user's bot is configured to watch,
-    with entropy + sentiment + indicators surfaced for the dashboard tile.
-    Bot_runner-generated signals are global market state (no user_id), so we
-    grab the latest doc per symbol regardless of owner.
+    Returns the latest signal per symbol the selected bot is configured to watch, with entropy + sentiment +
+    indicators surfaced for the dashboard tile.
+
+    v1.60.40 — per account: reads THAT account's bot config (own signal_cooldown_minutes, floored by the plan)
+    and THAT account's own latest signal (bot_runner tags signals with user_id + account_id), and caps the
+    countdown at the cooldown. Previously it read the default config and the newest signal of any account.
     """
     db = get_db()
-    cfg = await db.bot_configs.find_one(_config_filter(user["id"], None)) or {}
+    if account_id and not await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}):
+        raise HTTPException(status_code=404, detail="Account not found")
+    cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id)) or {}
+    if not cfg and account_id:
+        cfg = await db.bot_configs.find_one(_config_filter(user["id"], None)) or {}
     symbols = cfg.get("symbols") or ["XAUUSD"]
-    cooldown_min = cfg.get("signal_cooldown_minutes", 3)
+    from entitlements import cooldown_floor
+    from routes.bot_routes import _effective_cooldown_min
+    cooldown_min = _effective_cooldown_min(cfg, int(await cooldown_floor(user) or 1))
 
     out_symbols = []
     now = datetime.now(timezone.utc)
     for sym in symbols:
-        latest = await db.signals.find_one(
-            {"symbol": sym, "indicators": {"$exists": True}},
-            sort=[("created_at", -1)],
-        )
+        own = {"symbol": sym, "indicators": {"$exists": True}, "user_id": user["id"],
+               "account_id": account_id if account_id else {"$in": [None, ""]}}
+        latest = await db.signals.find_one(own, sort=[("created_at", -1)])
+        if not latest:
+            # no signal from this bot yet → market-state fallback (global doc), countdown not applicable
+            latest = await db.signals.find_one({"symbol": sym, "indicators": {"$exists": True}}, sort=[("created_at", -1)])
+            own_signal = False
+        else:
+            own_signal = True
         if not latest:
             out_symbols.append({"symbol": sym, "status": "no_data"})
             continue
@@ -154,10 +167,11 @@ async def watch_status(user=Depends(get_current_user)):
             except ValueError:
                 pass
         next_eval_in = None
-        if seconds_since is not None:
-            next_eval_in = max(0, cooldown_min * 60 - seconds_since)
+        if seconds_since is not None and own_signal:
+            next_eval_in = max(0, min(cooldown_min * 60 - seconds_since, cooldown_min * 60))
         out_symbols.append({
             "symbol": sym,
+            "own_signal": own_signal,
             "action": latest.get("action"),
             "confidence": latest.get("confidence"),
             "entropy": entropy,
@@ -188,6 +202,7 @@ async def watch_status(user=Depends(get_current_user)):
 
     return {
         "symbols": out_symbols,
+        "account_id": account_id,
         "cooldown_minutes": cooldown_min,
         "hold_streak": hold_streak,
         "last_actionable_signal_at": last_non_hold.get("created_at") if last_non_hold else None,

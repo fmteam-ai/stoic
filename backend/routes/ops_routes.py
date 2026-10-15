@@ -661,6 +661,31 @@ async def safety_loops(request: Request):
             "generated_at": now.isoformat()}
 
 
+@router.get("/ops/config-drift")
+async def config_drift(request: Request, days: int = 7):
+    """v1.60.40 — Config Drift telemetry: every SAVE whose response differed from what the client sent
+    (recorded by POST /bot/config/drift). Count + per-field tally so a recurring mismatch is visible on Bot Health."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    days = max(1, min(90, int(days)))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    db = get_db()
+    per_field: dict = {}
+    events = 0
+    users: set = set()
+    last = None
+    async for ev in db.config_drift_events.find({"at": {"$gte": since}}, {"fields": 1, "user_id": 1, "at": 1}).sort("at", -1).limit(2000):
+        events += 1
+        users.add(str(ev.get("user_id")))
+        last = last or _iso(_as_dt(ev.get("at")))
+        for f in ev.get("fields") or []:
+            name = str(f.get("field") or "?")
+            per_field[name] = per_field.get(name, 0) + 1
+    top = sorted(({"field": k, "count": v} for k, v in per_field.items()), key=lambda x: -x["count"])[:12]
+    return {"days": days, "events": events, "users": len(users), "last_at": last, "fields": top}
+
+
 @router.get("/ops/news-sources")
 async def news_sources(request: Request):
     """v1.60.39 — calendar ✓ / RSS+AI ✓ / NewsAPI off. Status is read from platform_state.news_sources (written by
@@ -691,7 +716,12 @@ async def news_sources(request: Request):
     return {
         "calendar": {"status": cal.get("status"), "provider": cal.get("provider"),
                      "last_fetch_at": cal.get("last_fetch_at"), "cached_events": cal.get("cached_events"),
-                     "last_error": cal.get("last_error")},
+                     "last_error": cal.get("last_error"),
+                     # v1.60.40 — dual source + staleness alert (> 2 h) + fail-safe (> 6 h)
+                     "active_source": cal.get("active_source"), "sources": cal.get("sources") or {},
+                     "stale": cal.get("stale"), "failsafe_active": cal.get("failsafe_active"),
+                     "stale_after_min": cal.get("stale_after_min"), "failsafe_after_min": cal.get("failsafe_after_min"),
+                     "attribution": cal.get("attribution")},
         "rss_ai": {"status": rss_state, "last_fetch_at": _iso(fetched), "last_scored_at": _iso(scored),
                    "age_sec": None if age is None else int(age), "rss_items": rss.get("rss_items"),
                    "newsapi_items": rss.get("newsapi_items"), "headlines": rss.get("headlines"),

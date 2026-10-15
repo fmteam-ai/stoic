@@ -45,13 +45,13 @@ function Bands({ title, rows, testid, showPredicted }) {
 function DeferredBands({ rows, testid }) {
     return (
         <div data-testid={testid}>
-            <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">DEFERRED · SHADOW OUTCOME (TP FIRST?) · ONE ROW PER IDEA (SYMBOL + DIRECTION WITHIN 15 MIN) · M1 REPLAY WHEN AVAILABLE</div>
+            <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">DEFERRED · SHADOW OUTCOME (TP FIRST?) · ONE ROW PER IDEA (SYMBOL + DIRECTION WITHIN 15 MIN) · M1 VERDICTS ONLY</div>
             <table className="w-full font-mono text-[11px]">
                 <thead>
                     <tr className="text-[#52525B]">
                         <th className="text-left font-normal py-0.5">band</th>
                         <th className="text-right font-normal">ideas <span className="text-[#3F3F46]">(re-evals)</span></th>
-                        <th className="text-right font-normal">labelled <span className="text-[#3F3F46]">(M1 %)</span></th>
+                        <th className="text-right font-normal">labelled <span className="text-[#3F3F46]">(awaiting M1)</span></th>
                         <th className="text-right font-normal">TP-first (95% CI)</th>
                         <th className="text-right font-normal">avg R</th>
                     </tr>
@@ -63,7 +63,7 @@ function DeferredBands({ rows, testid }) {
                             <td className="py-0.5 text-[#A1A1AA]">{r.band}</td>
                             <td className="text-right text-[#E4E4E7]">{r.n}{r.re_evaluations > r.n && <span className="text-[#52525B]"> ({r.re_evaluations})</span>}</td>
                             <td className="text-right text-[#71717A]">
-                                {r.labelled}{r.m1_share != null && <span className="text-[#52525B]"> ({r.m1_share}%)</span>}
+                                {r.labelled}{r.awaiting_m1 > 0 && <span className="text-[#52525B]" title="M15-only verdicts — too coarse for scalp stops, not counted"> (+{r.awaiting_m1})</span>}
                                 {r.ambiguous > 0 && <span className="text-[#FFB000]" title="SL and TP touched inside one bar — resolution-limited, counted SL-first"> ·{r.ambiguous}?</span>}
                             </td>
                             <td className={`text-right ${r.win_rate == null ? "text-[#52525B]" : r.win_rate >= 50 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>

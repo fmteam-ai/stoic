@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1443 |
+| unit | pure logic, no external I/O | every CI job | 1469 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4190 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5905 tests across 636 files.**
+**Total: 5931 tests across 641 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -530,6 +530,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
 | `backend/tests/unit/test_cap_aware_presets.py` | unit | 4 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
+| `backend/tests/unit/test_ea_1_65_candidate.py` | unit | 9 |
 | `backend/tests/unit/test_easy_connect_p1.py` | unit | 11 |
 | `backend/tests/unit/test_easy_start_wizard.py` | unit | 9 |
 | `backend/tests/unit/test_env_template_sync.py` | unit | 4 |
@@ -649,5 +650,9 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_v1_60_39_deferred_shadow_m1.py` | unit | 7 |
 | `backend/tests/unit/test_v1_60_39_loop_owners.py` | unit | 5 |
 | `backend/tests/unit/test_v1_60_39_news_plumbing.py` | unit | 10 |
+| `backend/tests/unit/test_v1_60_39_signal_cooldown_config.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_40_calendar_backup.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_40_pulse_countdown.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_40_shadow_m1_only.py` | unit | 2 |
 | `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 8 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |

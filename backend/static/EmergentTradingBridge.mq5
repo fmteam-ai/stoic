@@ -292,14 +292,21 @@
 //|         401 storms from a removed account).                      |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.64"
+#property version   "1.65"
 #property strict
+// v1.65 — (a) MODIFY_SL may carry new_tp (broker TP follows a fill re-base);
+//         the ack reports confirmed_position_tp. Servers that never send
+//         new_tp keep the old behaviour (TP passed through untouched).
+//         (b) M1 bar stream for the scalp (tick-stream) symbol: the last
+//         M1StreamBars closed+forming M1 bars once per M1StreamSeconds,
+//         on the slow lane AFTER the heartbeat. Order send / close /
+//         fencing logic unchanged from 1.64.
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.64"
+#define EA_CLIENT_VERSION "1.65"
 
 input string ServerUrl              = "https://stoicaibot.com";  // auto-loaded from MQL5\Files\STOIC-Server.txt (installer) when left at default
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -309,6 +316,9 @@ input int    PollSeconds            = 5;
 input int    Slippage               = 10;
 input int    MagicNumber            = 901234;
 input int    HistorySweepSeconds    = 60;     // how often to scan MT5 deal history
+input bool   M1StreamEnabled        = true;   // v1.65 — M1 bars for the tick-stream (scalp) symbol
+input int    M1StreamSeconds        = 60;     // v1.65 — batch cadence (bandwidth cap: one small POST per minute)
+input int    M1StreamBars           = 30;     // v1.65 — bars per batch (server merges + dedupes by time)
 input int    HistoryLookbackSeconds = 86400;  // initial backfill window (24h)
 input int    HistorySweepMaxDeals   = 50;     // hard cap per sweep so a fresh chart doesn't flood STOIC
 
@@ -368,6 +378,7 @@ datetime _last_dom_sent        = 0;
 bool     _dom_subscribed       = false;
 datetime lastPoll              = 0;
 datetime lastHistorySweep      = 0;
+datetime _last_m1_sent         = 0;   // v1.65
 datetime lastReportedDealTime  = 0;   // high-watermark — never re-push deals older than this
 
 // EA v1.36 · Resolved bridge token. `input string BridgeToken` is read-only
@@ -867,6 +878,12 @@ void OnTimer() {
    _last_slow_run = TimeCurrent();
    SendHeartbeat();
    PollPendingTrades();
+   // EA v1.65 — M1 bar stream for the scalp symbol (slow lane, after the
+   // heartbeat so it can never delay it; at most one POST per M1StreamSeconds).
+   if (M1StreamEnabled && TickStreamEnabled && TimeCurrent() - _last_m1_sent >= M1StreamSeconds) {
+      SendM1Candles();
+      _last_m1_sent = TimeCurrent();
+   }
    // EA v1.42 — M15 candle feed for the Market Structure agent.
    if (TimeCurrent() - _last_candles_sent >= CandlesSeconds) {
       SendCandles();
@@ -911,6 +928,35 @@ void SendCandlesFor(string sym) {
    HttpPost(g_server_url + "/api/bridge/candles", body);
 }
 
+//+------------------------------------------------------------------+
+//| EA v1.65 — M1 bars for the tick-stream (scalp) symbol. Small batch |
+//| (M1StreamBars, default 30) so the deferred-shadow replay and the   |
+//| scalp engine get a real M1 tape; the server dedupes by bar time    |
+//| and drops the forming bar itself.                                  |
+//+------------------------------------------------------------------+
+void SendM1CandlesFor(string sym) {
+   MqlRates rates[];
+   int want = (M1StreamBars < 5) ? 5 : ((M1StreamBars > 120) ? 120 : M1StreamBars);
+   int n = CopyRates(sym, PERIOD_M1, 0, want, rates);
+   if (n < 2) return;
+   string bars = "[";
+   for (int i = 0; i < n; i++) {
+      if (i > 0) bars += ",";
+      bars += StringFormat(
+         "{\"t\":%I64d,\"o\":%.5f,\"h\":%.5f,\"l\":%.5f,\"c\":%.5f,\"v\":%I64d}",
+         (long)rates[i].time, rates[i].open, rates[i].high, rates[i].low,
+         rates[i].close, rates[i].tick_volume);
+   }
+   bars += "]";
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"M1\",\"bars\":%s}",
+      EffectiveToken, sym, bars);
+   HttpPost(g_server_url + "/api/bridge/candles", body);
+}
+void SendM1Candles() {
+   string ts = (StringLen(_tick_symbol) > 0) ? _tick_symbol : ResolveTickSymbol(TickStreamSymbol);
+   if (StringLen(ts) > 0) SendM1CandlesFor(ts);
+}
 void SendCandles() {
    string sent = "," + _Symbol + ",";
    SendCandlesFor(_Symbol);
@@ -1769,6 +1815,7 @@ void ParseModificationsBlock(string resp) {
       string mod_type = ExtractString(obj, "\"type\":\"", 0);
       long   ticket   = (long)ExtractDouble(obj, "\"mt5_ticket\":", 0);
       double new_sl   = ExtractDouble(obj, "\"new_sl\":", 0);
+      double new_tp   = ExtractDouble(obj, "\"new_tp\":", 0);   // v1.65 — optional; 0/absent = keep broker TP
       double new_vol  = ExtractDouble(obj, "\"new_volume\":", 0);
       string intent   = ExtractString(obj, "\"intent_id\":\"", 0);
       long   seq      = (long)ExtractDouble(obj, "\"seq\":", 0);
@@ -1782,8 +1829,8 @@ void ParseModificationsBlock(string resp) {
          string extra = "";
          if (ticket > 0 && PositionSelectByTicket(ticket)) {
             if (mod_type == "MODIFY_SL")
-               extra = StringFormat("\"confirmed_position_sl\":%.5f,",
-                                    PositionGetDouble(POSITION_SL));
+               extra = StringFormat("\"confirmed_position_sl\":%.5f,\"confirmed_position_tp\":%.5f,",
+                                    PositionGetDouble(POSITION_SL), PositionGetDouble(POSITION_TP));
             else if (mod_type == "PARTIAL_CLOSE")
                extra = StringFormat("\"remaining_volume\":%.2f,",
                                     PositionGetDouble(POSITION_VOLUME));
@@ -1806,7 +1853,7 @@ void ParseModificationsBlock(string resp) {
          Print("STOIC v1.50: superseded stale command seq=", seq, " trade=",
                trade_id, " newest=", (long)JGet("S", trade_id));
       } else if (mod_type == "MODIFY_SL" && ticket > 0 && new_sl > 0) {
-         ApplyModifySL(trade_id, ticket, new_sl, intent, seq);
+         ApplyModifySL(trade_id, ticket, new_sl, intent, seq, new_tp);
       } else if (mod_type == "PARTIAL_CLOSE" && ticket > 0 && new_vol > 0) {
          // v1.50 — combo (PC + SL) is no longer chained here: the server
          // enqueues a SEPARATE fenced MODIFY_SL after the PC ack succeeds,
@@ -2317,7 +2364,7 @@ void ClosePosition(string trade_id, long ticket) {
 
 // ----- v1.10: SL/TP modify -----
 void ApplyModifySL(string trade_id, long ticket, double new_sl,
-                   string intent = "", long seq = 0) {
+                   string intent = "", long seq = 0, double new_tp = 0) {
    if (IsEodQuietWindow()) return;   // v1.41 — deferred, server re-dispatches
    if (!PositionSelectByTicket(ticket)) {
       // v1.50 — terminal vs retryable, decided from broker history
@@ -2341,6 +2388,13 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
    ClampStops(symbol, side, adj_sl, tp_ignore, 1);
    req.sl       = adj_sl;
    req.tp       = current_tp;
+   // v1.65 — optional new_tp (fill re-base): broker TP follows, clamped to
+   // the same stop rules. Absent/0 → TP passed through untouched (1.64 path).
+   if (new_tp > 0) {
+      double sl_keep = adj_sl, adj_tp = new_tp;
+      ClampStops(symbol, side, sl_keep, adj_tp, 1);
+      if (adj_tp > 0) req.tp = adj_tp;
+   }
 
    // v1.51 — broker-native preflight (stop/freeze levels re-validated by
    // MT5); a failed check acks success=false so the intent stays retryable.
@@ -2372,14 +2426,18 @@ void ApplyModifySL(string trade_id, long ticket, double new_sl,
                           MathAbs(confirmed_sl - adj_sl) <= tick_sz + 1e-10);
    double ack_sl = (success && confirmed_sl > 0) ? confirmed_sl : adj_sl;
 
+   // v1.65 — report the live broker TP too (confirmed_position_tp) so the
+   // server can bind the trade's TP fields to what the broker really holds.
+   double confirmed_tp = PositionSelectByTicket(ticket) ? PositionGetDouble(POSITION_TP) : 0;
    string body = StringFormat(
       "{\"bridge_token\":\"%s\",\"trade_id\":\"%s\",\"type\":\"MODIFY_SL\",\"success\":%s,"
       "\"new_sl\":%.5f,\"requested_sl\":%.5f,\"applied_sl\":%.5f,"
       "\"confirmed_position_sl\":%.5f,\"stop_confirmed\":%s,"
+      "\"confirmed_position_tp\":%.5f,\"requested_tp\":%.5f,"
       "\"intent_id\":\"%s\",\"error\":\"%s\"}",
       EffectiveToken, trade_id, (success ? "true" : "false"),
       ack_sl, new_sl, adj_sl, confirmed_sl,
-      (stop_confirmed ? "true" : "false"), intent, err);
+      (stop_confirmed ? "true" : "false"), confirmed_tp, new_tp, intent, err);
    HttpPost(g_server_url + "/api/bridge/modification-ack", body);
    // v1.52 — 'request accepted' and 'stop confirmed' are SEPARATE states:
    // the intent is consumed ONLY once the live position shows the stop

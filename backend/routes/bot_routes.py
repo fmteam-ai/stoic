@@ -9,6 +9,7 @@ from auth import get_current_user
 from database import get_db
 from step_up import require_step_up, audit_event
 from models import BotConfigUpdate, BotConfigOut
+from pydantic import BaseModel, Field
 from route_utils import parse_object_id
 from risk import get_profile, compute_lot_for_account
 from pip_utils import floor_to_lot_step
@@ -134,6 +135,9 @@ def _serialize(cfg: dict) -> dict:
     # (gold_off_hours_* on 15 Oct). test_v1_60_39_bot_config_serialize guards this.
     out = {name: cfg.get(name, f.get_default(call_default_factory=True))
            for name, f in BotConfigUpdate.model_fields.items()}
+    if cfg.get("signal_cooldown_minutes") is None:
+        # unset → the runtime default bot_runner._cooldown_minutes() actually uses (env, then 5)
+        out["signal_cooldown_minutes"] = int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "5"))
     out.update({
         "id": str(cfg["_id"]) if cfg.get("_id") is not None else None,
         "virtual": bool(cfg.get("virtual")),
@@ -320,7 +324,38 @@ async def get_config(account_id: Optional[str] = None, user=Depends(get_current_
     cfg = await _get_or_create_config(db, user["id"], account_id)
     out = _serialize(cfg)
     out["policy_risk_cap_pct"] = await policy_risk_cap(db)        # cap-aware UI: risk levels above the cap are marked on first load, not only after a save
+    await _attach_cooldown_floor(out, user)
     return out
+
+
+async def _attach_cooldown_floor(out: dict, user: dict) -> None:
+    """v1.60.39 — plan floor + the cooldown the runner really applies (max of setting and floor)."""
+    from entitlements import cooldown_floor
+    floor = int(await cooldown_floor(user) or 1)
+    out["plan_min_signal_cooldown_minutes"] = floor
+    out["effective_signal_cooldown_minutes"] = max(int(out.get("signal_cooldown_minutes") or 1), floor)
+
+
+class ConfigDriftReport(BaseModel):
+    fields: list = Field(default_factory=list, max_length=200)
+    account_id: Optional[str] = None
+
+
+@router.post("/config/drift")
+async def report_config_drift(payload: ConfigDriftReport, request: Request, user=Depends(get_current_user)):
+    """v1.60.40 — Drift Telemetry: the client reports fields whose saved value differed from the server echo.
+    Stored per user (values truncated), surfaced as a count on Admin → Bot Health (/ops/config-drift)."""
+    fields = []
+    for f in payload.fields[:200]:
+        if not isinstance(f, dict) or not f.get("field"):
+            continue
+        fields.append({"field": str(f["field"])[:80], "sent": str(f.get("sent"))[:120], "server": str(f.get("server"))[:120]})
+    if not fields:
+        return {"recorded": 0}
+    await get_db().config_drift_events.insert_one({
+        "user_id": user["id"], "account_id": payload.account_id, "fields": fields,
+        "at": datetime.now(timezone.utc), "ua": (request.headers.get("user-agent") or "")[:160]})
+    return {"recorded": len(fields)}
 
 
 @router.get("/configs")
@@ -351,6 +386,17 @@ async def mtf_confluence_report(symbol: str = "XAUUSD", user=Depends(get_current
     return {"available": True, "symbol": symbol, "live_price": live, **report}
 
 
+def _effective_cooldown_min(cfg: dict, plan_floor: int = 1) -> int:
+    """v1.60.40 — the cooldown bot_runner really applies for this config: its own signal_cooldown_minutes
+    (env default when unset) floored by the plan."""
+    v = cfg.get("signal_cooldown_minutes")
+    try:
+        v = int(v) if v is not None else int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "5"))
+    except (TypeError, ValueError):
+        v = 5
+    return max(1, v, int(plan_floor or 1))
+
+
 @router.get("/pulse")
 async def get_bot_pulse(user=Depends(get_current_user)):
     """Return the latest cycle verdict for every bot_config the user owns.
@@ -371,6 +417,8 @@ async def get_bot_pulse(user=Depends(get_current_user)):
     db = get_db()
     cursor = db.bot_configs.find({"user_id": user["id"]})
     docs = await cursor.to_list(length=100)
+    from entitlements import cooldown_floor
+    plan_floor = int(await cooldown_floor(user) or 1)
     locked_ids = {str(a["_id"]) async for a in db.accounts.find(
         {"user_id": user["id"], "authority_lock.reason": "panic"}, {"_id": 1})}
     # A7d — accounts under the execution-health brake (new entries paused)
@@ -443,10 +491,22 @@ async def get_bot_pulse(user=Depends(get_current_user)):
             else:
                 p = get_preset(active_preset)
                 strategy_label = (p or {}).get("label") or active_preset.title()
+        # v1.60.40 — the countdown uses THIS account's cooldown, measured on the server clock and capped at the
+        # cooldown (VTMarkets showed "NEXT IN 33M" on a 30-min cooldown: client clock skew + uncapped ISO delta)
+        cooldown_min = _effective_cooldown_min(d, plan_floor)
+        next_in = None
+        if pulse and pulse.get("next_eligible_at"):
+            try:
+                nxt = datetime.fromisoformat(str(pulse["next_eligible_at"]).replace("Z", "+00:00"))
+                next_in = max(0, min(int((nxt - now).total_seconds()), cooldown_min * 60))
+            except (TypeError, ValueError):
+                next_in = None
         out.append({
             "config_id": str(d["_id"]),
             "account_id": acct_id,
             "unbound": acct_id is None,
+            "cooldown_minutes": cooldown_min,
+            "next_eligible_in_seconds": next_in,
             "label": label,
             "active": bool(d.get("active")),
             "locked": (str(acct_id) in locked_ids) if acct_id else bool(locked_ids),
@@ -945,6 +1005,17 @@ async def update_config(payload: BotConfigUpdate,
         }
     if "max_lot_size" in update:
         update["max_lot_size"] = max(0.0, float(update["max_lot_size"]))
+    cooldown_clamped = None
+    if "signal_cooldown_minutes" in update:
+        # v1.60.39 — respect the plan floor at the boundary (the runner clamps too); tell the UI when we did
+        from entitlements import cooldown_floor
+        floor = int(await cooldown_floor(user) or 1)
+        asked = max(1, int(update["signal_cooldown_minutes"] or 1))
+        if asked < floor:
+            cooldown_clamped = floor
+            await audit_event(db, user["id"], "cooldown_clamped_to_plan_floor",
+                              {"requested": asked, "floor": floor, "account_id": account_id}, request)
+        update["signal_cooldown_minutes"] = max(asked, floor)
     # iter-65: Coerce bogus profit-target-action values at write time so the
     # DB never carries garbage like "TURBO_LOCK". The runtime evaluator also
     # coerces, but cleaning at the boundary keeps stored state honest.
@@ -994,6 +1065,9 @@ async def update_config(payload: BotConfigUpdate,
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
     out = _serialize(cfg)
     out["policy_risk_cap_pct"] = await policy_risk_cap(db)        # v1.60.30 — shown next to the risk field
+    await _attach_cooldown_floor(out, user)
+    if cooldown_clamped is not None:
+        out["cooldown_clamped_to_plan_floor"] = cooldown_clamped
     return out
 
 

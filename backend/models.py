@@ -179,6 +179,9 @@ class BotConfigUpdate(BaseModel):
     symbols: List[str] = ["XAUUSD"]
     active: bool = False
     max_concurrent_trades: int = Field(default=1, ge=1, le=10)
+    # v1.60.39 — minutes between signals per symbol (per account). Was only reachable via API/presets (STARTRADER /
+    # VTMarkets ran 30 min invisibly). Clamped on save to the plan floor (features.min_signal_cooldown_minutes).
+    signal_cooldown_minutes: int = Field(default=5, ge=1, le=1440)
     auto_execute: bool = True
     # Profit Protection Suite
     breakeven_enabled: bool = True            # move SL to entry after +1R
