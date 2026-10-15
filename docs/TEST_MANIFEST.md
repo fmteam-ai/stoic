@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1549 |
+| unit | pure logic, no external I/O | every CI job | 1580 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4190 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4176 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 6011 tests across 652 files.**
+**Total: 6028 tests across 654 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -311,7 +311,6 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter37_multi_bot_targeting_extensions.py` | http-live | 9 |
 | `backend/tests/test_iter39_p2_polish.py` | http-live | 5 |
 | `backend/tests/test_iter40_ea_clamp_stops.py` | http-live | 5 |
-| `backend/tests/test_iter41_payoff_repair.py` | http-live | 14 |
 | `backend/tests/test_iter42_profit_tied_objective.py` | http-live | 15 |
 | `backend/tests/test_iter43_index_symbols.py` | http-live | 11 |
 | `backend/tests/test_iter43_session_breakdown.py` | http-live | 8 |
@@ -665,5 +664,8 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_v1_60_44_scalp_metrics_scope.py` | unit | 3 |
 | `backend/tests/unit/test_v1_60_45_scalp_status_runner_mutation.py` | unit | 2 |
 | `backend/tests/unit/test_v1_60_47_protected_paths_guard.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_48_audit_batch2.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_48_audit_p1.py` | unit | 12 |
+| `backend/tests/unit/test_v1_60_48_audit_p2_p3.py` | unit | 11 |
 | `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 8 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |
