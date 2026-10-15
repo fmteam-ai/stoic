@@ -144,7 +144,7 @@ export default function BotConfig() {
         friday_flat_minutes_before: d?.friday_flat_minutes_before ?? 60,
         gold_off_hours_enabled: d?.gold_off_hours_enabled ?? true,
         gold_off_hours_start_utc: d?.gold_off_hours_start_utc || "21:00",
-        gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "00:30",
+        gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "06:00",
         macro_freeze_before_min: d?.macro_freeze_before_min ?? 15,
         macro_freeze_after_min: d?.macro_freeze_after_min ?? 10,
         macro_freeze_medium_usd_enabled: d?.macro_freeze_medium_usd_enabled ?? true,
@@ -278,7 +278,7 @@ export default function BotConfig() {
                 friday_flat_minutes_before: cfg.friday_flat_minutes_before ?? 60,
                 gold_off_hours_enabled: cfg.gold_off_hours_enabled ?? true,
                 gold_off_hours_start_utc: cfg.gold_off_hours_start_utc || "21:00",
-                gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "00:30",
+                gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "06:00",
                 macro_freeze_before_min: cfg.macro_freeze_before_min ?? 15,
                 macro_freeze_after_min: cfg.macro_freeze_after_min ?? 10,
                 macro_freeze_medium_usd_enabled: cfg.macro_freeze_medium_usd_enabled ?? true,
@@ -936,7 +936,7 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                 {/* v1.60.38 — XAUUSD off-hours defer window (per account, UTC) */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="gold_off_hours_enabled" label="Gold Off-Hours Window (UTC)" icon={CalendarClock} color="#FFD700"
-                        desc="New XAUUSD entries are deferred inside this UTC window (default 21:00–00:30 = daily rollover / spread blow-out). Weekends are always blocked. Outside the window the 2.5× median spread guard remains the protection in Asian hours. Deferred signals get a shadow outcome (TP or SL first?) in the Strategy Report." />
+                        desc="New XAUUSD entries are deferred inside this UTC window (default 21:00–06:00 = daily rollover + Asian hours paused). Weekends are always blocked; the 2.5× median spread guard still applies outside the window. Deferred signals get a shadow outcome (TP or SL first?) in the Strategy Report — re-enable Asian hours here (end 00:30) once that data justifies it." />
                     {(cfg.gold_off_hours_enabled ?? true) && (
                         <div className="grid grid-cols-2 gap-3 mt-3" data-testid="gold-off-hours-window">
                             {[["gold_off_hours_start_utc", "START (UTC)", "gold-off-hours-start"], ["gold_off_hours_end_utc", "END (UTC)", "gold-off-hours-end"]].map(([field, label, tid]) => (

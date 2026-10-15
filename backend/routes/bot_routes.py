@@ -129,7 +129,12 @@ async def default_operational_mode(db, account_id: str) -> str:
 
 
 def _serialize(cfg: dict) -> dict:
-    return {
+    # v1.60.39 hotfix — EVERY BotConfigUpdate field is returned (model default when unset). Omitting a field here
+    # made the UI fall back to its own default and the next SAVE wrote that default over the user's value
+    # (gold_off_hours_* on 15 Oct). test_v1_60_39_bot_config_serialize guards this.
+    out = {name: cfg.get(name, f.get_default(call_default_factory=True))
+           for name, f in BotConfigUpdate.model_fields.items()}
+    out.update({
         "id": str(cfg["_id"]) if cfg.get("_id") is not None else None,
         "virtual": bool(cfg.get("virtual")),
         "user_id": cfg["user_id"],
@@ -196,7 +201,8 @@ def _serialize(cfg: dict) -> dict:
         "soft_stop_min_minutes": int(cfg.get("soft_stop_min_minutes") or 10),
         "let_winners_run": bool(cfg.get("let_winners_run", False)),
         "updated_at": cfg.get("updated_at"),
-    }
+    })
+    return out
 
 
 @router.get("/sizing-preview")

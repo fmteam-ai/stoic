@@ -214,11 +214,12 @@ class BotConfigUpdate(BaseModel):
     friday_flat_enabled: bool = True
     friday_flat_mode: str = "close"          # "close" | "tighten"
     friday_flat_minutes_before: int = 60
-    # v1.60.38 — XAUUSD off-hours defer window (UTC, per account). Default 21:00–00:30 = rollover / spread blow-out.
-    # Weekends stay blocked; the 2.5× median spread guard remains the protection in Asian hours (00:30–06:00).
+    # v1.60.38 — XAUUSD off-hours defer window (UTC, per account). v1.60.39 hotfix: default 21:00–06:00 = rollover +
+    # Asian hours paused; re-enable Asian hours per account once the Strategy Report's shadow results justify it.
+    # Weekends stay blocked; the 2.5× median spread guard still applies outside the window.
     gold_off_hours_enabled: bool = True
     gold_off_hours_start_utc: str = "21:00"
-    gold_off_hours_end_utc: str = "00:30"
+    gold_off_hours_end_utc: str = "06:00"
     # v1.60.39 C8–C10 — macro freeze windows (per account). Gold HIGH-impact freeze is explicit by currency
     # (was every country: 15 Oct UK GDP froze gold); USD medium-impact prints get a short ±5 min freeze; ≥2 USD
     # HIGH-impact prints within 5 min ("macro avalanche", e.g. PPI + Retail Sales) extend the after-window to 20 min.
