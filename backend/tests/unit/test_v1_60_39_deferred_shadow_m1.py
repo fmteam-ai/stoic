@@ -167,8 +167,9 @@ def test_cluster_deferred_counts_one_idea_per_symbol_direction_within_15_min():
     rep = build_report([], 30, rows)
     assert rep["deferred"] == 6 and rep["deferred_ideas"] == 4
     ny = next(r for r in rep["engines"][0]["deferred_shadow"] if r["band"].startswith("New York"))
-    assert ny["n"] == 4 and ny["re_evaluations"] == 6 and ny["labelled"] == 2
-    assert ny["tp_first"] == 1 and ny["win_rate"] == 50.0 and ny["m1_share"] == 50.0 and ny["ambiguous"] == 1
+    # v1.60.40 — only the M1 verdict counts; the M15 (ambiguous) one is reported as awaiting_m1, never in the win rate
+    assert ny["n"] == 4 and ny["re_evaluations"] == 6 and ny["labelled"] == 1 and ny["awaiting_m1"] == 1
+    assert ny["tp_first"] == 1 and ny["win_rate"] == 100.0 and ny["ambiguous"] == 0
     fe = open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "src", "components",
                            "StrategyReport.jsx"), encoding="utf-8").read()
-    assert "re_evaluations" in fe and "m1_share" in fe and "ambiguous" in fe
+    assert "re_evaluations" in fe and "awaiting_m1" in fe and "ambiguous" in fe

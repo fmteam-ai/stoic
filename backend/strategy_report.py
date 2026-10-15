@@ -98,22 +98,27 @@ def _bucket_rows(decisions: list, key_fn, order: list) -> list:
 
 def deferred_rows(deferred: list) -> list:
     """Shadow outcomes of DEFERRED signals per UTC band: n ideas (one per symbol+direction cluster within 15 min —
-    v1.60.39, not every re-evaluation), re-evaluations, n labelled, shadow win rate (tp_first) + CI, M1 share."""
+    v1.60.39, not every re-evaluation), re-evaluations, n labelled, shadow win rate (tp_first) + CI.
+    v1.60.40 — only M1-based verdicts count as labelled; M15 verdicts (too coarse for scalp stops) are reported
+    separately as `awaiting_m1` and never enter the win rate."""
     acc: dict = defaultdict(lambda: {"n": 0, "re_evaluations": 0, "labelled": 0, "tp": 0, "sl": 0, "r": 0.0,
-                                     "m1": 0, "ambiguous": 0})
+                                     "awaiting_m1": 0, "ambiguous": 0})
     for d in cluster_deferred(deferred):
         band = (d.get("shadow") or {}).get("utc_band") or utc_band(d.get("ts"))
         b = acc[band]
         b["n"] += 1
         b["re_evaluations"] += int(d.get("re_evaluations") or 1)
         sh = d.get("shadow") or {}
-        if sh.get("outcome") in ("tp_first", "sl_first", "timeout"):
-            b["labelled"] += 1
-            b["tp"] += sh["outcome"] == "tp_first"
-            b["sl"] += sh["outcome"] == "sl_first"
-            b["r"] += float(sh.get("r") or 0)
-            b["m1"] += sh.get("timeframe") == "M1"
-            b["ambiguous"] += bool(sh.get("ambiguous"))
+        if sh.get("outcome") not in ("tp_first", "sl_first", "timeout"):
+            continue
+        if sh.get("timeframe") != "M1":
+            b["awaiting_m1"] += 1
+            continue
+        b["labelled"] += 1
+        b["tp"] += sh["outcome"] == "tp_first"
+        b["sl"] += sh["outcome"] == "sl_first"
+        b["r"] += float(sh.get("r") or 0)
+        b["ambiguous"] += bool(sh.get("ambiguous"))
     rows = []
     for label in SESSION_ORDER + [k for k in acc if k not in SESSION_ORDER]:
         if label not in acc:
@@ -125,7 +130,7 @@ def deferred_rows(deferred: list) -> list:
                      "win_rate": round(100.0 * b["tp"] / b["labelled"], 1) if b["labelled"] else None,
                      "win_rate_ci": [lo, hi] if b["labelled"] else None,
                      "avg_r": round(b["r"] / b["labelled"], 2) if b["labelled"] else None,
-                     "m1_share": round(100.0 * b["m1"] / b["labelled"], 1) if b["labelled"] else None,
+                     "awaiting_m1": b["awaiting_m1"],
                      "ambiguous": b["ambiguous"]})
     return rows
 
