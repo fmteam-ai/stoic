@@ -2,6 +2,7 @@
 """Capture the exact EA / Host Agent / strategy / policy hashes for release
 evidence (docs/RELEASE_HASHES.json). Image digests + MSI signature are only
 produced by the CI runners and are marked pending here."""
+from __future__ import annotations
 import hashlib
 import json
 import os
@@ -44,6 +45,27 @@ def host_agent_hash():
     return ha.hexdigest(), n
 
 
+def merge_ea_entry(existing: dict | None, captured: dict) -> dict:
+    """v1.60.41 — the `ea` entry is written by the ea-release workflow (signed EX5 record); a capture must
+    NEVER discard it. Same MQ5 → keep the signed record untouched. New MQ5 → the unsigned capture takes
+    the entry and the signed record is carried as `previous`, so verify_ea_release.record() signs
+    previous = <stable release> into the new record and the fleet's stable EX5 stays accepted."""
+    ex = existing or {}
+    signed = bool(ex.get("ex5_sha256") and (ex.get("signature") or {}).get("sig_hex"))
+    if not signed:
+        if isinstance(ex.get("previous"), dict) and ex["previous"].get("signature"):
+            captured["previous"] = ex["previous"]          # keep an already carried signed previous
+        return captured
+    if ex.get("version") == captured["version"] and ex.get("mq5_sha256") == captured["mq5_sha256"]:
+        return ex
+    prev = {k: v for k, v in ex.items() if k != "previous"}
+    pp = ex.get("previous") or None
+    if pp:
+        prev["previous"] = {"version": pp.get("version"), "ex5_sha256": pp.get("ex5_sha256")}
+    captured["previous"] = prev
+    return captured
+
+
 def main():
     commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"], cwd=ROOT).decode().strip()
@@ -84,6 +106,8 @@ def main():
                            "— pending CI"},
     }
     dest = os.path.join(ROOT, "docs/RELEASE_HASHES.json")
+    existing = json.load(open(dest)).get("ea") if os.path.exists(dest) else None
+    out["ea"] = merge_ea_entry(existing, out["ea"])
     with open(dest, "w") as f:
         json.dump(out, f, indent=2)
     print(json.dumps(out, indent=2))

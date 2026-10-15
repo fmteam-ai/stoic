@@ -27,7 +27,7 @@ def chain(tmp_path, monkeypatch):
     monkeypatch.delenv("EA_RELEASE_SHA256", raising=False)
     monkeypatch.setenv("APP_ENV", "development")
     hashes = tmp_path / "RELEASE_HASHES.json"
-    hashes.write_text(json.dumps({"ea": {"version": "x"}}))
+    hashes.write_text(json.dumps({"ea": {}}))        # v1.60.41 — an unsigned prior version would (rightly) refuse to record
     rel = tmp_path / "ea_release.json"
     monkeypatch.setattr(v, "HASHES", str(hashes))
     monkeypatch.setattr(v, "EA_RELEASE", str(rel))

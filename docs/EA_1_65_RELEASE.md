@@ -38,6 +38,30 @@ Server dedupes by bar time, drops the forming bar, keeps 26 h (1600 bars), recor
    elapsed, 0 corroborated deploy failures, signed EX5 record present). Admin → *Promote candidate* (step-up re-auth, audited) or the
    auto-promotion in the reconciliation worker. The previous stable (1.64) remains one click away.
 
+## v1.60.41 — recovery from the 14 Oct `previous: null` record (operator steps, on `main`)
+
+What happened: the merge set `docs/RELEASE_HASHES.json#ea` to an unsigned 1.65 capture, which discarded the signed
+1.64 record; `ea-release` (41893f48) therefore signed 1.65 with `previous: null`; the new server rejected the stable
+1.64 EX5 (`b05ed821…`) on all 4 terminals, voided their DEMO attestations and set every account `CLOSE_ONLY`.
+The deploy was rolled back. Guards now in place: `capture_release_hashes.py` never discards a signed `ea` entry
+(carried as `previous`); `verify_ea_release.py` takes `previous` from `release/ea_release.json` / `#ea` / `#ea.previous`
+and **fails** on a version change without a signed prior record (`--no-previous-reason` is the only, recorded,
+bypass); `scripts/check_ea_fleet_compat.py` blocks the tag (`release.yml` tag-only job, `ci.yml`, `ea-release`) and the
+host update (`deploy/update.sh`, against the PREV checkout's record) when the stable EX5 is not accepted.
+
+1. Restore the signed 1.64 record from the last good ea-release commit — never hand-edit the `ea` entry:
+   `git checkout 3344609d -- release/ea_release.json docs/RELEASE_HASHES.json && git commit -m "restore signed EA 1.64 record"`
+   (then `python scripts/capture_release_hashes.py` on the same commit: it keeps the signed 1.64 as `#ea.previous`
+   and records the 1.65 MQ5 as the pending capture; commit `docs/RELEASE_HASHES.json`).
+2. Actions → `ea-release` → Run workflow (`main`). The record step must print `OK: EX5 … · signed` and the fleet gate
+   `OK: release EA 1.65 accepts the fleet stable EX5 b05ed821… (signed previous)`; the bot commit's
+   `release/ea_release.json` must show `previous.version == "1.64"` and `previous.ex5_sha256 == b05ed821…`.
+3. Tag `v1.60.41`. The `tag-only` job runs the fleet gate against the previous tag; `deploy/update.sh` runs it again on
+   the host before building. Expected after the deploy: all 4 terminals keep `attested DEMO` / `FULL` while still on 1.64.
+4. Re-attest: the four accounts whose automatic DEMO attestations were voided re-attest automatically on the next
+   heartbeat once the server accepts `b05ed821…` again (`auto_attest`: broker demo + signed EX5 + identity chain).
+
+
 ## Install guide — replacing the EA in MetaTrader 5 (per terminal)
 
 1. Download the signed `EmergentTradingBridge.ex5` for the candidate (Dashboard → Accounts → *EA download*, or
