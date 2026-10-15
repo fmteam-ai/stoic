@@ -236,6 +236,7 @@ export default function BotConfig() {
                 symbols: cfg.symbols,
                 active: cfg.active,
                 max_concurrent_trades: cfg.max_concurrent_trades,
+                signal_cooldown_minutes: cfg.signal_cooldown_minutes,
                 max_lot_size: cfg.max_lot_size || 0,
                 auto_execute: cfg.auto_execute,
                 breakeven_enabled: cfg.breakeven_enabled,
@@ -293,7 +294,10 @@ export default function BotConfig() {
                 soft_stop_min_minutes: cfg.soft_stop_min_minutes ?? 10,
                 let_winners_run: cfg.let_winners_run ?? false,
             });
-            setCfg(withFlatDefaults(data)); setSaveMsg("Configuration saved.");
+            setCfg(withFlatDefaults(data));
+            setSaveMsg(data.cooldown_clamped_to_plan_floor
+                ? `Configuration saved. Minutes between signals raised to your plan floor (${data.cooldown_clamped_to_plan_floor} min).`
+                : "Configuration saved.");
             // refresh allConfigs index + preset cap-fit so the selector/presets reflect the saved risk settings
             try {
                 const [c, pr] = await Promise.all([api.get("/bot/configs"), api.get(`/bot/presets${accountQuery}`)]);
@@ -731,6 +735,32 @@ export default function BotConfig() {
                                 }`}>
                                 {cfg.auto_execute ? "● ENABLED" : "○ DISABLED"}
                             </button>
+                        </div>
+                        {/* v1.60.39 — per-account signal cooldown, floored by the plan */}
+                        <div className="md:col-span-2" data-testid="signal-cooldown-field">
+                            <label htmlFor="signal-cooldown-input" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2 flex items-center gap-2">
+                                <Timer className="w-3 h-3 text-[#FFD700]" />
+                                MINUTES BETWEEN SIGNALS
+                                <span className="font-mono text-[9px] text-[#52525B] normal-case tracking-normal ml-auto">
+                                    per symbol · plan floor <span className="text-[#FFD700]" data-testid="signal-cooldown-floor">{cfg.plan_min_signal_cooldown_minutes ?? 1} min</span>
+                                </span>
+                            </label>
+                            <div className="flex items-center gap-3">
+                                <input type="number" min={cfg.plan_min_signal_cooldown_minutes ?? 1} max="1440" step="1"
+                                    value={cfg.signal_cooldown_minutes ?? 5}
+                                    onChange={e => setCfg({ ...cfg, signal_cooldown_minutes: Math.max(1, parseInt(e.target.value) || 1) })}
+                                    onBlur={() => {
+                                        const floor = cfg.plan_min_signal_cooldown_minutes ?? 1;
+                                        if ((cfg.signal_cooldown_minutes ?? 5) < floor) setCfg({ ...cfg, signal_cooldown_minutes: floor });
+                                    }}
+                                    data-testid="signal-cooldown-input" id="signal-cooldown-input" name="signal_cooldown_minutes"
+                                    className="w-40 bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
+                                <span className="font-mono text-[11px] text-[#52525B]">
+                                    {(cfg.signal_cooldown_minutes ?? 5) < (cfg.plan_min_signal_cooldown_minutes ?? 1)
+                                        ? <span className="text-[#FFB000]" data-testid="signal-cooldown-floor-warning">below your plan floor — will be saved as {cfg.plan_min_signal_cooldown_minutes} min</span>
+                                        : <>the bot waits this long after a signal before it re-evaluates the same symbol</>}
+                                </span>
+                            </div>
                         </div>
                         <div className="md:col-span-2">
                             <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2 flex items-center gap-2">

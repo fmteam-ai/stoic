@@ -134,6 +134,9 @@ def _serialize(cfg: dict) -> dict:
     # (gold_off_hours_* on 15 Oct). test_v1_60_39_bot_config_serialize guards this.
     out = {name: cfg.get(name, f.get_default(call_default_factory=True))
            for name, f in BotConfigUpdate.model_fields.items()}
+    if cfg.get("signal_cooldown_minutes") is None:
+        # unset → the runtime default bot_runner._cooldown_minutes() actually uses (env, then 5)
+        out["signal_cooldown_minutes"] = int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "5"))
     out.update({
         "id": str(cfg["_id"]) if cfg.get("_id") is not None else None,
         "virtual": bool(cfg.get("virtual")),
@@ -320,7 +323,16 @@ async def get_config(account_id: Optional[str] = None, user=Depends(get_current_
     cfg = await _get_or_create_config(db, user["id"], account_id)
     out = _serialize(cfg)
     out["policy_risk_cap_pct"] = await policy_risk_cap(db)        # cap-aware UI: risk levels above the cap are marked on first load, not only after a save
+    await _attach_cooldown_floor(out, user)
     return out
+
+
+async def _attach_cooldown_floor(out: dict, user: dict) -> None:
+    """v1.60.39 — plan floor + the cooldown the runner really applies (max of setting and floor)."""
+    from entitlements import cooldown_floor
+    floor = int(await cooldown_floor(user) or 1)
+    out["plan_min_signal_cooldown_minutes"] = floor
+    out["effective_signal_cooldown_minutes"] = max(int(out.get("signal_cooldown_minutes") or 1), floor)
 
 
 @router.get("/configs")
@@ -945,6 +957,17 @@ async def update_config(payload: BotConfigUpdate,
         }
     if "max_lot_size" in update:
         update["max_lot_size"] = max(0.0, float(update["max_lot_size"]))
+    cooldown_clamped = None
+    if "signal_cooldown_minutes" in update:
+        # v1.60.39 — respect the plan floor at the boundary (the runner clamps too); tell the UI when we did
+        from entitlements import cooldown_floor
+        floor = int(await cooldown_floor(user) or 1)
+        asked = max(1, int(update["signal_cooldown_minutes"] or 1))
+        if asked < floor:
+            cooldown_clamped = floor
+            await audit_event(db, user["id"], "cooldown_clamped_to_plan_floor",
+                              {"requested": asked, "floor": floor, "account_id": account_id}, request)
+        update["signal_cooldown_minutes"] = max(asked, floor)
     # iter-65: Coerce bogus profit-target-action values at write time so the
     # DB never carries garbage like "TURBO_LOCK". The runtime evaluator also
     # coerces, but cleaning at the boundary keeps stored state honest.
@@ -994,6 +1017,9 @@ async def update_config(payload: BotConfigUpdate,
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
     out = _serialize(cfg)
     out["policy_risk_cap_pct"] = await policy_risk_cap(db)        # v1.60.30 — shown next to the risk field
+    await _attach_cooldown_floor(out, user)
+    if cooldown_clamped is not None:
+        out["cooldown_clamped_to_plan_floor"] = cooldown_clamped
     return out
 
 
