@@ -41,6 +41,40 @@ function Bands({ title, rows, testid, showPredicted }) {
     );
 }
 
+// v1.60.38 — deferred signals (off-hours window / spread guard): would TP or SL have hit first?
+function DeferredBands({ rows, testid }) {
+    return (
+        <div data-testid={testid}>
+            <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">DEFERRED · SHADOW OUTCOME (TP FIRST?)</div>
+            <table className="w-full font-mono text-[11px]">
+                <thead>
+                    <tr className="text-[#52525B]">
+                        <th className="text-left font-normal py-0.5">band</th>
+                        <th className="text-right font-normal">deferred</th>
+                        <th className="text-right font-normal">labelled</th>
+                        <th className="text-right font-normal">TP-first (95% CI)</th>
+                        <th className="text-right font-normal">avg R</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {rows.length === 0 && <tr><td colSpan={5} className="text-[#52525B] py-1">no deferred signals</td></tr>}
+                    {rows.map((r) => (
+                        <tr key={r.band} className="border-t border-[#141414]">
+                            <td className="py-0.5 text-[#A1A1AA]">{r.band}</td>
+                            <td className="text-right text-[#E4E4E7]">{r.n}</td>
+                            <td className="text-right text-[#71717A]">{r.labelled}</td>
+                            <td className={`text-right ${r.win_rate == null ? "text-[#52525B]" : r.win_rate >= 50 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
+                                {pct(r.win_rate)}{Array.isArray(r.win_rate_ci) && <span className="text-[#52525B]"> {r.win_rate_ci[0]}–{r.win_rate_ci[1]}%</span>}
+                            </td>
+                            <td className={`text-right ${(r.avg_r ?? 0) >= 0 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>{r.avg_r == null ? "—" : r.avg_r}</td>
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+}
+
 // v1.60.36 — per-engine evidence table (GET /postmortem/strategy-report), rendered verbatim.
 export function StrategyReport() {
     const [d, setD] = useState(null);
@@ -76,7 +110,7 @@ export function StrategyReport() {
                         <div className="flex items-baseline gap-3 mb-2 flex-wrap">
                             <span className="font-display font-bold text-sm text-[#FAFAFA]">{e.label}</span>
                             <span className="font-mono text-[10px] text-[#71717A]">
-                                {e.decisions} decisions · {e.trades} trades · win {pct(e.win_rate)}
+                                {e.decisions} decisions · {e.trades} trades · {(e.deferred_shadow || []).reduce((a, r) => a + r.n, 0)} deferred · win {pct(e.win_rate)}
                                 {Array.isArray(e.win_rate_ci) && <span className="text-[#52525B]"> ({e.win_rate_ci[0]}–{e.win_rate_ci[1]}%, n={e.decisions})</span>} · {usd(e.pnl)}
                             </span>
                         </div>
@@ -84,6 +118,8 @@ export function StrategyReport() {
                             <Bands title="MONTE CARLO PREDICTED → ACTUAL" rows={e.mc_bands} showPredicted testid={`strategy-report-mc-${e.engine}`} />
                             <Bands title="ENTRY POSITION IN DAY RANGE" rows={e.range_position} testid={`strategy-report-range-${e.engine}`} />
                             <Bands title="TREND-RIDE" rows={e.trend_ride} testid={`strategy-report-ride-${e.engine}`} />
+                            <Bands title="ENTRY SESSION (UTC) · EXECUTED" rows={e.sessions || []} testid={`strategy-report-session-${e.engine}`} />
+                            <DeferredBands rows={e.deferred_shadow || []} testid={`strategy-report-deferred-${e.engine}`} />
                         </div>
                     </div>
                 ))}

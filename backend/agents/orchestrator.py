@@ -190,7 +190,7 @@ class Orchestrator:
             eo_t0 = time.monotonic()
             try:
                 eo = await self.exec_optimizer.optimize(
-                    signal=signal, account=account,
+                    signal=signal, account=account, cfg=user_cfg,
                 )
                 if not eo.get("approved"):
                     signal["execution_deferred"] = True

@@ -138,6 +138,9 @@ export default function BotConfig() {
         friday_flat_enabled: d?.friday_flat_enabled ?? true,
         friday_flat_mode: d?.friday_flat_mode || "close",
         friday_flat_minutes_before: d?.friday_flat_minutes_before ?? 60,
+        gold_off_hours_enabled: d?.gold_off_hours_enabled ?? true,
+        gold_off_hours_start_utc: d?.gold_off_hours_start_utc || "21:00",
+        gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "00:30",
     });
 
     const load = useCallback(async () => {
@@ -263,6 +266,9 @@ export default function BotConfig() {
                 friday_flat_enabled: cfg.friday_flat_enabled ?? true,
                 friday_flat_mode: cfg.friday_flat_mode || "close",
                 friday_flat_minutes_before: cfg.friday_flat_minutes_before ?? 60,
+                gold_off_hours_enabled: cfg.gold_off_hours_enabled ?? true,
+                gold_off_hours_start_utc: cfg.gold_off_hours_start_utc || "21:00",
+                gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "00:30",
                 min_confidence_override: cfg.min_confidence_override,
                 paper_shadow_mode: cfg.paper_shadow_mode,
                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
@@ -907,6 +913,25 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                                 </select>
                             </div>
                             <PPNumInput cfg={cfg} setCfg={setCfg} field="friday_flat_minutes_before" label="WINDOW BEFORE CLOSE" suffix="minutes" step={5} min={5} max={480} />
+                        </div>
+                    )}
+                </div>
+
+                {/* v1.60.38 — XAUUSD off-hours defer window (per account, UTC) */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="gold_off_hours_enabled" label="Gold Off-Hours Window (UTC)" icon={CalendarClock} color="#FFD700"
+                        desc="New XAUUSD entries are deferred inside this UTC window (default 21:00–00:30 = daily rollover / spread blow-out). Weekends are always blocked. Outside the window the 2.5× median spread guard remains the protection in Asian hours. Deferred signals get a shadow outcome (TP or SL first?) in the Strategy Report." />
+                    {(cfg.gold_off_hours_enabled ?? true) && (
+                        <div className="grid grid-cols-2 gap-3 mt-3" data-testid="gold-off-hours-window">
+                            {[["gold_off_hours_start_utc", "START (UTC)", "gold-off-hours-start"], ["gold_off_hours_end_utc", "END (UTC)", "gold-off-hours-end"]].map(([field, label, tid]) => (
+                                <div key={field}>
+                                    <label htmlFor={tid} className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{label}</label>
+                                    <input type="time" id={tid} name={field} value={cfg[field] || ""} step={60}
+                                        onChange={(e) => setCfg({ ...cfg, [field]: e.target.value })}
+                                        data-testid={tid}
+                                        className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                                </div>
+                            ))}
                         </div>
                     )}
                 </div>

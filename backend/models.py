@@ -214,6 +214,11 @@ class BotConfigUpdate(BaseModel):
     friday_flat_enabled: bool = True
     friday_flat_mode: str = "close"          # "close" | "tighten"
     friday_flat_minutes_before: int = 60
+    # v1.60.38 — XAUUSD off-hours defer window (UTC, per account). Default 21:00–00:30 = rollover / spread blow-out.
+    # Weekends stay blocked; the 2.5× median spread guard remains the protection in Asian hours (00:30–06:00).
+    gold_off_hours_enabled: bool = True
+    gold_off_hours_start_utc: str = "21:00"
+    gold_off_hours_end_utc: str = "00:30"
     # Auto-Tune — let the bot raise the min-confidence threshold based on
     # historical win-rates per (symbol, confidence-bucket).
     auto_tune_enabled: bool = True

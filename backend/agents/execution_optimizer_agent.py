@@ -9,7 +9,7 @@ broker engine fires. Three deterministic guards:
                          flare the spread to 5-10× the norm during
                          news; firing there costs you the edge.)
   2. SESSION GUARD    — for XAUUSD, defer trades fired in pure
-                         off-hours (e.g., 22:00-06:00 UTC, weekends)
+                         off-hours (per-account UTC window, default 21:00–00:30 = rollover; weekends)
                          Off-hours
                          spreads are typically 2-3× tighter sessions.
   3. SLICE PLANNER    — if the lot would represent > SLICE_MAX_PCT of
@@ -62,13 +62,52 @@ DEFER_OFF_HOURS_GOLD = _bool("EXEC_DEFER_OFF_HOURS_GOLD", True)
 
 
 # Approximate UTC ranges for XAUUSD off-hours (very low liquidity, wide spreads).
-def _is_xau_off_hours(now: datetime | None = None) -> bool:
+DEFAULT_OFF_HOURS_START = "21:00"
+DEFAULT_OFF_HOURS_END = "00:30"
+
+
+def _hhmm(v, default: str) -> int:
+    """'HH:MM' → minutes since midnight; malformed → default."""
+    try:
+        h, m = str(v or default).strip().split(":")
+        h, m = int(h), int(m)
+        if 0 <= h < 24 and 0 <= m < 60:
+            return h * 60 + m
+    except (ValueError, AttributeError):
+        pass
+    h, m = default.split(":")
+    return int(h) * 60 + int(m)
+
+
+def off_hours_window(cfg: dict | None) -> tuple[int, int] | None:
+    """(start_min, end_min) UTC from the account's Bot Config, or None when the window is disabled."""
+    cfg = cfg or {}
+    if cfg.get("gold_off_hours_enabled") is False:
+        return None
+    return (_hhmm(cfg.get("gold_off_hours_start_utc"), DEFAULT_OFF_HOURS_START),
+            _hhmm(cfg.get("gold_off_hours_end_utc"), DEFAULT_OFF_HOURS_END))
+
+
+def _is_xau_off_hours(now: datetime | None = None, cfg: dict | None = None) -> bool:
+    """v1.60.38 — per-account UTC window (default 21:00–00:30, wraps midnight); weekends always blocked."""
     n = now or datetime.now(timezone.utc)
     if n.weekday() >= 5:  # Sat/Sun
         return True
-    h = n.hour
-    # Off-hours: 22:00-06:00 UTC (post-NY close to pre-London open)
-    return h >= 22 or h < 6
+    win = off_hours_window(cfg)
+    if win is None:
+        return False
+    start, end = win
+    cur = n.hour * 60 + n.minute
+    if start == end:
+        return False
+    return (start <= cur < end) if start < end else (cur >= start or cur < end)
+
+
+def window_label(cfg: dict | None) -> str:
+    win = off_hours_window(cfg)
+    if win is None:
+        return "disabled"
+    return f"{win[0] // 60:02d}:{win[0] % 60:02d}–{win[1] // 60:02d}:{win[1] % 60:02d} UTC"
 
 
 def _slice_plan(lot: float) -> list[float] | None:
@@ -117,6 +156,7 @@ class ExecutionOptimizerAgent:
         *,
         signal: dict,
         account: dict | None = None,
+        cfg: dict | None = None,
     ) -> dict:
         action = (signal or {}).get("action") or "HOLD"
         symbol = (signal or {}).get("symbol") or ""
@@ -137,12 +177,12 @@ class ExecutionOptimizerAgent:
             if spread_result.get("reason"):
                 deferred_reason = spread_result["reason"]
 
-        # 2. Session guard — XAUUSD off-hours
+        # 2. Session guard — XAUUSD off-hours (per-account UTC window + weekends)
         session = "active"
-        if sym == "XAUUSD" and DEFER_OFF_HOURS_GOLD and _is_xau_off_hours():
+        if sym == "XAUUSD" and DEFER_OFF_HOURS_GOLD and _is_xau_off_hours(cfg=cfg):
             session = "off_hours"
             if deferred_reason is None:
-                deferred_reason = ("XAUUSD off-hours window (22-06 UTC / weekend) "
+                deferred_reason = (f"XAUUSD off-hours window ({window_label(cfg)} / weekend) "
                                    "— defer to next session for tighter spreads")
 
         # 3. Slice plan (informational — engine may or may not consume)
