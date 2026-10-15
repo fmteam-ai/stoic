@@ -108,6 +108,8 @@ jobs:
             --compile-log compile.log --windows-build $win `
             --source-commit $env:GITHUB_SHA --compiled-by github-actions --sign
           python scripts/verify_ea_release.py --check
+          # v1.60.41 — the new record must still accept the EX5 the fleet runs (the committed record before this run)
+          python scripts/check_ea_fleet_compat.py --stable-ref HEAD
       - name: Publish EX5 + record + log
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:

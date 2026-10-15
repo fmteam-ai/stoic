@@ -147,7 +147,7 @@ def test_nr6_current_and_previous_signed_hash_accepted(tmp_path):
         assert ec.expected_ea_sha256() is None or len(ec.expected_ea_sha256()) == 64
     # verify_ea_release.record() keeps the last SIGNED release as `previous` on a version change
     vsrc = open(os.path.join(ROOT, "scripts", "verify_ea_release.py")).read()
-    assert '"previous": previous' in vsrc and 'ea.get("version") != version' in vsrc
+    assert '"previous": previous' in vsrc and "resolve_previous(ea, version" in vsrc   # v1.60.41: signed prior from any record, fail-closed
 
 
 def test_ea_renamed_to_1_60_everywhere_and_hash_recorded():

@@ -29,8 +29,17 @@ jobs:
           case "${GITHUB_REF}" in refs/tags/v*) echo "release ref ${GITHUB_REF_NAME}" ;;
             *) echo "::error::release.yml must run on a v* tag (got ${GITHUB_REF}) — pick the tag under 'Use workflow from'"; exit 1 ;; esac
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          fetch-depth: 0   # v1.60.41 — the fleet-compat gate needs the previous v* tag
       - name: Release discipline — no tag while an un-waived P0/P1 review finding is open (M119-7)
         run: python3 scripts/check_open_findings.py
+      - name: EA fleet compatibility gate — the release must accept the stable EX5 of the previous tag (v1.60.41)
+        env:
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+        run: |
+          pip install -q cryptography
+          python3 scripts/check_ea_fleet_compat.py
 
   ci-gates:
     needs: tag-only

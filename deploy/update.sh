@@ -196,6 +196,11 @@ adopt_release_lock || gate_refused
 echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test manifest bind to one commit)"
 verify_release_provenance || gate_refused
 
+# v1.60.41 — the new release must accept the EX5 the fleet runs today (the PREV checkout's signed record):
+# a record without its signed `previous` would void every DEMO attestation and put all accounts CLOSE_ONLY.
+echo "-- EA fleet compatibility gate (new record accepts the stable EX5 of ${PREV:0:8})"
+ea_fleet_compat_gate "${PREV}" || gate_refused
+
 if [ "$(app_env)" = "production" ]; then
   if [ "${ONBOARDING}" = 1 ]; then
     echo "!! STOIC_READINESS_POLICY=onboarding-close-only on a PRODUCTION host — operator release gates (ea_release · inventory · canonical_decision · topology policy) are REPORTED, not enforced, for this publish"

@@ -93,6 +93,84 @@ def _parse_compile_log(path):
     return int(m.group(1)), int(m.group(2))
 
 
+def _signed(rec) -> bool:
+    return bool(rec and rec.get("version") and str(rec.get("ex5_sha256") or "") and (rec.get("signature") or {}).get("sig_hex"))
+
+
+def _prior_signature_failure(rec: dict) -> str | None:
+    """The record carried forward as `previous` must verify on its OWN signature (the server drops it otherwise)."""
+    try:
+        from release_signing import verify_hex, key_id_accepted, release_public_key_for
+        from ea_capabilities import _canonical_payload as _ec_payload
+    except Exception as e:  # noqa: BLE001
+        return f"signature verification unavailable: {e}"
+    kid = (rec.get("signature") or {}).get("key_id")
+    if not key_id_accepted(kid):
+        return f"signed by key id {kid!r} which is not accepted"
+    pub = release_public_key_for(kid)
+    sig = rec["signature"]["sig_hex"]
+    if verify_hex(_ec_payload(rec), sig, pub, purpose="ea-release") or verify_hex(_ec_payload(rec, legacy=True), sig, pub, purpose="ea-release"):
+        return None
+    return "Ed25519 signature does NOT verify"
+
+
+def _version_tuple(v) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except ValueError:
+        return (-1,)
+
+
+def resolve_previous(ea: dict, version: str, waiver: str | None = None):
+    """v1.60.41 — the signed release the fleet is still running, carried into the new record as `previous`.
+
+    Sources (any may hold it — a merge or a re-capture can wipe docs/RELEASE_HASHES.json#ea):
+      · release/ea_release.json (the compact signed record the server ships),
+      · docs/RELEASE_HASHES.json#ea itself, · #ea.previous (capture_release_hashes carries it forward).
+    Same version re-signed → keep that record's own `previous` pointer. Version changed → the newest signed
+    prior record (verified) becomes `previous`, with ITS previous reduced to a pointer (N105-1).
+    FAILS when the version changed and no signed prior record exists anywhere: writing `previous: null`
+    rejects every terminal still on the stable EX5 (14 Oct: 4 terminals → CLOSE_ONLY)."""
+    candidates = []
+    if os.path.exists(EA_RELEASE):
+        try:
+            candidates.append(json.load(open(EA_RELEASE)))
+        except Exception:  # noqa: BLE001
+            pass
+    candidates.append(ea)
+    if isinstance(ea.get("previous"), dict):
+        candidates.append(ea["previous"])
+    same = [c for c in candidates if _signed(c) and str(c.get("version")) == str(version)]
+    prior = [c for c in candidates if _signed(c) and str(c.get("version")) != str(version)]
+    if same and (same[0].get("previous") or not prior):
+        return same[0].get("previous")
+    if prior:
+        best = max(prior, key=lambda c: _version_tuple(c.get("version")))
+        why = _prior_signature_failure(best)
+        if why:
+            raise SystemExit(f"FAIL: the signed prior EA release {best.get('version')} ({str(best.get('ex5_sha256'))[:16]}…) "
+                             f"cannot be carried forward as `previous` — {why}. Refusing to write previous: null.")
+        previous = {k: v for k, v in best.items() if k != "previous"}
+        pp = best.get("previous") or None
+        if pp:
+            previous["previous"] = {"version": pp.get("version"), "ex5_sha256": pp.get("ex5_sha256")}
+        return previous
+    prior_versions = sorted({str(c.get("version")) for c in candidates
+                             if c and c.get("version") and str(c.get("version")) != str(version)})
+    if not prior_versions:
+        return None                          # first release ever — nothing the fleet could be running
+    if waiver:
+        print(f"WARN: previous: null WAIVED — {waiver}")
+        return None
+    raise SystemExit(
+        f"FAIL: EA version changed to {version} (prior: {', '.join(prior_versions)}) but NO SIGNED prior release record "
+        "exists in release/ea_release.json or docs/RELEASE_HASHES.json#ea — the ea entry was hand-edited or overwritten by a "
+        "merge/re-capture. Writing previous: null would reject the stable EX5 on every terminal (CLOSE_ONLY).\n"
+        "  fix: restore the signed record from the last ea-release commit "
+        "(git checkout <commit> -- release/ea_release.json docs/RELEASE_HASHES.json), then re-run ea-release.\n"
+        "  only for a fleet that runs NO signed EA: --no-previous-reason \"<why>\" (recorded in the release).")
+
+
 def record(args):
     errors, warnings = _parse_compile_log(args.compile_log)
     if errors != 0:
@@ -115,14 +193,7 @@ def record(args):
         raise SystemExit("FAIL: cannot read #property version from the MQ5")
     # N-R6 — keep the last SIGNED release as `previous` so terminals still on it stay
     # live-admissible during the rollout (the backend accepts current + previous).
-    previous = ea.get("previous")
-    if ea.get("ex5_sha256") and (ea.get("signature") or {}).get("sig_hex") and ea.get("version") != version:
-        # N105-1 — the copy must stay verifiable on its OWN signature, which (N104-6) covers ITS
-        # previous.{version, ex5_sha256}: keep that pointer (and nothing more) inside the copy.
-        previous = {k: v for k, v in ea.items() if k != "previous"}
-        pp = ea.get("previous") or None
-        if pp:
-            previous["previous"] = {"version": pp.get("version"), "ex5_sha256": pp.get("ex5_sha256")}
+    previous = resolve_previous(ea, version, waiver=getattr(args, "no_previous_reason", None))
     ea.update({
         "version": version,
         "mq5_sha256": mq5_now,
@@ -138,6 +209,10 @@ def record(args):
         "compiled_by": args.compiled_by or ("github-actions" if os.environ.get("GITHUB_ACTIONS") else "manual"),
         "verified_at": datetime.now(timezone.utc).isoformat(),
     })
+    if previous is None and getattr(args, "no_previous_reason", None):
+        ea["previous_waiver"] = {"reason": args.no_previous_reason, "at": ea["verified_at"]}
+    else:
+        ea.pop("previous_waiver", None)
     if args.sign:
         from release_signing import key_id as _kid, sign_hex
         kid = _kid(purpose="ea-release")
@@ -331,6 +406,8 @@ def main():
     ap.add_argument("--sign", action="store_true")
     ap.add_argument("--source-commit", help="release commit the EX5 is bound to (default $GITHUB_SHA)")
     ap.add_argument("--compiled-by", help="sanctioned job identity (CI sets github-actions)")
+    ap.add_argument("--no-previous-reason", help="ONLY for a fleet running no signed EA: record previous: null with this reason "
+                                                 "(otherwise a version change without a signed prior record FAILS)")
     args = ap.parse_args()
     if args.check:
         return check(args)

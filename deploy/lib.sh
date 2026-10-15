@@ -382,6 +382,20 @@ sys.exit(0 if not missing else 1)
 ' "$1" "${READINESS_INFRA}"
 }
 
+# v1.60.41 — refuse a release whose EA record does not accept the EX5 the fleet is running (PREV's record).
+ea_fleet_compat_gate() {
+  local prev="$1" tmp rc=0
+  [ -f scripts/check_ea_fleet_compat.py ] || { echo "   (gate script missing in this checkout — skipped)"; return 0; }
+  tmp=$(mktemp)
+  if git show "${prev}:release/ea_release.json" > "${tmp}" 2>/dev/null && [ -s "${tmp}" ]; then
+    python3 scripts/check_ea_fleet_compat.py --stable-record "${tmp}" || rc=1
+  else
+    echo "   (previous checkout ${prev:0:8} carries no release/ea_release.json — nothing to compare)"
+  fi
+  rm -f "${tmp}"
+  return ${rc}
+}
+
 # Production pre-build gate: operator state that no rebuild can change (EA release
 # record in the checkout, inventory approval + canonical decision on the RUNNING
 # stack). Refusing here avoids a build → restart → rollback churn for a known outcome.
