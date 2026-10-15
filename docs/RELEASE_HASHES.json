@@ -1,27 +1,32 @@
 {
-  "captured_at": "2026-10-15T09:55:42.468548+00:00",
-  "git_commit": "159367e84ed3cc7b7e8540d3a5a9ad4b8c7f65e2",
+  "captured_at": "2026-10-15T13:42:19.695305+00:00",
+  "git_commit": "effb70f9fab6e540b505dc6040a6ce1013c66da2",
   "ea": {
     "version": "1.65",
     "mq5_sha256": "376c7430aa0e4d1b62b4fd28d0f4f83bc2087e8b024ff25f6307fa14bcfcb555",
     "ex5_sha256": "73f9390d8084067762150b4af1a04146f58da46640e8369a6720f1cea1c03e22",
     "ex5_note": null,
-    "previous": null,
-    "compile_log": {
-      "errors": 0,
-      "warnings": 0,
-      "log_sha256": "d1cf5d8a65ccb16fceda8a42cce011a5b539980ff705e7728dd67543928b5dcf"
-    },
-    "metaeditor_version": null,
-    "windows_build": "10.0.26100",
-    "mt5_build": null,
-    "source_commit": "5cb3247610d454ad174ac51740392f81f45298f1",
-    "compiled_by": "github-actions",
-    "verified_at": "2026-10-15T11:13:57.327983+00:00",
-    "signature": {
-      "key_id": "stoic-release-ed25519-v2",
-      "sig_hex": "5faa7e72fd57f80f7b2af61e34d8f30645c29b2b10a7d1ee2454614895b58b76333154b00201c374401527fb5cee292af9cd07ac8c3b4185b8b5df733b0fce0f",
-      "signed_at": "2026-10-15T11:13:57.914688+00:00"
+    "previous": {
+      "version": "1.64",
+      "mq5_sha256": "04913597961de896b4c603e640f0dc3f7e61d6100adc650e2656c59feba5aac5",
+      "ex5_sha256": "b05ed82175b928e6b9a5948a7a7af9052a5d98700410cb8466cd31176cfaf469",
+      "ex5_note": null,
+      "compile_log": {
+        "errors": 0,
+        "warnings": 0,
+        "log_sha256": "9b75ca869de9d661cb7c418b5bbe9e46b7ce346d699b88659e7bf6b5ada173eb"
+      },
+      "metaeditor_version": null,
+      "windows_build": "10.0.26100",
+      "mt5_build": null,
+      "source_commit": "af3b229251dcdacb972289052746ba43b0c0c2e0",
+      "compiled_by": "github-actions",
+      "verified_at": "2026-10-11T23:09:38.354871+00:00",
+      "signature": {
+        "key_id": "stoic-release-ed25519-v2",
+        "sig_hex": "af2da92a258a1bd4501b5431a1bea86c2197f7b1fa341a7e6dd096be3c0ea06758decc86489d56c7a8ae9ffb9d25fb358d86bdd94a85cf4686342cd4b557b10d",
+        "signed_at": "2026-10-11T23:09:38.850413+00:00"
+      }
     }
   },
   "host_agent": {
