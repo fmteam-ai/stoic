@@ -181,6 +181,18 @@ def accepted_ea_sha256s() -> list[str]:
     return out
 
 
+def accepted_ea_versions() -> list[str]:
+    """v1.60.43 — EA versions the signed release record accepts: current + signed `previous` (the rollout the
+    signed-previous record exists for). The pre-promotion gate `single_ea_version` must not contradict it."""
+    rec = _signed_release_record()
+    out: list[str] = []
+    if rec:
+        for v in (rec.get("version"), (rec.get("previous") or {}).get("version")):
+            if v and str(v) not in out:
+                out.append(str(v))
+    return out
+
+
 def _signed_release_record() -> dict | None:
     """The verified EA release entry (current + optional signed `previous`) or None."""
     import hashlib

@@ -636,6 +636,62 @@ async def slo_status(request: Request):
     return {"slos": await compute_slos(get_db())}
 
 
+@router.get("/ops/ea-fleet")
+async def ea_fleet(request: Request):
+    """v1.60.43 — Stable EX5 panel + Canary Soak panel. Which EX5 hashes the server accepts (signed record:
+    current + signed previous), how many terminals run each (and any terminal on an UNACCEPTED build), and for
+    terminals on the current (candidate) EA: heartbeat version/age, M1 payloads per hour (24 h), acks / failures /
+    TP-confirmed counts."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from ea_capabilities import accepted_ea_sha256s, _signed_release_record
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    rec = _signed_release_record() or {}
+    prev = rec.get("previous") or {}
+    accepted = []
+    for h in accepted_ea_sha256s():
+        role = "current" if h == str(rec.get("ex5_sha256") or "").lower() else \
+               "previous" if h == str(prev.get("ex5_sha256") or "").lower() else "env_pin"
+        ver = rec.get("version") if role == "current" else prev.get("version") if role == "previous" else None
+        accepted.append({"sha256": h, "role": role, "version": ver, "terminals": 0})
+    by_hash = {a["sha256"]: a for a in accepted}
+    terminals, unaccepted, canary = [], [], []
+    since = now - timedelta(hours=24)
+    async for acc in db.accounts.find({"mode": {"$ne": "paper"}, "ea_version": {"$exists": True}},
+                                      {"label": 1, "ea_version": 1, "ea_binary_sha256": 1, "last_heartbeat": 1, "trading_enabled": 1,
+                                       "broker_server": 1, "environment_attestation": 1, "ea_cmd_stats": 1, "account_number": 1}):
+        h = str(acc.get("ea_binary_sha256") or "").lower()
+        hb = _as_dt(acc.get("last_heartbeat"))
+        row = {"account_id": str(acc["_id"]), "label": acc.get("label") or acc.get("account_number"), "broker_server": acc.get("broker_server"),
+               "ea_version": acc.get("ea_version"), "ex5_sha256": h or None, "accepted": h in by_hash,
+               "role": (by_hash.get(h) or {}).get("role"), "trading_enabled": bool(acc.get("trading_enabled")),
+               "heartbeat_age_sec": None if hb is None else int((now - hb).total_seconds()),
+               "attested": ((acc.get("environment_attestation") or {}).get("environment"))}
+        if h in by_hash:
+            by_hash[h]["terminals"] += 1
+        elif acc.get("trading_enabled"):
+            unaccepted.append(row)
+        terminals.append(row)
+        if rec.get("version") and str(acc.get("ea_version")) == str(rec.get("version")) and prev:
+            hourly = {}
+            async for ev in db.ea_feed_events.find({"account_id": str(acc["_id"]), "at": {"$gte": since}}, {"at": 1, "bars": 1}):
+                k = ev["at"].strftime("%Y-%m-%dT%H:00Z") if hasattr(ev["at"], "strftime") else str(ev["at"])[:13]
+                hourly[k] = hourly.get(k, 0) + 1
+            st = acc.get("ea_cmd_stats") or {}
+            canary.append({**row, "m1_payloads_24h": sum(hourly.values()), "m1_payloads_per_hour": round(sum(hourly.values()) / 24, 1),
+                           "m1_hourly": dict(sorted(hourly.items())), "acks_ok": int(st.get("ok") or 0),
+                           "acks_failed": int(st.get("failed") or 0), "tp_confirmed": int(st.get("tp_confirmed") or 0),
+                           "last_cmd_error": st.get("last_error"), "last_cmd_at": st.get("last_at")})
+    return {"record": {"version": rec.get("version"), "ex5_sha256": rec.get("ex5_sha256"), "previous_version": prev.get("version"),
+                       "previous_ex5_sha256": prev.get("ex5_sha256"), "signed": bool(rec)},
+            "accepted": accepted, "terminals": terminals, "unaccepted_enabled": unaccepted,
+            "canary": {"version": rec.get("version") if prev else None, "terminals": canary,
+                       "soak_ok": bool(canary) and all(c["acks_failed"] == 0 and c["accepted"] for c in canary)},
+            "at": now.isoformat()}
+
+
 @router.get("/ops/loops")
 async def safety_loops(request: Request):
     """v1.60.39 — last-run time of every background loop (loop_progress), so a loop that stops is visible on

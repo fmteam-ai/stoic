@@ -9,7 +9,10 @@ Macro-filter strategy (per Forex Factory convention):
   - Window can be tuned via MACRO_FREEZE_BEFORE_MIN / MACRO_FREEZE_AFTER_MIN env vars.
 """
 import os
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 import asyncio
 import httpx
 import xml.etree.ElementTree as ET
@@ -365,6 +368,8 @@ async def get_events() -> list:
     async with _lock:
         if time.time() < _cache["expires_at"] and _cache["events"] is not None:
             return _cache["events"]
+        if await _load_shared_cache():                  # v1.60.43 — another process fetched recently: reuse, no refetch
+            return _cache["events"]
         await _refresh_source("forexfactory", _fetch_events)
         await _refresh_source("financecalendar", _fetch_financecalendar)
         now = time.time()
@@ -376,7 +381,47 @@ async def get_events() -> list:
         _cache["last_error"] = None if any_ok else " | ".join(
             f"{n}: {_sources[n]['last_error']}" for n in SOURCE_ORDER if _sources[n]["last_error"])
         await _persist_status()
+        if any_ok:
+            await _store_shared_cache(now)
         return _cache["events"]
+
+
+SHARED_CACHE_ID = "economic_calendar_cache"
+
+
+async def _load_shared_cache() -> bool:
+    """v1.60.43 — the per-process 1 h cache made every API/worker process refetch after a restart at once
+    (ForexFactory 429 on 15 Oct). The last successful fetch is kept in platform_state and reused by every process
+    while it is younger than 1 h; the per-source state is restored so feed_status() stays truthful."""
+    try:
+        from database import get_db
+        doc = await get_db().platform_state.find_one({"_id": SHARED_CACHE_ID})
+    except Exception:  # noqa: BLE001
+        return False
+    if not doc or not doc.get("sources"):
+        return False
+    now = time.time()
+    fetched = float(doc.get("fetched_at") or 0)
+    if not fetched or now - fetched > 3600:
+        return False
+    for name in SOURCE_ORDER:
+        src = (doc["sources"] or {}).get(name) or {}
+        _sources[name].update({"events": src.get("events"), "fetched_at": float(src.get("fetched_at") or 0),
+                               "last_error": src.get("last_error")})
+    _cache.update({"events": _assemble(now), "expires_at": fetched + 3600, "fetched_at": fetched, "last_error": doc.get("last_error")})
+    return True
+
+
+async def _store_shared_cache(now: float) -> None:
+    try:
+        from database import get_db
+        await get_db().platform_state.update_one(
+            {"_id": SHARED_CACHE_ID},
+            {"$set": {"fetched_at": now, "last_error": _cache["last_error"],
+                      "sources": {n: {"events": _sources[n]["events"], "fetched_at": _sources[n]["fetched_at"],
+                                      "last_error": _sources[n]["last_error"]} for n in SOURCE_ORDER}}}, upsert=True)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("calendar shared cache not stored: %s", e)
 
 
 async def _persist_status() -> None:

@@ -1421,6 +1421,13 @@ async def receive_candles(payload: BridgeCandles):
                  if forming else None)
     bars, forming_dropped = split_forming_bar(bars, payload.timeframe, now_ts)
     if not bars:
+        if str(payload.timeframe).upper() == "M1":          # v1.60.43 — canary soak: M1 payloads per hour per terminal
+            try:
+                await db.ea_feed_events.insert_one({"account_id": str(account["_id"]), "at": datetime.now(timezone.utc),
+                                                    "timeframe": "M1", "bars": len(bars), "dropped": dropped,
+                                                    "forming_dropped": forming_dropped, "symbol": payload.symbol})
+            except Exception:  # noqa: BLE001
+                pass
         await db.candle_feed_health.update_one(health_key, {"$set": {
             "last_received_at": now_iso, "source_symbol": payload.symbol,
             "account_id": str(account["_id"]),
@@ -1473,6 +1480,13 @@ async def receive_candles(payload: BridgeCandles):
         last_bar_ts = (max(int(b["t"]) for b in bars) if bars else None)
         bar_lag_s = (max(0, int(datetime.now(timezone.utc).timestamp())
                          - last_bar_ts) if last_bar_ts else None)
+        if str(payload.timeframe).upper() == "M1":          # v1.60.43 — canary soak: M1 payloads per hour per terminal
+            try:
+                await db.ea_feed_events.insert_one({"account_id": str(account["_id"]), "at": datetime.now(timezone.utc),
+                                                    "timeframe": "M1", "bars": len(bars), "dropped": dropped,
+                                                    "forming_dropped": forming_dropped, "symbol": payload.symbol})
+            except Exception:  # noqa: BLE001
+                pass
         await db.candle_feed_health.update_one(health_key, {"$set": {
             "last_received_at": now_iso, "source_symbol": payload.symbol,
             "account_id": str(account["_id"]),
@@ -2043,6 +2057,15 @@ async def modification_ack(payload: BridgeModificationAck):
         trade, bool(payload.success),
         new_sl=(payload.new_sl if payload.type == "MODIFY_SL" else None),
         error=payload.error))
+    try:                                                   # v1.60.43 — canary soak: acks / failures / TP-confirmed per terminal
+        inc = {f"ea_cmd_stats.{'ok' if payload.success else 'failed'}": 1}
+        if payload.success and payload.confirmed_position_tp:
+            inc["ea_cmd_stats.tp_confirmed"] = 1
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$inc": inc, "$set": {
+            "ea_cmd_stats.last_at": datetime.now(timezone.utc).isoformat(),
+            **({"ea_cmd_stats.last_error": str(payload.error or "")[:200]} if not payload.success else {})}})
+    except Exception:  # noqa: BLE001
+        pass
     if payload.success:
         try:
             from trade_events import append as _ev_append, build as _ev_build

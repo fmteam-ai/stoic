@@ -190,10 +190,27 @@ def release_id(*, policy_version: str | None = None) -> dict:
     out = {"tag": att.get("tag") or os.environ.get("STOIC_RELEASE_TAG") or None, "commit": commit, "short_commit": commit[:12] if commit else None,
            "attested": bool(att) and att.get("promotion_decision") == "APPROVED" and att.get("commit") == running,
            "ea_version": ea_version, "policy_version": policy_version, "model_manifest": mm}
+    # v1.60.43 — a HELD update (UPDATE_HOLD_ON_FAILURE) leaves the NEW release running: show it as such instead of the
+    # previous release (deploy/update.sh record_held_live → deploy/state/release/deployment_state.json).
+    held = deployment_state()
+    out["deployment_state"] = (held or {}).get("deployment_state")
+    out["held"] = (held or {}).get("held") if (held or {}).get("deployment_state") == "held_live" else None
     out["id"] = " · ".join(x for x in (out["tag"], out["short_commit"], f"EA {ea_version}" if ea_version else None,
                                         f"policy {policy_version}" if policy_version else None,
-                                        f"models v{mm['version']}@{mm['sha256']}" if mm.get("version") else None) if x)
+                                        f"models v{mm['version']}@{mm['sha256']}" if mm.get("version") else None,
+                                        "HELD-LIVE (verification failed — kept running for inspection)" if out["held"] else None) if x)
     return out
+
+
+def deployment_state() -> dict | None:
+    """deploy/update.sh's deployment_state.json as published to the ro state mount (None when absent)."""
+    for p in (os.path.join(STATE_DIR, "release", "deployment_state.json"),
+              os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "releases", "deployment_state.json")):
+        try:
+            return json.load(open(p))
+        except Exception:  # noqa: BLE001
+            continue
+    return None
 
 
 def public_release_identity() -> dict:

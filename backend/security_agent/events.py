@@ -62,9 +62,10 @@ async def flush_denied_counts(db, state: dict, *, force: bool = False) -> int:
             counters = dict(swallow_counters() or {})
         except Exception:  # noqa: BLE001
             counters = {}
-        if counters:
-            await db.security_signals.insert_one({"kind": "swallow_counters", "at": datetime.now(timezone.utc).isoformat(),
-                                                  "counters": {str(k)[:80]: int(v) for k, v in counters.items()}, "expires_at": exp})
+        await db.security_signals.update_one(                      # v1.60.43 — publish even when empty (P5 no_data otherwise)
+            {"kind": "swallow_counters", "process": "api"},
+            {"$set": {"at": datetime.now(timezone.utc).isoformat(), "counters": {str(k)[:80]: int(v) for k, v in counters.items()},
+                      "expires_at": exp}}, upsert=True)
     except Exception as e:  # noqa: BLE001
         log.warning("denied-count flush failed: %s", type(e).__name__)
     return n
