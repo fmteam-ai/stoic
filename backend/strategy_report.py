@@ -15,7 +15,10 @@ from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 
+from deferred_shadow import ROLLOVER_BAND, UTC_BANDS, utc_band
 from strategy_engines import ENGINE_LABELS
+
+SESSION_ORDER = [b[2] for b in UTC_BANDS] + [ROLLOVER_BAND, "Weekend"]
 
 MC_BANDS = [(0.0, 0.3, "<30%"), (0.3, 0.4, "30–40%"), (0.4, 0.5, "40–50%"), (0.5, 0.6, "50–60%"), (0.6, 1.01, "60%+")]
 RANGE_BANDS = [(0.0, 10.0, "0–10%"), (10.0, 20.0, "10–20%"), (20.0, 40.0, "20–40%"), (40.0, 1e9, "40%+")]
@@ -54,7 +57,8 @@ def decisions_from(trades: list, signals: dict) -> list:
         out.append({"key": decision_key(rows), "engine": _engine_of(rows[0], sig), "symbol": rows[0].get("symbol"),
                     "pnl": round(pnl, 2), "win": pnl > 0, "mirrored_accounts": len(rows),
                     "mc_p": None if mc is None else float(mc), "range_pos_pct": feats.get("range_pos_pct"),
-                    "trend_ride": ride, "closed_at": rows[0].get("closed_at")})
+                    "trend_ride": ride, "closed_at": rows[0].get("closed_at"),
+                    "utc_band": utc_band(rows[0].get("opened_at"))})
     return out
 
 
@@ -92,27 +96,62 @@ def _bucket_rows(decisions: list, key_fn, order: list) -> list:
     return rows
 
 
-def build_report(decisions: list, window_days: int) -> dict:
+def deferred_rows(deferred: list) -> list:
+    """Shadow outcomes of DEFERRED signals per UTC band: n deferred, n labelled, shadow win rate (tp_first) + CI."""
+    acc: dict = defaultdict(lambda: {"n": 0, "labelled": 0, "tp": 0, "sl": 0, "r": 0.0})
+    for d in deferred:
+        band = (d.get("shadow") or {}).get("utc_band") or utc_band(d.get("ts"))
+        b = acc[band]
+        b["n"] += 1
+        sh = d.get("shadow") or {}
+        if sh.get("outcome") in ("tp_first", "sl_first", "timeout"):
+            b["labelled"] += 1
+            b["tp"] += sh["outcome"] == "tp_first"
+            b["sl"] += sh["outcome"] == "sl_first"
+            b["r"] += float(sh.get("r") or 0)
+    rows = []
+    for label in SESSION_ORDER + [k for k in acc if k not in SESSION_ORDER]:
+        if label not in acc:
+            continue
+        b = acc[label]
+        lo, hi = wilson_interval(b["tp"], b["labelled"])
+        rows.append({"band": label, "n": b["n"], "labelled": b["labelled"], "tp_first": b["tp"], "sl_first": b["sl"],
+                     "win_rate": round(100.0 * b["tp"] / b["labelled"], 1) if b["labelled"] else None,
+                     "win_rate_ci": [lo, hi] if b["labelled"] else None,
+                     "avg_r": round(b["r"] / b["labelled"], 2) if b["labelled"] else None})
+    return rows
+
+
+def build_report(decisions: list, window_days: int, deferred: list | None = None) -> dict:
     by_engine: dict = defaultdict(list)
     for d in decisions:
         by_engine[d["engine"]].append(d)
+    by_engine_deferred: dict = defaultdict(list)
+    for d in deferred or []:
+        eng = (d.get("signal") or {}).get("scope") or "unknown"
+        by_engine_deferred[eng].append(d)
+        by_engine.setdefault(eng, [])
     engines = []
     mc_order = [b[2] for b in MC_BANDS]
     range_order = [b[2] for b in RANGE_BANDS]
-    for eng, rows in sorted(by_engine.items(), key=lambda kv: -len(kv[1])):
+    for eng, rows in sorted(by_engine.items(), key=lambda kv: -(len(kv[1]) + len(by_engine_deferred.get(kv[0], [])))):
         n = len(rows)
         wins = sum(r["win"] for r in rows)
         lo, hi = wilson_interval(wins, n)
         engines.append({
             "engine": eng, "label": ENGINE_LABELS.get(eng, eng), "decisions": n,
             "trades": sum(r["mirrored_accounts"] for r in rows),
-            "win_rate": round(100.0 * wins / n, 1), "win_rate_ci": [lo, hi], "pnl": round(sum(r["pnl"] for r in rows), 2),
+            "win_rate": round(100.0 * wins / n, 1) if n else None, "win_rate_ci": [lo, hi] if n else None,
+            "pnl": round(sum(r["pnl"] for r in rows), 2),
+            # v1.60.38 — executed decisions by entry UTC band (Asian hours is its own band) + deferred shadow outcomes
+            "sessions": _bucket_rows(rows, lambda d: d.get("utc_band") or "n/a", SESSION_ORDER),
+            "deferred_shadow": deferred_rows(by_engine_deferred.get(eng, [])),
             "mc_bands": _bucket_rows(rows, lambda d: _band(d["mc_p"], MC_BANDS), mc_order),
             "range_position": _bucket_rows(rows, lambda d: _band(d["range_pos_pct"], RANGE_BANDS), range_order),
             "trend_ride": _bucket_rows(rows, lambda d: "with trend-ride" if d["trend_ride"] else "without",
                                        ["with trend-ride", "without"]),
         })
-    return {"window_days": window_days, "decisions": len(decisions),
+    return {"window_days": window_days, "decisions": len(decisions), "deferred": len(deferred or []),
             "trades": sum(d["mirrored_accounts"] for d in decisions), "engines": engines,
             "dedupe": "one decision per symbol + direction + entry within ±2 min across mirrored accounts; $ = per-account average",
             "generated_at": datetime.now(timezone.utc).isoformat()}
@@ -138,4 +177,7 @@ async def strategy_report(db, user_id: str, days: int = 30) -> dict:
                                        {"monte_carlo.p_tp_first": 1, "session_feats.range_pos_pct": 1,
                                         "trend_ride": 1, "strategy_engine": 1, "scope": 1}):
             signals[str(s["_id"])] = s
-    return build_report(decisions_from(trades, signals), days)
+    deferred = await db.trade_decisions.find(
+        {"user_id": user_id, "status": "deferred", "ts": {"$gte": since}},
+        {"ts": 1, "symbol": 1, "signal.scope": 1, "signal.action": 1, "shadow": 1}).to_list(length=5000)
+    return build_report(decisions_from(trades, signals), days, deferred)

@@ -2,6 +2,12 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.38 — gold off-hours window (configurable; default changed 22:00–06:00 → 21:00–00:30 UTC)
+- **Per-account window in Bot Config** (`gold_off_hours_enabled`, `gold_off_hours_start_utc`, `gold_off_hours_end_utc`; `execution_optimizer_agent.off_hours_window`): new XAUUSD entries are deferred inside the UTC window (wraps midnight). **Default 21:00–00:30 UTC** (rollover / spread blow-out) replaces the hard-coded 22:00–06:00. Weekends stay blocked even when the window is disabled; the 2.5× rolling-median spread guard is unchanged and remains the protection in Asian hours. The orchestrator passes the account's Bot Config to the optimizer.
+- **Shadow outcome for every deferred signal** (`deferred_shadow.py`, analytics worker): replays the M15 bars after the decision (same engine as the gate ablation — SL-first on a both-touch bar) and stamps `trade_decisions.shadow {outcome, r, bars, utc_band}`; rows without enough bars yet are retried.
+- **Strategy Report**: per engine, executed decisions by entry session — **Asian hours (00:30–06:00 UTC)** is its own band, next to London, New York, Rollover (21:00–00:30) and Weekend — plus a "DEFERRED · SHADOW OUTCOME" table per band (deferred, labelled, TP-first % with Wilson CI, avg R) so the window can be judged on data before changing it.
+- No risk settings or trading on/off changed; the window change is a strategy-scope default the user requested. Tests: `tests/unit/test_v1_60_38_gold_off_hours.py` (5).
+
 ## v1.60.37 — decision grouping + cache-only entry context (no risk settings or trading on/off changed)
 - **Mirrored-trade dedupe is now symbol + direction + entry within ±2 min** (`decision_groups.group_decisions`). Each account writes its own signal doc (OnEquity 13:46:43 vs RoboForex 13:46:44), so grouping by `signal_id` still double-counted. Used by `loss_advisor._decisions()` (aggregates, loss counts, shadow evidence / auto-apply sample), `strategy_report.decisions_from()` and `/postmortem/patterns` (now clustered in Python over the bounded window; post-mortems store `opened_at`). Signals only supply MC / range-position features.
 - **Entry context reads the FRED cache only** (`entry_context.cached_fred_series`): the signal path never waits on a FRED fetch; the analytics worker (`background_loops._analytics_loop`) keeps the 6 h snapshot warm.

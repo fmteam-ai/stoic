@@ -182,6 +182,12 @@ async def _analytics_loop():
                 await _warm_fred()
             except Exception as _fe:  # noqa: BLE001
                 logger.debug("fred warm-up skipped: %s", _fe)
+            # v1.60.38 — label deferred signals (would TP or SL have hit first?) for the Strategy Report
+            try:
+                from deferred_shadow import sweep_deferred_shadows
+                await sweep_deferred_shadows(get_db())
+            except Exception as _de:  # noqa: BLE001
+                logger.debug("deferred shadow sweep skipped: %s", _de)
             record_progress("_analytics_loop", processed=1,
                             started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
