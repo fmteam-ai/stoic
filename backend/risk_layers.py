@@ -356,14 +356,14 @@ async def evaluate_layers(db, user_id: str, account: dict | None) -> list[dict]:
             if st == "DOWN":
                 return {"status": "degraded",
                         "detail": "calendar feed DOWN — event gate blind until it recovers"}
-            frz = await macro_freeze_check("XAUUSD")
+            frz = await macro_freeze_check("XAUUSD", the_cfg)        # v1.60.48 — per-account freeze currencies
             if frz.get("frozen"):
                 return {"status": "degraded",
                         "detail": f"event freeze ACTIVE — {frz.get('reason')}"}
             if st == "DEGRADED":
                 return {"status": "degraded",
                         "detail": "calendar feed degraded — using last cached events"}
-            ev = await upcoming_for("XAUUSD", hours=24)
+            ev = await upcoming_for("XAUUSD", hours=24, cfg=the_cfg)
             if ev:
                 nxt = ev[0]
                 mins = max(0, int((float(nxt["when_ts"]) - now.timestamp()) / 60))

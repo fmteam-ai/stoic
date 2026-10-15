@@ -157,7 +157,9 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
         if eff == "close":
             await request_close(db, {"_id": tr["_id"]}, reason="friday_flat", actor="friday_flat", stamp=update)
         else:
-            await db.trades.update_one({"_id": tr["_id"]}, {"$set": update})
+            from command_fence import stamp_pending_modification
+            mod = update.pop("pending_modification")
+            await stamp_pending_modification(db, {"_id": tr["_id"], "status": "open"}, mod, update)
         logger.warning(
             "Friday Flat %s user=%s sym=%s trade=%s%s",
             eff, user_id, tr.get("symbol"), tr["_id"],

@@ -128,29 +128,52 @@ export default function Strategies() {
         toast.success("Optimized filters merged into compiled strategy");
     };
 
-    const [applyTarget, setApplyTarget] = useState("matching");
+    // v1.60.48 — deploy defaults to ONE bot (first candidate) with a preview diff; multi-bot needs confirm_multi
+    const [applyTarget, setApplyTarget] = useState("");
     const [applyTargets, setApplyTargets] = useState(null);
+    const [deployPreview, setDeployPreview] = useState(null);
 
     // Refresh candidate-bots list whenever the compiled strategy's symbols change.
     useEffect(() => {
         if (!compiled?.symbols?.length) { setApplyTargets(null); return; }
         const syms = compiled.symbols.join(",");
         api.get(`/nl/strategy/targets?symbols=${encodeURIComponent(syms)}`)
-            .then(r => setApplyTargets(r.data))
+            .then(r => {
+                setApplyTargets(r.data);
+                const cands = r.data?.candidates || [];
+                const first = cands.find(c => c.matches_proposal_symbols) || cands[0];
+                setApplyTarget(prev => (prev && prev !== "matching" && prev !== "all") ? prev : (first?.key || "default"));
+            })
             .catch(() => setApplyTargets(null));
     }, [compiled?.symbols]);
+
+    const previewDeploy = async () => {
+        if (!compiled) return;
+        try {
+            const { data } = await api.post("/nl/strategy/apply", {
+                compiled, target: applyTarget || "default", preview: true, confirm_multi: true,
+            });
+            setDeployPreview(data);
+        } catch (e) {
+            toast.error("Preview failed", { description: formatApiError(e) });
+        }
+    };
 
     const applyToBot = async () => {
         if (!compiled) return;
         try {
+            const multi = applyTarget === "matching" || applyTarget === "all";
             const { data } = await api.post("/nl/strategy/apply", {
-                compiled, target: applyTarget,
+                compiled, target: applyTarget || "default", confirm_multi: multi,
             });
             const n = data.applied_count ?? 1;
             const names = (data.applied_to || [])
                 .map(a => a.is_default ? "Default profile" : `acct ${String(a.account_id).slice(-6)}`)
                 .join(", ");
-            toast.success(`Strategy deployed to ${n} bot${n === 1 ? "" : "s"}${names ? ` — ${names}` : ""}`);
+            toast.success(`Strategy deployed to ${n} bot${n === 1 ? "" : "s"}${names ? ` — ${names}` : ""}`, {
+                description: "Undo snapshot saved — restore it from Bot Config → Config History.",
+            });
+            setDeployPreview(null);
         } catch (e) {
             toast.error("Apply failed", { description: formatApiError(e) });
         }
@@ -322,12 +345,26 @@ export default function Strategies() {
                                     ))}
                                 </select>
                             )}
-                            <button onClick={applyToBot}
+                            <button onClick={deployPreview ? applyToBot : previewDeploy}
                                 data-testid="strategy-apply-button"
                                 className="px-3 py-2 text-xs font-mono tracking-widest bg-[#FFB000] text-black hover:bg-[#E59E00] flex items-center gap-1.5">
-                                <Rocket className="w-3.5 h-3.5" /> DEPLOY
+                                <Rocket className="w-3.5 h-3.5" /> {deployPreview ? "CONFIRM DEPLOY" : "PREVIEW DEPLOY"}
                             </button>
                         </div>
+                        {deployPreview && (
+                            <div data-testid="strategy-deploy-preview" className="mt-3 border border-[#FFB000]/40 bg-[#FFB000]/5 p-3 space-y-2">
+                                <div className="font-mono text-[10px] text-[#FFB000] tracking-widest">PREVIEW · {deployPreview.target_mode} · {(deployPreview.diff || []).length} bot(s) · an undo snapshot is taken before applying</div>
+                                {(deployPreview.diff || []).map(d => (
+                                    <div key={d.config_id} className="text-[11px] font-mono text-[#A1A1AA]">
+                                        <span className="text-white">{d.account_id ? `acct …${String(d.account_id).slice(-6)}` : "Default profile"}</span>
+                                        {Object.keys(d.changes).length === 0 ? " — no changes" : Object.entries(d.changes).map(([k, v]) => (
+                                            <div key={k} className="pl-3">{k}: <span className="text-[#FF3B30]">{JSON.stringify(v.from)}</span> → <span className="text-[#00FF41]">{JSON.stringify(v.to)}</span></div>
+                                        ))}
+                                    </div>
+                                ))}
+                                <button onClick={() => setDeployPreview(null)} data-testid="strategy-deploy-cancel" className="text-[10px] font-mono tracking-widest text-[#A1A1AA] hover:text-white">CANCEL</button>
+                            </div>
+                        )}
                     </div>
                 )}
 

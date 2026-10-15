@@ -85,12 +85,12 @@ async def _check_recurring_loss_pattern(db, user_id: str) -> list[dict]:
         new = min(95, cur + 5)
         if new <= cur:
             continue
-
-        await db.bot_configs.update_one(
-            {"_id": cfg["_id"]},
-            {"$set": {"min_confidence_override": new,
-                      "updated_at": datetime.now(timezone.utc).isoformat()}},
-        )
+        from config_promotion import apply_config_change, user_set
+        if user_set(cfg, "min_confidence_override"):
+            continue                                  # v1.60.48 — never override a value the user set
+        await apply_config_change(db, user_id, None, {"min_confidence_override": new},
+                                  label="auto-heal tighten", source="auto_heal",
+                                  audit_detail={"pattern_key": pattern, "count": cnt})
         adj_doc = {
             "user_id": user_id, "config_id": str(cfg["_id"]),
             "pattern_key": pattern, "direction": "tighten",

@@ -21,6 +21,7 @@ Activity-log shape (one document per tick per (user, symbol)):
 """
 import asyncio
 import logging
+import os
 import time
 import uuid
 from datetime import datetime, timezone
@@ -38,6 +39,13 @@ from agents.execution_optimizer_agent import ExecutionOptimizerAgent
 from agents.execution_agent import ExecutionAgent
 
 logger = logging.getLogger("agent.orchestrator")
+STRATEGY_TIMEOUT_SEC = float(os.environ.get("STRATEGY_AGENT_TIMEOUT_SEC", "20"))
+
+
+def _acct_id(account: dict | None, cfg: dict | None) -> str | None:
+    if account and account.get("_id") is not None:
+        return str(account["_id"])
+    return (cfg or {}).get("account_id")
 
 
 class Orchestrator:
@@ -90,7 +98,7 @@ class Orchestrator:
         steps: list[dict] = []
 
         # 1. Parallel analysers — Technical / Macro / NewsSentiment
-        analyser_results = await self._run_analysers_parallel(symbol, steps)
+        analyser_results = await self._run_analysers_parallel(symbol, steps, user_cfg)
         technical = analyser_results["technical"]
         macro = analyser_results["macro"]
         news = analyser_results["news"]
@@ -101,7 +109,10 @@ class Orchestrator:
         # 2. Strategy
         st_t0 = time.monotonic()
         try:
-            signal = await self.strategy.propose(symbol, risk_level, research_payload, user_cfg=user_cfg)
+            # v1.60.48 — p95 was 12.7 s (quote/feed stalls): a hard ceiling so one slow tick cannot hold the loop
+            signal = await asyncio.wait_for(
+                self.strategy.propose(symbol, risk_level, research_payload, user_cfg=user_cfg),
+                timeout=STRATEGY_TIMEOUT_SEC)
             steps.append({
                 "agent": "strategy", "status": "ok",
                 "summary": f"{signal.get('action')} {signal.get('confidence')}%",
@@ -114,6 +125,7 @@ class Orchestrator:
             duration_ms = int((time.monotonic() - t0) * 1000)
             await self._log({
                 "user_id": user_id, "symbol": symbol, "tick_id": tick_id,
+                "account_id": _acct_id(account, user_cfg),         # v1.60.48 — 2 account loops per tick
                 "started_at": started,
                 "completed_at": datetime.now(timezone.utc).isoformat(),
                 "duration_ms": duration_ms, "steps": steps,
@@ -230,6 +242,7 @@ class Orchestrator:
             "user_id": user_id,
             "symbol": symbol,
             "tick_id": tick_id,
+            "account_id": _acct_id(account, user_cfg),             # v1.60.48 — 2 account loops per tick
             "started_at": started,
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "duration_ms": duration_ms,
@@ -239,16 +252,16 @@ class Orchestrator:
         })
         return {"signal": signal, "tick_id": tick_id, "activity": steps}
 
-    async def _run_analysers_parallel(self, symbol: str, steps: list) -> dict:
+    async def _run_analysers_parallel(self, symbol: str, steps: list, user_cfg: dict | None = None) -> dict:
         """Run TechnicalAnalysis + MacroAnalysis + NewsSentiment concurrently.
 
         Each emits its own activity-log entry. Failures degrade gracefully —
         a missing analyser returns {} so Strategy can still compose its prompt.
         """
-        async def _run(agent, key):
+        async def _run(agent, key, **kw):
             t0 = time.monotonic()
             try:
-                result = await agent.analyze(symbol)
+                result = await agent.analyze(symbol, **kw)
                 steps.append({
                     "agent": agent.name, "status": "ok",
                     "summary": result.get("bias", "ok"),
@@ -264,7 +277,7 @@ class Orchestrator:
 
         results = await asyncio.gather(
             _run(self.technical, "technical"),
-            _run(self.macro, "macro"),
+            _run(self.macro, "macro", cfg=user_cfg),       # v1.60.48 — per-account macro freeze currencies
             _run(self.news, "news"),
             return_exceptions=False,
         )

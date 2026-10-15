@@ -22,6 +22,7 @@ logger = logging.getLogger("adaptive-exits")
 TIGHTEN_COOLDOWN_MIN = 10
 VOL_EXPAND = 1.3
 VOL_CONTRACT = 0.7
+VOL_RETARGET_MAX_SCALE = 1.2     # v1.60.48 — was 1.6
 FADE_LOCK_FRAC = 0.4
 DERISK_ATR_FRAC = 0.3
 
@@ -102,7 +103,9 @@ def vol_retarget(trade: dict, feats: dict, pips_up: float) -> dict | None:
     ratio = feats["atr15"] / float(entry_atr)
     if VOL_CONTRACT < ratio < VOL_EXPAND:
         return None
-    scale = min(ratio, 1.6) if ratio >= VOL_EXPAND else max(ratio, 0.65)
+    # v1.60.48 — the TP ladder was approved by Monte Carlo at entry; stretching it ×1.6 afterwards (10/10 trades on
+    # 13–15 Oct, 5/8 losers later hit the ORIGINAL TP) invalidates that approval. Expansion is capped at ×1.2.
+    scale = min(ratio, VOL_RETARGET_MAX_SCALE) if ratio >= VOL_EXPAND else max(ratio, 0.65)
     tp_pips = trade.get("tp_pips") or []
     if not tp_pips:
         return None
@@ -230,14 +233,12 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
     act = fade_tighten(trade, feats, current, pips_up)
     if act:
         from trade_manager import _free_slot_filter
-        res = await db.trades.update_one(
-            _free_slot_filter(trade["_id"]),   # N7 — never overwrite an in-flight close/modification
-            {"$set": {"pending_modification": {
-                          "type": "MODIFY_SL", "new_sl": act["new_sl"],
-                          "requested_at": now_iso},
-                      "exit_last_tighten_at": now_iso,
-                      "exit_fade_tightened": True}})
-        if not res.modified_count:
+        from command_fence import stamp_pending_modification
+        stamped = await stamp_pending_modification(
+            db, _free_slot_filter(trade["_id"]),   # N7 — never overwrite an in-flight close/modification
+            {"type": "MODIFY_SL", "new_sl": act["new_sl"], "requested_at": now_iso},
+            {"exit_last_tighten_at": now_iso, "exit_fade_tightened": True})
+        if stamped is None:
             # A6 — the guarded write did not apply (slot busy): no event, nothing happened
             logger.info("fade tighten trade=%s skipped — modification slot busy", trade["_id"])
             return False
@@ -255,15 +256,12 @@ async def manage_exits(db, trade: dict, cfg: dict, current: float,
     act = resistance_derisk(trade, feats, current, pips_up)
     if act:
         from trade_manager import _free_slot_filter
-        res = await db.trades.update_one(
-            _free_slot_filter(trade["_id"]),   # N7 — never overwrite an in-flight close/modification
-            {"$set": {"pending_modification": {
-                          "type": "PARTIAL_CLOSE",
-                          "new_volume": act["new_volume"],
-                          "requested_at": now_iso},
-                      "exit_derisked": {"barrier": act["barrier"],
-                                        "at": now_iso}}})
-        if not res.modified_count:
+        from command_fence import stamp_pending_modification
+        stamped = await stamp_pending_modification(
+            db, _free_slot_filter(trade["_id"]),   # N7 — never overwrite an in-flight close/modification
+            {"type": "PARTIAL_CLOSE", "new_volume": act["new_volume"], "requested_at": now_iso},
+            {"exit_derisked": {"barrier": act["barrier"], "at": now_iso}})
+        if stamped is None:
             logger.info("resistance de-risk trade=%s skipped — modification slot busy", trade["_id"])
             return False
         await ws_manager.broadcast(trade["user_id"], "trade_management", {

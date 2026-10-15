@@ -182,12 +182,14 @@ function AgentRoster() {
 function MacroSnapshot({ macro }) {
     if (!macro) return null;
     const series = macro.series || {};
-    const order = ["DFF", "DGS10", "T10YIE", "UNRATE", "VIXCLS"];
+    // v1.60.48 — the real yield (DFII10) is what the gold verdict is judged on; the nominal 10Y (DGS10) sat next to
+    // that verdict and read as if it were the input. REAL10Y carries value + change (5d) + regime from macro/tips.
+    const order = ["DFF", "REAL10Y", "T10YIE", "UNRATE", "VIXCLS"];
     const labels = {
-        DFF: "Fed Funds", DGS10: "10Y Yield", T10YIE: "10Y Breakeven",
+        DFF: "Fed Funds", REAL10Y: "10Y Real Yield (TIPS)", T10YIE: "10Y Breakeven",
         UNRATE: "Unemployment", VIXCLS: "VIX",
     };
-    const suffix = { DFF: "%", DGS10: "%", T10YIE: "%", UNRATE: "%", VIXCLS: "" };
+    const suffix = { DFF: "%", REAL10Y: "%", T10YIE: "%", UNRATE: "%", VIXCLS: "" };
     return (
         <section className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="macro-snapshot">
             <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center justify-between flex-wrap gap-2">
@@ -223,7 +225,7 @@ function MacroSnapshot({ macro }) {
                                 {delta !== null && delta !== undefined && (
                                     <span className={`font-mono text-[10px] tabular-nums ${
                                         delta > 0 ? "text-[#00FF41]" : delta < 0 ? "text-[#FF3B30]" : "text-[#52525B]"
-                                    }`}>{delta > 0 ? "+" : ""}{delta}</span>
+                                    }`}>{delta > 0 ? "+" : ""}{delta}{s.delta_label ? ` ${s.delta_label}` : ""}</span>
                                 )}
                             </div>
                         </div>

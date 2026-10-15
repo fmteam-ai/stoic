@@ -33,10 +33,10 @@ logger = logging.getLogger("agent.macro")
 class MacroAnalysisAgent:
     name = "macro"
 
-    async def analyze(self, symbol: str) -> dict:
+    async def analyze(self, symbol: str, cfg: dict | None = None) -> dict:
         sym = symbol.upper()
-        macro_freeze = await macro_freeze_check(sym)
-        upcoming = await upcoming_for(sym, hours=24)
+        macro_freeze = await macro_freeze_check(sym, cfg)         # v1.60.48 — per-account freeze currencies
+        upcoming = await upcoming_for(sym, hours=24, cfg=cfg)
 
         cot = tips = dxy = None
         if sym == "XAUUSD":

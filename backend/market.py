@@ -376,6 +376,12 @@ async def _fx_history(base: str, quote: str) -> list:
         return history[-365:]
 
 
+QUOTE_ATTEMPTS = 2
+QUOTE_ATTEMPT_TIMEOUT_SEC = 6.0
+QUOTE_RETRY_DELAY_SEC = 0.5
+_LAST_GOOD: dict = {}
+
+
 # ---------- Public API ----------
 async def get_quote(symbol: str) -> dict:
     sym = _key(symbol)
@@ -393,38 +399,53 @@ async def get_quote(symbol: str) -> dict:
         if not meta:
             raise RuntimeError(f"Symbol {sym} not supported")
 
-        try:
+        async def _fetch():
             if meta["asset"] == "crypto":
                 try:
-                    q = await _coinbase_quote(sym)
+                    return await _coinbase_quote(sym)
                 except Exception:
-                    q = await _cg_quote(meta["cg_id"])
-            elif meta["asset"] == "commodity":
-                q = await _gold_quote()
-            elif meta["asset"] == "index":
-                q = await _yahoo_index_quote(meta["yh"])
-            elif meta["asset"] == "forex":
-                q = await _fx_quote(meta["base"], meta["quote"])
-            else:
-                raise RuntimeError("Unknown asset class")
-            result = {"symbol": sym, **q}
-            _cache_set(cache_key, result, ttl_seconds_for_quote(meta["asset"]))
-            # Persist into Mongo time-series collection for fast windowed queries
+                    return await _cg_quote(meta["cg_id"])
+            if meta["asset"] == "commodity":
+                return await _gold_quote()
+            if meta["asset"] == "index":
+                return await _yahoo_index_quote(meta["yh"])
+            if meta["asset"] == "forex":
+                return await _fx_quote(meta["base"], meta["quote"])
+            raise RuntimeError("Unknown asset class")
+
+        # v1.60.48 — per-attempt timeout + one retry ("Quote fetch failed XAUUSD" ×4 at 20:00 stalled the Strategy
+        # agent to p95 12.7 s); after the last attempt the previous good quote is served, flagged stale.
+        last_err: Exception | None = None
+        for attempt in range(QUOTE_ATTEMPTS):
             try:
-                from database import get_db
-                db = get_db()
-                await db.price_ticks.insert_one({
-                    "ts": datetime.now(timezone.utc),
-                    "symbol": sym,
-                    "price": float(result.get("price") or 0),
-                    "bid": float(result.get("bid") or 0),
-                    "ask": float(result.get("ask") or 0),
-                })
-            except Exception:
-                pass  # never block live quotes on persistence
-            return {**result, "cached": False}
-        except httpx.HTTPError as e:
-            raise RuntimeError(f"Quote fetch failed for {sym}: {e}")
+                q = await asyncio.wait_for(_fetch(), timeout=QUOTE_ATTEMPT_TIMEOUT_SEC)
+                result = {"symbol": sym, **q}
+                _cache_set(cache_key, result, ttl_seconds_for_quote(meta["asset"]))
+                _LAST_GOOD[sym] = result
+                # Persist into Mongo time-series collection for fast windowed queries
+                try:
+                    from database import get_db
+                    db = get_db()
+                    await db.price_ticks.insert_one({
+                        "ts": datetime.now(timezone.utc),
+                        "symbol": sym,
+                        "price": float(result.get("price") or 0),
+                        "bid": float(result.get("bid") or 0),
+                        "ask": float(result.get("ask") or 0),
+                    })
+                except Exception:
+                    pass  # never block live quotes on persistence
+                return {**result, "cached": False}
+            except (httpx.HTTPError, asyncio.TimeoutError, ValueError, KeyError) as e:
+                last_err = e
+                if attempt + 1 < QUOTE_ATTEMPTS:
+                    await asyncio.sleep(QUOTE_RETRY_DELAY_SEC * (attempt + 1))
+        stale = _LAST_GOOD.get(sym)
+        if stale:
+            log.warning("Quote fetch failed for %s after %d attempts (%s) — serving last good quote",
+                           sym, QUOTE_ATTEMPTS, last_err)
+            return {**stale, "cached": True, "stale": True}
+        raise RuntimeError(f"Quote fetch failed for {sym}: {last_err}")
 
 
 def ttl_seconds_for_quote(asset: str) -> int:

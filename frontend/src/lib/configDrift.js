@@ -37,3 +37,15 @@ export function diffSavedConfig(sent, server) {
     }
     return out;
 }
+
+// v1.60.48 (audit item 10) — PATCH semantics: only the fields the user actually changed since the page loaded
+// (or last saved) are sent, so a full-form save can no longer revert values written by background jobs
+// (auto-heal, loss advisor, cooldown clamps) after the page was opened.
+export function changedFields(payload, baseline) {
+    if (!baseline || typeof baseline !== "object") return { ...payload };
+    const out = {};
+    for (const field of Object.keys(payload || {})) {
+        if (JSON.stringify(normalise(payload[field])) !== JSON.stringify(normalise(baseline[field]))) out[field] = payload[field];
+    }
+    return out;
+}

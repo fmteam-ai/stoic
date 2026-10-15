@@ -502,7 +502,10 @@ async def apply_recommendation(user_id: str, report: dict, rec: dict) -> dict:
         audit.update({"field": field, "to": value})
     elif rec["type"] == "preset_switch":
         preset = get_preset(rec["preset_key"])
-        overlay = {**preset["config"], "active_preset": rec["preset_key"], "updated_at": now}
+        from strategy_presets import safe_overlay
+        current = await db.bot_configs.find_one(_config_filter(user_id, account_id)) or {}
+        overlay = {**safe_overlay(current, preset["config"]),            # v1.60.48 — never loosens caps/cooldowns
+                   "active_preset": rec["preset_key"], "updated_at": now}
         await db.bot_configs.update_one(
             _config_filter(user_id, account_id), {"$set": overlay}
         )

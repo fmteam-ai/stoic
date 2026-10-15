@@ -215,8 +215,58 @@ PRESETS = {
 }
 
 
+# v1.60.48 (audit item 8) — knobs that no longer exist are stripped from every preset at import
+from models import DEAD_CONFIG_FIELDS as _DEAD  # noqa: E402
+
+for _p in PRESETS.values():
+    for _k in list((_p.get("config") or {}).keys()):
+        if _k in _DEAD:
+            del _p["config"][_k]
+
+
 def get_preset(key: str) -> dict | None:
     return PRESETS.get(key)
+
+
+# v1.60.48 — a preset overlay (auto-preset, meta-strategy, ai_optimizer preset_switch) may NEVER loosen the user's
+# caps and cooldowns: it takes the STRICTER of the two values for these fields and overlays the rest as before.
+_RISK_RANK = {"low": 0, "medium": 1, "high": 2, "extreme": 3}
+STRICTER_MIN = ("max_concurrent_trades", "trade_of_day_cap", "max_lot_size", "risk_per_trade_pct",
+                "daily_drawdown_pct", "weekly_drawdown_pct", "trend_ride_tp_mult", "user_direction_cap")
+STRICTER_MAX = ("min_confidence_override", "signal_cooldown_minutes", "sl_cooldown_minutes",
+                "loss_cooldown_minutes", "anti_tilt_freeze_hours", "pre_news_protect_minutes", "min_final_rr")
+STRICTER_OR = ("anti_tilt_enabled", "sl_cooldown_enabled", "loss_cooldown_enabled", "pre_news_protect_enabled",
+               "asia_session_skip_xau", "spread_filter_enabled", "daily_drawdown_enabled", "weekly_drawdown_enabled",
+               "friday_flat_enabled", "payoff_guard_enabled")
+
+
+def _stricter(field: str, user_v, preset_v):
+    if user_v is None:
+        return preset_v
+    if field == "risk_level":
+        return user_v if _RISK_RANK.get(str(user_v), 9) <= _RISK_RANK.get(str(preset_v), 9) else preset_v
+    if field in STRICTER_OR:
+        return bool(user_v) or bool(preset_v)
+    try:
+        if field in STRICTER_MIN:
+            # 0 / unset means "no cap" on max_lot_size and user_direction_cap — any positive cap is stricter
+            if field in ("max_lot_size", "user_direction_cap") and (not user_v or not preset_v):
+                return user_v or preset_v
+            return min(user_v, preset_v)
+        if field in STRICTER_MAX:
+            return max(user_v, preset_v)
+    except TypeError:
+        return user_v
+    return preset_v
+
+
+def safe_overlay(cfg: dict, preset_cfg: dict) -> dict:
+    """The preset's knobs merged onto cfg with risk/cap/cooldown fields taking the stricter value."""
+    out = dict(preset_cfg or {})
+    for k, v in (preset_cfg or {}).items():
+        if k == "risk_level" or k in STRICTER_MIN or k in STRICTER_MAX or k in STRICTER_OR:
+            out[k] = _stricter(k, cfg.get(k), v)
+    return out
 
 
 def list_presets() -> list[dict]:

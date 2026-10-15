@@ -4,11 +4,15 @@
   GET /api/agents/latest         — most recent activity entry per symbol
   GET /api/agents/macro          — current FRED macro snapshot (admin view)
 """
+import logging
+
 from fastapi import APIRouter, Depends, Query
 
 from auth import get_current_user
 from database import get_db
 from macro.fred import get_macro_snapshot
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 
@@ -70,4 +74,16 @@ async def report_card(force: bool = False, user=Depends(get_current_user)):
 @router.get("/macro")
 async def macro_snapshot(user=Depends(get_current_user)):  # noqa: ARG001 (auth gate only)
     snap = await get_macro_snapshot()
+    # v1.60.48 — the Macro card showed the NOMINAL 10Y (DGS10) next to the real-yield verdict; expose the real
+    # yield (DFII10 via macro.tips) as its own series so the card shows the value its regime is judged on.
+    try:
+        from macro.tips import get_real_yield
+        ry = await get_real_yield()
+        if ry and ry.get("real_yield_10y") is not None:
+            snap.setdefault("series", {})["REAL10Y"] = {
+                "value": ry["real_yield_10y"], "date": ry.get("real_yield_10y_date"),
+                "regime": ry.get("regime"), "delta_30d": ry.get("delta_5d"), "delta_label": "5d",
+                "source": ry.get("source")}
+    except Exception as e:  # noqa: BLE001
+        logger.debug("real yield unavailable for macro card: %s", e)
     return snap

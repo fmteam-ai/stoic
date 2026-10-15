@@ -138,7 +138,8 @@ async def apply_meta_strategy(db, user_id: str, cfg: dict) -> tuple[dict, dict |
             logger.info("Meta-strategy switch user=%s %s → %s",
                         user_id, current, key)
     preset_cfg = (PRESETS.get(key) or {}).get("config") or {}
-    cfg = {**cfg, **preset_cfg, "meta_strategy_active": key,
+    from strategy_presets import safe_overlay
+    cfg = {**cfg, **safe_overlay(cfg, preset_cfg), "meta_strategy_active": key,   # v1.60.48 — stricter-only
            "active_preset": f"{key}_meta"}
     return cfg, {"active": key, "switched": pick["switched"],
                  "reason": pick["reason"], "scores": scores}

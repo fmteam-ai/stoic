@@ -90,6 +90,10 @@ async def request_close(db, query: dict, *, reason: str, actor: str, ctx: dict |
     """Close every OPEN position matching `query` under one command id.
     Returns {command_id, trades_marked_for_close, trade_ids, commands}."""
     ctx = ctx or {}
+    stamp = dict(stamp or {})
+    if pending_modification is None and "pending_modification" in stamp:
+        # v1.60.48 — a FULL_CLOSE carried in `stamp` is fenced too (intent_id + seq), never written bare
+        pending_modification = stamp.pop("pending_modification")
     kw = dict(reason=reason, actor=actor, ctx=ctx, stamp=stamp, pending_modification=pending_modification)
     if session is not None:
         return await _request_close(db, query, session=session, **kw)

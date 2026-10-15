@@ -393,9 +393,24 @@ async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
                     upd["friday_flat_minutes_before"] = mins
             except (TypeError, ValueError):
                 pass
-            r = await db.bot_configs.update_many({"user_id": user_id}, {"$set": upd})
+            # v1.60.48 — scoped to the accounts that produced the reviewed losses (was: every config of the user)
+            # and never overriding a field the user set themselves (config_promotion.field_sources).
+            from config_promotion import apply_config_change, user_set
+            acct_ids = review_doc.get("loss_account_ids") or []
+            cfg_q = {"user_id": user_id}
+            if acct_ids:
+                cfg_q["account_id"] = {"$in": acct_ids}
+            touched = 0
+            async for c in db.bot_configs.find(cfg_q):
+                mine = {k: v for k, v in upd.items() if not user_set(c, k) and c.get(k) != v}
+                if not mine:
+                    continue
+                await apply_config_change(db, user_id, c.get("account_id"), mine,
+                                          label="loss-advisor friday_flat", source="loss_advisor",
+                                          audit_detail={"measure": m.get("title")})
+                touched += 1
             applied.append({"kind": "config", "measure": m,
-                            "updated_configs": r.modified_count, "applied_at": now_iso})
+                            "updated_configs": touched, "accounts": acct_ids, "applied_at": now_iso})
             try:
                 from change_governance import record_auto_applied
                 await record_auto_applied(
@@ -540,6 +555,7 @@ async def run_loss_review(db, user_id: str, trigger: str = "auto") -> dict | Non
         "market_context": verdict.get("market_context"),
         "measures": measures,
         "llm_failed": bool(verdict.get("_llm_failed")),
+        "loss_account_ids": sorted({str(t.get("account_id")) for t in ds["losses"] if t.get("account_id")}),
     }
     res = await db.loss_reviews.insert_one(doc)
     doc["_id"] = res.inserted_id
