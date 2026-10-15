@@ -8,9 +8,12 @@ blocks that release before the tag / before the host rebuilds: the hashes the ne
 
 Stable EX5 sources (first that applies):
     --stable-sha <hex>            explicit (e.g. release_state.stable["stoic-ea-ex5"] from the server)
+    EA_FLEET_STABLE_SHA=<hex>     the same as an env override (CI: repository variable, for recovery PRs)
     --stable-record <path>        a release/ea_release.json the fleet runs (deploy/update.sh: the PREV checkout)
-    --stable-ref <git ref>        git show <ref>:release/ea_release.json (release.yml: the previous v* tag)
-    (default)                     the latest v* tag reachable from HEAD^ (no earlier tag → nothing to compare)
+    --stable-ref <git ref>        git show <ref>:release/ea_release.json
+    (default)                     the newest v* tag reachable from HEAD^ that SHIPPED — tags listed in
+                                  release/rolled_back_tags.json or recorded as rolled back / gate-refused in
+                                  deploy/releases.log never went live and are skipped (no shipped tag → nothing to compare)
 Exit 0 = compatible (or no stable to compare against — printed), 1 = RELEASE BLOCKED.
 """
 from __future__ import annotations
@@ -69,24 +72,79 @@ def _git_show(ref: str, path: str = "release/ea_release.json") -> dict | None:
         return None
 
 
-def _previous_tag() -> str | None:
+def _git(*args) -> str:
+    return subprocess.check_output(["git", *args], cwd=ROOT, stderr=subprocess.DEVNULL).decode()
+
+
+ROLLED_BACK_FILE = os.path.join(ROOT, "release", "rolled_back_tags.json")
+RELEASES_LOG = os.path.join(ROOT, "deploy", "releases.log")
+
+
+def rolled_back_tags() -> dict:
+    """Tags whose EX5 never went live: release/rolled_back_tags.json (tracked — a recovery PR records the
+    rolled-back release there) ∪ deploy/releases.log on the host (`rollback-from=<sha>` / `auto-rollback-from=<ref>`
+    / `gate-refused ref=<ref>` entries → the tags at those commits)."""
+    out: dict = {}
+    if os.path.exists(ROLLED_BACK_FILE):
+        try:
+            for tag, why in (json.load(open(ROLLED_BACK_FILE)).get("tags") or {}).items():
+                out[tag] = (why or {}).get("reason") or "rolled back"
+        except Exception:  # noqa: BLE001
+            pass
+    if os.path.exists(RELEASES_LOG):
+        refs = set()
+        for line in open(RELEASES_LOG, errors="replace"):
+            for key in ("rollback-from=", "auto-rollback-from=", "gate-refused ref="):
+                if key in line:
+                    refs.add(line.split(key, 1)[1].split()[0])
+        for ref in refs:
+            try:
+                tags = _git("tag", "--points-at", ref).split()
+            except Exception:  # noqa: BLE001
+                tags = [ref] if ref.startswith("v") else []
+            for t in tags:
+                out.setdefault(t, f"deploy/releases.log: rolled back ({ref})")
+    return out
+
+
+def _previous_tag() -> tuple:
+    """Newest v* tag reachable from HEAD^ that was not rolled back / never shipped → (tag, skipped[])."""
+    skip = rolled_back_tags()
     try:
-        return subprocess.check_output(["git", "describe", "--tags", "--abbrev=0", "--match", "v*", "HEAD^"],
-                                       cwd=ROOT, stderr=subprocess.DEVNULL).decode().strip() or None
+        tags = [t for t in _git("tag", "--merged", "HEAD^", "--sort=-v:refname", "--list", "v*").split()]
     except Exception:  # noqa: BLE001
-        return None
+        return None, []
+    try:
+        at_head = set(_git("tag", "--points-at", "HEAD").split())
+    except Exception:  # noqa: BLE001
+        at_head = set()
+    skipped = []
+    for t in tags:
+        if t in at_head:
+            continue
+        if t in skip:
+            skipped.append(f"{t} ({skip[t]})")
+            continue
+        return t, skipped
+    return None, skipped
 
 
 def stable_from_args(args) -> tuple[str | None, str]:
     """(stable ex5 sha256 or None, description)."""
-    if args.stable_sha:
-        return args.stable_sha.lower(), "--stable-sha"
+    sha = args.stable_sha or os.environ.get("EA_FLEET_STABLE_SHA", "").strip()
+    if sha:
+        return sha.lower(), "--stable-sha" if args.stable_sha else "EA_FLEET_STABLE_SHA (operator override)"
     if args.stable_record:
         rec = _load_record(args.stable_record)
         return str(rec.get("ex5_sha256") or "").lower() or None, f"{args.stable_record} (EA {rec.get('version')})"
-    ref = args.stable_ref or _previous_tag()
+    skipped = []
+    ref = args.stable_ref
     if not ref:
-        return None, "no earlier v* tag"
+        ref, skipped = _previous_tag()
+    if skipped:
+        print("skipped rolled-back / never-shipped tag(s): " + ", ".join(skipped))
+    if not ref:
+        return None, "no earlier shipped v* tag"
     rec = _git_show(ref)
     if not rec:
         return None, f"{ref} has no release/ea_release.json"
