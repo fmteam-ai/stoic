@@ -346,7 +346,8 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
     from scalp import permissions as _perms
     from state_contract import effective_connection_state
     from bson import ObjectId
-    for r in _runners.values():
+    # snapshot: the loop awaits, so runners may be added/removed meanwhile
+    for r in list(_runners.values()):
         if r.user_id != user["id"]:
             continue
         if account_id and r.account_id != account_id:
@@ -479,7 +480,7 @@ async def decisions(limit: int = 50, symbol: str = None, account_id: str = None,
         q["symbol"] = symbol.upper()
     if account_id:                                       # v1.60.44 — the page scopes decisions to the selected runner
         q["account_id"] = account_id
-    docs = await db.scalp_decisions.find(q).sort("ts_ms", -1).to_list(min(limit, 200))
+    docs = await db.scalp_decisions.find(q).sort("ts_ms", -1).to_list(min(max(int(limit), 1), 200))
     for d in docs:
         d["id"] = str(d.pop("_id"))
     return {"decisions": docs}
