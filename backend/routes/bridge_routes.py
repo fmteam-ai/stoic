@@ -14,7 +14,7 @@ from models import BridgeHeartbeat, BridgeTradeReport, BridgeExternalDeal
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips, base_symbol
 from intelligence_counters import increment as inc_intel_counter
-from trade_reconciler import reconcile_account, reconcile_user
+from trade_reconciler import reconcile_account
 from silent_failures import record_swallow
 from broker_env import TRADE_MODES, _REAL_MONEY_MODES
 
