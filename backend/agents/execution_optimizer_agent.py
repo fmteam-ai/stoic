@@ -9,7 +9,7 @@ broker engine fires. Three deterministic guards:
                          flare the spread to 5-10× the norm during
                          news; firing there costs you the edge.)
   2. SESSION GUARD    — for XAUUSD, defer trades fired in pure
-                         off-hours (per-account UTC window, default 21:00–00:30 = rollover; weekends)
+                         off-hours (per-account UTC window, default 21:00–06:00 = rollover + Asian hours; weekends)
                          Off-hours
                          spreads are typically 2-3× tighter sessions.
   3. SLICE PLANNER    — if the lot would represent > SLICE_MAX_PCT of
@@ -63,7 +63,7 @@ DEFER_OFF_HOURS_GOLD = _bool("EXEC_DEFER_OFF_HOURS_GOLD", True)
 
 # Approximate UTC ranges for XAUUSD off-hours (very low liquidity, wide spreads).
 DEFAULT_OFF_HOURS_START = "21:00"
-DEFAULT_OFF_HOURS_END = "00:30"
+DEFAULT_OFF_HOURS_END = "06:00"       # v1.60.39 hotfix — Asian hours paused by default until shadow data justifies them
 
 
 def _hhmm(v, default: str) -> int:
@@ -89,7 +89,7 @@ def off_hours_window(cfg: dict | None) -> tuple[int, int] | None:
 
 
 def _is_xau_off_hours(now: datetime | None = None, cfg: dict | None = None) -> bool:
-    """v1.60.38 — per-account UTC window (default 21:00–00:30, wraps midnight); weekends always blocked."""
+    """v1.60.38 — per-account UTC window (default 21:00–06:00, wraps midnight); weekends always blocked."""
     n = now or datetime.now(timezone.utc)
     if n.weekday() >= 5:  # Sat/Sun
         return True

@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1440 |
+| unit | pure logic, no external I/O | every CI job | 1443 |
 | integration | real MongoDB service container | CI `backend-integration` | 255 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4190 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5902 tests across 635 files.**
+**Total: 5905 tests across 636 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -643,6 +643,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_v1_60_37_scope.py` | unit | 4 |
 | `backend/tests/unit/test_v1_60_37_telegram_save.py` | unit | 2 |
 | `backend/tests/unit/test_v1_60_38_gold_off_hours.py` | unit | 5 |
+| `backend/tests/unit/test_v1_60_39_bot_config_serialize.py` | unit | 3 |
 | `backend/tests/unit/test_v1_60_39_calendar_freeze.py` | unit | 6 |
 | `backend/tests/unit/test_v1_60_39_ci_dependency_stall.py` | unit | 2 |
 | `backend/tests/unit/test_v1_60_39_deferred_shadow_m1.py` | unit | 7 |

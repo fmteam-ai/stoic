@@ -1,4 +1,4 @@
-"""v1.60.38 — gold off-hours window: per-account UTC config (default 21:00–00:30), weekends blocked, spread guard
+"""v1.60.38 — gold off-hours window: per-account UTC config (default 21:00–06:00 since the v1.60.39 hotfix), weekends blocked, spread guard
 kept; deferred signals get a shadow outcome; Strategy Report shows Asian hours (00:30–06:00 UTC) as its own band."""
 import asyncio
 import os
@@ -27,13 +27,15 @@ def _t(h, m=0, day=14):      # 2026-10-14 is a Wednesday
     return datetime(2026, 10, day, h, m, tzinfo=timezone.utc)
 
 
-def test_default_window_is_rollover_21_00_to_00_30_and_asian_hours_are_open():
+def test_default_window_is_21_00_to_06_00_rollover_plus_asian_hours():
     from agents.execution_optimizer_agent import _is_xau_off_hours, window_label
     assert _is_xau_off_hours(_t(21, 0)) and _is_xau_off_hours(_t(23, 59)) and _is_xau_off_hours(_t(0, 29))
-    assert not _is_xau_off_hours(_t(0, 30)) and not _is_xau_off_hours(_t(3, 0)) and not _is_xau_off_hours(_t(5, 59))
-    assert not _is_xau_off_hours(_t(20, 59)) and not _is_xau_off_hours(_t(12, 0))
+    assert _is_xau_off_hours(_t(0, 30)) and _is_xau_off_hours(_t(3, 0)) and _is_xau_off_hours(_t(5, 59))   # v1.60.39: Asian hours paused
+    assert not _is_xau_off_hours(_t(6, 0)) and not _is_xau_off_hours(_t(20, 59)) and not _is_xau_off_hours(_t(12, 0))
+    # per-account re-enable of Asian hours = the former default
+    assert not _is_xau_off_hours(_t(3, 0), {"gold_off_hours_end_utc": "00:30"})
     assert _is_xau_off_hours(_t(12, 0, day=17)) and _is_xau_off_hours(_t(12, 0, day=18))     # Sat / Sun always
-    assert window_label({}) == "21:00–00:30 UTC"
+    assert window_label({}) == "21:00–06:00 UTC"
 
 
 def test_window_is_configurable_per_account_and_can_be_disabled():
@@ -44,9 +46,9 @@ def test_window_is_configurable_per_account_and_can_be_disabled():
     assert off_hours_window({"gold_off_hours_enabled": False}) is None
     assert not _is_xau_off_hours(_t(23, 0), {"gold_off_hours_enabled": False})
     assert _is_xau_off_hours(_t(12, 0, day=17), {"gold_off_hours_enabled": False})        # weekend still blocked
-    assert off_hours_window({"gold_off_hours_start_utc": "garbage"}) == (21 * 60, 30)       # malformed → default
+    assert off_hours_window({"gold_off_hours_start_utc": "garbage"}) == (21 * 60, 6 * 60)    # malformed → default
     m = _read("backend", "models.py")
-    assert 'gold_off_hours_start_utc: str = "21:00"' in m and 'gold_off_hours_end_utc: str = "00:30"' in m
+    assert 'gold_off_hours_start_utc: str = "21:00"' in m and 'gold_off_hours_end_utc: str = "06:00"' in m
     assert "cfg=user_cfg" in _read("backend", "agents", "orchestrator.py")
     bc = _read("frontend", "src", "pages", "BotConfig.jsx")
     assert 'data-testid="gold-off-hours-window"' in bc and "gold_off_hours_start_utc: cfg.gold_off_hours_start_utc" in bc
@@ -60,14 +62,15 @@ def test_spread_guard_still_defers_in_asian_hours():
     real = eo._is_xau_off_hours
     eo._is_xau_off_hours = lambda now=None, cfg=None: real(_t(3, 0), cfg)
     try:
-        out = _run(agent.optimize(signal={"action": "SELL", "symbol": "XAUUSD", "lot_size": 0.1}, account=acct, cfg={}))
+        asian_open = {"gold_off_hours_end_utc": "00:30"}        # v1.60.39: Asian hours must be re-enabled per account
+        out = _run(agent.optimize(signal={"action": "SELL", "symbol": "XAUUSD", "lot_size": 0.1}, account=acct, cfg=asian_open))
         assert out["approved"] is False and "Spread 9.00 > 2.5×" in out["deferred_reason"] and out["session"] == "active"
         ok = _run(agent.optimize(signal={"action": "SELL", "symbol": "XAUUSD", "lot_size": 0.1},
-                                 account={"current_spreads": {"XAUUSD": 3.2}, "median_spreads": {"XAUUSD": 3.0}}, cfg={}))
+                                 account={"current_spreads": {"XAUUSD": 3.2}, "median_spreads": {"XAUUSD": 3.0}}, cfg=asian_open))
         assert ok["approved"] is True
         eo._is_xau_off_hours = lambda now=None, cfg=None: real(_t(22, 0), cfg)
         night = _run(agent.optimize(signal={"action": "SELL", "symbol": "XAUUSD", "lot_size": 0.1}, account={}, cfg={}))
-        assert night["approved"] is False and "21:00–00:30 UTC" in night["deferred_reason"] and night["session"] == "off_hours"
+        assert night["approved"] is False and "21:00–06:00 UTC" in night["deferred_reason"] and night["session"] == "off_hours"
     finally:
         eo._is_xau_off_hours = real
 
