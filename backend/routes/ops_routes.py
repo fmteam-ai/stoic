@@ -676,9 +676,9 @@ async def ea_fleet(request: Request):
         terminals.append(row)
         if rec.get("version") and str(acc.get("ea_version")) == str(rec.get("version")) and prev:
             hourly = {}
-            async for ev in db.ea_feed_events.find({"account_id": str(acc["_id"]), "at": {"$gte": since}}, {"at": 1, "bars": 1}):
+            async for ev in db.ea_feed_events.find({"account_id": str(acc["_id"]), "at": {"$gte": since}}, {"at": 1, "payloads": 1}):
                 k = ev["at"].strftime("%Y-%m-%dT%H:00Z") if hasattr(ev["at"], "strftime") else str(ev["at"])[:13]
-                hourly[k] = hourly.get(k, 0) + 1
+                hourly[k] = hourly.get(k, 0) + int(ev.get("payloads") or 1)
             st = acc.get("ea_cmd_stats") or {}
             canary.append({**row, "m1_payloads_24h": sum(hourly.values()), "m1_payloads_per_hour": round(sum(hourly.values()) / 24, 1),
                            "m1_hourly": dict(sorted(hourly.items())), "acks_ok": int(st.get("ok") or 0),

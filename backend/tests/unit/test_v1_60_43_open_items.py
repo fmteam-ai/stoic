@@ -250,8 +250,8 @@ def test_ea_fleet_endpoint_counts_terminals_per_accepted_hash_and_reports_the_ca
     db.accounts.rows += [canary] + [{"_id": ObjectId(), "label": f"T{i}", "mode": "demo", "ea_version": "1.64", "ea_binary_sha256": prev, "trading_enabled": True,
                                      "last_heartbeat": now.isoformat()} for i in range(3)]
     db.accounts.rows.append({"_id": ObjectId(), "label": "rogue", "mode": "demo", "ea_version": "1.63", "ea_binary_sha256": "c" * 64, "trading_enabled": True})
-    for i in range(5):
-        db.ea_feed_events.rows.append({"account_id": str(canary["_id"]), "at": now - timedelta(minutes=10 * i), "bars": 30})
+    db.ea_feed_events.rows.append({"account_id": str(canary["_id"]), "at": now - timedelta(hours=1), "timeframe": "M1", "payloads": 3, "bars": 90})
+    db.ea_feed_events.rows.append({"account_id": str(canary["_id"]), "at": now, "timeframe": "M1", "payloads": 2, "bars": 60})
     out = _run(orr.ea_fleet(types.SimpleNamespace()))
     by_role = {a["role"]: a for a in out["accepted"]}
     assert by_role["current"]["terminals"] == 1 and by_role["previous"]["terminals"] == 3 and by_role["previous"]["version"] == "1.64"
@@ -267,5 +267,5 @@ def test_ea_fleet_endpoint_counts_terminals_per_accepted_hash_and_reports_the_ca
 
 def test_bridge_records_m1_feed_events_and_command_stats():
     src = _read("backend", "routes", "bridge_routes.py")
-    assert 'db.ea_feed_events.insert_one' in src and '"ea_cmd_stats.tp_confirmed"' in src and "ea_cmd_stats.{'ok' if payload.success else 'failed'}" in src
+    assert 'db.ea_feed_events.update_one' in src and '"$inc": {"payloads": 1' in src and '"ea_cmd_stats.tp_confirmed"' in src and "ea_cmd_stats.{'ok' if payload.success else 'failed'}" in src
     assert 'ea_feed_events.create_index("at", expireAfterSeconds=48 * 3600)' in _read("backend", "seed.py")

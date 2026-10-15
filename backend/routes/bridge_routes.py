@@ -1422,10 +1422,12 @@ async def receive_candles(payload: BridgeCandles):
     bars, forming_dropped = split_forming_bar(bars, payload.timeframe, now_ts)
     if not bars:
         if str(payload.timeframe).upper() == "M1":          # v1.60.43 — canary soak: M1 payloads per hour per terminal
-            try:
-                await db.ea_feed_events.insert_one({"account_id": str(account["_id"]), "at": datetime.now(timezone.utc),
-                                                    "timeframe": "M1", "bars": len(bars), "dropped": dropped,
-                                                    "forming_dropped": forming_dropped, "symbol": payload.symbol})
+            try:                                               # audit #34: one hourly bucket per account, not one doc per payload
+                hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+                await db.ea_feed_events.update_one(
+                    {"account_id": str(account["_id"]), "at": hour, "timeframe": "M1"},
+                    {"$inc": {"payloads": 1, "bars": len(bars), "dropped": dropped, "forming_dropped": forming_dropped},
+                     "$set": {"symbol": payload.symbol}}, upsert=True)
             except Exception:  # noqa: BLE001
                 pass
         await db.candle_feed_health.update_one(health_key, {"$set": {
@@ -1481,10 +1483,12 @@ async def receive_candles(payload: BridgeCandles):
         bar_lag_s = (max(0, int(datetime.now(timezone.utc).timestamp())
                          - last_bar_ts) if last_bar_ts else None)
         if str(payload.timeframe).upper() == "M1":          # v1.60.43 — canary soak: M1 payloads per hour per terminal
-            try:
-                await db.ea_feed_events.insert_one({"account_id": str(account["_id"]), "at": datetime.now(timezone.utc),
-                                                    "timeframe": "M1", "bars": len(bars), "dropped": dropped,
-                                                    "forming_dropped": forming_dropped, "symbol": payload.symbol})
+            try:                                               # audit #34: one hourly bucket per account, not one doc per payload
+                hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+                await db.ea_feed_events.update_one(
+                    {"account_id": str(account["_id"]), "at": hour, "timeframe": "M1"},
+                    {"$inc": {"payloads": 1, "bars": len(bars), "dropped": dropped, "forming_dropped": forming_dropped},
+                     "$set": {"symbol": payload.symbol}}, upsert=True)
             except Exception:  # noqa: BLE001
                 pass
         await db.candle_feed_health.update_one(health_key, {"$set": {
@@ -2026,7 +2030,7 @@ async def modification_ack(payload: BridgeModificationAck):
             {"_id": ObjectId(payload.trade_id),
              "pending_modification": {"$ne": None}},
             {"$inc": {"pending_modification.retry_count": 1},
-             "$set": {"pending_modification.last_error": payload.error}})
+             "$set": {"pending_modification.last_error": str(payload.error or "")[:200]}})
         return {"status": "retry_pending"}
 
     # Notifications to fire AFTER the EA confirms — collected here, dispatched

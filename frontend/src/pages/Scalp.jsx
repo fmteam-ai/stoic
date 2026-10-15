@@ -136,15 +136,23 @@ export default function Scalp() {
         }
     };
 
+    // v1.60.44 — the Shadow Performance block follows the SELECTED runner (symbol + account): the page used to
+    // request EURUSD for every runner, so an XAUUSD card read the lifetime EURUSD aggregate (735 samples, PF 0.65).
+    const [sel, setSel] = useState(null);   // {account_id, symbol}
     const load = useCallback(async () => {
         setLoading(true);
         try {
-            const [st, mt, dc] = await Promise.all([
-                api.get("/scalp/status"),
-                api.get("/scalp/metrics?symbol=EURUSD"),
-                api.get("/scalp/decisions?limit=25&symbol=EURUSD"),
+            const st = await api.get("/scalp/status");
+            const rs = st.data.runners || [];
+            setRunners(rs);
+            const cur = (sel && rs.find((r) => r.account_id === sel.account_id && r.symbol === sel.symbol)) || rs[0] || null;
+            if (cur && (!sel || cur.account_id !== sel.account_id || cur.symbol !== sel.symbol)) setSel({ account_id: cur.account_id, symbol: cur.symbol });
+            const sym = cur?.symbol || "EURUSD";
+            const accQ = cur ? `&account_id=${encodeURIComponent(cur.account_id)}` : "";
+            const [mt, dc] = await Promise.all([
+                api.get(`/scalp/metrics?symbol=${sym}${accQ}`),
+                api.get(`/scalp/decisions?limit=25&symbol=${sym}${accQ}`),
             ]);
-            setRunners(st.data.runners || []);
             setMetrics(mt.data);
             setDecisions(dc.data.decisions || []);
         } catch (e) {
@@ -152,7 +160,7 @@ export default function Scalp() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [sel]);
 
     useEffect(() => {
         api.get("/accounts").then((r) => {
@@ -455,7 +463,28 @@ export default function Scalp() {
             </div>
 
             {/* Metrics */}
-            <h2 className="text-sm text-[#A1A1AA] uppercase tracking-widest mb-2">Shadow Performance (labeled outcomes)</h2>
+            <h2 className="text-sm text-[#A1A1AA] uppercase tracking-widest mb-2 flex flex-wrap items-center gap-2">
+                <span>Shadow Performance (labeled outcomes)</span>
+                {runners.length > 0 && (
+                    <select value={sel ? `${sel.account_id}:${sel.symbol}` : ""} data-testid="scalp-metrics-scope"
+                            onChange={(e) => { const [account_id, symbol] = e.target.value.split(":"); setSel({ account_id, symbol }); }}
+                            className="bg-[#0A0A0A] border border-[#1F1F1F] text-[#E4E4E7] font-mono text-[11px] px-2 py-0.5 normal-case tracking-normal">
+                        {runners.map((r) => <option key={`${r.account_id}:${r.symbol}`} value={`${r.account_id}:${r.symbol}`}>{r.symbol} · {acctName(r.account_id)}</option>)}
+                    </select>
+                )}
+                <span className="font-mono text-[10px] text-[#52525B] normal-case tracking-normal" data-testid="scalp-metrics-scope-note">
+                    {metrics?.symbol || "—"}{metrics?.account_id ? " · this account only" : " · all accounts"} · all setups
+                </span>
+            </h2>
+            {metrics?.by_setup && Object.keys(metrics.by_setup).length > 0 && (
+                <div className="font-mono text-[11px] text-[#A1A1AA] mb-2 flex flex-wrap gap-x-4" data-testid="scalp-metrics-by-setup">
+                    {Object.entries(metrics.by_setup).map(([k, v]) => (
+                        <span key={k} data-testid={`scalp-setup-${k}`}>
+                            <span className="text-[#52525B]">{k}{k === "range_break_momentum_v2" ? " (current)" : ""}:</span> {v.n} samples · {fmt(v.net_expectancy_pips, 3)}p · PF {v.profit_factor == null ? "—" : fmt(v.profit_factor)}
+                        </span>
+                    ))}
+                </div>
+            )}
             {metrics?.n != null && metrics.n < 100 && (
                 <div className="text-xs text-[#FFB000] border border-[#FFB000]/30 bg-[#FFB000]/5 px-3 py-2 mb-2"
                      data-testid="scalp-low-sample-note">
