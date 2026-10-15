@@ -1,0 +1,21 @@
+{
+  "account_ids": [
+    "6acbd44be31d42a7df0440d5"
+  ],
+  "accounts": 1,
+  "bots": 1,
+  "demo_only": true,
+  "enabled": 1,
+  "environment": "production",
+  "expires_at": "2026-11-10T19:13:12.991422+00:00",
+  "installation_id": "stoic-f8b5c7f7082c287c",
+  "issued_at": "2026-10-11T19:13:12.991422+00:00",
+  "issuer": "fmteam-ai via policy-approval",
+  "key_id": "stoic-release-ed25519-v2",
+  "nonce": "9342918100425bd51f52c3f629f35a4a",
+  "policy_version": "demo-1x1-v1",
+  "previous_policy_version": "6/3/3-v1",
+  "reason": "Demo week 1: OnEquity demo only, Balanced, 2 trades/symbol/day",
+  "schema": "stoic.policy-migration/v3",
+  "signature_hex": "a09840d73cf6b079d31c59a70a1a9155ea9b24982b0b8124ef9861721529dd54d39c5d69153df3cb9f4bd820f2e76eb6990085b1c6c6913cbeb47dfe52deeb0b"
+}
