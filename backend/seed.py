@@ -346,6 +346,9 @@ async def ensure_indexes():
     await db.order_authorizations.create_index("nonce", unique=True)
     await db.order_authorizations.create_index("issued_at")
     await db.audit_anchors.create_index("seq", unique=True)
+    # v1.60.41 — chained audit appends must not race to the same seq (15 Oct dup 77/78 → I3)
+    from audit_chain import ensure_seq_index
+    await ensure_seq_index(db)
     # iter-177 — WebAuthn: single-use challenges auto-expire via TTL;
     # credential ids unique per user.
     await db.webauthn_challenges.create_index("expires_at",
