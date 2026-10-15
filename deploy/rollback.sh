@@ -38,6 +38,20 @@ fi
 
 echo "-- checking out ${REF}"
 git fetch --all --tags --quiet || true
+# v1.60.41 — an update that HELD on failure (UPDATE_HOLD_ON_FAILURE=1) or stopped mid-way leaves the adopted
+# rc_lock / BUILD_SHA / MODEL_MANIFEST / RELEASE_SUMMARY modified in the tree; `git checkout` refuses and the
+# rollback died here. Restore them (update.sh does the same) and, as in update.sh (M117-4), save any other
+# tracked edits as a patch before resetting — a rollback must never be refused by a dirty tree.
+restore_tracked_release_files
+DIRTY=$(git status --porcelain --untracked-files=no)
+if [ -n "${DIRTY}" ]; then
+  mkdir -p deploy/releases
+  PATCH="deploy/releases/local-changes-$(date -u +%Y%m%dT%H%M%SZ).patch"
+  git diff HEAD > "${PATCH}"
+  echo "!! local modifications to tracked files saved to ${PATCH} and discarded (the deployed tree must equal the signed release):"
+  echo "${DIRTY}" | sed 's/^/     /'
+  git reset -q --hard HEAD
+fi
 git checkout --detach "${REF}"
 
 echo "-- provisioning images ($(deploy_mode)) + restarting stack"
