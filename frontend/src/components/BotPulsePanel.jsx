@@ -32,6 +32,15 @@ function ago(seconds) {
     return `${h}h ${m % 60}m ago`;
 }
 
+function fmtSecs(s) {
+    if (s <= 0) return "now";
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m`;
+    const h = Math.floor(m / 60);
+    return `${h}h ${m % 60}m`;
+}
+
 function untilStr(iso) {
     if (!iso) return null;
     const ms = new Date(iso).getTime() - Date.now();
@@ -44,14 +53,17 @@ function untilStr(iso) {
     return `${h}h ${m % 60}m`;
 }
 
-function PulseRow({ item }) {
+function PulseRow({ item, fetchedAt }) {
     const p = item.pulse;
     const lvl = LEVEL_STYLE[(p?.level) || "info"] || LEVEL_STYLE.info;
     const actStyle = ACTION_STYLE[(p?.action) || "HOLD"] || ACTION_STYLE.HOLD;
     const ActIcon = actStyle.Icon;
     const isShadow = item.paper_shadow_mode && !item.active;
     const noPulse = !p;
-    const next = p?.next_eligible_at ? untilStr(p.next_eligible_at) : null;
+    // v1.60.40 — server-clock countdown for THIS account, capped at its cooldown (no client clock skew)
+    const next = item.next_eligible_in_seconds != null
+        ? fmtSecs(Math.max(0, item.next_eligible_in_seconds - Math.floor((Date.now() - (fetchedAt || Date.now())) / 1000)))
+        : (p?.next_eligible_at ? untilStr(p.next_eligible_at) : null);
 
     return (
         <div className={`flex items-start gap-3 px-4 py-3 border ${lvl.border} ${lvl.bg}`}
@@ -159,11 +171,12 @@ export default function BotPulsePanel() {
     // In dropdown mode (>10 accounts), which config_id is selected for
     // preview. "__all__" means user explicitly toggled the wall-of-rows view.
     const [selectedId, setSelectedId] = useState("");
+    const [fetchedAt, setFetchedAt] = useState(null);
 
     const load = useCallback(async () => {
         try {
             const r = await api.get("/bot/pulse");
-            setData(r.data);
+            setData(r.data); setFetchedAt(Date.now());
             setErr(null);
         } catch (e) {
             setErr(formatApiError(e));
@@ -287,7 +300,7 @@ export default function BotPulsePanel() {
                 <div className="border-t border-[#1F1F1F] divide-y divide-[#1F1F1F]"
                      data-testid="bot-pulse-rows">
                     {dropdownVisible.map(item => (
-                        <PulseRow key={item.config_id} item={item} />
+                        <PulseRow key={item.config_id} item={item} fetchedAt={fetchedAt} />
                     ))}
                 </div>
             )}

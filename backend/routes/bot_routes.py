@@ -386,6 +386,17 @@ async def mtf_confluence_report(symbol: str = "XAUUSD", user=Depends(get_current
     return {"available": True, "symbol": symbol, "live_price": live, **report}
 
 
+def _effective_cooldown_min(cfg: dict, plan_floor: int = 1) -> int:
+    """v1.60.40 — the cooldown bot_runner really applies for this config: its own signal_cooldown_minutes
+    (env default when unset) floored by the plan."""
+    v = cfg.get("signal_cooldown_minutes")
+    try:
+        v = int(v) if v is not None else int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "5"))
+    except (TypeError, ValueError):
+        v = 5
+    return max(1, v, int(plan_floor or 1))
+
+
 @router.get("/pulse")
 async def get_bot_pulse(user=Depends(get_current_user)):
     """Return the latest cycle verdict for every bot_config the user owns.
@@ -406,6 +417,8 @@ async def get_bot_pulse(user=Depends(get_current_user)):
     db = get_db()
     cursor = db.bot_configs.find({"user_id": user["id"]})
     docs = await cursor.to_list(length=100)
+    from entitlements import cooldown_floor
+    plan_floor = int(await cooldown_floor(user) or 1)
     locked_ids = {str(a["_id"]) async for a in db.accounts.find(
         {"user_id": user["id"], "authority_lock.reason": "panic"}, {"_id": 1})}
     # A7d — accounts under the execution-health brake (new entries paused)
@@ -478,10 +491,22 @@ async def get_bot_pulse(user=Depends(get_current_user)):
             else:
                 p = get_preset(active_preset)
                 strategy_label = (p or {}).get("label") or active_preset.title()
+        # v1.60.40 — the countdown uses THIS account's cooldown, measured on the server clock and capped at the
+        # cooldown (VTMarkets showed "NEXT IN 33M" on a 30-min cooldown: client clock skew + uncapped ISO delta)
+        cooldown_min = _effective_cooldown_min(d, plan_floor)
+        next_in = None
+        if pulse and pulse.get("next_eligible_at"):
+            try:
+                nxt = datetime.fromisoformat(str(pulse["next_eligible_at"]).replace("Z", "+00:00"))
+                next_in = max(0, min(int((nxt - now).total_seconds()), cooldown_min * 60))
+            except (TypeError, ValueError):
+                next_in = None
         out.append({
             "config_id": str(d["_id"]),
             "account_id": acct_id,
             "unbound": acct_id is None,
+            "cooldown_minutes": cooldown_min,
+            "next_eligible_in_seconds": next_in,
             "label": label,
             "active": bool(d.get("active")),
             "locked": (str(acct_id) in locked_ids) if acct_id else bool(locked_ids),
