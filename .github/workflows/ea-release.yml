@@ -64,7 +64,7 @@ jobs:
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
           set -o pipefail
-          pip install -q cryptography requests
+          pip install -q cryptography==50.0.0 requests==2.34.2
           printf '%s' "$RELEASE_SIGNER_TOKEN" > "$RUNNER_TEMP/signer.token"
           if ! python scripts/signer_probe.py --url "$RELEASE_SIGNER_URL" --token-file "$RUNNER_TEMP/signer.token" \
                --public-key "$RELEASE_PUBLIC_KEY_B64" --key-id "$RELEASE_SIGNER_KEY_ID" | tee "$RUNNER_TEMP/signer_probe.json"; then
@@ -102,7 +102,7 @@ jobs:
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
-          pip install -q cryptography requests
+          pip install -q cryptography==50.0.0 requests==2.34.2
           $win = (Get-CimInstance Win32_OperatingSystem).Version
           python scripts/verify_ea_release.py --ex5 backend/static/EmergentTradingBridge.ex5 `
             --compile-log compile.log --windows-build $win `

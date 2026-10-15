@@ -55,7 +55,7 @@ jobs:
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
           set -o pipefail
-          pip install -q cryptography requests
+          pip install -q cryptography==50.0.0 requests==2.34.2
           printf '%s' "$RELEASE_SIGNER_TOKEN" > "$RUNNER_TEMP/signer.token"
           python scripts/signer_probe.py --url "$RELEASE_SIGNER_URL" --token-file "$RUNNER_TEMP/signer.token" \
                --public-key "$RELEASE_PUBLIC_KEY_B64" --key-id "$RELEASE_SIGNER_KEY_ID"
@@ -70,7 +70,7 @@ jobs:
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
           STOIC_BUILD_SHA: ${{ github.sha }}
         run: |
-          pip install -q -r backend/requirements.txt 2>/dev/null || pip install -q cryptography requests
+          pip install -q -r backend/requirements.txt 2>/dev/null || pip install -q cryptography==50.0.0 requests==2.34.2
           cd backend
           python -m model_manifest resign --commit "${GITHUB_SHA}"
           python -m model_manifest verify --build "${GITHUB_SHA}"
