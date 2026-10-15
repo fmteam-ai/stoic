@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 
-from deferred_shadow import ROLLOVER_BAND, UTC_BANDS, utc_band
+from deferred_shadow import ROLLOVER_BAND, UTC_BANDS, cluster_deferred, utc_band
 from strategy_engines import ENGINE_LABELS
 
 SESSION_ORDER = [b[2] for b in UTC_BANDS] + [ROLLOVER_BAND, "Weekend"]
@@ -97,28 +97,36 @@ def _bucket_rows(decisions: list, key_fn, order: list) -> list:
 
 
 def deferred_rows(deferred: list) -> list:
-    """Shadow outcomes of DEFERRED signals per UTC band: n deferred, n labelled, shadow win rate (tp_first) + CI."""
-    acc: dict = defaultdict(lambda: {"n": 0, "labelled": 0, "tp": 0, "sl": 0, "r": 0.0})
-    for d in deferred:
+    """Shadow outcomes of DEFERRED signals per UTC band: n ideas (one per symbol+direction cluster within 15 min —
+    v1.60.39, not every re-evaluation), re-evaluations, n labelled, shadow win rate (tp_first) + CI, M1 share."""
+    acc: dict = defaultdict(lambda: {"n": 0, "re_evaluations": 0, "labelled": 0, "tp": 0, "sl": 0, "r": 0.0,
+                                     "m1": 0, "ambiguous": 0})
+    for d in cluster_deferred(deferred):
         band = (d.get("shadow") or {}).get("utc_band") or utc_band(d.get("ts"))
         b = acc[band]
         b["n"] += 1
+        b["re_evaluations"] += int(d.get("re_evaluations") or 1)
         sh = d.get("shadow") or {}
         if sh.get("outcome") in ("tp_first", "sl_first", "timeout"):
             b["labelled"] += 1
             b["tp"] += sh["outcome"] == "tp_first"
             b["sl"] += sh["outcome"] == "sl_first"
             b["r"] += float(sh.get("r") or 0)
+            b["m1"] += sh.get("timeframe") == "M1"
+            b["ambiguous"] += bool(sh.get("ambiguous"))
     rows = []
     for label in SESSION_ORDER + [k for k in acc if k not in SESSION_ORDER]:
         if label not in acc:
             continue
         b = acc[label]
         lo, hi = wilson_interval(b["tp"], b["labelled"])
-        rows.append({"band": label, "n": b["n"], "labelled": b["labelled"], "tp_first": b["tp"], "sl_first": b["sl"],
+        rows.append({"band": label, "n": b["n"], "re_evaluations": b["re_evaluations"], "labelled": b["labelled"],
+                     "tp_first": b["tp"], "sl_first": b["sl"],
                      "win_rate": round(100.0 * b["tp"] / b["labelled"], 1) if b["labelled"] else None,
                      "win_rate_ci": [lo, hi] if b["labelled"] else None,
-                     "avg_r": round(b["r"] / b["labelled"], 2) if b["labelled"] else None})
+                     "avg_r": round(b["r"] / b["labelled"], 2) if b["labelled"] else None,
+                     "m1_share": round(100.0 * b["m1"] / b["labelled"], 1) if b["labelled"] else None,
+                     "ambiguous": b["ambiguous"]})
     return rows
 
 
@@ -152,6 +160,7 @@ def build_report(decisions: list, window_days: int, deferred: list | None = None
                                        ["with trend-ride", "without"]),
         })
     return {"window_days": window_days, "decisions": len(decisions), "deferred": len(deferred or []),
+            "deferred_ideas": len(cluster_deferred(deferred or [])),
             "trades": sum(d["mirrored_accounts"] for d in decisions), "engines": engines,
             "dedupe": "one decision per symbol + direction + entry within ±2 min across mirrored accounts; $ = per-account average",
             "generated_at": datetime.now(timezone.utc).isoformat()}
@@ -179,5 +188,5 @@ async def strategy_report(db, user_id: str, days: int = 30) -> dict:
             signals[str(s["_id"])] = s
     deferred = await db.trade_decisions.find(
         {"user_id": user_id, "status": "deferred", "ts": {"$gte": since}},
-        {"ts": 1, "symbol": 1, "signal.scope": 1, "signal.action": 1, "shadow": 1}).to_list(length=5000)
+        {"ts": 1, "symbol": 1, "signal.scope": 1, "signal.action": 1, "signal.symbol": 1, "shadow": 1}).to_list(length=5000)
     return build_report(decisions_from(trades, signals), days, deferred)

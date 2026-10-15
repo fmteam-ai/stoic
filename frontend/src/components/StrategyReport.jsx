@@ -45,13 +45,13 @@ function Bands({ title, rows, testid, showPredicted }) {
 function DeferredBands({ rows, testid }) {
     return (
         <div data-testid={testid}>
-            <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">DEFERRED · SHADOW OUTCOME (TP FIRST?)</div>
+            <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">DEFERRED · SHADOW OUTCOME (TP FIRST?) · ONE ROW PER IDEA (SYMBOL + DIRECTION WITHIN 15 MIN) · M1 REPLAY WHEN AVAILABLE</div>
             <table className="w-full font-mono text-[11px]">
                 <thead>
                     <tr className="text-[#52525B]">
                         <th className="text-left font-normal py-0.5">band</th>
-                        <th className="text-right font-normal">deferred</th>
-                        <th className="text-right font-normal">labelled</th>
+                        <th className="text-right font-normal">ideas <span className="text-[#3F3F46]">(re-evals)</span></th>
+                        <th className="text-right font-normal">labelled <span className="text-[#3F3F46]">(M1 %)</span></th>
                         <th className="text-right font-normal">TP-first (95% CI)</th>
                         <th className="text-right font-normal">avg R</th>
                     </tr>
@@ -61,8 +61,11 @@ function DeferredBands({ rows, testid }) {
                     {rows.map((r) => (
                         <tr key={r.band} className="border-t border-[#141414]">
                             <td className="py-0.5 text-[#A1A1AA]">{r.band}</td>
-                            <td className="text-right text-[#E4E4E7]">{r.n}</td>
-                            <td className="text-right text-[#71717A]">{r.labelled}</td>
+                            <td className="text-right text-[#E4E4E7]">{r.n}{r.re_evaluations > r.n && <span className="text-[#52525B]"> ({r.re_evaluations})</span>}</td>
+                            <td className="text-right text-[#71717A]">
+                                {r.labelled}{r.m1_share != null && <span className="text-[#52525B]"> ({r.m1_share}%)</span>}
+                                {r.ambiguous > 0 && <span className="text-[#FFB000]" title="SL and TP touched inside one bar — resolution-limited, counted SL-first"> ·{r.ambiguous}?</span>}
+                            </td>
                             <td className={`text-right ${r.win_rate == null ? "text-[#52525B]" : r.win_rate >= 50 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>
                                 {pct(r.win_rate)}{Array.isArray(r.win_rate_ci) && <span className="text-[#52525B]"> {r.win_rate_ci[0]}–{r.win_rate_ci[1]}%</span>}
                             </td>
@@ -110,7 +113,7 @@ export function StrategyReport() {
                         <div className="flex items-baseline gap-3 mb-2 flex-wrap">
                             <span className="font-display font-bold text-sm text-[#FAFAFA]">{e.label}</span>
                             <span className="font-mono text-[10px] text-[#71717A]">
-                                {e.decisions} decisions · {e.trades} trades · {(e.deferred_shadow || []).reduce((a, r) => a + r.n, 0)} deferred · win {pct(e.win_rate)}
+                                {e.decisions} decisions · {e.trades} trades · {(e.deferred_shadow || []).reduce((a, r) => a + r.n, 0)} deferred ideas · win {pct(e.win_rate)}
                                 {Array.isArray(e.win_rate_ci) && <span className="text-[#52525B]"> ({e.win_rate_ci[0]}–{e.win_rate_ci[1]}%, n={e.decisions})</span>} · {usd(e.pnl)}
                             </span>
                         </div>
