@@ -17,7 +17,8 @@ async def I1(db, cfg):
 # A13-2 / main98 — bridge tokens are stored hashed: the unique index is on bridge_token_hash (bridge_tokens.ensure_indexes
 # drops the legacy plaintext bridge_token_1), so I2 must require the hash index or it alerts forever.
 REQUIRED_INDEXES = {"users": "email_1", "accounts": "bridge_token_hash_1", "trades": "uniq_account_ticket",
-                    "broker_deals": None, "order_authorizations": "nonce_1", "audit_anchors": "seq_1"}
+                    "broker_deals": None, "order_authorizations": "nonce_1", "audit_anchors": "seq_1",
+                    "admin_audit_log": "uniq_chain_seq"}   # v1.60.41 — cannot be built while duplicate seqs exist: repair_chain first
 
 
 async def I2(db, cfg):
