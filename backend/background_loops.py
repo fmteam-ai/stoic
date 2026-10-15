@@ -549,10 +549,12 @@ async def _billing_loop():
     await asyncio.sleep(45)
     while True:
         try:
+            t0 = datetime.now(timezone.utc)
             db = get_db()
             from affiliate_service import process_affiliate_outbox
             await process_affiliate_outbox(db)
-            await renewal_reminder_sweep(db)
+            n = await renewal_reminder_sweep(db)
+            record_progress("_billing_loop", processed=1 + int(n or 0), started_at=t0, interval_sec=3600)   # v1.60.40
         except Exception:
             logger.exception("billing loop iteration failed")
         await asyncio.sleep(3600)

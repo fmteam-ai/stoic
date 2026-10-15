@@ -20,6 +20,7 @@ import { ReleaseGateCard } from "../components/ReleaseGateCard";
 import { EaChannelCard } from "../components/EaChannelCard";
 import { SafetyLoopsCard } from "../components/SafetyLoopsCard";
 import { NewsSourcesCard } from "../components/NewsSourcesCard";
+import { ConfigDriftCard } from "../components/ConfigDriftCard";
 import { ChaosDrillsCard } from "../components/ChaosDrillsCard";
 import { StressTestCard } from "../components/StressTestCard";
 import { SoakReportCard } from "../components/DemoReadinessPanels";
@@ -649,6 +650,7 @@ export default function BotHealth() {
                 {user?.role === "admin" && <EaChannelCard />}
                 {user?.role === "admin" && <SafetyLoopsCard />}
                 {user?.role === "admin" && <NewsSourcesCard />}
+                {user?.role === "admin" && <ConfigDriftCard />}
                 <RealtimeRiskCard />
                 <OperatorConsole onAction={load} />
                 <ModeGuardianCard />

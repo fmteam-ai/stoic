@@ -11,6 +11,7 @@ const ago = (sec) => {
 
 const TONE = {
     OK: "border-[#00FF41]/40 text-[#00FF41]",
+    FAILSAFE: "border-[#FF3B30]/40 text-[#FF3B30]",
     DEGRADED: "border-[#FFB000]/40 text-[#FFB000]",
     STALE: "border-[#FFB000]/40 text-[#FFB000]",
     DOWN: "border-[#FF3B30]/40 text-[#FF3B30]",
@@ -53,7 +54,20 @@ export function NewsSourcesCard() {
                 {d && !d.error && (
                     <>
                         <Row name="Economic calendar" status={cal.status || "IDLE"} testid="news-source-calendar"
-                            detail={cal.last_error || `${cal.provider || ""} · ${cal.cached_events ?? 0} events`} />
+                            detail={cal.failsafe_active
+                                ? `FAIL-SAFE · both sources > ${cal.failsafe_after_min ?? 360} min stale — default US freeze slots (12:30 / 14:00 UTC, 18:00 on FOMC days) applied until a source recovers`
+                                : cal.stale
+                                    ? `STALE · active source older than ${cal.stale_after_min ?? 120} min — freeze windows may miss new prints`
+                                    : `${cal.active_source || "no source"} active · ${cal.cached_events ?? 0} events merged`} />
+                        {cal.sources && Object.entries(cal.sources).map(([name, s]) => (
+                            <Row key={name} name={`  ↳ ${name}`} status={s.status || "IDLE"} testid={`news-source-calendar-${name}`}
+                                detail={s.last_error || (s.last_fetch_at ? `${s.events} events · fetched ${ago(Math.round((s.age_min || 0) * 60))}` : "never fetched")} />
+                        ))}
+                        {cal.attribution?.url && (
+                            <div className="font-mono text-[9px] text-[#3F3F46] pt-1" data-testid="calendar-attribution">
+                                calendar data in part from <a href={cal.attribution.url} target="_blank" rel="noreferrer" className="underline hover:text-[#A1A1AA]">financecalendar.com</a>
+                            </div>
+                        )}
                         <Row name="RSS wire + AI scoring" status={rss.status || "IDLE"} testid="news-source-rss-ai"
                             detail={rss.last_error || rss.last_llm_error
                                 || (rss.last_fetch_at ? `fetched ${ago(rss.age_sec)} · ${rss.rss_items ?? 0} RSS · ${rss.headlines ?? 0} scored` : "no fetch recorded yet")} />

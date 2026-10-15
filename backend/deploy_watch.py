@@ -232,10 +232,13 @@ async def poll_once(db, fetch=fetch_health) -> list[dict]:
 async def loop():
     interval = int(os.environ.get("DEPLOY_WATCH_INTERVAL_SEC", "30"))
     from database import get_db
+    from workers.base import record_progress
     while True:
         try:
             await asyncio.sleep(interval)
+            t0 = datetime.now(timezone.utc)
             await poll_once(get_db())
+            record_progress("deploy_watch.loop", processed=1, started_at=t0, interval_sec=interval)   # v1.60.40
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001

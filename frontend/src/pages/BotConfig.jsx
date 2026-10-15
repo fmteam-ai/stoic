@@ -301,6 +301,10 @@ export default function BotConfig() {
             // v1.60.40 — Config Drift Check: every field we sent must come back unchanged
             const drifted = diffSavedConfig(payload, data);
             setDrift(drifted);
+            if (drifted.length) {
+                // v1.60.40 — Drift Telemetry: server-side count on Bot Health (best-effort, never blocks the save)
+                api.post("/bot/config/drift", { fields: drifted, account_id: selectedAccountId || null }).catch(() => {});
+            }
             setSaveMsg(drifted.length ? "" : data.cooldown_clamped_to_plan_floor
                 ? `Configuration saved. Minutes between signals raised to your plan floor (${data.cooldown_clamped_to_plan_floor} min).`
                 : "Configuration saved.");

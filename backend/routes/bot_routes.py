@@ -9,6 +9,7 @@ from auth import get_current_user
 from database import get_db
 from step_up import require_step_up, audit_event
 from models import BotConfigUpdate, BotConfigOut
+from pydantic import BaseModel, Field
 from route_utils import parse_object_id
 from risk import get_profile, compute_lot_for_account
 from pip_utils import floor_to_lot_step
@@ -333,6 +334,28 @@ async def _attach_cooldown_floor(out: dict, user: dict) -> None:
     floor = int(await cooldown_floor(user) or 1)
     out["plan_min_signal_cooldown_minutes"] = floor
     out["effective_signal_cooldown_minutes"] = max(int(out.get("signal_cooldown_minutes") or 1), floor)
+
+
+class ConfigDriftReport(BaseModel):
+    fields: list = Field(default_factory=list, max_length=200)
+    account_id: Optional[str] = None
+
+
+@router.post("/config/drift")
+async def report_config_drift(payload: ConfigDriftReport, request: Request, user=Depends(get_current_user)):
+    """v1.60.40 — Drift Telemetry: the client reports fields whose saved value differed from the server echo.
+    Stored per user (values truncated), surfaced as a count on Admin → Bot Health (/ops/config-drift)."""
+    fields = []
+    for f in payload.fields[:200]:
+        if not isinstance(f, dict) or not f.get("field"):
+            continue
+        fields.append({"field": str(f["field"])[:80], "sent": str(f.get("sent"))[:120], "server": str(f.get("server"))[:120]})
+    if not fields:
+        return {"recorded": 0}
+    await get_db().config_drift_events.insert_one({
+        "user_id": user["id"], "account_id": payload.account_id, "fields": fields,
+        "at": datetime.now(timezone.utc), "ua": (request.headers.get("user-agent") or "")[:160]})
+    return {"recorded": len(fields)}
 
 
 @router.get("/configs")
