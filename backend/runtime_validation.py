@@ -163,11 +163,22 @@ async def s_replay_protection(db):
         await db.auth_sessions.delete_many({"family": fam})
 
 
+def internal_api_base() -> str:
+    """v1.60.43 — the nightly drill runs in the worker container: `localhost:8001` is not the API there (every night
+    runtime:unauthorized_api failed → CRITICAL + Bot Health capped at 45). INTERNAL_API_BASE wins; in-process mode
+    (workers inside the API process) → localhost; dedicated workers → the compose service `backend`."""
+    env = (os.environ.get("INTERNAL_API_BASE") or "").strip().rstrip("/")
+    if env:
+        return env
+    if (os.environ.get("BACKGROUND_WORKERS_IN_PROCESS") or "").lower() == "true":
+        return "http://localhost:8001"
+    return "http://backend:8001"
+
+
 async def s_unauthorized_api(db):
     """Admin/ops surfaces must reject unauthenticated requests outright."""
     import httpx
-    async with httpx.AsyncClient(base_url="http://localhost:8001",
-                                 timeout=10) as client:
+    async with httpx.AsyncClient(base_url=internal_api_base(), timeout=10) as client:
         checks = []
         for path in ("/api/admin/ops-console", "/api/admin/users",
                      "/api/admin/settings/turnstile"):

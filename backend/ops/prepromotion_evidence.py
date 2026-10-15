@@ -149,8 +149,20 @@ async def collect(args) -> dict:
     except Exception:  # noqa: BLE001
         _latest = None
     approved_ea = approved_ea or _latest
-    gates["single_ea_version"] = bool(en_rows) and len(ea_versions) == 1 and all(ea_versions) \
-        and (approved_ea is None or ea_versions == {approved_ea})
+    # v1.60.43 — a rollout runs the signed-previous EA next to the current one by design (15 Oct: fleet on 1.64 while
+    # the release declares 1.65 HELD the deploy). Every enabled account must run an ACCEPTED version (current or
+    # signed previous of the release record); exactly one version is only required when no signed record exists.
+    try:
+        from ea_capabilities import accepted_ea_versions
+        accepted = set(accepted_ea_versions())
+    except Exception:  # noqa: BLE001
+        accepted = set()
+    if accepted:
+        gates["single_ea_version"] = bool(en_rows) and all(ea_versions) and ea_versions <= accepted
+        gates["ea_versions_accepted"] = sorted(accepted)
+    else:
+        gates["single_ea_version"] = bool(en_rows) and len(ea_versions) == 1 and all(ea_versions) \
+            and (approved_ea is None or ea_versions == {approved_ea})
     gates["bot_map_one_to_one"] = sorted(str(a["_id"]) for a in enabled) == sorted(b for b in bots if b in {str(a["_id"]) for a in real})
     ctr = await contract(db, args.scope_user)
     worker_view = worker_enabled_view(ctr.get("accounts") or [], totals=ctr.get("totals") or {})

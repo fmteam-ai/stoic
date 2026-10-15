@@ -185,6 +185,6 @@ def test_publisher_normalises_pip_audit_and_npm_audit_and_ci_publishes():
     assert n["package"] == "lodash" and n["score"] == 7.5 and n["id"] == "1234" and n["fix"] == "lodash@4.17.21"
     for wf in ("ci.yml", "dependency-audit.yml"):
         y = _read(".github", "workflows", wf)
-        assert "publish_dependency_audit.py --kind python --input /tmp/pip-audit.json" in y
-        assert "publish_dependency_audit.py --kind frontend --input /tmp/npm-audit.json" in y
+        assert "publish_dependency_audit.py --kind python --input /tmp/pip-audit.json" in y.replace("--require ", "")
+        assert "publish_dependency_audit.py --kind frontend --input /tmp/npm-audit.json" in y.replace("--require ", "")
         assert "STOIC_METRICS_TOKEN: ${{ secrets.STOIC_METRICS_TOKEN }}" in y

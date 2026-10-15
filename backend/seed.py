@@ -346,6 +346,8 @@ async def ensure_indexes():
     await db.order_authorizations.create_index("nonce", unique=True)
     await db.order_authorizations.create_index("issued_at")
     await db.audit_anchors.create_index("seq", unique=True)
+    await db.ea_feed_events.create_index("at", expireAfterSeconds=48 * 3600)   # v1.60.43 canary soak panel
+    await db.ea_feed_events.create_index([("account_id", 1), ("at", -1)])
     # v1.60.41 — chained audit appends must not race to the same seq (15 Oct dup 77/78 → I3)
     from audit_chain import ensure_seq_index
     await ensure_seq_index(db)

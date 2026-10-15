@@ -471,12 +471,14 @@ async def scalp_executions(limit: int = 25, account_id: str = None,
 
 
 @router.get("/decisions")
-async def decisions(limit: int = 50, symbol: str = None,
+async def decisions(limit: int = 50, symbol: str = None, account_id: str = None,
                     user=Depends(get_current_user)):
     db = get_db()
     q = {"user_id": user["id"]}
     if symbol:
         q["symbol"] = symbol.upper()
+    if account_id:                                       # v1.60.44 — the page scopes decisions to the selected runner
+        q["account_id"] = account_id
     docs = await db.scalp_decisions.find(q).sort("ts_ms", -1).to_list(min(limit, 200))
     for d in docs:
         d["id"] = str(d.pop("_id"))
@@ -484,7 +486,7 @@ async def decisions(limit: int = 50, symbol: str = None,
 
 
 @router.get("/metrics")
-async def metrics(symbol: str = "EURUSD", account_id: str = None,
+async def metrics(symbol: str = "EURUSD", account_id: str = None, setup: str = None,
                   user=Depends(get_current_user)):
     """Step 18 production metrics: alpha / execution / risk / stability.
 
@@ -497,10 +499,25 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
          "outcome.result": {"$in": ["target_first", "stop_first", "timeout"]}}
     if account_id:
         q["account_id"] = account_id
+    if setup:                                            # v1.60.44 — one setup only (the runner's current setup)
+        q["setup.setup"] = setup
     docs = await db.scalp_decisions.find(q).sort("ts_ms", -1).to_list(5000)
     n = len(docs)
+    # v1.60.44 — per-setup breakdown of the same rolling sample, so the UI can show the CURRENT setup next to
+    # the all-setups aggregate (the page used to show the lifetime EURUSD aggregate under an XAUUSD card).
+    by_setup: dict = {}
+    for d in docs:
+        key = str(((d.get("setup") or {}).get("setup")) or "unknown")
+        b = by_setup.setdefault(key, {"n": 0, "net": 0.0, "win": 0.0, "loss": 0.0})
+        v = float((d.get("outcome") or {}).get("net_pips") or 0)
+        b["n"] += 1
+        b["net"] += v
+        b["win" if v > 0 else "loss"] += v
+    setups = {k: {"n": b["n"], "net_expectancy_pips": round(b["net"] / b["n"], 3),
+                  "profit_factor": (round(b["win"] / abs(b["loss"]), 3) if b["loss"] < 0 else None)}
+              for k, b in by_setup.items()}
     if n == 0:
-        return {"symbol": symbol.upper(), "n": 0}
+        return {"symbol": symbol.upper(), "account_id": account_id, "setup": setup, "n": 0, "by_setup": {}}
     tf = [d for d in docs if d["outcome"]["result"] == "target_first"]
     sf = [d for d in docs if d["outcome"]["result"] == "stop_first"]
     # Review item 1: outcome.net_pips is ALREADY fully cost-loaded
@@ -653,7 +670,8 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
         "capacity_rejections_24h": cap_rejections,
     }
     return {
-        "symbol": symbol.upper(), "n": n,
+        "symbol": symbol.upper(), "account_id": account_id, "setup": setup, "n": n,
+        "by_setup": setups,
         "window": {
             "type": "rolling", "max_samples": 5000, "n": n,
             "from_ts_ms": docs[-1].get("ts_ms"),

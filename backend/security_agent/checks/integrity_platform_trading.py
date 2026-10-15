@@ -163,10 +163,12 @@ async def P5(db, cfg):
     out = []
     counters = dict(swallow_counters() or {})
     # S13 — the API/worker processes persist their counters; the security worker reads them
+    published = 0
     async for row in db.security_signals.find({"kind": "swallow_counters", "at": {"$gte": iso_ago(minutes=15)}}).limit(50):
+        published += 1
         for key, n in (row.get("counters") or {}).items():
             counters[key] = max(int(counters.get(key, 0)), int(n))
-    if not counters and not swallow_counters():
+    if not published and not counters and not swallow_counters():   # v1.60.43 — an empty published row IS data
         out.append(f("P5", "no_data", "low", "platform", "no swallowed-exception counters published by any process in 15 min", {"no_data": True}))
     for key, n in counters.items():
         if int(n) >= lim:

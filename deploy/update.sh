@@ -147,10 +147,33 @@ gate_refused() {
   exit 1
 }
 
+# v1.60.43 — after a HELD run the new release IS running, but deploy/releases/deployment_state.json and releases.log
+# still described the previous one (dashboard + readiness showed the wrong release). Record the truth.
+record_held_live() {
+  local why="$1" sha; sha=$(git rev-parse --short HEAD)
+  mkdir -p deploy/releases
+  HELD_WHY="${why}" HELD_SHA="${sha}" HELD_REF="${REF}" HELD_PREV="${PREV}" python3 - <<'PY' || echo "!! could not record held-live state"
+import json, os, datetime
+p = "deploy/releases/deployment_state.json"
+try:
+    d = json.load(open(p))
+except Exception:
+    d = {}
+d.update({"deployment_state": "held_live", "release_ready": False, "trading_posture": "CLOSE_ONLY",
+          "held": {"running_sha": os.environ["HELD_SHA"], "ref": os.environ["HELD_REF"], "previous_sha": os.environ["HELD_PREV"],
+                   "reason": os.environ["HELD_WHY"], "at": datetime.datetime.now(datetime.timezone.utc).isoformat()}})
+json.dump(d, open(p, "w"), sort_keys=True, indent=1)
+print("   deployment state: held_live · running " + os.environ["HELD_SHA"] + " (verification failed, kept for inspection)")
+PY
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${sha} held-live ref=${REF} prev=${PREV} reason=$(printf '%s' "${why}" | tr ' ' '_')" >> deploy/releases.log
+  publish_release_truth 2>/dev/null || true
+}
+
 rollback() {
   if [ "${UPDATE_HOLD_ON_FAILURE:-0}" = "1" ]; then
     echo "!! verification failed — UPDATE_HOLD_ON_FAILURE=1: leaving $(git rev-parse --short HEAD) running for inspection"
     echo "   inspect: docker compose logs backend --tail 100 · deploy/doctor.sh · revert with deploy/rollback.sh"
+    record_held_live "${1:-verification failed}"
     exit 1
   fi
   echo "!! verification failed — rolling back to ${PREV}"

@@ -27,7 +27,7 @@ jobs:
           STOIC_METRICS_TOKEN: ${{ secrets.STOIC_METRICS_TOKEN }}
         run: |
           pip-audit -r /tmp/audit-reqs.txt --no-deps -f json -o /tmp/pip-audit.json || true
-          python3 scripts/publish_dependency_audit.py --kind python --input /tmp/pip-audit.json
+          python3 scripts/publish_dependency_audit.py --require --kind python --input /tmp/pip-audit.json
 
   frontend-yarn-audit:
     runs-on: ubuntu-latest
@@ -47,4 +47,4 @@ jobs:
           STOIC_METRICS_TOKEN: ${{ secrets.STOIC_METRICS_TOKEN }}
         run: |
           (cd frontend && npm audit --omit=dev --json > /tmp/npm-audit.json) || true
-          python3 scripts/publish_dependency_audit.py --kind frontend --input /tmp/npm-audit.json
+          python3 scripts/publish_dependency_audit.py --require --kind frontend --input /tmp/npm-audit.json

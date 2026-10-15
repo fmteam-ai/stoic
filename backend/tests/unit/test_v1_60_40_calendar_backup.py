@@ -26,10 +26,26 @@ def _ev(title, country, impact, ts, source=None):
     return e
 
 
+async def _no_shared(*a, **k):
+    return False
+
+
+async def _nop_store(*a, **k):
+    return None
+
+
 def _reset(ec):
     for st in ec._sources.values():
         st.update({"events": None, "fetched_at": 0, "last_error": None})
     ec._cache.update({"events": None, "expires_at": 0, "fetched_at": 0, "last_error": None})
+
+
+@pytest.fixture(autouse=True)
+def _isolate_shared_cache(monkeypatch):
+    """v1.60.43 — these tests exercise the fetch path, not the shared DB cache."""
+    import economic_calendar as ec
+    monkeypatch.setattr(ec, "_load_shared_cache", _no_shared)
+    monkeypatch.setattr(ec, "_store_shared_cache", _nop_store)
 
 
 def test_financecalendar_parse_and_country_mapping():

@@ -765,7 +765,7 @@ _verify_attestation_core() {
 publish_release_truth() {
   mkdir -p deploy/state/release 2>/dev/null || return 0
   local f
-  for f in release/attestation.current.json release/rc_lock.json; do
+  for f in release/attestation.current.json release/rc_lock.json deploy/releases/deployment_state.json; do
     [ -s "${f}" ] && cp "${f}" "deploy/state/release/$(basename "${f}")" && chmod 644 "deploy/state/release/$(basename "${f}")"
   done
   return 0
@@ -841,7 +841,7 @@ pull_attested_images() {
         --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null \
       || { echo "!! image SIGNATURE invalid or not issued by ${repo} workflows: ${d}"; return 1; }
     echo "   image signature verified: ${d}"
-    docker pull -q "${d}" >/dev/null || { echo "!! pull failed: ${d} (GHCR outage, or a private package without a read:packages GITHUB_TOKEN in ./.env)"; return 1; }
+    pull_with_retry "${d}" || return 1
     id=$(docker inspect --format '{{index .RepoDigests 0}}' "${d}" 2>/dev/null || true)
     [ "${id}" = "${d}" ] || { echo "!! pulled digest ${id:-none} != attested ${d}"; return 1; }
   done
@@ -878,10 +878,11 @@ provision_images() {
         if pull_attested_images; then
           record_deploy_source registry "attested release $(git rev-parse --short "${GIT_SHA}")"
         else
-          echo "!! registry pull/verification failed — falling back to an on-host build of the same commit (deploy/state/deploy_source.json records it; the LIVE digest gate stays red until a registry deploy succeeds)"
-          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) registry-fallback-build sha=${GIT_SHA}" >> deploy/releases.log
-          build_with_provenance || return 1
-          record_deploy_source build-fallback "registry pull/verification failed"
+          # v1.60.43 — an attested release expects the SIGNED registry image: a host build can never match the locked
+          # digest, so do not build. Fail cleanly (the caller rolls back / holds); re-run once GHCR is reachable.
+          echo "!! registry pull/verification failed for an attested release — NOT building on the host (a local image cannot match the locked digest). Re-run deploy/update.sh when GHCR is reachable, or DEPLOY_MODE=build knowingly."
+          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) registry-pull-failed sha=${GIT_SHA}" >> deploy/releases.log
+          return 1
         fi
       else
         local why="${ATTESTATION_FAIL_REASON:-no attested images for this ref}"
@@ -890,6 +891,25 @@ provision_images() {
         record_deploy_source build "${why}"
       fi ;;
   esac
+}
+
+# v1.60.43 — a `docker pull` of the backend image hung for 22 min on 15 Oct; after it was killed, auto mode built on the
+# host and the locally built image could never match the locked digest. Pull with a per-attempt timeout and retries
+# (PULL_ATTEMPTS × PULL_TIMEOUT_SEC, default 3 × 300 s) and fail cleanly instead.
+pull_with_retry() {
+  local d="$1" attempts="${PULL_ATTEMPTS:-3}" per="${PULL_TIMEOUT_SEC:-300}" i rc
+  for i in $(seq 1 "${attempts}"); do
+    timeout -k 10 "${per}" docker pull -q "${d}" >/dev/null; rc=$?
+    [ "${rc}" = 0 ] && return 0
+    if [ "${rc}" = 124 ]; then
+      echo "!! pull attempt ${i}/${attempts} of ${d} timed out after ${per}s"
+    else
+      echo "!! pull attempt ${i}/${attempts} of ${d} failed (rc=${rc})"
+    fi
+    [ "${i}" -lt "${attempts}" ] && sleep 5
+  done
+  echo "!! pull failed after ${attempts} attempts: ${d} (GHCR outage/stall, or a private package without a read:packages GITHUB_TOKEN in ./.env)"
+  return 1
 }
 
 # `docker compose up` for the active deploy mode — registry mode must never

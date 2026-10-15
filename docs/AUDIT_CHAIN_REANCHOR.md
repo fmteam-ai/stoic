@@ -15,10 +15,14 @@ Every entry's *content* is intact — only the links/sequence forked.
 
 ## Safe re-anchor of the existing break (operator)
 ```
-python scripts/reanchor_audit_chain.py                                   # 1. verify + DRY-RUN plan — writes nothing
-python scripts/reanchor_audit_chain.py --apply --actor ops@… \
+deploy/reanchor-audit-chain.sh                                           # 1. verify + DRY-RUN plan — writes nothing
+deploy/reanchor-audit-chain.sh --apply --actor ops@… \
        --reason "15 Oct 11:46:58 seq race (dup 77/78)"                    # 2. apply
 ```
+The wrapper runs the script **inside the backend image** (`docker compose exec -T backend python
+/app/scripts/reanchor_audit_chain.py …`, shipped since v1.60.43; for older images it pipes the checked-out script
+in) — the host's Python 3.9 has neither the backend's libraries nor `MONGO_URL`. Running
+`python scripts/reanchor_audit_chain.py` directly only works where the backend's Python and `backend/.env` are available.
 What `--apply` does, in order (all inside `audit_chain.repair_chain`):
 1. Refuses if any entry's content no longer matches its own `entry_hash` (that is tampering, not a race — restore from backup).
 2. Snapshots the original documents of every entry from the break onward into `audit_chain_repairs`

@@ -45,6 +45,7 @@ def main() -> int:
     ap.add_argument("--kind", choices=["python", "frontend"], required=True)
     ap.add_argument("--input", required=True, help="pip-audit / npm audit JSON (missing or empty file = clean run)")
     ap.add_argument("--source", default=os.environ.get("GITHUB_WORKFLOW") or "ci")
+    ap.add_argument("--require", action="store_true", help="fail (exit 1) when the publish secrets are unset — the scheduled daily job")
     a = ap.parse_args()
     doc = {}
     if os.path.exists(a.input) and os.path.getsize(a.input) > 0:
@@ -62,6 +63,12 @@ def main() -> int:
     url, token = os.environ.get("STOIC_PUBLISH_URL", "").rstrip("/"), os.environ.get("STOIC_METRICS_TOKEN", "")
     print(f"dependency audit [{a.kind}]: {len(vulns)} finding(s) from {a.input}")
     if not url or not token:
+        if a.require:
+            # v1.60.43 — the DAILY job is the only producer of D1/D2: skipping silently left the reports on
+            # "no result stored" for weeks. Fail so the missing repository secrets are noticed.
+            print("ERROR: STOIC_PUBLISH_URL / STOIC_METRICS_TOKEN not set — the daily dependency-audit MUST publish D1/D2 "
+                  "(Settings → Secrets: STOIC_PUBLISH_URL = public origin, STOIC_METRICS_TOKEN = METRICS_TOKEN of backend/.env)")
+            return 1
         print("STOIC_PUBLISH_URL / STOIC_METRICS_TOKEN not set — not published (dry run)")
         return 0
     req = urllib.request.Request(f"{url}/api/ops/dependency-audit", data=json.dumps(payload).encode(),
