@@ -2,6 +2,7 @@
 and canonical authority may only allow new exposure — on terminals whose
 STOIC EA carries the destination-side controls. Versions are compared as
 numeric tuples, never as strings."""
+from __future__ import annotations   # host-side gate imports this under Python 3.9 (no `X | None` at runtime)
 import os
 import re
 

@@ -6,6 +6,7 @@
 
 An explicit `broker_environment` field on the account always wins;
 otherwise PAPER mode and demo-server naming are detected."""
+from __future__ import annotations   # imported (lazily) by ea_capabilities, which the host-side fleet gate loads under Python 3.9
 
 ENVIRONMENTS = ("LIVE", "DEMO", "PAPER")
 _DEMO_TOKENS = ("demo", "trial", "practice", "contest")

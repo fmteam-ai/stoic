@@ -2155,6 +2155,18 @@ class ScalpRunner:
                    "requested_at": datetime.now(timezone.utc).isoformat(),
                    "reason": act["reason"]}
             if be_sl is not None:
+                # v1.60.42 — the EA clamps to the stops level from the market: a BE that would land below entry is not sent
+                from trade_manager import be_clamp
+                clamp = be_clamp({"entry_price": info["entry_px"], "action": d}, be_sl, mid,
+                                 float(spec.get("stops_level_points") or 0) * tick)
+                if clamp is not None:
+                    clamp.update({"source": "scalp_partial_be_combo", "decision": "skip",
+                                  "at": datetime.now(timezone.utc).isoformat()})
+                    _bg(lambda t=tid, c=clamp: db.trades.update_one(
+                        {"_id": _oid(t)}, {"$push": {"be_clamped": c}, "$inc": {"be_clamped_count": 1},
+                                           "$set": {"be_clamped_last_at": c["at"]}}), "be_clamped")
+                    be_sl = None
+            if be_sl is not None:
                 be_sl = round_to_tick(be_sl, tick)
                 if (d == "BUY" and be_sl > cur_sl) or \
                         (d == "SELL" and be_sl < cur_sl):

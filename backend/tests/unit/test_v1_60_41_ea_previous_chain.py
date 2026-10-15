@@ -214,7 +214,7 @@ def test_fleet_compat_gate_blocks_a_record_that_drops_the_stable_ex5(chain):
     assert len(fails) == 1 and "NOT accepted" in fails[0] and "CLOSE_ONLY" in fails[0]
     unsigned_prev = dict(good, previous={"version": "1.64", "ex5_sha256": stable["ex5_sha256"]})   # grafted pointer only
     fails = gate.check(unsigned_prev, stable["ex5_sha256"], "prev tag")
-    assert len(fails) == 1 and "does not verify" in fails[0]
+    assert len(fails) == 1 and "could not be verified" in fails[0] and "no signature" in fails[0]
     assert gate.check(bad, None, "no tag") == []                       # nothing to compare against
 
 
