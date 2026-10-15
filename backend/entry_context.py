@@ -62,16 +62,54 @@ async def cached_fred_series() -> dict:
         return {}
 
 
+DXY_MAX_AGE_HOURS = 48          # the CSV is daily — 48 h tolerates a weekend without flagging Monday morning
+
+
+def dxy_cache_age_hours(doc: dict | None, now: datetime | None = None) -> float | None:
+    """Hours since `fetched_at`; None when the cache is missing or has no parsable timestamp (treated as stale)."""
+    if not doc or not doc.get("fetched_at"):
+        return None
+    try:
+        fetched = datetime.fromisoformat(str(doc["fetched_at"]).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return None
+    if fetched.tzinfo is None:
+        fetched = fetched.replace(tzinfo=timezone.utc)
+    return ((now or datetime.now(timezone.utc)) - fetched).total_seconds() / 3600.0
+
+
+def dxy_cache_is_stale(doc: dict | None, now: datetime | None = None) -> bool:
+    age = dxy_cache_age_hours(doc, now)
+    return age is None or age > DXY_MAX_AGE_HOURS
+
+
 async def cached_dxy() -> dict | None:
     """v1.60.39 — CACHE ONLY (dxy_cache._id=latest, refreshed by the signal path / macro worker). The scalp engine
-    builds its context from a bare signal, so without this its entry DXY was always null."""
+    builds its context from a bare signal, so without this its entry DXY was always null.
+    v1.60.51 — the cache is only trusted for DXY_MAX_AGE_HOURS: macro/dxy.get_dxy_snapshot keeps returning the old
+    document when the download fails, so without an age check a week-old regime would be stamped on new entries.
+    Older → None (entry stamped "DXY unknown") + one WARNING per hour."""
     try:
         from database import get_db
-        doc = await get_db().dxy_cache.find_one({"_id": "latest"}, {"current_price": 1, "regime": 1})
-        return doc or None
+        doc = await get_db().dxy_cache.find_one({"_id": "latest"}, {"current_price": 1, "regime": 1, "fetched_at": 1})
+        if not doc:
+            return None
+        age = dxy_cache_age_hours(doc)
+        if age is None or age > DXY_MAX_AGE_HOURS:
+            global _last_stale_warn
+            now_m = datetime.now(timezone.utc).timestamp()
+            if now_m - _last_stale_warn > 3600:
+                _last_stale_warn = now_m
+                logger.warning("DXY cache stale: fetched_at=%s age=%sh (> %dh) — entries stamped DXY unknown",
+                               doc.get("fetched_at"), None if age is None else round(age, 1), DXY_MAX_AGE_HOURS)
+            return None
+        return {"current_price": doc.get("current_price"), "regime": doc.get("regime")}
     except Exception as e:  # noqa: BLE001
         logger.debug("entry context: DXY cache unavailable: %s", e)
         return None
+
+
+_last_stale_warn = 0.0
 
 
 async def build_entry_context(signal: dict) -> dict:
