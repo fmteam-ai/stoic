@@ -19,7 +19,7 @@ FF_FEED = "https://nfs.faireconomy.media/ff_calendar_thisweek.xml"
 
 # Map symbol -> list of currencies it's sensitive to (Forex Factory country codes)
 SYMBOL_CURRENCIES = {
-    "XAUUSD":  {"USD", "ALL"},       # Gold is USD-driven + reacts to global risk
+    "XAUUSD":  {"USD", "EUR", "GBP", "JPY", "CNY"},   # v1.60.39 C8 — explicit, per-account (gold_freeze_currencies)
     "BTCUSD":  {"USD", "ALL"},       # Crypto reacts to Fed + global risk
     "ETHUSD":  {"USD", "ALL"},
     "SOLUSD":  {"USD", "ALL"},
@@ -49,6 +49,99 @@ def _before_min() -> int:
 
 def _after_min() -> int:
     return int(os.environ.get("MACRO_FREEZE_AFTER_MIN", "10"))
+
+
+# v1.60.39 (C8) — which currencies' HIGH-impact events freeze gold. Was implicitly every country ("ALL"):
+# 15 Oct UK GDP froze gold 05:45–06:10. Default = the five that actually move XAUUSD.
+GOLD_FREEZE_CURRENCIES_DEFAULT = ["USD", "EUR", "GBP", "JPY", "CNY"]
+MEDIUM_FREEZE_MIN_DEFAULT = 5          # C9 — USD medium-impact: ±5 min
+AVALANCHE_AFTER_MIN_DEFAULT = 20       # C10 — ≥2 USD high-impact prints within 5 min → after-window 20 min
+AVALANCHE_CLUSTER_MIN = 5
+
+
+def _cfg_int(cfg: dict | None, key: str, default: int, lo: int = 0, hi: int = 240) -> int:
+    try:
+        v = int((cfg or {}).get(key) if (cfg or {}).get(key) is not None else default)
+    except (TypeError, ValueError):
+        v = default
+    return max(lo, min(hi, v))
+
+
+def freeze_settings(cfg: dict | None = None) -> dict:
+    """Per-account freeze windows (Bot Config), env/legacy defaults when unset."""
+    cfg = cfg or {}
+    cur = cfg.get("gold_freeze_currencies")
+    if not isinstance(cur, (list, tuple, set)) or not cur:
+        cur = GOLD_FREEZE_CURRENCIES_DEFAULT
+    return {
+        "before_min": _cfg_int(cfg, "macro_freeze_before_min", _before_min()),
+        "after_min": _cfg_int(cfg, "macro_freeze_after_min", _after_min()),
+        "medium_usd_enabled": bool(cfg.get("macro_freeze_medium_usd_enabled", True)),
+        "medium_min": _cfg_int(cfg, "macro_freeze_medium_min", MEDIUM_FREEZE_MIN_DEFAULT, 0, 60),
+        "avalanche_after_min": _cfg_int(cfg, "macro_freeze_avalanche_after_min", AVALANCHE_AFTER_MIN_DEFAULT),
+        "gold_freeze_currencies": sorted({str(c).upper() for c in cur}),
+    }
+
+
+def freeze_windows(symbol: str, events: list, cfg: dict | None = None) -> list:
+    """Every freeze window for `symbol`, sorted by start: [{start_ts, end_ts, kind, event, ...}].
+
+    kind: "high" (before/after around a HIGH-impact print), "avalanche" (≥2 USD HIGH prints within
+    AVALANCHE_CLUSTER_MIN → longer after-window), "medium" (USD medium-impact ±medium_min, only when the
+    print is not already inside a high window)."""
+    st = freeze_settings(cfg)
+    before_s, after_s = st["before_min"] * 60, st["after_min"] * 60
+    relevant = relevant_events_for(symbol, events, cfg)
+    highs = [e for e in relevant if e.get("impact") == "high"]
+    usd_high_ts = sorted(e["when_ts"] for e in highs if e.get("country") == "USD")
+    windows = []
+    for e in highs:
+        ts = e["when_ts"]
+        cluster = [t for t in usd_high_ts if abs(t - ts) <= AVALANCHE_CLUSTER_MIN * 60]
+        avalanche = e.get("country") == "USD" and len(cluster) >= 2
+        a = st["avalanche_after_min"] * 60 if avalanche else after_s
+        windows.append({"start_ts": ts - before_s, "end_ts": ts + a, "kind": "avalanche" if avalanche else "high",
+                        "event": e, "cluster_size": len(cluster) if avalanche else 1})
+    if st["medium_usd_enabled"] and st["medium_min"] > 0 and "USD" in _affecting(symbol, cfg):
+        m_s = st["medium_min"] * 60
+        for e in events:
+            if e.get("impact") != "medium" or e.get("country") != "USD":
+                continue
+            ts = e["when_ts"]
+            if any(w["start_ts"] <= ts <= w["end_ts"] for w in windows):
+                continue
+            windows.append({"start_ts": ts - m_s, "end_ts": ts + m_s, "kind": "medium", "event": e, "cluster_size": 1})
+    windows.sort(key=lambda w: w["start_ts"])
+    return windows
+
+
+def _window_reason(w: dict, now: float) -> str:
+    e = w["event"]
+    ts = e["when_ts"]
+    mins_to = int((ts - now) / 60)
+    lvl = {"high": "HIGH-impact", "avalanche": f"MACRO AVALANCHE ({w.get('cluster_size')} USD HIGH-impact prints)",
+           "medium": "USD medium-impact"}[w["kind"]]
+    if mins_to >= 0:
+        return f"{lvl} {e['country']} event '{e['title']}' in {mins_to}min — bot frozen to avoid spread widening."
+    settle = "letting market settle" if w["kind"] != "medium" else "short settle window"
+    return f"{lvl} {e['country']} event '{e['title']}' {abs(mins_to)}min ago — {settle}."
+
+
+def _describe_window(w: dict) -> dict:
+    e = w["event"]
+    return {**e, "when_human": datetime.fromtimestamp(e["when_ts"], tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            "freeze_kind": w["kind"], "freeze_start": datetime.fromtimestamp(w["start_ts"], tz=timezone.utc).isoformat(),
+            "freeze_end": datetime.fromtimestamp(w["end_ts"], tz=timezone.utc).isoformat(),
+            "cluster_size": w.get("cluster_size", 1)}
+
+
+def next_freeze(symbol: str, events: list, cfg: dict | None = None, now: float | None = None) -> dict | None:
+    """The next freeze window that has not started yet — "next freeze: <event> at <time>" on the dashboard."""
+    now = time.time() if now is None else now
+    for w in freeze_windows(symbol, events, cfg):
+        if w["start_ts"] > now:
+            return _describe_window(w)
+    return None
 
 
 def _parse_event_time(date_str: str, time_str: str) -> datetime:
@@ -170,21 +263,28 @@ def feed_status() -> dict:
     }
 
 
-def relevant_events_for(symbol: str, events: list) -> list:
+def _affecting(symbol: str, cfg: dict | None = None) -> set:
     sym = symbol.upper()
-    affecting = SYMBOL_CURRENCIES.get(sym, {"USD"})
+    if sym == "XAUUSD":
+        return set(freeze_settings(cfg)["gold_freeze_currencies"])
+    return set(SYMBOL_CURRENCIES.get(sym, {"USD"}))
+
+
+def relevant_events_for(symbol: str, events: list, cfg: dict | None = None) -> list:
+    """Events whose country can freeze `symbol`. Gold is explicit + per-account (C8); crypto keeps "ALL"."""
+    affecting = _affecting(symbol, cfg)
     if "ALL" in affecting:
         return events
     return [e for e in events if e["country"] in affecting]
 
 
-async def upcoming_for(symbol: str, hours: int = 24) -> list:
+async def upcoming_for(symbol: str, hours: int = 24, cfg: dict | None = None) -> list:
     """High/medium-impact events affecting `symbol` in the next `hours`."""
     events = await get_events()
     now = time.time()
     cutoff = now + hours * 3600
     filtered = []
-    for e in relevant_events_for(symbol, events):
+    for e in relevant_events_for(symbol, events, cfg):
         if e["impact"] not in ("high", "medium"):
             continue
         ts = e["when_ts"]
@@ -193,32 +293,17 @@ async def upcoming_for(symbol: str, hours: int = 24) -> list:
     return sorted(filtered, key=lambda x: x["when_ts"])
 
 
-async def macro_freeze_check(symbol: str) -> dict:
-    """Decide whether to freeze trading for `symbol` due to imminent macro event.
+async def macro_freeze_check(symbol: str, cfg: dict | None = None) -> dict:
+    """Decide whether to freeze trading for `symbol` due to an imminent/just-passed macro event.
 
-    Returns: { frozen: bool, reason: str, event: dict or None }
+    Returns: { frozen: bool, reason: str, event: dict or None, kind, next_freeze }
     """
     events = await get_events()
     now = time.time()
-    before_s = _before_min() * 60
-    after_s = _after_min() * 60
-    for e in relevant_events_for(symbol, events):
-        if e["impact"] != "high":
-            continue
-        ts = e["when_ts"]
-        # Freeze window: [event - before_min, event + after_min]
-        if (ts - before_s) <= now <= (ts + after_s):
-            when_dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-            mins_to = int((ts - now) / 60)
-            if mins_to >= 0:
-                reason = (f"HIGH-impact {e['country']} event '{e['title']}' "
-                          f"in {mins_to}min — bot frozen to avoid spread widening.")
-            else:
-                reason = (f"HIGH-impact {e['country']} event '{e['title']}' "
-                          f"{abs(mins_to)}min ago — letting market settle.")
-            return {
-                "frozen": True,
-                "reason": reason,
-                "event": {**e, "when_human": when_dt.strftime("%Y-%m-%d %H:%M UTC")},
-            }
-    return {"frozen": False, "reason": "", "event": None}
+    windows = freeze_windows(symbol, events, cfg)
+    for w in windows:
+        if w["start_ts"] <= now <= w["end_ts"]:
+            return {"frozen": True, "reason": _window_reason(w, now), "event": _describe_window(w),
+                    "kind": w["kind"], "next_freeze": next_freeze(symbol, events, cfg, now)}
+    return {"frozen": False, "reason": "", "event": None, "kind": None,
+            "next_freeze": next_freeze(symbol, events, cfg, now)}
