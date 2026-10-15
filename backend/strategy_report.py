@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 
 from bson import ObjectId
 
-from deferred_shadow import ROLLOVER_BAND, UTC_BANDS, cluster_deferred, utc_band
+from deferred_shadow import LABEL_VERSION, ROLLOVER_BAND, UTC_BANDS, cluster_deferred, utc_band
 from strategy_engines import ENGINE_LABELS
 
 SESSION_ORDER = [b[2] for b in UTC_BANDS] + [ROLLOVER_BAND, "Weekend"]
@@ -102,7 +102,7 @@ def deferred_rows(deferred: list) -> list:
     v1.60.40 — only M1-based verdicts count as labelled; M15 verdicts (too coarse for scalp stops) are reported
     separately as `awaiting_m1` and never enter the win rate."""
     acc: dict = defaultdict(lambda: {"n": 0, "re_evaluations": 0, "labelled": 0, "tp": 0, "sl": 0, "r": 0.0,
-                                     "awaiting_m1": 0, "ambiguous": 0})
+                                     "awaiting_m1": 0, "ambiguous": 0, "invalid": 0})
     for d in cluster_deferred(deferred):
         band = (d.get("shadow") or {}).get("utc_band") or utc_band(d.get("ts"))
         b = acc[band]
@@ -110,6 +110,11 @@ def deferred_rows(deferred: list) -> list:
         b["re_evaluations"] += int(d.get("re_evaluations") or 1)
         sh = d.get("shadow") or {}
         if sh.get("outcome") not in ("tp_first", "sl_first", "timeout"):
+            continue
+        # v1.60.49 (#36) — labels below LABEL_VERSION were produced with HOLD replayed as SELL (#33) and broker-time
+        # ticks bucketed as UTC (#34): every one of them is invalid. They are counted, never scored.
+        if sh.get("invalid") or int(sh.get("label_version") or 1) < LABEL_VERSION:
+            b["invalid"] += 1
             continue
         if sh.get("timeframe") != "M1":
             b["awaiting_m1"] += 1
@@ -131,7 +136,7 @@ def deferred_rows(deferred: list) -> list:
                      "win_rate_ci": [lo, hi] if b["labelled"] else None,
                      "avg_r": round(b["r"] / b["labelled"], 2) if b["labelled"] else None,
                      "awaiting_m1": b["awaiting_m1"],
-                     "ambiguous": b["ambiguous"]})
+                     "ambiguous": b["ambiguous"], "invalid": b["invalid"]})
     return rows
 
 

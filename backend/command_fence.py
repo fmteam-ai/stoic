@@ -45,11 +45,22 @@ def is_stale_ack(trade: dict, ack_intent_id: str | None) -> bool:
     """True when the ack references an intent that is NOT the current
     pending command — a delayed/replayed ack that must be ignored.
     Also true for an intent already executed (replay after the pending
-    command was cleared). Acks without an intent_id (pre-v1.49 EAs)
-    pass through unfenced."""
+    command was cleared), and for an intent-less ack while a fenced command
+    is pending: the EA executed a bare command that has since been replaced
+    (v1.60.48 — a PARTIAL_CLOSE ack must never settle a FULL_CLOSE slot)."""
+    current = (trade.get("pending_modification") or {}).get("intent_id")
     if not ack_intent_id:
-        return False
+        return current is not None
     if ack_intent_id in (trade.get("executed_intents") or []):
         return True
-    current = (trade.get("pending_modification") or {}).get("intent_id")
     return current is not None and ack_intent_id != current
+
+
+def ack_type_mismatch(trade: dict, ack_type: str | None) -> bool:
+    """v1.60.48 — an ack whose type differs from the pending command's type is not that command's ack.
+    The one sanctioned difference is the R-6 netting volume-limited close: a FULL_CLOSE intent dispatched
+    to the EA as PARTIAL_CLOSE (the caller re-maps it after checking the intent_id)."""
+    pending_type = (trade.get("pending_modification") or {}).get("type")
+    if not pending_type or not ack_type or ack_type == pending_type:
+        return False
+    return not (pending_type == "FULL_CLOSE" and ack_type == "PARTIAL_CLOSE")

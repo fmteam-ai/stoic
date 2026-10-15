@@ -85,7 +85,7 @@ def test_m1_feed_from_ea_is_preferred_over_ticks():
     from deferred_shadow import m1_bars_after
     db = FakeDb()
     e = T0.timestamp()
-    db.intraday_candles.rows.append({"user_id": "u1", "symbol": "XAUUSD", "timeframe": "M1",
+    db.intraday_candles.rows.append({"user_id": "u1", "symbol": "XAUUSD", "timeframe": "M1", "label_version": 2,
                                      "bars": [_bar(e - 60, 1, 1, 1, 1), _bar(e + 60, 2, 2, 2, 2), _bar(e + 90000, 3, 3, 3, 3)]})
     db.scalp_ticks.rows.append({"user_id": "u1", "symbol": "XAUUSD", "first_ms": int((e + 1) * 1000),
                                 "last_ms": int((e + 2) * 1000), "ticks": [{"tm": int((e + 1) * 1000), "b": 9, "a": 9}]})
@@ -153,7 +153,7 @@ def test_cluster_deferred_counts_one_idea_per_symbol_direction_within_15_min():
             _dec("BUY", base + timedelta(minutes=6), 4080, 4073, 4094),        # idea 3 — other direction
             _dec("SELL", base + timedelta(minutes=7), 1.1, 1.2, 1.0, symbol="EURUSD")]  # idea 4 — other symbol
     rows[0]["shadow"] = {}                                                      # first unresolved …
-    rows[1]["shadow"] = {"outcome": "tp_first", "r": 2.0, "utc_band": "New York (13:00–21:00 UTC)", "timeframe": "M1"}
+    rows[1]["shadow"] = {"outcome": "tp_first", "r": 2.0, "utc_band": "New York (13:00–21:00 UTC)", "timeframe": "M1", "label_version": 2}
     rows[2]["shadow"] = {"outcome": "sl_first", "r": -1.0, "utc_band": "New York (13:00–21:00 UTC)", "timeframe": "M15"}
     rows[3]["shadow"] = {"outcome": "sl_first", "r": -1.0, "utc_band": "New York (13:00–21:00 UTC)", "timeframe": "M15",
                          "ambiguous": True}
@@ -168,7 +168,7 @@ def test_cluster_deferred_counts_one_idea_per_symbol_direction_within_15_min():
     assert rep["deferred"] == 6 and rep["deferred_ideas"] == 4
     ny = next(r for r in rep["engines"][0]["deferred_shadow"] if r["band"].startswith("New York"))
     # v1.60.40 — only the M1 verdict counts; the M15 (ambiguous) one is reported as awaiting_m1, never in the win rate
-    assert ny["n"] == 4 and ny["re_evaluations"] == 6 and ny["labelled"] == 1 and ny["awaiting_m1"] == 1
+    assert ny["n"] == 4 and ny["re_evaluations"] == 6 and ny["labelled"] == 1 and ny["invalid"] == 1   # v1.60.49: untagged M15 = pre-v2 → invalid
     assert ny["tp_first"] == 1 and ny["win_rate"] == 100.0 and ny["ambiguous"] == 0
     fe = open(os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "src", "components",
                            "StrategyReport.jsx"), encoding="utf-8").read()

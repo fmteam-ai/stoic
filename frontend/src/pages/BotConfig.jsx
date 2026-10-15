@@ -3,7 +3,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { TrackRecord } from "@/components/TrackRecord";
 import { extractBlockerDetail } from "@/lib/fixShortcuts";
-import { diffSavedConfig, fmtValue } from "@/lib/configDrift";
+import { diffSavedConfig, changedFields, fmtValue } from "@/lib/configDrift";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AiOptimizerSection from "@/components/AiOptimizerSection";
 import { OperationalModeCard } from "@/components/OperationalModeCard";
@@ -95,6 +95,7 @@ export default function BotConfig() {
     const [scrollOptimizer, setScrollOptimizer] = useState(false);
     const deepLinkAppliedRef = useRef(false);
     const presetsAnchorRef = useRef(null);
+    const baselineRef = useRef(null);     // v1.60.48 — server state as loaded / last saved (PATCH diff base)
     const optimizerAnchorRef = useRef(null);
 
     useEffect(() => {
@@ -146,7 +147,7 @@ export default function BotConfig() {
         friday_flat_minutes_before: d?.friday_flat_minutes_before ?? 60,
         gold_off_hours_enabled: d?.gold_off_hours_enabled ?? true,
         gold_off_hours_start_utc: d?.gold_off_hours_start_utc || "21:00",
-        gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "06:00",
+        gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "07:00",
         macro_freeze_before_min: d?.macro_freeze_before_min ?? 15,
         macro_freeze_after_min: d?.macro_freeze_after_min ?? 10,
         macro_freeze_medium_usd_enabled: d?.macro_freeze_medium_usd_enabled ?? true,
@@ -165,7 +166,8 @@ export default function BotConfig() {
                 api.get("/accounts"),
                 api.get("/bot/configs"),
             ]);
-            setCfg(withFlatDefaults(c.data)); setProfiles(p.data.profiles); setSupported(s.data.symbols);
+            setCfg(withFlatDefaults(c.data)); baselineRef.current = withFlatDefaults(c.data);
+            setProfiles(p.data.profiles); setSupported(s.data.symbols);
             setPresets(pr.data.presets || []);
             setCustomPresets(pr.data.custom || []);
             setPresetCap(pr.data.policy_risk_cap_pct ?? null);
@@ -233,7 +235,7 @@ export default function BotConfig() {
     const save = async () => {
         setSaving(true); setErr(""); setErrFix(null); setSaveMsg(""); setDrift([]);
         try {
-            const payload = {
+            const fullPayload = {
                 risk_level: cfg.risk_level,
                 symbols: cfg.symbols,
                 active: cfg.active,
@@ -241,14 +243,6 @@ export default function BotConfig() {
                 signal_cooldown_minutes: cfg.signal_cooldown_minutes,
                 max_lot_size: cfg.max_lot_size || 0,
                 auto_execute: cfg.auto_execute,
-                breakeven_enabled: cfg.breakeven_enabled,
-                breakeven_trigger_r: cfg.breakeven_trigger_r,
-                partial_close_enabled: cfg.partial_close_enabled,
-                partial_close_trigger_r: cfg.partial_close_trigger_r,
-                partial_close_fraction: cfg.partial_close_fraction,
-                trailing_enabled: cfg.trailing_enabled,
-                trailing_start_r: cfg.trailing_start_r,
-                trailing_distance_r: cfg.trailing_distance_r,
                 daily_drawdown_pct: cfg.daily_drawdown_pct,
                 daily_drawdown_enabled: cfg.daily_drawdown_enabled,
                 daily_profit_target_r: cfg.daily_profit_target_r ?? 0,
@@ -266,7 +260,6 @@ export default function BotConfig() {
                 anti_tilt_consecutive_losses: cfg.anti_tilt_consecutive_losses,
                 anti_tilt_freeze_hours: cfg.anti_tilt_freeze_hours,
                 trade_of_day_cap: cfg.trade_of_day_cap,
-                asia_session_skip_xau: cfg.asia_session_skip_xau,
                 sl_cooldown_enabled: cfg.sl_cooldown_enabled,
                 sl_cooldown_minutes: cfg.sl_cooldown_minutes,
                 loss_cooldown_enabled: cfg.loss_cooldown_enabled ?? true,
@@ -281,7 +274,7 @@ export default function BotConfig() {
                 friday_flat_minutes_before: cfg.friday_flat_minutes_before ?? 60,
                 gold_off_hours_enabled: cfg.gold_off_hours_enabled ?? true,
                 gold_off_hours_start_utc: cfg.gold_off_hours_start_utc || "21:00",
-                gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "06:00",
+                gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "07:00",
                 macro_freeze_before_min: cfg.macro_freeze_before_min ?? 15,
                 macro_freeze_after_min: cfg.macro_freeze_after_min ?? 10,
                 macro_freeze_medium_usd_enabled: cfg.macro_freeze_medium_usd_enabled ?? true,
@@ -291,13 +284,13 @@ export default function BotConfig() {
                 min_confidence_override: cfg.min_confidence_override,
                 paper_shadow_mode: cfg.paper_shadow_mode,
                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
-                soft_stop_enabled: cfg.soft_stop_enabled ?? false,
-                soft_stop_loss_fraction: cfg.soft_stop_loss_fraction ?? 0.6,
-                soft_stop_min_minutes: cfg.soft_stop_min_minutes ?? 10,
                 let_winners_run: cfg.let_winners_run ?? false,
             };
+            // v1.60.48 — send only what changed since load/last save (PATCH), never the whole form
+            const payload = changedFields(fullPayload, baselineRef.current);
+            if (!Object.keys(payload).length) { setSaveMsg("No changes to save."); setSaving(false); return; }
             const { data } = await api.put(`/bot/config${accountQuery}`, payload);
-            setCfg(withFlatDefaults(data));
+            setCfg(withFlatDefaults(data)); baselineRef.current = withFlatDefaults(data);
             // v1.60.40 — Config Drift Check: every field we sent must come back unchanged
             const drifted = diffSavedConfig(payload, data);
             setDrift(drifted);
@@ -888,12 +881,6 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     </div>
                 </div>
 
-                {/* Asia-session skip XAU */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="asia_session_skip_xau" label="Skip Asia-Session Gold (XAU)" icon={MoonStar} color="#FFD700"
-                        desc="XAUUSD chops sideways during the Asia session (00:00–07:00 UTC) with razor-thin moves and wide spreads. Toggle ON to skip new XAU entries during this window." />
-                </div>
-
                 {/* SL Cooldown */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="sl_cooldown_enabled" label="Post-SL Cooldown" icon={Timer} color="#FF3B30"
@@ -992,7 +979,7 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                 {/* v1.60.38 — XAUUSD off-hours defer window (per account, UTC) */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="gold_off_hours_enabled" label="Gold Off-Hours Window (UTC)" icon={CalendarClock} color="#FFD700"
-                        desc="New XAUUSD entries are deferred inside this UTC window (default 21:00–06:00 = daily rollover + Asian hours paused). Weekends are always blocked; the 2.5× median spread guard still applies outside the window. Deferred signals get a shadow outcome (TP or SL first?) in the Strategy Report — re-enable Asian hours here (end 00:30) once that data justifies it." />
+                        desc="New XAUUSD entries are deferred inside this UTC window (default 21:00–07:00 = daily rollover + Asian session paused; this window replaced the old 'Skip Asia-Session Gold' toggle). Weekends are always blocked; the 2.5× median spread guard still applies outside the window. Deferred signals get a shadow outcome (TP or SL first?) in the Strategy Report — re-enable Asian hours here (end 00:30) once that data justifies it." />
                     {(cfg.gold_off_hours_enabled ?? true) && (
                         <div className="grid grid-cols-2 gap-3 mt-3" data-testid="gold-off-hours-window">
                             {[["gold_off_hours_start_utc", "START (UTC)", "gold-off-hours-start"], ["gold_off_hours_end_utc", "END (UTC)", "gold-off-hours-end"]].map(([field, label, tid]) => (
@@ -1143,57 +1130,19 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                 </div>
             </div>
             <div className="p-5 space-y-4">
-                {/* Break-even */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="breakeven_enabled" label="Break-Even Auto-Shift" icon={Shield}
-                        desc="Once a trade moves +1R in your favor, automatically shift Stop-Loss to entry price. Result: planned price risk on the remainder is removed (gaps, slippage, swap and commissions can still cost)." />
-                    {cfg.breakeven_enabled && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="breakeven_trigger_r" label="TRIGGER (R-multiple)" suffix="R" step={0.1} min={0.5} max={5} />
-                        </div>
-                    )}
-                </div>
-
-                {/* Partial close */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="partial_close_enabled" label="Partial Close at TP1" icon={Scissors} color="#00FF41"
-                        desc="Take 50% of the position off at the first target (1R), let the runner go for the bigger target. Locks in profit and reduces stress." />
-                    {cfg.partial_close_enabled && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="partial_close_trigger_r" label="TRIGGER (R-multiple)" suffix="R" step={0.1} min={0.5} max={5} />
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="partial_close_fraction" label="CLOSE FRACTION" suffix="0-1" step={0.05} min={0.1} max={0.9} />
-                        </div>
-                    )}
-                </div>
-
-                {/* Soft-Stop — iter-41 payoff-ratio repair */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="soft_stop_enabled" label="Soft-Stop — Cut Losers Early" icon={Scissors} color="#FF3B30"
-                        desc="Close a losing trade once it reaches a fraction of the stop distance (e.g. 60%) instead of riding to the full SL. Shrinks average loss — the fix for high win rate but flat profit." />
-                    {cfg.soft_stop_enabled && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="soft_stop_loss_fraction" label="CUT AT FRACTION OF SL" suffix="0.3-0.9" step={0.05} min={0.3} max={0.9} />
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="soft_stop_min_minutes" label="MIN TRADE AGE" suffix="minutes" step={1} min={1} max={120} />
-                        </div>
-                    )}
+                {/* v1.60.48 (audit item 8) — the exit tiers are ENGINE RULES, not knobs: the old breakeven_* /
+                    partial_close_* / soft_stop_* / trailing_* fields were saved but never read by trade_manager. */}
+                <div data-testid="engine-exit-rules" className="rounded-md border border-[#FFD700]/30 bg-[#FFD700]/5 p-4 space-y-2">
+                    <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">ENGINE EXIT RULES · READ-ONLY</div>
+                    <div className="text-xs text-white/80"><span className="text-[#10F2C5] font-mono">SCALP (hf_scalp / hf_scalp_fast)</span> — single TP · stop to entry (+ round-trip costs) at <b>+0.5R</b> · a trade that has not reached +0.5R within <b>90 min</b> is closed · once break-even is armed the trade is risk-free and is left to run to its TP (no second time-stop).</div>
+                    <div className="text-xs text-white/80"><span className="text-[#FFD700] font-mono">LEGACY TIERS</span> — TP1 <b>100 pips</b> / TP2 <b>200 pips</b> · 50% banked at TP1 and SL moved to entry (or Let Winners Run below) · a break-even the broker would clamp below entry is skipped and retried (be_clamped).</div>
+                    <div className="text-[10px] text-white/40">Trailing stops are not part of either engine; the exit ladder is approved by Monte Carlo at entry and may only be re-scaled ×0.65–×1.2 by the adaptive exit engine.</div>
                 </div>
 
                 {/* Let Winners Run — iter-41 payoff-ratio repair */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="let_winners_run" label="Let Winners Run" icon={TrendingUp} color="#10F2C5"
                         desc="At TP1, move SL to break-even WITHOUT banking 50% — the full position keeps running toward TP2/TP3 (half banked at TP2). Raises average win at zero added risk once break-even is set." />
-                </div>
-
-                {/* Trailing */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="trailing_enabled" label="Trailing Stop-Loss" icon={TrendingUp} color="#00FF41"
-                        desc="After the trade moves +1.5R, SL trails behind price at 0.7R distance. Captures larger trends while locking in gains as they grow." />
-                    {cfg.trailing_enabled && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="trailing_start_r" label="START TRAILING AT" suffix="R" step={0.1} min={1.0} max={10} />
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="trailing_distance_r" label="TRAIL DISTANCE" suffix="R" step={0.1} min={0.2} max={5} />
-                        </div>
-                    )}
                 </div>
 
                 {/* Daily drawdown */}

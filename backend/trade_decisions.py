@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 HOLD_RETENTION_DAYS = int(os.environ.get("TRADE_DECISIONS_HOLD_RETENTION_DAYS", "30"))
 EXPIRING_STATUSES = ("held", "deferred")
 
-SNAPSHOT_FIELDS = ("action", "entry_price", "stop_loss", "take_profit",
+SNAPSHOT_FIELDS = ("action", "deferred_action", "entry_price", "stop_loss", "take_profit",
                    "tp1", "tp2", "tp3", "confidence", "rr_ratio", "scope",
                    "entry_style", "session_feats", "news_bias",
                    "news_size_scale", "trend_ride", "regime",

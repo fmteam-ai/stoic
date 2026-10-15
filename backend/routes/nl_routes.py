@@ -125,6 +125,10 @@ async def nl_strategy_targets(symbols: str = "", user=Depends(get_current_user))
 
 
 
+STYLE_PRESET = {"trend_following": "trend_rider", "mean_reversion": "mean_reversion", "scalping": "scalper",
+                "swing": "balanced"}
+
+
 @router.post("/strategy/apply")
 async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
     """Persist a compiled strategy into the user's bot_config(s).
@@ -141,15 +145,30 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
     from research_agent.proposal_targeting import (
         resolve_target_configs, apply_to_bot_configs,
     )
+    # v1.60.48 (Strategy Generator audit):
+    #  (a) "max N trades a day" → trade_of_day_cap; max_concurrent_trades only when the prompt limited open positions
+    #  (b) session_preference / strategy_style are now READ by bot_runner (session gate) and the analyser (active_preset)
+    #  (c) auto_execute is only written when the prompt asked for it — a deploy never silently stops an autopilot bot
+    #  (d) the default target is ONE bot; "matching" / "all" need confirm_multi; every touched config gets an undo
+    #      snapshot (config_versions) and the response carries the per-field diff. preview=true returns the diff only.
     update_fields = {
         "risk_level": compiled.get("risk_level", "medium"),
         "symbols": [s.upper() for s in (compiled.get("symbols") or ["XAUUSD", "BTCUSD"])],
-        "max_concurrent_trades": int(compiled.get("max_concurrent_trades", 2)),
-        "auto_execute": bool(compiled.get("auto_execute", True)),
         "session_preference": compiled.get("session_preference", "any"),
         "strategy_style": compiled.get("strategy_style", "trend_following"),
+        "active_preset": STYLE_PRESET.get(compiled.get("strategy_style") or "", "adaptive"),
         "source": "nl_strategy_builder",
     }
+    if compiled.get("max_concurrent_trades") is not None:
+        update_fields["max_concurrent_trades"] = max(1, min(10, int(compiled["max_concurrent_trades"])))
+    if compiled.get("max_trades_per_day") is not None:
+        update_fields["trade_of_day_cap"] = max(0, min(20, int(compiled["max_trades_per_day"])))
+    if "auto_execute" in compiled and compiled["auto_execute"] is not None:
+        update_fields["auto_execute"] = bool(compiled["auto_execute"])
+    if target in ("matching", "all") and not payload.get("confirm_multi"):
+        raise HTTPException(status_code=409, detail={
+            "code": "multi_target_confirm_required",
+            "message": "Deploy targets one bot by default — pick an account, or confirm the multi-bot deploy."})
     configs, resolved_mode = await resolve_target_configs(
         db, user["id"], update_fields["symbols"], target,
     )
@@ -159,6 +178,16 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
             detail=f"No matching bot configs for target='{target}'. "
                    "Try target='all' or pick a specific bot.",
         )
+    diff = [{"config_id": str(c["_id"]), "account_id": c.get("account_id"),
+             "changes": {k: {"from": c.get(k), "to": v} for k, v in update_fields.items()
+                         if k != "source" and c.get(k) != v}} for c in configs]
+    if payload.get("preview"):
+        return {"ok": True, "preview": True, "target_mode": resolved_mode, "diff": diff, "update_fields": update_fields}
+    from change_governance import snapshot_config
+    undo = []
+    for c in configs:
+        vid = await snapshot_config(db, user["id"], c.get("account_id"), "pre-nl-strategy-deploy")
+        undo.append({"config_id": str(c["_id"]), "account_id": c.get("account_id"), "version_id": vid})
     audit = await apply_to_bot_configs(
         db, configs,
         update_fields=update_fields,
@@ -177,6 +206,8 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
         "applied_count": len(audit),
         "target_mode": resolved_mode,
         "applied_to": audit,
+        "diff": diff,
+        "undo": undo,
     }
 
 

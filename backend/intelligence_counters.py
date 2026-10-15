@@ -10,6 +10,7 @@ Tracks per-user daily counts of "things the intelligence layer prevented":
 Stored in `db.intelligence_counters` with one document per (user_id, day).
 A 24-hour rolling figure is computed by summing today + yesterday.
 """
+import re
 from datetime import datetime, timezone, timedelta
 
 from database import get_db
@@ -25,8 +26,14 @@ def _yesterday() -> str:
     return (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
 
 
+_SLUG = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+
+
 async def increment(user_id: str, kind: str, *, by: int = 1) -> None:
-    if kind not in CATEGORIES or not user_id or by <= 0:
+    # v1.60.48 — no whitelist: every veto/gate slug bot_runner emits (mc_block, liquidity_gate_veto, exhaustion_chase_veto,
+    # eod_quiet_block, loss_cooldown_block, structure_gate_veto, …) is stored, so the Weekly Agent Report Card has data.
+    # CATEGORIES remains the dashboard's headline set only. The slug shape is enforced (it becomes a Mongo field name).
+    if not user_id or by <= 0 or not isinstance(kind, str) or not _SLUG.match(kind) or kind in ("user_id", "day", "updated_at"):
         return
     db = get_db()
     await db.intelligence_counters.update_one(

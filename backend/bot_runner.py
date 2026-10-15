@@ -36,8 +36,12 @@ from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
 from account_reservations import trade_counter_filter
+from streak_losses import is_streak_loss
+from models import BotConfigUpdate as _BotConfigUpdate
 
 logger = logging.getLogger("bot-runner")
+CFG_DEFAULTS = _BotConfigUpdate().model_dump()   # v1.60.48 — runtime defaults = model defaults (audit item 15)
+USER_DIRECTION_CAP_DEFAULT = 1    # v1.60.48 — open automated positions per (symbol, direction) across ALL accounts of a user
 _CURRENT_SIGNAL: contextvars.ContextVar = contextvars.ContextVar("current_signal")
 
 # Internal cooldown tracker { (user_id, symbol): datetime_next_eligible }
@@ -509,7 +513,7 @@ async def _process_user_account_locked(db, cfg: dict):
         )
         return
 
-    risk_level = cfg.get("risk_level", "medium")
+    risk_level = cfg.get("risk_level", CFG_DEFAULTS["risk_level"])            # v1.60.48 — single default source
     auto_exec = (bool(cfg.get("auto_execute", True))
                  and bool(cfg.get("_tier_auto_execute", True)))
     # Paper-shadow mode (iter-39): when the cfg is in shadow mode but not
@@ -529,14 +533,14 @@ async def _process_user_account_locked(db, cfg: dict):
     auto_preset_active = bool(cfg.get("auto_preset_enabled"))
     if auto_preset_active:
         from adaptive_mode import pick_preset_for_regime
-        from strategy_presets import PRESETS as _PRESETS
+        from strategy_presets import PRESETS as _PRESETS, safe_overlay
         pick = pick_preset_for_regime(
             cfg.get("_last_execution_mode"),
             cfg.get("_last_regime"),
         )
         preset_cfg = (_PRESETS.get(pick["preset_key"]) or {}).get("config", {})
         if preset_cfg:
-            cfg = {**cfg, **preset_cfg,
+            cfg = {**cfg, **safe_overlay(cfg, preset_cfg),     # v1.60.48 — never loosens the user's caps/cooldowns
                    "active_preset": f"{pick['preset_key']}_auto",
                    "_auto_preset_source": pick["preset_key"]}
             logger.info("Auto-preset overlay user=%s acct=%s → %s (%s)",
@@ -557,11 +561,11 @@ async def _process_user_account_locked(db, cfg: dict):
         except Exception as e:  # noqa: BLE001
             logger.exception("meta strategy failed user=%s: %s", user_id, e)
 
-    max_concurrent = int(cfg.get("max_concurrent_trades", 3))
+    max_concurrent = int(cfg.get("max_concurrent_trades", CFG_DEFAULTS["max_concurrent_trades"]))
     max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
     min_conf_override = int(cfg.get("min_confidence_override") or 0)
-    spread_filter_enabled = bool(cfg.get("spread_filter_enabled", False))
+    spread_filter_enabled = bool(cfg.get("spread_filter_enabled", CFG_DEFAULTS["spread_filter_enabled"]))
     max_spread_pips = cfg.get("max_spread_pips") or {}
     anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
     anti_tilt_n = int(cfg.get("anti_tilt_consecutive_losses", 3))
@@ -576,7 +580,6 @@ async def _process_user_account_locked(db, cfg: dict):
         trade_of_day_cap = 1 if trade_of_day_cap_default else int(_tod_raw)
     except (TypeError, ValueError):
         trade_of_day_cap, trade_of_day_cap_default = 1, True
-    asia_skip_xau = bool(cfg.get("asia_session_skip_xau", True))
     sl_cooldown_enabled = bool(cfg.get("sl_cooldown_enabled", True))
     sl_cooldown_min = int(cfg.get("sl_cooldown_minutes", _sl_cooldown_minutes_default()) or 0)
 
@@ -595,11 +598,11 @@ async def _process_user_account_locked(db, cfg: dict):
         recent = await db.trades.find(recent_q).sort(
             "closed_at", -1
         ).limit(anti_tilt_n).to_list(length=anti_tilt_n)
-        # A trade counts as a LOSS only when pnl is strictly negative.
-        # Reconciler ghost-closes (exit never reported → pnl 0.0 / None) and
-        # true breakevens must NOT trip the freeze — users were frozen on
-        # days with zero actual losing trades (iter-45 bug).
-        if len(recent) == anti_tilt_n and all(float(r.get("pnl") or 0) < 0 for r in recent):
+        # A trade counts as a LOSS only when it gave back > 0.1R of its planned risk.
+        # Reconciler ghost-closes (pnl 0.0 / None), breakeven scratches (−0.04 after a
+        # BE move) and true breakevens must NOT trip the freeze — users were frozen on
+        # days with zero actual losing trades (iter-45 bug, v1.60.48 scratches).
+        if len(recent) == anti_tilt_n and all(is_streak_loss(r) for r in recent):
             last_close = recent[0].get("closed_at")
             try:
                 lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
@@ -636,14 +639,17 @@ async def _process_user_account_locked(db, cfg: dict):
             continue
 
         # Capital-preservation guards (skip BEFORE expensive AI analysis)
-        if asia_skip_xau and sym.upper() == "XAUUSD":
-            now_h = datetime.now(timezone.utc).hour
-            if now_h < 7:
-                logger.info("Asia-session skip user=%s sym=%s hour=%d", user_id, sym, now_h)
-                await _record_pulse(db, cfg, symbol=sym,
-                    action="SKIP", level="info",
-                    reason="Asia-session skip — XAUUSD pauses until 07:00 UTC (low liquidity).",
-                )
+        # v1.60.48 (audit item 17) — the Asia-session skip merged into the gold off-hours window (default 21:00–07:00 UTC)
+        # v1.60.48 (Strategy Generator b) — session_preference from a deployed NL strategy is enforced here
+        _sess_pref = str(cfg.get("session_preference") or "any").lower()
+        if _sess_pref in ("london", "ny", "tokyo"):
+            from microstructure import current_session as _cur_sess
+            _active = _cur_sess().get("active_sessions") or []
+            if _sess_pref not in _active:
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info",
+                    reason=f"Session preference: strategy trades the {_sess_pref.upper()} session only "
+                           f"(now: {', '.join(_active) or 'off-hours'}).")
+                await inc_intel_counter(user_id, "session_preference_block")
                 continue
 
         if trade_of_day_cap > 0:
@@ -930,7 +936,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 signal["auto_tune"] = tune
                 eff = float(tune.get("effective_threshold") or 0)
                 if 0 < min_conf_override < 100:
-                    eff = min(eff, float(min_conf_override))
+                    eff = max(eff, float(min_conf_override))   # v1.60.48 — the user's floor can only RAISE the bar
                 if (signal.get("confidence") or 0) < eff:
                     auto_tune_block_reason = (
                         f"Auto-tune raised threshold to {eff:.0f}% "
@@ -1083,6 +1089,7 @@ async def _process_user_account_locked(db, cfg: dict):
                                       trend_ride_check)
             from intraday_features import compute_intraday_features
             _feats = compute_intraday_features((cdoc or {}).get("bars") or [])
+            ride = None
             if _feats:
                 signal["session_feats"] = {k: _feats.get(k) for k in (
                     "day_range_pct", "typical_day_range_pct", "range_pos_pct",
@@ -1106,25 +1113,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 # v1.60.36 (revised) — trend-ride STAYS on for scalp engines (the 14 Oct winner reached +217 pips);
                 # every trade records whether it applied (`trend_ride_applied`) so both arms can be compared later
                 # in the Strategy Report before anyone changes a setting.
-                if cfg.get("trend_ride_enabled", True):
-                    ride = trend_ride_check(signal["action"], _feats, _base)
-                    if ride:
-                        try:
-                            _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)
-                            # user policy (2026-07-16): trend-ride may widen the TP but NEVER past the hard cap —
-                            # this is what produced 450-pip gold TPs. v1.60.36: take_profit, tp1/tp2/tp3 and
-                            # tp_pips are widened TOGETHER so the trade's tp fields match the broker TP.
-                            from exit_sync import widen_signal_targets
-                            if widen_signal_targets(signal, _mult, _base):
-                                signal["trend_ride"] = ride
-                                await inc_intel_counter(user_id, "trend_ride_applied")
-                                await _record_pulse(db, cfg, symbol=sym,
-                                    action="INFO", level="info",
-                                    reason=(f"Trend-ride: {ride['day_range_pct']:.2f}% "
-                                            f"{ride['direction']} day — TP widened ×{_mult} "
-                                            f"so the trailing stop can ride the move."))
-                        except (TypeError, ValueError):
-                            pass
+                # v1.60.48 — the widening is applied AFTER the range gate below (the gate judges the base target;
+                # the widened ladder must itself fit the day's range forecast, else the base TP is kept).
+                ride = trend_ride_check(signal["action"], _feats, _base) if cfg.get("trend_ride_enabled", True) else None
             try:
                 from market import get_history
                 rf = build_range_forecast(await get_history(sym),
@@ -1145,6 +1136,30 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "range_gate_veto")
                     continue
                 signal["range_gate_advisory"] = rg
+            if ride:
+                try:
+                    _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)
+                    # user policy (2026-07-16): trend-ride may widen the TP but NEVER past the hard cap —
+                    # this is what produced 450-pip gold TPs. v1.60.36: take_profit, tp1/tp2/tp3 and
+                    # tp_pips are widened TOGETHER so the trade's tp fields match the broker TP.
+                    from exit_sync import widen_signal_targets
+                    _probe = dict(signal)
+                    if widen_signal_targets(_probe, _mult, _base) and range_gate(
+                            signal["action"], signal.get("entry_price"),
+                            _probe.get("tp1") or _probe.get("take_profit"), rf) is None:
+                        widen_signal_targets(signal, _mult, _base)
+                        signal["trend_ride"] = ride
+                        await inc_intel_counter(user_id, "trend_ride_applied")
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="INFO", level="info",
+                            reason=(f"Trend-ride: {ride['day_range_pct']:.2f}% "
+                                    f"{ride['direction']} day — TP widened ×{_mult} "
+                                    f"so the trailing stop can ride the move."))
+                    else:
+                        signal["trend_ride_skipped"] = "widened TP outside the day's range forecast"
+                        await inc_intel_counter(user_id, "trend_ride_skipped_range")
+                except (TypeError, ValueError):
+                    pass
             if _base == "XAUUSD":
                 try:
                     tone = await get_fed_tone()
@@ -1638,6 +1653,22 @@ async def _process_user_account_locked(db, cfg: dict):
             )
             continue
 
+        # v1.60.48 — per-USER cross-account exposure cap. All caps were per account, so on 13–15 Oct 8/10 trades
+        # were the same signal doubled on two accounts (same stop, same event risk, twice the loss). Default: at
+        # most ONE open automated position per (symbol, direction) across every account of the user.
+        user_dir_cap = int(cfg.get("user_direction_cap", USER_DIRECTION_CAP_DEFAULT) or 0)
+        if user_dir_cap > 0:
+            user_q = {k: v for k, v in pyramid_q.items() if k != "account_id"}
+            user_same_dir = await db.trades.count_documents(user_q)
+            if user_same_dir >= user_dir_cap:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn",
+                    reason=(f"Cross-account cap: {user_same_dir} {signal['action']} {sym} already open across "
+                            f"your accounts (cap {user_dir_cap}) — the same signal is not doubled."),
+                )
+                await inc_intel_counter(user_id, "user_direction_cap_block")
+                continue
+
         # Same-direction loss circuit-breaker (P0, iter-48) — if the LAST
         # `LOSS_STREAK_THRESHOLD` closed trades on this (symbol, action) all
         # lost, pause same-direction entries for `LOSS_STREAK_COOLDOWN_HRS`
@@ -1654,7 +1685,7 @@ async def _process_user_account_locked(db, cfg: dict):
         recent_closed = await db.trades.find(ls_q).sort(
             "closed_at", -1).limit(LOSS_STREAK_THRESHOLD).to_list(LOSS_STREAK_THRESHOLD)
         if (len(recent_closed) >= LOSS_STREAK_THRESHOLD
-                and all(float(t.get("pnl") or 0) < 0 for t in recent_closed)):
+                and all(is_streak_loss(t) for t in recent_closed)):   # v1.60.48 — scratches are not losses
             await _record_pulse(db, cfg, symbol=sym,
                 action="SKIP", level="warn",
                 reason=(f"Loss-streak circuit-breaker: last {LOSS_STREAK_THRESHOLD} "
@@ -2579,6 +2610,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 "scope": signal.get("scope"),
                 "trend_ride": signal.get("trend_ride"),
                 "trend_ride_applied": bool(signal.get("trend_ride")),
+                "trend_ride_skipped": signal.get("trend_ride_skipped"),
+                "strategy_class": signal.get("strategy_class"),   # v1.60.48 — were dropped here → trades stored None
+                "market_regime": signal.get("market_regime"),     #   and Regime Gating could not be measured
                 "entry_context": signal.get("entry_context"),
                 "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
                 "news_ai": signal.get("news_ai"),

@@ -28,6 +28,7 @@ ROLLOVER_BAND = "Rollover (21:00–00:30 UTC)"
 HORIZON_SEC = HORIZON_BARS * 900            # 24 h — same span whichever timeframe replays it
 M1_HORIZON_BARS = HORIZON_SEC // 60         # 1440
 CLUSTER_WINDOW_SEC = 15 * 60                # same symbol + direction within 15 min = one idea
+LABEL_VERSION = 2                           # v1.60.49 — #33 direction + #34 broker-offset fix; v1 labels are invalid
 
 
 def utc_band(ts) -> str:
@@ -58,12 +59,19 @@ def _epoch(ts) -> float | None:
         return None
 
 
-def m1_bars_from_ticks(ticks: list, start_epoch: float, end_epoch: float) -> list:
-    """Mid-price ticks ({tm ms, b, a}) → M1 OHLC bars [{t,o,h,l,c,n}] inside (start, end], sorted by t."""
-    buckets: dict = {}
+MAX_BROKER_OFFSET_SEC = 50400
+
+
+def m1_bars_from_ticks(ticks: list, start_epoch: float, end_epoch: float, broker_offset_sec: int = 0,
+                       buckets: dict | None = None) -> list:
+    """Mid-price ticks ({tm ms, b, a}) → M1 OHLC bars [{t,o,h,l,c,n}] inside (start, end], sorted by t.
+    v1.60.49 (#34) — `tm` is BROKER time (MT5 server clock, e.g. UTC+3): `broker_offset_sec` is subtracted so the
+    bars sit on the UTC axis the decision `ts` lives on (labels were using prices from 3 h earlier)."""
+    buckets = {} if buckets is None else buckets
+    off = int(broker_offset_sec or 0)
     for tk in ticks:
         try:
-            tm = int(tk["tm"]) / 1000.0
+            tm = int(tk["tm"]) / 1000.0 - off
             mid = (float(tk["b"]) + float(tk["a"])) / 2.0
         except (KeyError, TypeError, ValueError):
             continue
@@ -81,20 +89,58 @@ def m1_bars_from_ticks(ticks: list, start_epoch: float, end_epoch: float) -> lis
     return [buckets[t] for t in sorted(buckets)]
 
 
-async def m1_bars_after(db, user_id: str, base: str, epoch: float) -> list:
+async def _account_offsets(db, user_id: str) -> dict:
+    """account_id → seconds to subtract from broker time (routes.bridge_routes.broker_offset_sec)."""
+    from routes.bridge_routes import broker_offset_sec
+    out: dict = {}
+    async for acc in db.accounts.find({"user_id": user_id},
+                                      {"broker_time_info": 1, "broker_utc_offset_sec": 1}):
+        out[str(acc["_id"])] = broker_offset_sec(acc)[0]
+    return out
+
+
+async def m1_bars_after(db, user_id: str, base: str, epoch: float, offsets: dict | None = None) -> list:
     """M1 bars after `epoch` (≤ 24 h): EA M1 feed first, then the scalp tick store. [] when neither covers it."""
     end = epoch + HORIZON_SEC
     doc = await db.intraday_candles.find_one({"user_id": user_id, "symbol": base, "timeframe": "M1"}, {"bars": 1})
     bars = [b for b in ((doc or {}).get("bars") or []) if epoch < int(b.get("t") or 0) <= end]
     if bars:
         return bars
-    ticks: list = []
+    if offsets is None:
+        offsets = await _account_offsets(db, user_id)
+    # first_ms/last_ms are broker time too — widen the window by the largest plausible offset, filter exactly below
     cur = db.scalp_ticks.find({"user_id": user_id, "symbol": {"$regex": f"^{re.escape(base)}"},
-                               "last_ms": {"$gt": int(epoch * 1000)}, "first_ms": {"$lte": int(end * 1000)}},
-                              {"ticks": 1}).sort("first_ms", 1)
+                               "last_ms": {"$gt": int((epoch - MAX_BROKER_OFFSET_SEC) * 1000)},
+                               "first_ms": {"$lte": int((end + MAX_BROKER_OFFSET_SEC) * 1000)}},
+                              {"ticks": 1, "account_id": 1}).sort("first_ms", 1)
+    buckets: dict = {}
     async for batch in cur:
-        ticks.extend(batch.get("ticks") or [])
-    return m1_bars_from_ticks(ticks, epoch, end)
+        off = offsets.get(str(batch.get("account_id") or ""), 0)
+        m1_bars_from_ticks(batch.get("ticks") or [], epoch, end, off, buckets)
+    return [buckets[t] for t in sorted(buckets)]
+
+
+def deferred_direction(sig: dict) -> str:
+    """v1.60.49 (#33) — the Execution Optimizer rewrites `action` to HOLD when it defers; the pre-defer direction is
+    kept in `deferred_action`. Older rows (233/233 stored HOLD) fall back to the geometry: TP above entry = BUY."""
+    for k in ("deferred_action", "pre_defer_action"):
+        a = str(sig.get(k) or "").upper()
+        if a in ("BUY", "SELL"):
+            return a
+    a = str(sig.get("action") or "").upper()
+    if a in ("BUY", "SELL"):
+        return a
+    try:
+        entry = float(sig.get("entry_price") or 0)
+        tp = float(sig.get("take_profit") or sig.get("tp3") or sig.get("tp1") or 0)
+        sl = float(sig.get("stop_loss") or 0)
+        if entry and tp and tp != entry:
+            return "BUY" if tp > entry else "SELL"
+        if entry and sl and sl != entry:
+            return "BUY" if sl < entry else "SELL"
+    except (TypeError, ValueError):
+        pass
+    return "HOLD"
 
 
 def _coverage_sec(bars: list, epoch: float) -> float:
@@ -107,6 +153,7 @@ async def resolve_deferred_outcomes(db, user_id: str, limit: int = 300) -> dict:
          "signal.entry_price": {"$exists": True}, "signal.stop_loss": {"$exists": True}},
         {"symbol": 1, "ts": 1, "signal": 1}).sort("ts", 1).to_list(length=limit)
     m15_cache: dict = {}
+    offsets = await _account_offsets(db, user_id)
     resolved = pending = skipped = 0
     by_tf: dict = defaultdict(int)
     for d in rows:
@@ -116,12 +163,12 @@ async def resolve_deferred_outcomes(db, user_id: str, limit: int = 300) -> dict:
         if epoch is None:
             skipped += 1
             continue
-        action = str(sig.get("action") or "").upper()
+        action = deferred_direction(sig)
         entry, sl = float(sig.get("entry_price") or 0), float(sig.get("stop_loss") or 0)
         tp = float(sig.get("take_profit") or sig.get("tp3") or sig.get("tp1") or 0)
 
         sim, tf = None, None
-        m1 = await m1_bars_after(db, user_id, base, epoch)
+        m1 = await m1_bars_after(db, user_id, base, epoch, offsets)
         if m1:
             sim = replay_outcome(action, entry, sl, tp, m1, horizon_bars=M1_HORIZON_BARS)
             tf = "M1"
@@ -146,7 +193,8 @@ async def resolve_deferred_outcomes(db, user_id: str, limit: int = 300) -> dict:
                 continue
         await db.trade_decisions.update_one(
             {"_id": d["_id"]},
-            {"$set": {"shadow": {**sim, "timeframe": tf, "resolved_at": datetime.now(timezone.utc).isoformat(),
+            {"$set": {"shadow": {**sim, "timeframe": tf, "direction": action, "label_version": LABEL_VERSION,
+                                 "resolved_at": datetime.now(timezone.utc).isoformat(),
                                  "utc_band": utc_band(d.get("ts"))}}})
         resolved += 1
         by_tf[tf] += 1
@@ -161,7 +209,7 @@ def cluster_deferred(deferred: list) -> list:
     out: list = []
     for d in rows:
         sig = d.get("signal") or {}
-        key = (base_symbol(d.get("symbol") or sig.get("symbol") or ""), str(sig.get("action") or "").upper())
+        key = (base_symbol(d.get("symbol") or sig.get("symbol") or ""), deferred_direction(sig))
         ts = _epoch(d["ts"])
         c = open_clusters.get(key)
         if c is None or ts - c["start"] > CLUSTER_WINDOW_SEC:
@@ -175,36 +223,52 @@ def cluster_deferred(deferred: list) -> list:
     return out
 
 
-async def rescore_legacy_shadows(db, user_id: str, limit: int = 200) -> dict:
-    """v1.60.39 — shadows stamped before the M1 replay existed (no `timeframe`) are re-run on M1 bars when the
-    tick store covers them (15 Oct: 211 sl_first-on-bar-1 verdicts); otherwise just tagged M15."""
-    rows = await db.trade_decisions.find(
-        {"user_id": user_id, "status": "deferred", "shadow": {"$exists": True}, "shadow.timeframe": {"$exists": False}},
-        {"symbol": 1, "ts": 1, "signal": 1, "shadow": 1}).sort("ts", 1).to_list(length=limit)
+def _legacy_q(user_id: str) -> dict:
+    """Shadows that predate LABEL_VERSION (no timeframe, or no label_version / older one)."""
+    return {"user_id": user_id, "status": "deferred", "shadow": {"$exists": True},
+            "$or": [{"shadow.timeframe": {"$exists": False}}, {"shadow.label_version": {"$exists": False}},
+                    {"shadow.label_version": {"$lt": LABEL_VERSION}}]}
+
+
+async def rescore_legacy_shadows(db, user_id: str, limit: int = 200, *, rescore_all: bool = False) -> dict:
+    """v1.60.39 — shadows stamped before the M1 replay existed (no `timeframe`) are re-run on M1 bars.
+    v1.60.49 — also every label below LABEL_VERSION (HOLD replayed as SELL #33, broker-time ticks #34); with
+    `rescore_all` EVERY shadow is re-scored. The previous label is kept in `shadow.rescored_from`."""
+    q = {"user_id": user_id, "status": "deferred", "shadow": {"$exists": True}} if rescore_all else _legacy_q(user_id)
+    rows = await db.trade_decisions.find(q, {"symbol": 1, "ts": 1, "signal": 1, "shadow": 1}).sort("ts", 1).to_list(length=limit)
+    offsets = await _account_offsets(db, user_id)
     rescored = tagged = 0
     for d in rows:
         sig = d.get("signal") or {}
         base = base_symbol(d.get("symbol") or sig.get("symbol") or "")
         epoch = _epoch(d.get("ts"))
+        action = deferred_direction(sig)
         sim = None
         if epoch is not None:
-            m1 = await m1_bars_after(db, user_id, base, epoch)
+            m1 = await m1_bars_after(db, user_id, base, epoch, offsets)
             if m1:
-                sim = replay_outcome(str(sig.get("action") or "").upper(), float(sig.get("entry_price") or 0),
-                                     float(sig.get("stop_loss") or 0),
+                sim = replay_outcome(action, float(sig.get("entry_price") or 0), float(sig.get("stop_loss") or 0),
                                      float(sig.get("take_profit") or sig.get("tp3") or sig.get("tp1") or 0),
                                      m1, horizon_bars=M1_HORIZON_BARS)
                 if sim and sim["outcome"] == "timeout" and _coverage_sec(m1, epoch) < HORIZON_SEC - 900:
                     sim = None
+        old = d.get("shadow") or {}
         if sim:
-            old = d.get("shadow") or {}
             await db.trade_decisions.update_one({"_id": d["_id"]}, {"$set": {"shadow": {
-                **sim, "timeframe": "M1", "resolved_at": datetime.now(timezone.utc).isoformat(),
+                **sim, "timeframe": "M1", "direction": action, "label_version": LABEL_VERSION,
+                "resolved_at": datetime.now(timezone.utc).isoformat(),
                 "utc_band": old.get("utc_band") or utc_band(d.get("ts")),
-                "rescored_from": {"timeframe": "M15", "outcome": old.get("outcome"), "r": old.get("r")}}}})
+                "rescored_from": {"timeframe": old.get("timeframe") or "M15", "outcome": old.get("outcome"),
+                                  "r": old.get("r"), "label_version": old.get("label_version") or 1,
+                                  "direction": old.get("direction")}}}})
             rescored += 1
         else:
-            await db.trade_decisions.update_one({"_id": d["_id"]}, {"$set": {"shadow.timeframe": "M15"}})
+            # no M1 coverage — the old label cannot be trusted (v1 direction/offset bugs): mark it invalid, keep it
+            await db.trade_decisions.update_one({"_id": d["_id"]}, {"$set": {
+                "shadow.timeframe": old.get("timeframe") or "M15", "shadow.label_version": LABEL_VERSION,
+                "shadow.invalid": True, "shadow.invalid_reason": "no M1 coverage — pre-v2 label unverifiable",
+                "shadow.rescored_from": {"timeframe": old.get("timeframe") or "M15", "outcome": old.get("outcome"),
+                                         "r": old.get("r"), "label_version": old.get("label_version") or 1}}})
             tagged += 1
     return {"rescored": rescored, "tagged_m15": tagged}
 
@@ -217,8 +281,7 @@ async def sweep_deferred_shadows(db) -> int:
             total += (await resolve_deferred_outcomes(db, uid))["resolved"]
         except Exception as e:  # noqa: BLE001
             logger.warning("deferred shadow sweep failed user=%s: %s", uid, e)
-    legacy_users = await db.trade_decisions.distinct(
-        "user_id", {"status": "deferred", "shadow": {"$exists": True}, "shadow.timeframe": {"$exists": False}})
+    legacy_users = await db.trade_decisions.distinct("user_id", {k: v for k, v in _legacy_q("").items() if k != "user_id"})
     for uid in legacy_users:
         try:
             total += (await rescore_legacy_shadows(db, uid))["rescored"]

@@ -46,11 +46,12 @@ def _now():
 # ------------------------------------------------------------ freeze guard
 async def freeze_check(db, user_id: str) -> dict:
     """Learning freezes while the system is in a bad short-term state."""
+    from streak_losses import STREAK_FIELDS, is_streak_loss
     recent = await db.trades.find(
         {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True},
          "pnl": {"$ne": None}},
-        {"pnl": 1, "closed_at": 1}).sort("closed_at", -1).to_list(length=STREAK_FREEZE_N)
-    if len(recent) >= STREAK_FREEZE_N and all(float(t["pnl"]) < 0 for t in recent):
+        STREAK_FIELDS).sort("closed_at", -1).to_list(length=STREAK_FREEZE_N)
+    if len(recent) >= STREAK_FREEZE_N and all(is_streak_loss(t) for t in recent):
         try:
             last = datetime.fromisoformat(str(recent[0]["closed_at"]))
             if last.tzinfo is None:

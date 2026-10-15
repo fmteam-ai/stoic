@@ -80,6 +80,31 @@ class _Cursor:
             raise StopAsyncIteration
 
 
+def _agg_eval(expr, r):
+    if isinstance(expr, str) and expr.startswith("$"):
+        return r.get(expr[1:])
+    if isinstance(expr, list):
+        return [_agg_eval(x, r) for x in expr]
+    if not isinstance(expr, dict):
+        return expr
+    if "$literal" in expr:
+        return expr["$literal"]
+    if "$ifNull" in expr:
+        a, b = expr["$ifNull"]
+        v = _agg_eval(a, r)
+        return v if v is not None else _agg_eval(b, r)
+    if "$add" in expr:
+        return sum(_agg_eval(x, r) or 0 for x in expr["$add"])
+    if "$concatArrays" in expr:
+        return [x for arr in expr["$concatArrays"] for x in (_agg_eval(arr, r) or [])]
+    if "$slice" in expr:
+        arr, n = expr["$slice"]
+        arr = _agg_eval(arr, r) or []
+        return arr[n:] if n < 0 else arr[:n]
+    return {k: _agg_eval(v, r) for k, v in expr.items()}
+
+
+
 class _Res:
     def __init__(self, **kw):
         self.__dict__.update(kw)
@@ -98,7 +123,7 @@ class FakeCollection:
             rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=(direction == -1))
         return _Cursor(rows)
 
-    async def find_one(self, q=None, proj=None, sort=None, projection=None):
+    async def find_one(self, q=None, proj=None, sort=None, projection=None, session=None):
         rows = [r for r in self.rows if _match(r, q or {})]
         for key, direction in reversed(list(sort or [])):
             rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=(direction == -1))
@@ -121,18 +146,23 @@ class FakeCollection:
         return out
 
 
-    async def insert_one(self, doc):
+    async def insert_one(self, doc, session=None):
         d = dict(doc)
         d.setdefault("_id", ObjectId())
         self.rows.append(d)
         return _Res(inserted_id=d["_id"])
 
-    async def insert_many(self, docs):
+    async def insert_many(self, docs, session=None):
         for d in docs:
             await self.insert_one(d)
         return _Res(inserted_id=None)
 
     def _apply(self, r, upd):
+        if isinstance(upd, list):                           # aggregation-pipeline update ($literal/$add/$ifNull/"$field")
+            for stage in upd:
+                for k, v in (stage.get("$set") or {}).items():
+                    r[k] = _agg_eval(v, r)
+            return
         for k, v in (upd.get("$set") or {}).items():
             if "." in k:                                   # dotted $set → nested dict
                 cur = r
@@ -172,7 +202,7 @@ class FakeCollection:
             return _Res(matched_count=0, modified_count=0, upserted_id=d["_id"])
         return _Res(matched_count=0, modified_count=0, upserted_id=None)
 
-    async def replace_one(self, q, doc, upsert=False):
+    async def replace_one(self, q, doc, upsert=False, session=None):
         for i, r in enumerate(self.rows):
             if _match(r, q):
                 self.rows[i] = dict(doc)
@@ -209,7 +239,7 @@ class FakeCollection:
         self.rows[:] = keep
         return _Res(deleted_count=n)
 
-    async def delete_one(self, q):
+    async def delete_one(self, q, session=None):
         for i, r in enumerate(self.rows):
             if _match(r, q):
                 del self.rows[i]

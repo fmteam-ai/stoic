@@ -27,8 +27,9 @@ this exact schema (do not invent extra keys):
 {
   "risk_level": "low" | "medium" | "high" | "extreme",
   "symbols": ["XAUUSD" | "BTCUSD" | "EURUSD" | ...],
-  "max_concurrent_trades": 1..10,
-  "auto_execute": true | false,
+  "max_concurrent_trades": 1..10,        (positions open AT THE SAME TIME — "max 2 trades at once")
+  "max_trades_per_day": 0..20,           (NEW entries per UTC day — "max 2 trades a day"; 0 = unlimited)
+  "auto_execute": true | false,          (ONLY when the user explicitly asks to turn automatic execution on/off)
   "session_preference": "london" | "ny" | "tokyo" | "any",
   "strategy_style": "trend_following" | "mean_reversion" | "scalping" | "swing",
   "notes": "...one short sentence explaining your translation..."
@@ -39,7 +40,9 @@ Rules:
 - If the prompt is ambiguous, output: {"clarification_needed": "...question..."}
 - Map vague risk words: 'safe/conservative'→low, 'balanced'→medium, 'aggressive'→high, 'yolo/max'→extreme
 - Default symbols to ["XAUUSD","BTCUSD"] if not specified
-- Always include max_concurrent_trades (default 2)
+- Include max_concurrent_trades only when the prompt limits SIMULTANEOUS positions; include max_trades_per_day only
+  when it limits trades per day ("2 trades a day" → max_trades_per_day: 2, NOT max_concurrent_trades)
+- Omit auto_execute unless the user explicitly asks to enable or disable automatic execution — never default it
 """
 
 

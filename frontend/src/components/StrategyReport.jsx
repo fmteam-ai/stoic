@@ -43,8 +43,14 @@ function Bands({ title, rows, testid, showPredicted }) {
 
 // v1.60.38 — deferred signals (off-hours window / spread guard): would TP or SL have hit first?
 function DeferredBands({ rows, testid }) {
+    const invalid = rows.reduce((a, r) => a + (r.invalid || 0), 0);
     return (
         <div data-testid={testid}>
+            {invalid > 0 && (
+                <div data-testid={`${testid}-invalid-flag`} className="mb-1 border border-[#FF3B30]/40 bg-[#FF3B30]/10 px-2 py-1 font-mono text-[10px] text-[#FF3B30]">
+                    {invalid} deferred shadow label{invalid === 1 ? "" : "s"} INVALID (pre-v2: HOLD replayed as SELL · broker-time ticks bucketed as UTC) — excluded from every rate until re-scored.
+                </div>
+            )}
             <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">DEFERRED · SHADOW OUTCOME (TP FIRST?) · ONE ROW PER IDEA (SYMBOL + DIRECTION WITHIN 15 MIN) · M1 VERDICTS ONLY</div>
             <table className="w-full font-mono text-[11px]">
                 <thead>
@@ -64,6 +70,7 @@ function DeferredBands({ rows, testid }) {
                             <td className="text-right text-[#E4E4E7]">{r.n}{r.re_evaluations > r.n && <span className="text-[#52525B]"> ({r.re_evaluations})</span>}</td>
                             <td className="text-right text-[#71717A]">
                                 {r.labelled}{r.awaiting_m1 > 0 && <span className="text-[#52525B]" title="M15-only verdicts — too coarse for scalp stops, not counted"> (+{r.awaiting_m1})</span>}
+                                {r.invalid > 0 && <span className="text-[#FF3B30]" title="pre-v2 labels (direction / broker-offset bugs) — invalid, not counted"> ✕{r.invalid}</span>}
                                 {r.ambiguous > 0 && <span className="text-[#FFB000]" title="SL and TP touched inside one bar — resolution-limited, counted SL-first"> ·{r.ambiguous}?</span>}
                             </td>
                             <td className={`text-right ${r.win_rate == null ? "text-[#52525B]" : r.win_rate >= 50 ? "text-[#00FF41]" : "text-[#FF3B30]"}`}>

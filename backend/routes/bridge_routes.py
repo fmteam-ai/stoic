@@ -2005,11 +2005,17 @@ async def modification_ack(payload: BridgeModificationAck):
 
     # audit r3 P0 · sequence fence: a delayed/replayed ack for a SUPERSEDED
     # command must never clear the current one or apply an older stop.
-    from command_fence import is_stale_ack
+    from command_fence import is_stale_ack, ack_type_mismatch
     if is_stale_ack(trade, payload.intent_id):
         logger.warning("stale modification-ack ignored trade=%s intent=%s",
                        payload.trade_id, payload.intent_id)
         return {"status": "stale_intent_ignored"}
+    if ack_type_mismatch(trade, payload.type):
+        # v1.60.48 — e.g. a PARTIAL_CLOSE ack arriving while a MODIFY_SL is pending: not this command's ack
+        logger.warning("modification-ack type mismatch ignored trade=%s ack=%s pending=%s intent=%s",
+                       payload.trade_id, payload.type,
+                       (trade.get("pending_modification") or {}).get("type"), payload.intent_id)
+        return {"status": "type_mismatch_ignored"}
 
     # EA v1.50 — superseded (stale-sequence) TERMINAL ack: clear the queue
     # entry it refers to WITHOUT ever treating the command as executed.
@@ -2046,7 +2052,7 @@ async def modification_ack(payload: BridgeModificationAck):
     _close_path = bool(trade.get("close_requested")) and bool(payload.intent_id) \
         and payload.intent_id == trade.get("close_idem_key")
     if payload.type == "PARTIAL_CLOSE" and (
-            (_pm.get("type") == "FULL_CLOSE" and (not payload.intent_id or payload.intent_id == _pm.get("intent_id")))
+            (_pm.get("type") == "FULL_CLOSE" and payload.intent_id and payload.intent_id == _pm.get("intent_id"))
             or _close_path):
         payload.type = "FULL_CLOSE"
         payload.netting_volume_limited = True

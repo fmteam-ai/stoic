@@ -93,7 +93,7 @@ def test_held_run_records_held_live_and_release_id_shows_it(tmp_path, monkeypatc
 
 # ── 4 · re-anchor shipped in the image + wrapper ──────────────────────────────────────────────────────────
 def test_reanchor_script_in_image_and_wrapper_documented():
-    assert "COPY scripts/reanchor_audit_chain.py scripts/check_ea_fleet_compat.py /app/scripts/" in _read("Dockerfile.backend")
+    assert "COPY scripts/reanchor_audit_chain.py scripts/check_ea_fleet_compat.py scripts/relabel_deferred_shadows.py /app/scripts/" in _read("Dockerfile.backend")
     w = _read("deploy", "reanchor-audit-chain.sh")
     assert "docker compose exec -T backend python /app/scripts/reanchor_audit_chain.py" in w and 'python - "$@" < scripts/reanchor_audit_chain.py' in w
     assert os.access(os.path.join(ROOT, "deploy", "reanchor-audit-chain.sh"), os.X_OK)

@@ -184,7 +184,9 @@ class TestCommandFence:
 
     def test_is_stale_ack_matrix(self):
         cur = {"pending_modification": {"intent_id": "new"}}
-        assert cf.is_stale_ack(cur, None) is False           # pre-v1.49 EA
+        assert cf.is_stale_ack(cur, None) is True            # v1.60.48 — bare ack vs FENCED pending: the EA executed a
+        #                                                      replaced command (PR audit item 1) — never settles this slot
+        assert cf.is_stale_ack({"pending_modification": {"type": "MODIFY_SL"}}, None) is False  # legacy unfenced pending
         assert cf.is_stale_ack(cur, "new") is False          # current cmd
         assert cf.is_stale_ack(cur, "old") is True           # superseded
         assert cf.is_stale_ack({}, "old") is False           # nothing pending

@@ -439,12 +439,12 @@ async def _maybe_autotighten(db, trade: dict, signal: dict, pattern_key: str) ->
     new_min = min(95, max(50, (cur_min if cur_min > 0 else 65) + 5))
     if new_min <= cur_min:
         return None
-
-    await db.bot_configs.update_one(
-        {"_id": cfg["_id"]},
-        {"$set": {"min_confidence_override": new_min,
-                  "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
+    from config_promotion import apply_config_change, user_set
+    if user_set(cfg, "min_confidence_override"):
+        return None                                   # v1.60.48 — never override a value the user set
+    await apply_config_change(db, user_id, cfg.get("account_id"), {"min_confidence_override": new_min},
+                              label="loss-postmortem tighten", source="loss_postmortem",
+                              audit_detail={"pattern_key": pattern_key})
     adj_doc = {
         "user_id": user_id,
         "config_id": str(cfg["_id"]),
@@ -586,12 +586,11 @@ async def maybe_record_winner(db, trade_id) -> dict | None:
     new_min = max(50, cur_min - 3)
     if new_min >= cur_min:
         return None  # already at floor
-
-    await db.bot_configs.update_one(
-        {"_id": cfg["_id"]},
-        {"$set": {"min_confidence_override": new_min,
-                  "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
+    from config_promotion import apply_config_change, user_set
+    if user_set(cfg, "min_confidence_override"):
+        return None                                   # v1.60.48 — never loosen a floor the user set
+    await apply_config_change(db, user_id, cfg.get("account_id"), {"min_confidence_override": new_min},
+                              label="loss-postmortem loosen", source="loss_postmortem")
     adj_doc = {
         "user_id": user_id,
         "config_id": str(cfg["_id"]),

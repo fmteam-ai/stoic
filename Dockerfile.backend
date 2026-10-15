@@ -34,7 +34,7 @@ COPY backend/ ./
 # RC dependency lock, release hashes — without them the gates report "unavailable".
 COPY scripts/verify_ea_release.py /app/scripts/verify_ea_release.py
 # v1.60.43 — operator scripts that need the backend's Python + libs (the host runs 3.9): see docs/AUDIT_CHAIN_REANCHOR.md
-COPY scripts/reanchor_audit_chain.py scripts/check_ea_fleet_compat.py /app/scripts/
+COPY scripts/reanchor_audit_chain.py scripts/check_ea_fleet_compat.py scripts/relabel_deferred_shadows.py /app/scripts/
 COPY release/rc_lock.json /app/release/rc_lock.json
 COPY release/release_key.fingerprint /app/release/release_key.fingerprint
 COPY docs/RELEASE_HASHES.json /app/docs/RELEASE_HASHES.json

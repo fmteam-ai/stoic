@@ -183,15 +183,8 @@ class BotConfigUpdate(BaseModel):
     # VTMarkets ran 30 min invisibly). Clamped on save to the plan floor (features.min_signal_cooldown_minutes).
     signal_cooldown_minutes: int = Field(default=5, ge=1, le=1440)
     auto_execute: bool = True
-    # Profit Protection Suite
-    breakeven_enabled: bool = True            # move SL to entry after +1R
-    breakeven_trigger_r: float = Field(default=1.0, ge=0.1, le=10.0)
-    partial_close_enabled: bool = True        # take 50% off at TP1
-    partial_close_trigger_r: float = Field(default=1.0, ge=0.1, le=10.0)
-    partial_close_fraction: float = Field(default=0.5, gt=0.0, lt=1.0)
-    trailing_enabled: bool = True             # trail SL after partial close
-    trailing_start_r: float = Field(default=1.5, ge=0.1, le=20.0)
-    trailing_distance_r: float = Field(default=0.7, gt=0.0, le=10.0)
+    # v1.60.48 (audit item 8) — breakeven_* / partial_close_* / trailing_* / soft_stop_* REMOVED: they were saved but
+    # never read by trade_manager (fixed engine tiers: scalp BE +0.5R + 90-min time-stop; legacy TP1 100 / TP2 200).
     daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)
     daily_drawdown_enabled: bool = True
     weekly_drawdown_pct: float = Field(default=7.0, gt=0.0, le=40.0)
@@ -204,6 +197,11 @@ class BotConfigUpdate(BaseModel):
     # `0` / `null` = disabled.
     daily_profit_target_r: float = Field(default=0.0, ge=0.0, le=20.0)
     daily_profit_target_action: Literal["lock", "stop"] = "lock"
+    # v1.60.48 (audit item 14) — sent by the UI and coerced by the route, but was missing here → silently dropped
+    daily_profit_target_escalate: bool = False
+    daily_profit_target_escalate_step_r: float = Field(default=1.0, ge=0.25, le=10.0)
+    # v1.60.48 (audit item 7) — open automated positions per (symbol, direction) across ALL accounts; 0 = off
+    user_direction_cap: int = Field(default=1, ge=0, le=10)
     # Spread Filter — ON by default (audit C3): spread is a first-order
     # execution cost; thresholds are per-symbol and broker-tunable.
     spread_filter_enabled: bool = True
@@ -222,7 +220,7 @@ class BotConfigUpdate(BaseModel):
     # Weekends stay blocked; the 2.5× median spread guard still applies outside the window.
     gold_off_hours_enabled: bool = True
     gold_off_hours_start_utc: str = "21:00"
-    gold_off_hours_end_utc: str = "06:00"
+    gold_off_hours_end_utc: str = "07:00"   # v1.60.48 (audit item 17) — absorbs the old asia_session_skip_xau (<07:00)
     # v1.60.39 C8–C10 — macro freeze windows (per account). Gold HIGH-impact freeze is explicit by currency
     # (was every country: 15 Oct UK GDP froze gold); USD medium-impact prints get a short ±5 min freeze; ≥2 USD
     # HIGH-impact prints within 5 min ("macro avalanche", e.g. PPI + Retail Sales) extend the after-window to 20 min.
@@ -303,7 +301,6 @@ class BotConfigUpdate(BaseModel):
     anti_tilt_consecutive_losses: int = 3
     anti_tilt_freeze_hours: int = 4
     trade_of_day_cap: int = 1   # max NEW trades per symbol per UTC day; 0 = unlimited
-    asia_session_skip_xau: bool = True
     # Per-symbol cooldown after a stop-loss hit — prevents revenge-regime re-entry
     sl_cooldown_enabled: bool = True
     sl_cooldown_minutes: int = 45
@@ -357,11 +354,6 @@ class BotConfigUpdate(BaseModel):
     # is bypassed only while auto is enabled.
     auto_preset_enabled: bool = False
     # ───── iter-41 · Payoff-ratio repair (high win rate / oversized losers) ─
-    # Soft-Stop: cut a losing trade early at a fraction of its SL distance
-    # instead of riding to the full stop. Directly shrinks the average loss.
-    soft_stop_enabled: bool = False
-    soft_stop_loss_fraction: float = 0.6   # close at 60% of the SL distance
-    soft_stop_min_minutes: int = 10        # min trade age before it may fire
     # Let Winners Run: at TP1 move SL to break-even WITHOUT banking 50% —
     # full size continues toward TP2/TP3. Raises the average win.
     let_winners_run: bool = False
@@ -370,9 +362,6 @@ class BotConfigUpdate(BaseModel):
     def validate_relationships(self):
         if self.adaptive_risk_floor_pct > self.adaptive_risk_cap_pct:
             raise ValueError("adaptive risk floor cannot exceed cap")
-        if (self.trailing_enabled and self.breakeven_enabled
-                and self.trailing_start_r < self.breakeven_trigger_r):
-            raise ValueError("trailing should start at or after breakeven")
         return self
 
 
@@ -581,3 +570,11 @@ class QuoteOut(BaseModel):
     low: Optional[float] = None
     timestamp: datetime
     cached: bool = False
+
+
+# v1.60.48 (audit items 8 + 17) — config fields that no longer exist; stripped from presets / overlays / saves.
+DEAD_CONFIG_FIELDS = frozenset({
+    "breakeven_enabled", "breakeven_trigger_r", "partial_close_enabled", "partial_close_trigger_r",
+    "partial_close_fraction", "trailing_enabled", "trailing_start_r", "trailing_distance_r",
+    "soft_stop_enabled", "soft_stop_loss_fraction", "soft_stop_min_minutes", "asia_session_skip_xau",
+})

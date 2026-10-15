@@ -87,12 +87,21 @@ async def _transactions_supported(db) -> bool:
     return _txn_support
 
 
+USER_SOURCES = {"config_update", "user"}
+
+
+def user_set(cfg: dict | None, field: str) -> bool:
+    """v1.60.48 — True when the last writer of `field` was the user (apply_config_change records per-field sources)."""
+    return ((cfg or {}).get("field_sources") or {}).get(field) in USER_SOURCES
+
+
 async def _apply(db, user_id, account_id, update, label, source,
                  audit_detail, now, session=None) -> str | None:
     prev = await db.bot_configs.find_one(_cfg_filter(user_id, account_id),
                                          session=session) or {}
+    sets = {**update, **{f"field_sources.{k}": source for k in update if prev.get(k) != update[k]}}
     await db.bot_configs.update_one(_cfg_filter(user_id, account_id),
-                                    {"$set": update}, session=session)
+                                    {"$set": sets}, session=session)
     cfg = await db.bot_configs.find_one(_cfg_filter(user_id, account_id),
                                         session=session)
     vid = await record_version(db, cfg, label=label, source=source,

@@ -1158,12 +1158,17 @@ class TestRound8ProtectionRecovery:
         db = self._guard_db([tr])
         out = asyncio.run(repair_unprotected_positions(db))
         assert out["stops_queued"] == 1
-        sets = [c.args[1] for c in db.trades.update_one.call_args_list]
-        mod = [s for s in sets if s.get("$set", {}).get("protection_state")
-               == "EMERGENCY_STOP_PENDING"][0]
-        pend = mod["$set"]["pending_modification"]
-        assert pend["type"] == "MODIFY_SL" and pend["new_sl"] < 1.08
-        assert mod["$inc"]["protection_repair_attempts"] == 1
+        # v1.60.48 — the emergency stop is a FENCED command (command_fence.stamp_pending_modification pipeline)
+        fau = [c for c in db.trades.find_one_and_update.call_args_list]
+        assert fau, "emergency stop must go through command_fence.stamp_pending_modification"
+        pipeline = fau[0].args[1]
+        set2 = pipeline[1]["$set"]
+        assert set2["protection_state"]["$literal"] == "EMERGENCY_STOP_PENDING"
+        pend = set2["pending_modification"]
+        assert pend["type"]["$literal"] == "MODIFY_SL" and pend["new_sl"]["$literal"] < 1.08
+        assert pend["intent_id"]["$literal"] and pend["seq"] == "$command_seq"
+        incs = [c.args[1] for c in db.trades.update_one.call_args_list if "$inc" in c.args[1]]
+        assert incs[0]["$inc"]["protection_repair_attempts"] == 1
         db.notifications.insert_one.assert_awaited()
         # new scalp entries blocked for the account
         from scalp.engine import BLOCK_MISSING_PROTECTION, account_block_reasons

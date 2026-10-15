@@ -24,10 +24,10 @@ from intelligence_counters import increment as inc_intel_counter
 logger = logging.getLogger("position-protector")
 
 
-async def _imminent_high_impact(symbol: str, lead_min: int) -> dict | None:
+async def _imminent_high_impact(symbol: str, lead_min: int, cfg: dict | None = None) -> dict | None:
     """Return the soonest HIGH-impact event for `symbol` within `lead_min` minutes, or None."""
     try:
-        events = await upcoming_for(symbol, hours=1)
+        events = await upcoming_for(symbol, hours=1, cfg=cfg)   # v1.60.48 — per-account freeze currencies
     except Exception as e:
         logger.warning("upcoming_for failed sym=%s: %s", symbol, e)
         return None
@@ -50,12 +50,19 @@ async def sweep_user(db, user_id: str, cfg: dict) -> int:
     if lead_min <= 0:
         return 0
 
-    cursor = db.trades.find({
-        "user_id": user_id,
-        "status": "open",
-        "close_requested": {"$ne": True},
-    })
-    open_trades = await cursor.to_list(length=200)
+    # v1.60.48 — scoped like friday_flat.sweep_user: this config's account(s) and bot-managed trades only.
+    # Before, every open trade of the user (manual ones, other accounts' configs) was flattened by any config.
+    q = {"user_id": user_id, "status": "open", "close_requested": {"$ne": True}, "origin": "auto"}
+    cfg_account_id = cfg.get("account_id")
+    if cfg_account_id:
+        q["account_id"] = cfg_account_id
+    else:
+        ov = await db.bot_configs.find({"user_id": user_id, "account_id": {"$nin": [None]}},
+                                       {"account_id": 1}).to_list(length=50)
+        ov_ids = [o["account_id"] for o in ov if o.get("account_id")]
+        if ov_ids:
+            q["account_id"] = {"$nin": ov_ids}
+    open_trades = await db.trades.find(q).to_list(length=200)
     flattened = 0
 
     # Cache event lookups per symbol within one sweep
@@ -66,7 +73,7 @@ async def sweep_user(db, user_id: str, cfg: dict) -> int:
         if not sym:
             continue
         if sym not in cache:
-            cache[sym] = await _imminent_high_impact(sym, lead_min)
+            cache[sym] = await _imminent_high_impact(sym, lead_min, cfg)
         event = cache[sym]
         if not event:
             continue

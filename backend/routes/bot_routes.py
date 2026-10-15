@@ -62,47 +62,13 @@ async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = No
         cfg = await db.bot_configs.find_one(_config_filter(user_id, account_id))
         if cfg:
             return cfg
+    # v1.60.48 (audit item 15) — ONE source of defaults: models.BotConfigUpdate (conservative first-live defaults,
+    # audit C2/C3: risk low, 1 concurrent trade, spread filter ON). This dict used to disagree (medium / 3 / off).
     new_cfg = {
+        **BotConfigUpdate().model_dump(),
         "user_id": user_id,
         "account_id": account_id,  # None = default profile
-        "risk_level": "medium",
-        "symbols": ["XAUUSD", "BTCUSD"],
         "active": False,
-        "max_concurrent_trades": 3,
-        "auto_execute": True,
-        "breakeven_enabled": True,
-        "breakeven_trigger_r": 1.0,
-        "partial_close_enabled": True,
-        "partial_close_trigger_r": 1.0,
-        "partial_close_fraction": 0.5,
-        "trailing_enabled": True,
-        "trailing_start_r": 1.5,
-        "trailing_distance_r": 0.7,
-        "daily_drawdown_pct": 3.0,
-        "daily_drawdown_enabled": True,
-        "weekly_drawdown_pct": 7.0,
-        "weekly_drawdown_enabled": True,
-        "spread_filter_enabled": False,
-        "max_spread_pips": {"XAUUSD": 50.0, "BTCUSD": 100.0},
-        "auto_tune_enabled": True,
-        "slippage_veto_enabled": True,
-        "max_slippage_pips": {"XAUUSD": 20.0, "BTCUSD": 80.0},
-        "anti_tilt_enabled": True,
-        "anti_tilt_consecutive_losses": 3,
-        "anti_tilt_freeze_hours": 4,
-        "trade_of_day_cap": 1,
-        "asia_session_skip_xau": True,
-        "sl_cooldown_enabled": True,
-        "sl_cooldown_minutes": 45,
-        "loss_cooldown_enabled": True,
-        "loss_cooldown_minutes": 30,
-        "min_final_rr": 0.75,
-        "payoff_guard_enabled": True,
-        "payoff_guard_max_sl_tp1": 1.2,
-        "pre_news_protect_enabled": True,
-        "pre_news_protect_minutes": 5,
-        "min_confidence_override": 0,
-        "max_lot_size": 0.0,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if account_id is None:
@@ -148,14 +114,6 @@ def _serialize(cfg: dict) -> dict:
         "active": cfg.get("active", False),
         "max_concurrent_trades": cfg.get("max_concurrent_trades", 3),
         "auto_execute": cfg.get("auto_execute", True),
-        "breakeven_enabled": cfg.get("breakeven_enabled", True),
-        "breakeven_trigger_r": cfg.get("breakeven_trigger_r", 1.0),
-        "partial_close_enabled": cfg.get("partial_close_enabled", True),
-        "partial_close_trigger_r": cfg.get("partial_close_trigger_r", 1.0),
-        "partial_close_fraction": cfg.get("partial_close_fraction", 0.5),
-        "trailing_enabled": cfg.get("trailing_enabled", True),
-        "trailing_start_r": cfg.get("trailing_start_r", 1.5),
-        "trailing_distance_r": cfg.get("trailing_distance_r", 0.7),
         "daily_drawdown_pct": cfg.get("daily_drawdown_pct", 3.0),
         "daily_drawdown_enabled": cfg.get("daily_drawdown_enabled", True),
         "weekly_drawdown_pct": cfg.get("weekly_drawdown_pct", 7.0),
@@ -174,7 +132,6 @@ def _serialize(cfg: dict) -> dict:
         "anti_tilt_consecutive_losses": cfg.get("anti_tilt_consecutive_losses", 3),
         "anti_tilt_freeze_hours": cfg.get("anti_tilt_freeze_hours", 4),
         "trade_of_day_cap": cfg.get("trade_of_day_cap", 1),
-        "asia_session_skip_xau": cfg.get("asia_session_skip_xau", True),
         "sl_cooldown_enabled": cfg.get("sl_cooldown_enabled", True),
         "sl_cooldown_minutes": cfg.get("sl_cooldown_minutes", 45),
         "loss_cooldown_enabled": cfg.get("loss_cooldown_enabled", True),
@@ -200,9 +157,6 @@ def _serialize(cfg: dict) -> dict:
         "pattern_gate_enabled": bool(cfg.get("pattern_gate_enabled", False)),   # Spec B — observe-only unless an admin flipped it
         "crypto_risk_pct_per_trade": cfg.get("crypto_risk_pct_per_trade"),
         # iter-41 — payoff-ratio repair (Soft-Stop + Let Winners Run)
-        "soft_stop_enabled": bool(cfg.get("soft_stop_enabled", False)),
-        "soft_stop_loss_fraction": float(cfg.get("soft_stop_loss_fraction") or 0.6),
-        "soft_stop_min_minutes": int(cfg.get("soft_stop_min_minutes") or 10),
         "let_winners_run": bool(cfg.get("let_winners_run", False)),
         "updated_at": cfg.get("updated_at"),
     })
@@ -791,8 +745,7 @@ GUARD_FLAG_FIELDS = ("daily_drawdown_enabled", "weekly_drawdown_enabled", "month
                      "risk_engine_enabled", "spread_filter_enabled", "friday_flat_enabled",
                      "slippage_veto_enabled", "anti_tilt_enabled", "sl_cooldown_enabled",
                      "loss_cooldown_enabled", "payoff_guard_enabled", "pre_news_protect_enabled",
-                     "adaptive_sizing_enabled", "breakeven_enabled", "trailing_enabled",
-                     "regime_gating_enabled", "asia_session_skip_xau")
+                     "adaptive_sizing_enabled", "regime_gating_enabled")
 GUARD_MODE_FIELDS = ("uncertainty_gate_mode", "calendar_intel_mode")   # enforce → anything else
 
 
@@ -940,9 +893,11 @@ async def update_config(payload: BotConfigUpdate,
     if (wants_activation or risk_raise) and await _live_context(db, user["id"], account_id, owns):
         action = "live_activation" if wants_activation else "risk_raise"
         await require_step_up(db, user, request, action)
+        # v1.60.48 (audit item 10) — log the fields that actually CHANGE, not every field the client sent
+        changed_fields = sorted(k for k, v in update.items() if (current_cfg or {}).get(k) != v)
         await audit_event(db, user["id"], action,
                           {"account_id": account_id, "via": "config_update",
-                           "fields": sorted(update.keys())},
+                           "fields": changed_fields},
                           request, step_up=True)
 
     # Operational-mode promotion gate — moving TOWARD live execution is

@@ -1,0 +1,33 @@
+{
+  "summary": "v1.60.48 frontend smoke test (frontend only) as admin@trading.bot on the preview URL. Passed: Bot Config engine-exit-rules panel and removed toggles; gold off-hours 21:00/07:00 default and its description; save without changes sends no PUT; partial save sends only the changed field and the revert worked; Agents REAL10Y tile; Strategies page renders; Scalp scope note shows; /api/scalp/status returns 200. Not reachable: the Strategies PREVIEW DEPLOY area, because the admin's strategy library is empty and compiling was out of scope (checked in code only).",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "verified": [
+    "Login -> /bot-config redirects to /bot; page renders. The only console errors were 2x 401 /api/auth/me on the login page before authentication (expected)",
+    "engine-exit-rules visible with 'ENGINE EXIT RULES', '+0.5R', '90 min', 'TP1 100 pips'. Break-Even Auto-Shift / Partial Close at TP1 / Soft-Stop / Trailing Stop-Loss / 'Skip Asia-Session Gold (XAU)' are absent from the whole page body. Let Winners Run and Daily Drawdown Circuit Breaker are present",
+    "gold-off-hours-start=21:00, gold-off-hours-end=07:00 (GET /api/bot/config also returns 07:00); description contains '21:00–07:00'",
+    "SAVE with no changes -> 'No changes to save.', 0 PUT requests",
+    "signal_cooldown_minutes 3->4: PUT body exactly {\"signal_cooldown_minutes\":4}, 200, response 4, 'Configuration saved.'; revert 4->3: PUT body {\"signal_cooldown_minutes\":3}, 200, response 3 (original restored)",
+    "Agents macro-snapshot: macro-REAL10Y = '10Y Real Yield (TIPS) | 2.84% | BULLISH GOLD | -0.07 5d'; no plain '10Y Yield' label. /api/agents/macro series.REAL10Y source fred:DFII10",
+    "Strategies page renders (prompt, COMPILE, library). Library is empty (library-empty), so the deploy area was not reachable. Code check: the button label is 'PREVIEW DEPLOY' until a preview exists; applyTarget defaults to the first candidate key or 'default', never 'matching'",
+    "Scalp: scalp-metrics-scope-note = '— · all accounts · all setups'; /api/scalp/status 200"
+  ],
+  "test_report_links": [],
+  "action_items": [
+    "None blocking. Optional: seed one saved strategy for the test admin so a later agent can check the PREVIEW DEPLOY button and the target selector in the browser."
+  ],
+  "critical_code_review_comments": [
+    "Strategies.jsx: the 'matching'/'all' options still exist in the select (fine, only the default changed); the multi-target confirm path sets confirm_multi only for those values — looks correct.",
+    "Environment note (not an app bug): full page reloads in quick succession on the preview ingress return 429 for Vite dev modules (/src/lib/utils.js, node_modules/.vite/deps/*), which shows the 'STOIC IS TAKING LONGER THAN USUAL' fallback. In-app SPA navigation avoids it. This is a dev-server rate limit, not a production bundle problem."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "N/A (skipped per request)", "frontend": "100% of reachable checks (1 sub-check not reachable: deploy area needs a saved strategy)"},
+  "seed_data_creation": "None. signal_cooldown_minutes was changed temporarily (3->4) and restored to 3.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Bot Config route is /bot (/bot-config redirects). Use SPA navigation (history.pushState + popstate) between pages to avoid preview ingress 429s on Vite modules. Admin admin@trading.bot has an empty strategy library. signal_cooldown_minutes baseline = 3, plan floor 1."
+}

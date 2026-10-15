@@ -88,14 +88,14 @@ def sentiment_axis(momenta: dict) -> dict:
             "detail": f"risk assets {risk_m:+.2f} vs gold {gold:+.2f} (ATR units)"}
 
 
-async def news_axis(symbol="XAUUSD") -> dict:
+async def news_axis(symbol="XAUUSD", cfg: dict | None = None) -> dict:
     try:
         from economic_calendar import macro_freeze_check, upcoming_for
-        frz = await macro_freeze_check(symbol)
+        frz = await macro_freeze_check(symbol, cfg)              # v1.60.48 — per-account freeze currencies
         if frz.get("frozen"):
             return {"news_driven": True,
                     "detail": f"event freeze ACTIVE — {frz.get('reason')}"}
-        ev = await upcoming_for(symbol, hours=1)
+        ev = await upcoming_for(symbol, hours=1, cfg=cfg)
         high = [e for e in ev if e.get("impact") == "high"]
         if high:
             mins = max(0, int((float(high[0]["when_ts"]) - time.time()) / 60))
@@ -163,11 +163,14 @@ def regime_probabilities(bars, trend: str, trend_conf: float, vol: dict,
             "uncertainty": round(uncertainty, 3)}
 
 
-async def detect(db, user_id: str, force: bool = False) -> dict:
+async def detect(db, user_id: str, force: bool = False, cfg: dict | None = None) -> dict:
     """Unified snapshot, cached 5 min per user."""
     cached = _CACHE.get(user_id)
     if cached and not force and time.time() - cached[0] < CACHE_TTL_SEC:
         return cached[1]
+    if cfg is None:                                     # v1.60.48 — freeze currencies from the user's default config
+        cfg = await db.bot_configs.find_one(
+            {"user_id": user_id, "$or": [{"account_id": None}, {"account_id": {"$exists": False}}]}) or {}
 
     from strategy_portfolio import _asset_of
     docs = {}
@@ -205,7 +208,7 @@ async def detect(db, user_id: str, force: bool = False) -> dict:
         if m is not None:
             momenta[a] = m if a not in momenta else (momenta[a] + m) / 2
     sent = sentiment_axis(momenta)
-    news = await news_axis(primary_sym or "XAUUSD")
+    news = await news_axis(primary_sym or "XAUUSD", cfg)
 
     key = _regime_key(trend, vol["axis"], news["news_driven"])
     label_bits = [trend.replace("_", " ").upper(), f"{vol['axis'].upper()} VOL"]
@@ -269,7 +272,7 @@ async def strategy_edge(db, user_id: str, regime_key: str) -> dict:
 async def regime_gate(db, user_id: str, cfg: dict,
                       strategy_class: str) -> dict:
     """Per-signal verdict. Fail-open on any error or missing evidence."""
-    regime = await detect(db, user_id)
+    regime = await detect(db, user_id, cfg=cfg)
     if not (cfg or {}).get("regime_gating_enabled", True):
         return {"allowed": True, "regime": regime,
                 "reason": "regime gating disabled in bot config"}

@@ -236,19 +236,30 @@ FOMC_STATEMENT_DAYS = {
 }
 
 _FC_COUNTRY_PREFIX = (("US ", "USD"), ("UK ", "GBP"), ("ECB", "EUR"), ("Eurozone", "EUR"), ("Euro ", "EUR"),
-                      ("Germany", "EUR"), ("France", "EUR"), ("Italy", "EUR"), ("Spain", "EUR"), ("FOMC", "USD"),
-                      ("Fed ", "USD"), ("Japan", "JPY"), ("BoJ", "JPY"), ("China", "CNY"), ("PBoC", "CNY"),
-                      ("Bank of Canada", "CAD"), ("Canada", "CAD"), ("Australia", "AUD"), ("RBA", "AUD"),
-                      ("RBNZ", "NZD"), ("New Zealand", "NZD"), ("Switzerland", "CHF"), ("SNB", "CHF"),
-                      ("Bank of England", "GBP"), ("BoE", "GBP"))
+                      ("Germany", "EUR"), ("German ", "EUR"), ("France", "EUR"), ("French ", "EUR"), ("Italy", "EUR"),
+                      ("Italian ", "EUR"), ("Spain", "EUR"), ("Spanish ", "EUR"), ("FOMC", "USD"), ("ADP ", "USD"),
+                      ("Fed ", "USD"), ("Japan", "JPY"), ("BoJ", "JPY"), ("China", "CNY"), ("Chinese ", "CNY"),
+                      ("PBoC", "CNY"), ("Bank of Canada", "CAD"), ("Canada", "CAD"), ("Canadian ", "CAD"),
+                      ("Australia", "AUD"), ("RBA", "AUD"), ("RBNZ", "NZD"), ("New Zealand", "NZD"),
+                      ("Switzerland", "CHF"), ("Swiss ", "CHF"), ("SNB", "CHF"), ("Bank of England", "GBP"),
+                      ("BoE", "GBP"), ("British ", "GBP"))
+
+
+_ISO_CODES = {"USD", "EUR", "GBP", "JPY", "CNY", "AUD", "NZD", "CAD", "CHF"}
 
 
 def _fc_country(name: str) -> str:
-    n = (name or "").strip().lower()
+    n = (name or "").strip()
+    head = n.split(" ", 1)[0].upper().strip(":-")
+    if head in _ISO_CODES:                   # "AUD Employment Change", "EUR CPI Flash" — code-prefixed rows
+        return head
+    n = n.lower()
     for prefix, cur in _FC_COUNTRY_PREFIX:
         p = prefix.lower()
         if (n.startswith(p) if p.endswith(" ") else p in n):
             return cur
+    if n.startswith("employment change"):     # bare "Employment Change" is AUD/CAD/NZD — the US print is NFP / "ADP …"
+        return "OTHER"
     return "USD"   # Finance Calendar is US-centric; un-prefixed prints (PPI, Jobless claims, PCE…) are US
 
 
