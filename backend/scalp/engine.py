@@ -2874,12 +2874,27 @@ class ScalpRunner:
                 or (self._tick_buffer and nm - self._last_flush_ms >= TICK_FLUSH_MS)):
             batch, self._tick_buffer = self._tick_buffer, []
             self._last_flush_ms = nm
-            _bg(lambda b=batch: db.scalp_ticks.insert_one({
-                "user_id": self.user_id, "account_id": self.account_id,
-                "symbol": self.symbol, "n": len(b),
-                "first_ms": b[0]["tm"], "last_ms": b[-1]["tm"],
-                "stored_at": datetime.now(timezone.utc).isoformat(),
-                "ticks": b}), "tick_batch")
+            _bg(lambda b=batch: self._store_tick_batch(db, b), "tick_batch")
+
+    async def _store_tick_batch(self, db, b: list):
+        # v1.60.50 — the broker offset is stored WITH the batch (broker clocks follow DST; the account's current
+        # offset is wrong for ticks recorded under the other regime). deferred_shadow prefers this value.
+        off = None
+        try:
+            from routes.bridge_routes import broker_offset_sec
+            from bson import ObjectId as _OID
+            acc = await db.accounts.find_one({"_id": _OID(str(self.account_id))},
+                                             {"broker_time_info": 1, "broker_utc_offset_sec": 1})
+            off = broker_offset_sec(acc or {})[0]
+        except Exception:  # noqa: BLE001
+            off = None
+        await db.scalp_ticks.insert_one({
+            "user_id": self.user_id, "account_id": self.account_id,
+            "symbol": self.symbol, "n": len(b),
+            "first_ms": b[0]["tm"], "last_ms": b[-1]["tm"],
+            "broker_offset_sec": off,
+            "stored_at": datetime.now(timezone.utc).isoformat(),
+            "ticks": b})
 
     def fill_stats(self) -> dict:
         """Empirical fill probability with an optimistic Beta(8,1) prior so a

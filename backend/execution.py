@@ -645,7 +645,7 @@ class PaperEngine(ExecutionEngine):
             )
             return {"blocked": "market_closed", **closure}
         # caps enforced by the account-wide reservation (A13 P1-02)
-        quote = await get_quote(signal["symbol"])
+        quote = await get_quote(signal["symbol"], allow_stale=False)   # v1.60.50 — no fills on a stale quote
         fill_price = quote.get("price") or signal["entry_price"]
 
         trade_doc = {
@@ -746,7 +746,7 @@ async def settle_paper_trades_against_price() -> int:
         sym = t["symbol"]
         if sym not in quote_cache:
             try:
-                quote_cache[sym] = await get_quote(sym)
+                quote_cache[sym] = await get_quote(sym, allow_stale=False)   # v1.60.50
             except Exception:
                 continue
         q = quote_cache[sym]

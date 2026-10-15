@@ -31,16 +31,33 @@ from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
 from risk import get_profile, compute_lot_for_account
-from pip_utils import floor_to_lot_step, symbol_match, lot_spec
+from pip_utils import floor_to_lot_step, symbol_match, lot_spec, base_symbol
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
 from account_reservations import trade_counter_filter
 from streak_losses import is_streak_loss
+from market import StaleQuoteError
 from models import BotConfigUpdate as _BotConfigUpdate
 
 logger = logging.getLogger("bot-runner")
 CFG_DEFAULTS = _BotConfigUpdate().model_dump()   # v1.60.48 — runtime defaults = model defaults (audit item 15)
+ASIA_GOLD_SKIP_END_HOUR = 7
+
+
+def asia_gold_skip_active(now: datetime | None = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    return now.weekday() < 5 and now.hour < ASIA_GOLD_SKIP_END_HOUR
+
+
+async def _udc_release(db, reservation_id):
+    try:
+        from user_direction_cap import release_user_direction
+        await release_user_direction(db, reservation_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("direction reservation release failed: %s", e)
+
+
 USER_DIRECTION_CAP_DEFAULT = 1    # v1.60.48 — open automated positions per (symbol, direction) across ALL accounts of a user
 _CURRENT_SIGNAL: contextvars.ContextVar = contextvars.ContextVar("current_signal")
 
@@ -639,7 +656,13 @@ async def _process_user_account_locked(db, cfg: dict):
             continue
 
         # Capital-preservation guards (skip BEFORE expensive AI analysis)
-        # v1.60.48 (audit item 17) — the Asia-session skip merged into the gold off-hours window (default 21:00–07:00 UTC)
+        # v1.60.50 (PR #100 review, item 1) — the Asia gold skip is a SECOND window (00:00–07:00 UTC), independent of
+        # the user's off-hours window. Missing or True → active; only an explicit False disables it (as before v1.60.48).
+        if cfg.get("asia_session_skip_xau", True) is not False and sym.upper() == "XAUUSD" and asia_gold_skip_active():
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info",
+                reason="Asia gold skip: XAUUSD entries are paused 00:00–07:00 UTC (Bot Config → Asia gold skip).")
+            await inc_intel_counter(user_id, "asia_gold_skip_block")
+            continue
         # v1.60.48 (Strategy Generator b) — session_preference from a deployed NL strategy is enforced here
         _sess_pref = str(cfg.get("session_preference") or "any").lower()
         if _sess_pref in ("london", "ny", "tokyo"):
@@ -1653,22 +1676,6 @@ async def _process_user_account_locked(db, cfg: dict):
             )
             continue
 
-        # v1.60.48 — per-USER cross-account exposure cap. All caps were per account, so on 13–15 Oct 8/10 trades
-        # were the same signal doubled on two accounts (same stop, same event risk, twice the loss). Default: at
-        # most ONE open automated position per (symbol, direction) across every account of the user.
-        user_dir_cap = int(cfg.get("user_direction_cap", USER_DIRECTION_CAP_DEFAULT) or 0)
-        if user_dir_cap > 0:
-            user_q = {k: v for k, v in pyramid_q.items() if k != "account_id"}
-            user_same_dir = await db.trades.count_documents(user_q)
-            if user_same_dir >= user_dir_cap:
-                await _record_pulse(db, cfg, symbol=sym,
-                    action="SKIP", level="warn",
-                    reason=(f"Cross-account cap: {user_same_dir} {signal['action']} {sym} already open across "
-                            f"your accounts (cap {user_dir_cap}) — the same signal is not doubled."),
-                )
-                await inc_intel_counter(user_id, "user_direction_cap_block")
-                continue
-
         # Same-direction loss circuit-breaker (P0, iter-48) — if the LAST
         # `LOSS_STREAK_THRESHOLD` closed trades on this (symbol, action) all
         # lost, pause same-direction entries for `LOSS_STREAK_COOLDOWN_HRS`
@@ -2585,44 +2592,71 @@ async def _process_user_account_locked(db, cfg: dict):
             except Exception as e:  # noqa: BLE001
                 logger.warning("execution timing failed (fail-open): %s", e)
         from versioning import version_stamp
-        trade_doc = await engine.execute(
-            user_id=user_id,
-            account=target_account,
-            signal={
-                "signal_id": signal_id,
-                "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
-                "decision_id": signal.get("decision_id"),
-                "latency_trace": signal.get("latency_trace"),
-                "symbol": signal["symbol"],
-                "action": signal["action"],
-                "lot_size": effective_lot,
-                "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd")},
-                "entry_price": signal["entry_price"],
-                "stop_loss": signal["stop_loss"],
-                "take_profit": signal["take_profit"],
-                "tp1": signal.get("tp1"),
-                "tp2": signal.get("tp2"),
-                "tp3": signal.get("tp3"),
-                "sl_pips": signal.get("sl_pips"),
-                "tp_pips": signal.get("tp_pips"),
-                "risk_pct_cap": signal.get("risk_pct_cap"),
-                "origin": "auto",
-                "scope": signal.get("scope"),
-                "trend_ride": signal.get("trend_ride"),
-                "trend_ride_applied": bool(signal.get("trend_ride")),
-                "trend_ride_skipped": signal.get("trend_ride_skipped"),
-                "strategy_class": signal.get("strategy_class"),   # v1.60.48 — were dropped here → trades stored None
-                "market_regime": signal.get("market_regime"),     #   and Regime Gating could not be measured
-                "entry_context": signal.get("entry_context"),
-                "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
-                "news_ai": signal.get("news_ai"),
-                "sentiment": signal.get("sentiment"),
-                "versions": version_stamp(signal.get("scope")),
-            },
-            max_concurrent=max_concurrent,
-            cfg_account_id=cfg_account_id,
-        )
+        # v1.60.48/50 — per-USER cross-account exposure cap, reserved atomically right before the order is sent
+        user_dir_cap = int(cfg.get("user_direction_cap", USER_DIRECTION_CAP_DEFAULT) or 0)
+        _udc_res = None
+        if user_dir_cap > 0:
+            # v1.60.50 — atomic: account loops run concurrently, so the slot is a unique reservation doc (TTL),
+            # released below when the entry is blocked / rejected; only LIVE automated trades count.
+            from user_direction_cap import reserve_user_direction
+            _udc_res, _occupied = await reserve_user_direction(
+                db, user_id=user_id, base_symbol=base_symbol(sym), action=signal["action"], cap=user_dir_cap,
+                account_id=cfg_account_id, symbol_match_q=symbol_match(sym))
+            if _udc_res is None:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn",
+                    reason=(f"Cross-account cap: {_occupied} {signal['action']} {sym} already open/in flight across "
+                            f"your accounts (cap {user_dir_cap}) — the same signal is not doubled."),
+                )
+                await inc_intel_counter(user_id, "user_direction_cap_block")
+                continue
+
+        try:
+            trade_doc = await engine.execute(
+                user_id=user_id,
+                account=target_account,
+                signal={
+                    "signal_id": signal_id,
+                    "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
+                    "decision_id": signal.get("decision_id"),
+                    "latency_trace": signal.get("latency_trace"),
+                    "symbol": signal["symbol"],
+                    "action": signal["action"],
+                    "lot_size": effective_lot,
+                    "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd")},
+                    "entry_price": signal["entry_price"],
+                    "stop_loss": signal["stop_loss"],
+                    "take_profit": signal["take_profit"],
+                    "tp1": signal.get("tp1"),
+                    "tp2": signal.get("tp2"),
+                    "tp3": signal.get("tp3"),
+                    "sl_pips": signal.get("sl_pips"),
+                    "tp_pips": signal.get("tp_pips"),
+                    "risk_pct_cap": signal.get("risk_pct_cap"),
+                    "origin": "auto",
+                    "scope": signal.get("scope"),
+                    "trend_ride": signal.get("trend_ride"),
+                    "trend_ride_applied": bool(signal.get("trend_ride")),
+                    "trend_ride_skipped": signal.get("trend_ride_skipped"),
+                    "strategy_class": signal.get("strategy_class"),   # v1.60.48 — were dropped here → trades stored None
+                    "market_regime": signal.get("market_regime"),     #   and Regime Gating could not be measured
+                    "entry_context": signal.get("entry_context"),
+                    "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
+                    "news_ai": signal.get("news_ai"),
+                    "sentiment": signal.get("sentiment"),
+                    "versions": version_stamp(signal.get("scope")),
+                },
+                max_concurrent=max_concurrent,
+                cfg_account_id=cfg_account_id,
+            )
+        except StaleQuoteError as _sq:
+            await _udc_release(db, _udc_res)
+            # v1.60.50 — a stale quote never fills: skip this cycle (as before the stale fallback existed)
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=f"Quote stale — entry skipped this cycle ({_sq})")
+            await inc_intel_counter(user_id, "stale_quote_skip")
+            continue
         if trade_doc.get("blocked"):
+            await _udc_release(db, _udc_res)
             logger.warning(
                 "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
                 user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),

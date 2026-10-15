@@ -96,6 +96,7 @@ export default function BotConfig() {
     const deepLinkAppliedRef = useRef(false);
     const presetsAnchorRef = useRef(null);
     const baselineRef = useRef(null);     // v1.60.48 — server state as loaded / last saved (PATCH diff base)
+    const presetTouchedRef = useRef(new Set());   // v1.60.50 — fields a preset changed since the last save
     const optimizerAnchorRef = useRef(null);
 
     useEffect(() => {
@@ -147,7 +148,7 @@ export default function BotConfig() {
         friday_flat_minutes_before: d?.friday_flat_minutes_before ?? 60,
         gold_off_hours_enabled: d?.gold_off_hours_enabled ?? true,
         gold_off_hours_start_utc: d?.gold_off_hours_start_utc || "21:00",
-        gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "07:00",
+        gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "06:00",
         macro_freeze_before_min: d?.macro_freeze_before_min ?? 15,
         macro_freeze_after_min: d?.macro_freeze_after_min ?? 10,
         macro_freeze_medium_usd_enabled: d?.macro_freeze_medium_usd_enabled ?? true,
@@ -189,6 +190,10 @@ export default function BotConfig() {
         setApplyingPreset(key); setErr("");
         try {
             const { data } = await api.post(`/bot/preset/${key}${accountQuery}`);
+            // v1.60.50 — the preset's fields are now DIRTY relative to the server: keep the baseline as the server state
+            // (so every preset-touched field is sent on SAVE) but remember which fields the preset touched so a user
+            // reverting one of them still sends it (otherwise the server would keep the preset value).
+            presetTouchedRef.current = new Set([...(presetTouchedRef.current || []), ...Object.keys(data.config || {})]);
             setCfg(withFlatDefaults(data.config));
             toast.success(`Preset applied · ${label}`, {
                 description: "Behaviour knobs updated. Click SAVE CONFIGURATION to persist.",
@@ -274,7 +279,9 @@ export default function BotConfig() {
                 friday_flat_minutes_before: cfg.friday_flat_minutes_before ?? 60,
                 gold_off_hours_enabled: cfg.gold_off_hours_enabled ?? true,
                 gold_off_hours_start_utc: cfg.gold_off_hours_start_utc || "21:00",
-                gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "07:00",
+                gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "06:00",
+                asia_session_skip_xau: cfg.asia_session_skip_xau !== false,
+                user_direction_cap: cfg.user_direction_cap ?? 1,
                 macro_freeze_before_min: cfg.macro_freeze_before_min ?? 15,
                 macro_freeze_after_min: cfg.macro_freeze_after_min ?? 10,
                 macro_freeze_medium_usd_enabled: cfg.macro_freeze_medium_usd_enabled ?? true,
@@ -288,9 +295,10 @@ export default function BotConfig() {
             };
             // v1.60.48 — send only what changed since load/last save (PATCH), never the whole form
             const payload = changedFields(fullPayload, baselineRef.current);
+            for (const f of presetTouchedRef.current) if (f in fullPayload && !(f in payload)) payload[f] = fullPayload[f];
             if (!Object.keys(payload).length) { setSaveMsg("No changes to save."); setSaving(false); return; }
             const { data } = await api.put(`/bot/config${accountQuery}`, payload);
-            setCfg(withFlatDefaults(data)); baselineRef.current = withFlatDefaults(data);
+            setCfg(withFlatDefaults(data)); baselineRef.current = withFlatDefaults(data); presetTouchedRef.current = new Set();
             // v1.60.40 — Config Drift Check: every field we sent must come back unchanged
             const drifted = diffSavedConfig(payload, data);
             setDrift(drifted);
@@ -881,6 +889,30 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     </div>
                 </div>
 
+                {/* v1.60.50 — Asia gold skip (second window, independent of the off-hours window above) */}
+                <div className="flex items-start justify-between gap-4 p-3 border border-[#1F1F1F] bg-[#0D0D0D]" data-testid="asia-gold-skip-row">
+                    <div>
+                        <div className="text-xs font-mono text-[#E4E4E7]">ASIA GOLD SKIP (00:00–07:00 UTC)</div>
+                        <div className="text-[10px] text-white/40 mt-1">New XAUUSD entries are paused during the Asian session in addition to the off-hours window. On by default; turn off only with shadow data that justifies it.</div>
+                    </div>
+                    <button type="button" data-testid="asia-gold-skip-toggle"
+                        onClick={() => setCfg({ ...cfg, asia_session_skip_xau: cfg.asia_session_skip_xau === false })}
+                        className={`px-3 py-1 text-[10px] font-mono tracking-widest border ${cfg.asia_session_skip_xau !== false ? "border-[#00FF41] text-[#00FF41]" : "border-[#52525B] text-[#52525B]"}`}>
+                        {cfg.asia_session_skip_xau !== false ? "ON" : "OFF"}
+                    </button>
+                </div>
+                {/* v1.60.50 — per-user cross-account cap (item 7 of the 15 Oct audit) */}
+                <div className="flex items-start justify-between gap-4 p-3 border border-[#1F1F1F] bg-[#0D0D0D]" data-testid="user-direction-cap-row">
+                    <div>
+                        <div className="text-xs font-mono text-[#E4E4E7]">CROSS-ACCOUNT CAP (PER DIRECTION)</div>
+                        <div className="text-[10px] text-white/40 mt-1">Max open automated positions per symbol + direction across ALL your accounts. 1 = the same signal is never doubled on two accounts; 0 = off.</div>
+                    </div>
+                    <input type="number" min={0} max={10} step={1} data-testid="user-direction-cap-input"
+                        value={cfg.user_direction_cap ?? 1}
+                        onChange={(e) => setCfg({ ...cfg, user_direction_cap: Math.max(0, Math.min(10, parseInt(e.target.value || "0", 10))) })}
+                        className="w-16 bg-black border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-[#E4E4E7]" />
+                </div>
+
                 {/* SL Cooldown */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="sl_cooldown_enabled" label="Post-SL Cooldown" icon={Timer} color="#FF3B30"
@@ -979,7 +1011,7 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                 {/* v1.60.38 — XAUUSD off-hours defer window (per account, UTC) */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="gold_off_hours_enabled" label="Gold Off-Hours Window (UTC)" icon={CalendarClock} color="#FFD700"
-                        desc="New XAUUSD entries are deferred inside this UTC window (default 21:00–07:00 = daily rollover + Asian session paused; this window replaced the old 'Skip Asia-Session Gold' toggle). Weekends are always blocked; the 2.5× median spread guard still applies outside the window. Deferred signals get a shadow outcome (TP or SL first?) in the Strategy Report — re-enable Asian hours here (end 00:30) once that data justifies it." />
+                        desc="New XAUUSD entries are deferred inside this UTC window (default 21:00–06:00 = daily rollover; the separate Asia gold skip below pauses 00:00–07:00). Weekends are always blocked; the 2.5× median spread guard still applies outside the window. Deferred signals get a shadow outcome (TP or SL first?) in the Strategy Report — re-enable Asian hours here (end 00:30) once that data justifies it." />
                     {(cfg.gold_off_hours_enabled ?? true) && (
                         <div className="grid grid-cols-2 gap-3 mt-3" data-testid="gold-off-hours-window">
                             {[["gold_off_hours_start_utc", "START (UTC)", "gold-off-hours-start"], ["gold_off_hours_end_utc", "END (UTC)", "gold-off-hours-end"]].map(([field, label, tid]) => (

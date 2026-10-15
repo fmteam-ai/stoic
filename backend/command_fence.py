@@ -64,3 +64,8 @@ def ack_type_mismatch(trade: dict, ack_type: str | None) -> bool:
     if not pending_type or not ack_type or ack_type == pending_type:
         return False
     return not (pending_type == "FULL_CLOSE" and ack_type == "PARTIAL_CLOSE")
+
+
+def is_close_leg_ack(trade: dict, ack_intent_id: str | None) -> bool:
+    """v1.60.50 — an ack for the durable close path (intent == close_idem_key) outranks any pending modify."""
+    return bool(ack_intent_id) and bool(trade.get("close_requested")) and ack_intent_id == trade.get("close_idem_key")

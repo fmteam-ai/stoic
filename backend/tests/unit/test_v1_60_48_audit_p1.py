@@ -102,7 +102,7 @@ def test_breakeven_scratches_are_not_streak_losses():
     assert is_streak_loss({**base, "pnl": -0.92}) is False
     assert is_streak_loss({**base, "pnl": -1.5}) is True           # −0.15R
     assert is_streak_loss({**base, "pnl": -9.8}) is True
-    assert is_streak_loss({**base, "pnl": -5.0, "scalp_exit_rule": "breakeven_0_5r"}) is False
+    assert is_streak_loss({**base, "pnl": -5.0, "scalp_exit_rule": "breakeven_0_5r", "breakeven_set": True}) is False
     assert is_streak_loss({"pnl": -0.5}) is True                   # risk unknown → conservative
     assert is_streak_loss({**base, "pnl": 0.0}) is False
 

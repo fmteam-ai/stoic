@@ -71,9 +71,6 @@ ALLOWED_FIELDS = {
     "pre_news_protect_minutes":     ("int",   1,    60),
     "profit_taking_mode":           ("enum",  None, ("expected_value", "win_rate", "trend_follow")),
     "daily_drawdown_pct":           ("float", 0.5,  20.0),
-    "soft_stop_enabled":            ("bool",  None, None),
-    "soft_stop_loss_fraction":      ("float", 0.3,  0.9),
-    "soft_stop_min_minutes":        ("int",   1,    120),
     "let_winners_run":              ("bool",  None, None),
 }
 

@@ -43,7 +43,7 @@ def test_user_direction_cap_default_and_wiring():
     from models import BotConfigUpdate
     assert USER_DIRECTION_CAP_DEFAULT == 1 and BotConfigUpdate().user_direction_cap == 1
     src = open(os.path.join(BACKEND, "bot_runner.py")).read()
-    assert 'user_q = {k: v for k, v in pyramid_q.items() if k != "account_id"}' in src
+    assert "reserve_user_direction(" in src          # v1.60.50 — atomic reservation replaced the plain count
     assert "user_direction_cap_block" in src
     from strategy_presets import STRICTER_MIN
     assert "user_direction_cap" in STRICTER_MIN
@@ -179,20 +179,17 @@ def test_dead_config_fields_are_gone_from_model_presets_and_page():
     from strategy_presets import PRESETS
     fields = set(BotConfigUpdate.model_fields)
     assert not (fields & DEAD_CONFIG_FIELDS)
-    assert BotConfigUpdate().gold_off_hours_end_utc == "07:00"
+    assert BotConfigUpdate().gold_off_hours_end_utc == "06:00"     # v1.60.50 — restored; Asia skip is its own window
     for p in PRESETS.values():
         assert not (set(p.get("config") or {}) & DEAD_CONFIG_FIELDS)
     page = open(os.path.join(FRONTEND, "pages", "BotConfig.jsx")).read()
-    for f in ("breakeven_enabled", "trailing_enabled", "soft_stop_enabled", "asia_session_skip_xau", "partial_close_enabled"):
+    for f in ("breakeven_enabled", "trailing_enabled", "soft_stop_enabled", "partial_close_enabled"):
         assert f"field=\"{f}\"" not in page, f
     assert 'data-testid="engine-exit-rules"' in page and "90 min" in page
-    src = open(os.path.join(BACKEND, "bot_runner.py")).read()
-    assert "asia_session_skip_xau" not in src.replace("# v1.60.48 (audit item 17) — the Asia-session skip merged", "")
 
 
-def test_legacy_asia_skip_configs_keep_their_coverage_until_07_00():
+def test_off_hours_window_never_stretched_by_asia_toggle():
     from agents.execution_optimizer_agent import off_hours_window
-    assert off_hours_window({}) == (21 * 60, 7 * 60)
-    assert off_hours_window({"gold_off_hours_end_utc": "06:00", "asia_session_skip_xau": True}) == (21 * 60, 7 * 60)
-    assert off_hours_window({"gold_off_hours_end_utc": "06:00"}) == (21 * 60, 6 * 60)
+    assert off_hours_window({}) == (21 * 60, 6 * 60)
+    assert off_hours_window({"gold_off_hours_end_utc": "23:00", "asia_session_skip_xau": True}) == (21 * 60, 23 * 60)
     assert off_hours_window({"gold_off_hours_end_utc": "00:30", "asia_session_skip_xau": False}) == (21 * 60, 30)

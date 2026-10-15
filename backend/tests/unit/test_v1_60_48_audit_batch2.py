@@ -31,16 +31,20 @@ def _apply(db, compiled, target, **extra):
 def test_daily_limit_maps_to_trade_of_day_cap_and_auto_execute_is_kept_unless_asked():
     db = FakeDb()
     cid = ObjectId()
-    db.bot_configs.rows.append({"_id": cid, "user_id": "u1", "account_id": "A", "symbols": ["XAUUSD"],
-                                "auto_execute": True, "max_concurrent_trades": 3, "trade_of_day_cap": 1})
+    # v1.60.50: apply checks for a live-context risk raise → the account must be a real (paper) account document
+    acc = ObjectId()
+    db.accounts.rows.append({"_id": acc, "user_id": "u1", "mode": "paper"})
+    A = str(acc)
+    db.bot_configs.rows.append({"_id": cid, "user_id": "u1", "account_id": A, "symbols": ["XAUUSD"],
+                                "auto_execute": True, "max_concurrent_trades": 3, "trade_of_day_cap": 1, "risk_level": "low"})
     out = _apply(db, {"risk_level": "low", "symbols": ["XAUUSD"], "max_trades_per_day": 2,
-                      "strategy_style": "scalping", "session_preference": "london"}, "A")
+                      "strategy_style": "scalping", "session_preference": "london"}, A)
     cfg = db.bot_configs.rows[0]
     assert cfg["trade_of_day_cap"] == 2 and cfg["max_concurrent_trades"] == 3, "daily limit must not touch concurrency"
     assert cfg["auto_execute"] is True, "(c) auto_execute untouched when the prompt did not mention it"
     assert cfg["active_preset"] == "scalper" and cfg["session_preference"] == "london"
     assert out["undo"] and out["undo"][0]["version_id"] and out["diff"][0]["changes"]["trade_of_day_cap"] == {"from": 1, "to": 2}
-    _apply(db, {"risk_level": "low", "symbols": ["XAUUSD"], "auto_execute": False}, "A")
+    _apply(db, {"risk_level": "low", "symbols": ["XAUUSD"], "auto_execute": False}, A)
     assert db.bot_configs.rows[0]["auto_execute"] is False
 
 

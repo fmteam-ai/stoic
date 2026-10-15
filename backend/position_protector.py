@@ -130,7 +130,9 @@ async def sweep_user(db, user_id: str, cfg: dict) -> int:
 async def sweep_all(db) -> int:
     """Run the protector across every active bot config. Returns total flattened."""
     total = 0
-    cursor = db.bot_configs.find({"active": True})
+    # v1.60.50 — a PAUSED per-account config still protects its open positions (its trades are not managed by the
+    # default config any more, see trade_manager v1.60.48 item 16)
+    cursor = db.bot_configs.find({"$or": [{"active": True}, {"account_id": {"$nin": [None]}, "pre_news_protect_enabled": {"$ne": False}}]})
     cfgs = await cursor.to_list(length=200)
     for cfg in cfgs:
         try:

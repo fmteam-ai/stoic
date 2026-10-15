@@ -132,11 +132,11 @@ def test_legacy_m15_shadows_are_rescored_on_m1_or_tagged():
     db.scalp_ticks.rows.append({"user_id": "u1", "symbol": "XAUUSD", "first_ms": ticks[0]["tm"],
                                 "last_ms": ticks[-1]["tm"], "ticks": ticks})
     out = _run(rescore_legacy_shadows(db, "u1"))
-    assert out == {"rescored": 1, "tagged_m15": 1}
+    assert out["rescored"] == 1 and out["tagged_m15"] == 1   # v1.60.50 adds kept/visited/next_after_id
     sh = db.trade_decisions.rows[0]["shadow"]
     assert sh["outcome"] == "tp_first" and sh["timeframe"] == "M1" and sh["rescored_from"]["outcome"] == "sl_first"
     assert db.trade_decisions.rows[1]["shadow"]["timeframe"] == "M15"
-    assert _run(rescore_legacy_shadows(db, "u1")) == {"rescored": 0, "tagged_m15": 0}   # idempotent
+    assert _run(rescore_legacy_shadows(db, "u1"))["visited"] == 0   # idempotent
     assert "rescore_legacy_shadows" in open(os.path.join(os.path.dirname(__file__), "..", "..", "deferred_shadow.py"),
                                            encoding="utf-8").read().split("async def sweep_deferred_shadows")[1]
     assert _run(sweep_deferred_shadows(db)) == 0

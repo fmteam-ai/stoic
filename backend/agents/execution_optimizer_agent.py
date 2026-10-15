@@ -63,8 +63,7 @@ DEFER_OFF_HOURS_GOLD = _bool("EXEC_DEFER_OFF_HOURS_GOLD", True)
 
 # Approximate UTC ranges for XAUUSD off-hours (very low liquidity, wide spreads).
 DEFAULT_OFF_HOURS_START = "21:00"
-DEFAULT_OFF_HOURS_END = "07:00"       # v1.60.48 (audit item 17) — absorbs the retired asia_session_skip_xau (<07:00 UTC)
-LEGACY_ASIA_SKIP_END_MIN = 7 * 60
+DEFAULT_OFF_HOURS_END = "06:00"       # v1.60.50 — restored; the Asia gold skip (00:00–07:00) is a separate window in bot_runner
 
 
 def _hhmm(v, default: str) -> int:
@@ -85,10 +84,8 @@ def off_hours_window(cfg: dict | None) -> tuple[int, int] | None:
     cfg = cfg or {}
     if cfg.get("gold_off_hours_enabled") is False:
         return None
-    end = _hhmm(cfg.get("gold_off_hours_end_utc"), DEFAULT_OFF_HOURS_END)
-    if cfg.get("asia_session_skip_xau") is True and end < LEGACY_ASIA_SKIP_END_MIN:
-        end = LEGACY_ASIA_SKIP_END_MIN      # configs saved with the retired toggle keep their <07:00 coverage
-    return (_hhmm(cfg.get("gold_off_hours_start_utc"), DEFAULT_OFF_HOURS_START), end)
+    return (_hhmm(cfg.get("gold_off_hours_start_utc"), DEFAULT_OFF_HOURS_START),
+            _hhmm(cfg.get("gold_off_hours_end_utc"), DEFAULT_OFF_HOURS_END))
 
 
 def _is_xau_off_hours(now: datetime | None = None, cfg: dict | None = None) -> bool:

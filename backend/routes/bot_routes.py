@@ -745,7 +745,7 @@ GUARD_FLAG_FIELDS = ("daily_drawdown_enabled", "weekly_drawdown_enabled", "month
                      "risk_engine_enabled", "spread_filter_enabled", "friday_flat_enabled",
                      "slippage_veto_enabled", "anti_tilt_enabled", "sl_cooldown_enabled",
                      "loss_cooldown_enabled", "payoff_guard_enabled", "pre_news_protect_enabled",
-                     "adaptive_sizing_enabled", "regime_gating_enabled")
+                     "adaptive_sizing_enabled", "regime_gating_enabled", "asia_session_skip_xau")
 GUARD_MODE_FIELDS = ("uncertainty_gate_mode", "calendar_intel_mode")   # enforce → anything else
 
 

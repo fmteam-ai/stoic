@@ -2005,12 +2005,16 @@ async def modification_ack(payload: BridgeModificationAck):
 
     # audit r3 P0 · sequence fence: a delayed/replayed ack for a SUPERSEDED
     # command must never clear the current one or apply an older stop.
-    from command_fence import is_stale_ack, ack_type_mismatch
-    if is_stale_ack(trade, payload.intent_id):
+    from command_fence import is_stale_ack, ack_type_mismatch, is_close_leg_ack
+    # v1.60.50 (PR #100 item 9) — the netting ClosePosition path acks with intent == close_idem_key. While a
+    # MODIFY_SL is pending that ack was judged stale and the close leg was re-dispatched every poll. Close intents
+    # take priority over a pending modify: they are never stale / mismatched against the modify slot.
+    _close_leg = is_close_leg_ack(trade, payload.intent_id)
+    if not _close_leg and is_stale_ack(trade, payload.intent_id):
         logger.warning("stale modification-ack ignored trade=%s intent=%s",
                        payload.trade_id, payload.intent_id)
         return {"status": "stale_intent_ignored"}
-    if ack_type_mismatch(trade, payload.type):
+    if not _close_leg and ack_type_mismatch(trade, payload.type):
         # v1.60.48 — e.g. a PARTIAL_CLOSE ack arriving while a MODIFY_SL is pending: not this command's ack
         logger.warning("modification-ack type mismatch ignored trade=%s ack=%s pending=%s intent=%s",
                        payload.trade_id, payload.type,
