@@ -142,6 +142,7 @@ gate_refused() {
   restore_tracked_release_files
   git checkout --detach "${PREV}"
   restore_adopted_lock "${PREV}"
+  restore_release_truth "${PREV}"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) gate-refused ref=${REF}" >> deploy/releases.log
   exit 1
 }

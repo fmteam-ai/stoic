@@ -60,6 +60,57 @@ def tightened_sl(trade: dict, new_sl: float):
     return new_sl if new_sl < cur else None
 
 
+def be_clamp(trade: dict, new_sl: float, current: float, min_stop_distance_px) -> dict | None:
+    """v1.60.42 — the EA clamps a MODIFY_SL to the broker's stops level measured from the CURRENT price; on a fast
+    spike back toward entry the clamped breakeven lands on the LOSING side of entry (OnEquity #46719148: SL clamped
+    below entry, −0.92). Pure: returns the clamp detail when the requested stop would be clamped past entry, else None."""
+    try:
+        dist = float(min_stop_distance_px or 0)
+    except (TypeError, ValueError):
+        return None
+    if dist <= 0 or not current or current <= 0:
+        return None
+    entry = float(trade.get("entry_price") or 0)
+    if trade.get("action") == "BUY":
+        clamped = min(float(new_sl), current - dist)
+        losing = clamped < entry
+    else:
+        clamped = max(float(new_sl), current + dist)
+        losing = clamped > entry
+    if not losing:
+        return None
+    return {"requested_sl": round(float(new_sl), 5), "clamped_to": round(clamped, 5), "entry": entry, "current": current,
+            "min_stop_distance_px": dist, "action": trade.get("action")}
+
+
+async def be_clamped_skip(db, trade: dict, new_sl: float, current: float, source: str) -> dict | None:
+    """Skip (and log `be_clamped`) a breakeven MODIFY_SL that the EA would clamp below entry. Needs fresh broker
+    symbol specs on the account (protection_guard.broker_stop_constraints); without them the request goes out as before."""
+    from protection_guard import broker_stop_constraints, find_account
+    acc, _ = await find_account(db, str(trade.get("account_id") or ""))
+    cons = broker_stop_constraints(acc, trade.get("symbol")) if acc else None
+    clamp = be_clamp(trade, new_sl, current, (cons or {}).get("min_stop_distance_px"))
+    if clamp is None:
+        return None
+    clamp.update({"source": source, "at": datetime.now(timezone.utc).isoformat(), "decision": "skip"})
+    logger.warning("be_clamped: %s %s #%s stop %.5f would be clamped to %.5f (entry %.5f, stops level %.5f) — not sent (%s)",
+                   trade.get("symbol"), trade.get("action"), trade.get("mt5_ticket"), clamp["requested_sl"], clamp["clamped_to"],
+                   clamp["entry"], clamp["min_stop_distance_px"], source)
+    last = (trade.get("be_clamped") or [None])[-1]
+    if last and last.get("source") == source and last.get("requested_sl") == clamp["requested_sl"]:
+        try:
+            if (datetime.now(timezone.utc) - datetime.fromisoformat(str(last.get("at")))).total_seconds() < 300:
+                return clamp                        # same clamp re-evaluated within 5 min: evidence already on the trade
+        except (TypeError, ValueError):
+            pass
+    await db.trades.update_one({"_id": trade["_id"]}, {"$push": {"be_clamped": clamp}, "$inc": {"be_clamped_count": 1},
+                                                       "$set": {"be_clamped_last_at": clamp["at"]}})
+    await ws_manager.broadcast(trade["user_id"], "trade_management", {
+        "trade_id": str(trade["_id"]), "action": "BE_CLAMPED", "requested_sl": clamp["requested_sl"],
+        "clamped_to": clamp["clamped_to"], "source": source})
+    return clamp
+
+
 async def record_sl_loosen_refusal(trade: dict, requested_sl: float, source: str) -> bool:
     """Stop audit trail (v1.60.35): persist each REFUSED stop-loosen on the trade — once per trade + requested SL +
     source (the manager re-evaluates every cycle; the first refusal is the evidence, repeats are noise). Returns True
@@ -129,6 +180,8 @@ async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_u
         new_sl = scalp_breakeven_sl(trade)
         if tightened_sl(trade, new_sl) is None:
             await record_sl_loosen_refusal(trade, new_sl, "scalp_breakeven_0_5r")
+        elif await be_clamped_skip(db, trade, new_sl, current, "scalp_breakeven_0_5r"):
+            return True                             # v1.60.42 — retried next cycle once price clears the stops level
         else:
             res = await db.trades.update_one(
                 _free_slot_filter(trade_id),
@@ -320,6 +373,23 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             # NOTE: no Telegram here — fires from modification_ack on EA confirm.
             return
 
+    # v1.60.42 — a TP1 breakeven deferred by be_clamped (partial banked, stop left alone): retry once the price has
+    # cleared the broker's stops level, so the trade still gets its breakeven instead of riding the full stop.
+    if (trade.get("tp1_closed") and trade.get("be_clamped") and not trade.get("be_target_sl")
+            and not trade.get("breakeven_set")):
+        be_sl = tightened_sl(trade, round(entry, 5))
+        if be_sl is not None and not await be_clamped_skip(db, trade, be_sl, current, "tp1_be_retry"):
+            res = await db.trades.update_one(
+                _free_slot_filter(trade_id),
+                {"$set": {"pending_modification": {"type": "MODIFY_SL", "new_sl": be_sl, "reason": "tp1_be_retry",
+                                                   "requested_at": datetime.now(timezone.utc).isoformat()},
+                          "be_target_sl": be_sl}})
+            if res.matched_count:
+                await ws_manager.broadcast(trade["user_id"], "trade_management", {
+                    "trade_id": str(trade_id), "action": "BE_RETRY_AFTER_CLAMP", "new_sl": be_sl,
+                    "from_lot": current_lot, "to_lot": current_lot, "pips": round(pips_up, 1)})
+                return
+
     # Tier 1 — close 50% AND move SL to entry at +tp1 pips.
     # let_winners_run (iter-41): move SL to break-even ONLY — keep full size
     # running toward TP2/TP3 to raise the average win.
@@ -328,6 +398,11 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
         if be_sl is None:
             await record_sl_loosen_refusal(trade, round(entry, 5),
                                            "tp1_let_winners_run" if cfg.get("let_winners_run") else "tp1_partial_close")
+        elif await be_clamped_skip(db, trade, be_sl, current,
+                                   "tp1_let_winners_run" if cfg.get("let_winners_run") else "tp1_partial_close"):
+            if cfg.get("let_winners_run"):
+                return                              # v1.60.42 — BE-only step: nothing sent, retried next cycle
+            be_sl = None                            # the partial still banks; the BE is retried above once clear
         if cfg.get("let_winners_run"):
             if be_sl is None:
                 await db.trades.update_one(_free_slot_filter(trade_id), {"$set": {"tp1_closed": True}})

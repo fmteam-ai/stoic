@@ -61,7 +61,11 @@ host update (`deploy/update.sh`, against the PREV checkout's record) when the st
    `b05ed821…`). If a recovery ever needs it, the repository variable `EA_FLEET_STABLE_SHA` (Settings → Variables)
    overrides the derivation with the EX5 the terminals actually run; on the host, `deploy/releases.log` rollback
    entries are honoured automatically.
-3. Tag `v1.60.41`. The `tag-only` job runs the fleet gate against the previous shipped tag; `deploy/update.sh` runs it again on
+   v1.60.42: on the VPS the gate is run by `deploy/lib.sh gate_python` (the first host interpreter ≥ 3.9 with
+   `cryptography`); its imports are 3.9-safe and a verification that cannot run is reported as `cannot verify: …`
+   (a gate problem) — never as an invalid record. A refused gate now re-publishes the running release's
+   attestation (`restore_release_truth`), so `/api/health` keeps reporting the version that actually runs.
+3. Tag `v1.60.42`. The `tag-only` job runs the fleet gate against the previous shipped tag; `deploy/update.sh` runs it again on
    the host before building. Expected after the deploy: all 4 terminals keep `attested DEMO` / `FULL` while still on 1.64.
 4. Re-attest: the four accounts whose automatic DEMO attestations were voided re-attest automatically on the next
    heartbeat once the server accepts `b05ed821…` again (`auto_attest`: broker demo + signed EX5 + identity chain).

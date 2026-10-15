@@ -45,35 +45,45 @@ def accepted_hashes(rec: dict) -> list[str]:
     return out
 
 
-def previous_verifies(rec: dict) -> bool:
-    """The server only honours `previous` when it verifies on its own signature — mirror that."""
+def previous_verifies(rec: dict) -> tuple[bool, str]:
+    """(ok, reason). The server only honours `previous` when it verifies on its own signature — mirror that.
+    v1.60.42: an import/runtime failure is reported as "cannot verify: <exception>", never as a silent False
+    (the host's Python 3.9 could not import ea_capabilities and the gate called a valid 1.64 record unverifiable)."""
     prev = rec.get("previous") or None
     if not prev:
-        return False
+        return False, "no previous record"
     try:
         from release_signing import verify_hex, key_id_accepted, release_public_key_for
         from ea_capabilities import _canonical_payload
-        kid = (prev.get("signature") or {}).get("key_id")
-        sig = (prev.get("signature") or {}).get("sig_hex")
-        if not (sig and prev.get("compiled_by") == "github-actions" and key_id_accepted(kid)):
-            return False
-        pub = release_public_key_for(kid)
-        return bool(verify_hex(_canonical_payload(prev), sig, pub, purpose="ea-release")
-                    or verify_hex(_canonical_payload(prev, legacy=True), sig, pub, purpose="ea-release"))
-    except Exception:  # noqa: BLE001
-        return False
-
-
-def _git_show(ref: str, path: str = "release/ea_release.json") -> dict | None:
+    except Exception as e:  # noqa: BLE001
+        return False, f"cannot verify: {type(e).__name__}: {e} (python {sys.version.split()[0]} at {sys.executable})"
+    kid = (prev.get("signature") or {}).get("key_id")
+    sig = (prev.get("signature") or {}).get("sig_hex")
+    if not sig:
+        return False, "previous carries no signature"
+    if prev.get("compiled_by") != "github-actions":
+        return False, f"previous compiled_by={prev.get('compiled_by')!r} is not the sanctioned job"
     try:
-        raw = subprocess.check_output(["git", "show", f"{ref}:{path}"], cwd=ROOT, stderr=subprocess.DEVNULL)
-        return json.loads(raw)
-    except Exception:  # noqa: BLE001
-        return None
+        if not key_id_accepted(kid):
+            return False, f"previous key id {kid!r} is not accepted (RELEASE_SIGNER_KEY_ID / RELEASE_PUBLIC_KEY_B64 pins)"
+        pub = release_public_key_for(kid)
+        if verify_hex(_canonical_payload(prev), sig, pub, purpose="ea-release") or \
+                verify_hex(_canonical_payload(prev, legacy=True), sig, pub, purpose="ea-release"):
+            return True, "verified"
+        return False, "Ed25519 signature does NOT verify against the pinned release key"
+    except Exception as e:  # noqa: BLE001
+        return False, f"cannot verify: {type(e).__name__}: {e}"
 
 
 def _git(*args) -> str:
     return subprocess.check_output(["git", *args], cwd=ROOT, stderr=subprocess.DEVNULL).decode()
+
+
+def _git_show(ref: str, path: str = "release/ea_release.json") -> dict | None:
+    try:
+        return json.loads(_git("show", f"{ref}:{path}"))
+    except Exception:  # noqa: BLE001
+        return None
 
 
 ROLLED_BACK_FILE = os.path.join(ROOT, "release", "rolled_back_tags.json")
@@ -163,9 +173,14 @@ def check(rec: dict, stable_sha: str | None, stable_desc: str, *, verify_previou
                      f"{str(prev.get('ex5_sha256') or 'null')[:16]}) — every terminal still on the stable EA would be "
                      "rejected (DEMO attestation voided, CLOSE_ONLY). The ea entry lost its signed previous record: "
                      "restore it and re-run ea-release.")
-    elif stable_sha != str(rec.get("ex5_sha256") or "").lower() and verify_previous and not previous_verifies(rec):
-        fails.append(f"fleet stable EX5 {stable_sha[:16]}… is only accepted via `previous` (EA {prev.get('version')}), "
-                     "but that previous record does not verify on its own signature — the server will drop it.")
+    elif stable_sha != str(rec.get("ex5_sha256") or "").lower() and verify_previous:
+        ok, why = previous_verifies(rec)
+        if not ok:
+            fails.append(f"fleet stable EX5 {stable_sha[:16]}… is only accepted via `previous` (EA {prev.get('version')}), "
+                         f"but that previous record could not be verified here — {why}. "
+                         + ("This is a GATE problem, not a record problem: run the gate with the backend's Python "
+                            "(docker compose run --rm backend python scripts/check_ea_fleet_compat.py …) or fix the import."
+                            if why.startswith("cannot verify") else "The server will drop it."))
     return fails
 
 
@@ -177,6 +192,8 @@ def main() -> int:
     ap.add_argument("--stable-ref")
     ap.add_argument("--no-verify-previous", action="store_true", help="skip the previous-signature check (no key pin available)")
     args = ap.parse_args()
+    from verify_ea_release import load_backend_env_pins
+    load_backend_env_pins()                                   # RELEASE_* pins from backend/.env, as verify_ea_release does
     if not os.path.exists(args.record):
         print(f"RELEASE BLOCKED: {os.path.relpath(args.record, ROOT)} missing — run the ea-release workflow first")
         return 1
@@ -185,8 +202,6 @@ def main() -> int:
     if not stable:
         print(f"OK: no fleet stable EX5 to compare against ({desc})")
         return 0
-    from verify_ea_release import load_backend_env_pins
-    load_backend_env_pins()                                   # host: the key pins live in backend/.env
     fails = check(rec, stable, desc, verify_previous=not args.no_verify_previous)
     if fails:
         print("RELEASE BLOCKED: EA fleet compatibility gate\n" + "\n".join(f" • {f}" for f in fails))

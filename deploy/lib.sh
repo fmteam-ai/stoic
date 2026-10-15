@@ -382,18 +382,48 @@ sys.exit(0 if not missing else 1)
 ' "$1" "${READINESS_INFRA}"
 }
 
+# v1.60.42 — verify_attestation (run for the NEW tree before the gates) replaces release/attestation.current.json and
+# its deploy/state copy; a refused gate left v1.60.41's attestation published while v1.60.39 kept running, so
+# /api/health said "v1.60.41 … attested: false". After the checkout back to PREV, re-establish PREV's truth.
+restore_release_truth() {
+  local prev="$1"
+  rm -f release/attestation.current.json release/attestation.current.bundle deploy/state/release/attestation.current.json
+  if [ "$(deploy_mode)" != "build" ]; then
+    if verify_attestation >/dev/null 2>&1; then
+      echo "   release truth restored: attestation of ${prev:0:8} re-published"
+    else
+      echo "!! could not re-fetch the attestation of ${prev:0:8} — /api/health reports attested:false until the next successful update"
+    fi
+  fi
+  publish_release_truth
+}
+
 # v1.60.41 — refuse a release whose EA record does not accept the EX5 the fleet is running (PREV's record).
 ea_fleet_compat_gate() {
   local prev="$1" tmp rc=0
   [ -f scripts/check_ea_fleet_compat.py ] || { echo "   (gate script missing in this checkout — skipped)"; return 0; }
   tmp=$(mktemp)
   if git show "${prev}:release/ea_release.json" > "${tmp}" 2>/dev/null && [ -s "${tmp}" ]; then
-    python3 scripts/check_ea_fleet_compat.py --stable-record "${tmp}" || rc=1
+    # v1.60.42 — the gate imports backend/ea_capabilities + release_signing: run it with the interpreter the backend
+    # uses when one is on the host (3.11), else the deploy python (3.9-safe modules; a verification failure caused by
+    # the interpreter is reported as "cannot verify: …", never as an invalid record).
+    "$(gate_python)" scripts/check_ea_fleet_compat.py --stable-record "${tmp}" || rc=1
   else
     echo "   (previous checkout ${prev:0:8} carries no release/ea_release.json — nothing to compare)"
   fi
   rm -f "${tmp}"
   return ${rc}
+}
+
+# Interpreter for gates that import backend modules: the first host python (backend's 3.11 preferred, then the
+# deploy python) that is >= 3.9 AND has `cryptography` — a bare interpreter would turn every record into "cannot verify".
+gate_python() {
+  local p
+  for p in python3.11 python3.12 python3.10 python3; do
+    command -v "${p}" >/dev/null 2>&1 || continue
+    "${p}" -c 'import sys, cryptography; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1 && { command -v "${p}"; return 0; }
+  done
+  command -v python3
 }
 
 # Production pre-build gate: operator state that no rebuild can change (EA release
