@@ -56,7 +56,12 @@ host update (`deploy/update.sh`, against the PREV checkout's record) when the st
 2. Actions → `ea-release` → Run workflow (`main`). The record step must print `OK: EX5 … · signed` and the fleet gate
    `OK: release EA 1.65 accepts the fleet stable EX5 b05ed821… (signed previous)`; the bot commit's
    `release/ea_release.json` must show `previous.version == "1.64"` and `previous.ex5_sha256 == b05ed821…`.
-3. Tag `v1.60.41`. The `tag-only` job runs the fleet gate against the previous tag; `deploy/update.sh` runs it again on
+   The fleet gate derives "stable" from the newest **shipped** tag: `v1.60.40` is listed in
+   `release/rolled_back_tags.json` (never live) and is skipped, so the gate compares against `v1.60.39` (1.64,
+   `b05ed821…`). If a recovery ever needs it, the repository variable `EA_FLEET_STABLE_SHA` (Settings → Variables)
+   overrides the derivation with the EX5 the terminals actually run; on the host, `deploy/releases.log` rollback
+   entries are honoured automatically.
+3. Tag `v1.60.41`. The `tag-only` job runs the fleet gate against the previous shipped tag; `deploy/update.sh` runs it again on
    the host before building. Expected after the deploy: all 4 terminals keep `attested DEMO` / `FULL` while still on 1.64.
 4. Re-attest: the four accounts whose automatic DEMO attestations were voided re-attest automatically on the next
    heartbeat once the server accepts `b05ed821…` again (`auto_attest`: broker demo + signed EX5 + identity chain).

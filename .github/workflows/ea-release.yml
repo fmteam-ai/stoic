@@ -101,6 +101,7 @@ jobs:
           RELEASE_SIGNER_ALLOWED_HOSTS: ${{ secrets.RELEASE_SIGNER_ALLOWED_HOSTS }}
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+          EA_FLEET_STABLE_SHA: ${{ vars.EA_FLEET_STABLE_SHA }}   # optional: the EX5 the fleet runs when HEAD's record never shipped
         run: |
           pip install -q cryptography==50.0.0 requests==2.34.2
           $win = (Get-CimInstance Win32_OperatingSystem).Version
