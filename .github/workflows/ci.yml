@@ -597,7 +597,7 @@ jobs:
           python-version: "3.9"
       - name: Host-side scripts import under Python 3.9 — run the gate
         run: |
-          python3.9 -m pip install -q cryptography==50.0.0 requests==2.34.2
+          python3.9 -m pip install -q cryptography==50.0.0 requests==2.32.5   # requests ≥2.33 needs py3.10; 2.32.5 is the py3.9 host pin
           python3.9 scripts/check_host_python_compat.py
 
   container-build:

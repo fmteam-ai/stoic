@@ -31,6 +31,9 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
         with:
           fetch-depth: 0   # v1.60.41 — the fleet-compat gate needs the previous v* tag
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"
       - name: Release discipline — no tag while an un-waived P0/P1 review finding is open (M119-7)
         run: python3 scripts/check_open_findings.py
       - name: EA fleet compatibility gate — the release must accept the stable EX5 of the previous tag (v1.60.41)
@@ -309,6 +312,9 @@ jobs:
           if (-not (Test-Path "backend\static\EmergentTradingBridge.ex5")) {
             throw "Compiled .ex5 not produced"
           }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"   # same interpreter as ea-release (the Windows runner default is 3.9)
       - name: Reproducibility — the tagged tree must carry a SIGNED record whose EX5 hash equals this compile
         shell: pwsh
         env:
@@ -341,6 +347,9 @@ jobs:
     needs: [ci-gates, suite-from-archive, hermetic-verify, install-from-archive, ea-compile]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"   # v1.60.41 — pins below follow backend/requirements.txt (py3.11), not the runner default
       - name: Resolve release commit (peel annotated-tag object)
         run: |
           COMMIT_SHA=$(git rev-parse --verify --quiet "${GITHUB_SHA}^{commit}" \
