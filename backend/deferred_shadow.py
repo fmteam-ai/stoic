@@ -12,6 +12,7 @@ Strategy Report, not once per re-evaluation."""
 from __future__ import annotations
 
 import logging
+import re
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -88,7 +89,7 @@ async def m1_bars_after(db, user_id: str, base: str, epoch: float) -> list:
     if bars:
         return bars
     ticks: list = []
-    cur = db.scalp_ticks.find({"user_id": user_id, "symbol": {"$regex": f"^{base}"},
+    cur = db.scalp_ticks.find({"user_id": user_id, "symbol": {"$regex": f"^{re.escape(base)}"},
                                "last_ms": {"$gt": int(epoch * 1000)}, "first_ms": {"$lte": int(end * 1000)}},
                               {"ticks": 1}).sort("first_ms", 1)
     async for batch in cur:
