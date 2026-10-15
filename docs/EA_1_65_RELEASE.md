@@ -49,6 +49,17 @@ and **fails** on a version change without a signed prior record (`--no-previous-
 bypass); `scripts/check_ea_fleet_compat.py` blocks the tag (`release.yml` tag-only job, `ci.yml`, `ea-release`) and the
 host update (`deploy/update.sh`, against the PREV checkout's record) when the stable EX5 is not accepted.
 
+**v1.60.47 — CI `protected-paths` job (PR #98, 15 Oct):** an export from a workspace behind `main` (a2482c58) reverted
+`release/ea_release.json` to the 6 Oct EA 1.60 record (`previous: null`), deleted `backend/static/EmergentTradingBridge.ex5`
+and every `policies/*.json` / `release/policy_migrations/*.json` — CI stayed green. `scripts/check_protected_paths.py`
+now fails any PR / push to `main` that deletes those files, or that changes `release/ea_release.json`, the EX5 or
+`docs/RELEASE_HASHES.json#ea` in a commit not authored by `stoic-ea-release[bot]`. It is a PR-time safety net on top of
+the signature checks (`verify_ea_release.py`, `check_ea_fleet_compat.py`): a wrong record is still refused by the
+signed-record gates even if the author is spoofed. Fix for a flagged PR: re-sync the branch with `main`
+(`git checkout origin/main -- release/ea_release.json docs/RELEASE_HASHES.json backend/static/EmergentTradingBridge.ex5 policies release/policy_migrations`),
+never hand-edit.
+
+
 1. Restore the signed 1.64 record from the last good ea-release commit — never hand-edit the `ea` entry:
    `git checkout 3344609d -- release/ea_release.json docs/RELEASE_HASHES.json && git commit -m "restore signed EA 1.64 record"`
    (then `python scripts/capture_release_hashes.py` on the same commit: it keeps the signed 1.64 as `#ea.previous`
