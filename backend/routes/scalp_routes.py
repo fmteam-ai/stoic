@@ -346,7 +346,8 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
     from scalp import permissions as _perms
     from state_contract import effective_connection_state
     from bson import ObjectId
-    for r in _runners.values():
+    # snapshot: the loop awaits, so runners may be added/removed meanwhile
+    for r in list(_runners.values()):
         if r.user_id != user["id"]:
             continue
         if account_id and r.account_id != account_id:
