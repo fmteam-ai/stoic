@@ -661,6 +661,49 @@ async def safety_loops(request: Request):
             "generated_at": now.isoformat()}
 
 
+@router.get("/ops/news-sources")
+async def news_sources(request: Request):
+    """v1.60.39 — calendar ✓ / RSS+AI ✓ / NewsAPI off. Status is read from platform_state.news_sources (written by
+    the worker that fetches) with the in-process view as fallback, so production shows the real wire state."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from economic_calendar import feed_status
+    from news_status import load_source_status, newsapi_configured
+    from news_understanding import CACHE_TTL, FAIL_TTL, source_status
+    persisted = await load_source_status()
+    now = datetime.now(timezone.utc)
+    cal = persisted.get("calendar") or feed_status()
+    rss = persisted.get("rss_ai") or source_status()
+    fetched = _as_dt(rss.get("last_fetch_at"))
+    scored = _as_dt(rss.get("last_scored_at"))
+    age = (now - fetched).total_seconds() if fetched else None
+    if fetched is None:
+        rss_state = "IDLE"
+    elif rss.get("last_error") or rss.get("last_llm_error") or (scored is None):
+        rss_state = "DEGRADED" if rss.get("rss_items") else "DOWN"
+    else:
+        rss_state = "OK" if age <= 2 * (CACHE_TTL + FAIL_TTL) else "STALE"
+    bases = []
+    async for doc in get_db().news_ai_cache.find({}, {"net": 1, "label": 1, "headlines": 1, "fetched_at": 1}):
+        bases.append({"base": str(doc["_id"]), "net": doc.get("net"), "label": doc.get("label"),
+                      "headlines": doc.get("headlines"), "fetched_at": doc.get("fetched_at")})
+    return {
+        "calendar": {"status": cal.get("status"), "provider": cal.get("provider"),
+                     "last_fetch_at": cal.get("last_fetch_at"), "cached_events": cal.get("cached_events"),
+                     "last_error": cal.get("last_error")},
+        "rss_ai": {"status": rss_state, "last_fetch_at": _iso(fetched), "last_scored_at": _iso(scored),
+                   "age_sec": None if age is None else int(age), "rss_items": rss.get("rss_items"),
+                   "newsapi_items": rss.get("newsapi_items"), "headlines": rss.get("headlines"),
+                   "last_error": rss.get("last_error"), "last_llm_error": rss.get("last_llm_error"),
+                   "bases": bases},
+        "newsapi": {"configured": newsapi_configured(),
+                    "note": "optional supplement only — free tier delays articles up to 24 h"},
+        "sentiment_source": "rss_ai",
+        "generated_at": now.isoformat(),
+    }
+
+
 @router.get("/ops/releases")
 async def releases_state(request: Request):
     """iter-160 — canary/staged rollout state + deployment history."""

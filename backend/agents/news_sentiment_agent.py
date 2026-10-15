@@ -42,7 +42,13 @@ class NewsSentimentAgent:
                     "article_count": 0, "summary": "news feed unavailable",
                     "bias": "unavailable"}
 
-        score = float(s.get("score") or 0.0)
+        score = s.get("score")
+        if score is None or s.get("available") is False:
+            # v1.60.39 — no live source → say so; never a fake neutral 0 that reads as "news is fine"
+            return {"symbol": sym, "score": None, "label": "UNAVAILABLE", "article_count": 0,
+                    "summary": s.get("summary") or "news source unavailable",
+                    "bias": "unavailable (no news source)", "available": False}
+        score = float(score)
         label = (s.get("label") or _label_from_score(score)).upper()
         article_count = int(s.get("article_count") or 0)
         summary = s.get("summary") or ""
@@ -55,4 +61,6 @@ class NewsSentimentAgent:
             "article_count": article_count,
             "summary": summary,
             "bias": bias,
+            "available": True,
+            "source": s.get("source") or "rss_ai",
         }

@@ -38,6 +38,25 @@ def broker_identity_snapshot(account: dict) -> dict:
     }
 
 
+def _entry_dxy_value(signal: dict):
+    """v1.60.39 — DXY level at entry: signal.dxy (snapshot dict or number) else entry_context.dxy."""
+    dxy = signal.get("dxy")
+    if isinstance(dxy, dict):
+        return dxy.get("current_price")
+    if isinstance(dxy, (int, float)):
+        return dxy
+    return (signal.get("entry_context") or {}).get("dxy")
+
+
+async def _cached_news_ai(base: str):
+    """v1.60.39 — cache-only read for engines that bypass the signal pipeline (scalp); never fetches."""
+    try:
+        from news_understanding import cached_news_ai
+        return await cached_news_ai(base)
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def stamp_pamm_identity(trade_doc: dict, signal: dict) -> None:
     """v62.3/v62.4 — full ownership lineage on every PAMM-originated
     trade. Manual overrides carry the program only — NEVER attributed to
@@ -431,6 +450,10 @@ class MT5BridgeEngine(ExecutionEngine):
             "trend_ride": signal.get("trend_ride"),
             "trend_ride_applied": bool(signal.get("trend_ride")),   # v1.60.36 — compare both arms in the Strategy Report
             "entry_context": signal.get("entry_context"),           # v1.60.36 — DXY/VIX/10Y/MTF/setup score at entry
+            # v1.60.39 — raw entry snapshots too, so post-mortems never show null when the data existed
+            "dxy": _entry_dxy_value(signal),
+            "news_ai": signal.get("news_ai") or await _cached_news_ai(base_symbol),
+            "sentiment": signal.get("sentiment"),
             "versions": signal.get("versions"),
             "partial_closed": False,
             "breakeven_set": False,

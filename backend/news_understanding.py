@@ -53,6 +53,9 @@ RSS_RELEVANCE = ("iran", "israel", "middle east", "war", "strike", "missile",
                  "central bank", "rate")
 
 _cache: dict = {}   # {base: (expires_ts, payload|None)}
+# v1.60.39 — source diagnostics for Admin → Bot Health (persisted via news_status so the API process sees them)
+_status: dict = {"last_fetch_at": None, "rss_items": 0, "newsapi_items": 0, "headlines": 0,
+                 "last_error": None, "last_llm_error": None, "last_scored_at": None}
 
 ASSET_CONTEXT = {
     "XAUUSD": ("gold (XAUUSD). Weigh: USD strength, real yields, Fed policy path, "
@@ -139,6 +142,7 @@ async def fetch_market_news(base: str, limit: int = MAX_HEADLINES) -> list:
             rss = await _fetch_rss(client)
     except Exception as e:
         logger.warning("news_understanding fetch failed: %s", e)
+        _status["last_error"] = f"{type(e).__name__}: {e}"
         return []
     seen, out = set(), []
     for a in macro + geo + asset:
@@ -153,6 +157,9 @@ async def fetch_market_news(base: str, limit: int = MAX_HEADLINES) -> list:
         if a["title"].lower() not in seen:
             seen.add(a["title"].lower())
             out.append(a)
+    _status.update({"last_fetch_at": datetime.now(timezone.utc).isoformat(), "rss_items": len(rss),
+                    "newsapi_items": len(macro) + len(geo) + len(asset), "headlines": min(len(out), limit),
+                    "last_error": None if out else "no headlines returned by RSS wire"})
     return out[:limit]
 
 
@@ -195,6 +202,7 @@ def aggregate_scores(items: list, now: datetime | None = None) -> dict | None:
     net = round(max(-3.0, min(3.0, ssum / wsum)), 2) if wsum > 0 else 0.0
     drivers = sorted(scored, key=lambda x: abs(x["score"]), reverse=True)[:3]
     return {"net": net, "label": _label(net), "headlines": len(scored),
+            "distinct_sources": len({str(it.get("source") or "").lower() for it in scored if it.get("source")}),
             "drivers": [{"title": d["title"][:120], "source": d.get("source", ""),
                          "score": d["score"], "why": d.get("why", "")}
                         for d in drivers]}
@@ -251,19 +259,64 @@ async def get_news_understanding(base: str) -> dict | None:
     heads = await fetch_market_news(base)
     if not heads:
         _cache[base] = (now + FAIL_TTL, None)
+        await _persist_status(base, None)
         return None
     try:
         items = await _score_headlines(base, heads)
         snap = aggregate_scores(items)
+        _status["last_llm_error"] = None
     except Exception as e:
         logger.warning("news_understanding scoring failed: %s", e)
+        _status["last_llm_error"] = f"{type(e).__name__}: {e}"
         snap = None
     if not snap:
         _cache[base] = (now + FAIL_TTL, None)
+        await _persist_status(base, None)
         return None
     snap["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    _status["last_scored_at"] = snap["fetched_at"]
     _cache[base] = (now + CACHE_TTL, snap)
+    await _persist_status(base, snap)
     return snap
+
+
+async def _persist_status(base: str, snap: dict | None) -> None:
+    """v1.60.39 — status + latest snapshot to Mongo so the API process (Bot Health) and other workers (scalp
+    engine at entry) can read them without fetching."""
+    try:
+        from news_status import record_source_status
+        await record_source_status("rss_ai", {**_status, "base": base})
+        if snap:
+            from database import get_db
+            await get_db().news_ai_cache.update_one({"_id": base}, {"$set": snap}, upsert=True)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("news_ai persist skipped: %s", e)
+
+
+async def cached_news_ai(base: str) -> dict | None:
+    """CACHE ONLY (memory, then Mongo within CACHE_TTL) — never fetches. Used at trade entry for engines that
+    bypass the signal pipeline and by post-mortems for the "now" read."""
+    hit = _cache.get(base)
+    if hit and hit[0] > time.time() and hit[1]:
+        return hit[1]
+    try:
+        from database import get_db
+        doc = await get_db().news_ai_cache.find_one({"_id": base})
+        if not doc:
+            return None
+        fetched = datetime.fromisoformat(str(doc.get("fetched_at")).replace("Z", "+00:00"))
+        if (datetime.now(timezone.utc) - fetched).total_seconds() > CACHE_TTL:
+            return None
+        doc.pop("_id", None)
+        return doc
+    except Exception as e:  # noqa: BLE001
+        logger.debug("news_ai cache read failed: %s", e)
+        return None
+
+
+def source_status() -> dict:
+    """In-process view (the ops route prefers the persisted copy)."""
+    return dict(_status)
 
 
 def news_gate(action: str, base: str, snap: dict | None) -> str | None:

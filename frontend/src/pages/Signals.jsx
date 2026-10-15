@@ -573,8 +573,14 @@ function SignalCard({ s, accounts, onExecute, onDelete }) {
                 <div className="pt-2 border-t border-[#1F1F1F]">
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">NEWS SENTIMENT</div>
                     <div className="flex items-center gap-2 text-xs">
-                        <span className={`font-mono ${sentClass}`}>{sentLabel.replace("_", " ").toUpperCase()} · {sentScore >= 0 ? "+" : ""}{sentScore}</span>
-                        <span className="text-[#52525B] font-mono">· {s.sentiment.article_count} articles</span>
+                        {s.sentiment?.score == null ? (
+                            <span className="font-mono text-[#52525B]" data-testid={`signal-sentiment-unavailable-${s.symbol}`}>UNAVAILABLE · no live news source</span>
+                        ) : (
+                            <>
+                                <span className={`font-mono ${sentClass}`}>{sentLabel.replace("_", " ").toUpperCase()} · {sentScore >= 0 ? "+" : ""}{sentScore}</span>
+                                <span className="text-[#52525B] font-mono">· {s.sentiment.article_count} articles</span>
+                            </>
+                        )}
                     </div>
                 </div>
             )}

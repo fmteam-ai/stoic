@@ -132,13 +132,24 @@ async def get_events() -> list:
             _cache["expires_at"] = time.time() + 3600  # 1h
             _cache["fetched_at"] = time.time()
             _cache["last_error"] = None
+            await _persist_status()
             return evts
         except Exception as e:
             # Failure backoff (e.g. HTTP 429 rate limit): keep stale events and
             # stop hammering the feed for 10 min so the limit can reset.
             _cache["expires_at"] = time.time() + 600
             _cache["last_error"] = f"{type(e).__name__}: {e}"
+            await _persist_status()
             return _cache["events"] or []
+
+
+async def _persist_status() -> None:
+    """v1.60.39 — Bot Health (API process) reads the calendar status the worker recorded."""
+    try:
+        from news_status import record_source_status
+        await record_source_status("calendar", feed_status())
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def feed_status() -> dict:

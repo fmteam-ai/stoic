@@ -2580,6 +2580,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 "trend_ride": signal.get("trend_ride"),
                 "trend_ride_applied": bool(signal.get("trend_ride")),
                 "entry_context": signal.get("entry_context"),
+                "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
+                "news_ai": signal.get("news_ai"),
+                "sentiment": signal.get("sentiment"),
                 "versions": version_stamp(signal.get("scope")),
             },
             max_concurrent=max_concurrent,

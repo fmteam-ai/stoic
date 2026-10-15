@@ -62,5 +62,21 @@ async def cached_fred_series() -> dict:
         return {}
 
 
+async def cached_dxy() -> dict | None:
+    """v1.60.39 — CACHE ONLY (dxy_cache._id=latest, refreshed by the signal path / macro worker). The scalp engine
+    builds its context from a bare signal, so without this its entry DXY was always null."""
+    try:
+        from database import get_db
+        doc = await get_db().dxy_cache.find_one({"_id": "latest"}, {"current_price": 1, "regime": 1})
+        return doc or None
+    except Exception as e:  # noqa: BLE001
+        logger.debug("entry context: DXY cache unavailable: %s", e)
+        return None
+
+
 async def build_entry_context(signal: dict) -> dict:
+    if not isinstance(signal.get("dxy") or signal.get("dxy_dollar_index"), dict):
+        dxy = await cached_dxy()
+        if dxy:
+            signal = {**signal, "dxy": dxy}
     return context_from_signal(signal, await cached_fred_series())
