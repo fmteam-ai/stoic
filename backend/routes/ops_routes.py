@@ -636,6 +636,31 @@ async def slo_status(request: Request):
     return {"slos": await compute_slos(get_db())}
 
 
+@router.get("/ops/loops")
+async def safety_loops(request: Request):
+    """v1.60.39 — last-run time of every background loop (loop_progress), so a loop that stops is visible on
+    Admin → Bot Health instead of silently never running (13 Oct intent sweep, 14 Oct deploy watch)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    rows = []
+    async for lp in db.loop_progress.find({}):
+        done = _as_dt(lp.get("last_iteration_completed_at"))
+        ivl = int(lp.get("expected_interval_sec") or 60)
+        age = (now - done).total_seconds() if done else None
+        rows.append({"loop": str(lp["_id"]), "last_run_at": _iso(done), "age_sec": None if age is None else int(age),
+                     "expected_interval_sec": ivl, "fresh": bool(done and age <= max(3 * ivl, 120)),
+                     "processed_count": lp.get("processed_count"), "last_duration_ms": lp.get("last_duration_ms"),
+                     "worker": lp.get("worker") or lp.get("host")})
+    rows.sort(key=lambda r: (r["fresh"], r["loop"]))
+    st = await db.platform_state.find_one({"_id": "release_state"}, {"deploy_watch": 1}) or {}
+    return {"loops": rows, "deploy_watch_pending": bool(st.get("deploy_watch")),
+            "in_process_workers": os.environ.get("BACKGROUND_WORKERS_IN_PROCESS", "").lower() == "true",
+            "generated_at": now.isoformat()}
+
+
 @router.get("/ops/releases")
 async def releases_state(request: Request):
     """iter-160 — canary/staged rollout state + deployment history."""

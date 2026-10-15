@@ -17,6 +17,7 @@ BAKE_HOURS = float(os.environ.get("DEPLOY_BAKE_HOURS", "4"))
 MIN_SCORE = float(os.environ.get("DEPLOY_MIN_HEALTH", "60"))
 MAX_DROP = float(os.environ.get("DEPLOY_MAX_HEALTH_DROP", "25"))
 HB_FRESH_SEC = 300
+STALE_WATCH_FACTOR = 2.0   # a watch older than 2× its bake window is stale: resolve from bake-window evidence, never roll back
 # SEC (3rd audit) — auto-rollback only fires after INDEPENDENT corroboration
 # from distinct TENANTS (not tenant-controlled agent_ids, which one customer
 # can mint without limit) AND only for the exact release digest under
@@ -166,6 +167,23 @@ async def watch_deployment(db) -> dict | None:
     started = _aware(watch.get("started_at"))
     bake = float(watch.get("bake_hours") or BAKE_HOURS)
     baseline = float(watch.get("baseline_score") or 100)
+    # v1.60.39 — STALE watch (the loop was not running — prod before v1.60.39 — and the bake window elapsed long
+    # ago): resolve it from the bake-window evidence only. Today's fleet health says nothing about a release that
+    # baked days ago, so never auto-rollback here; a corroborated failure count is recorded for the operator.
+    if started and _now() - started >= timedelta(hours=STALE_WATCH_FACTOR * bake):
+        trusted_uids = await _trusted_user_ids(db)
+        fails = await distinct_fail_tenants(db, started, set((watch.get("artifacts") or {}).values()),
+                                            only_user_ids=trusted_uids)
+        display_health = await score_fleet(db)
+        await _clear_watch(db)
+        from release_channels import _history
+        detail = {"health": display_health, "baseline": baseline, "stale_resolved": True,
+                  "elapsed_hours": round((_now() - started).total_seconds() / 3600, 1), "fail_tenants": fails,
+                  "note": "bake window elapsed while the watch loop was not running — resolved without rollback"}
+        await _history(db, "bake_complete", detail)
+        logger.warning("deploy watch from %s resolved as STALE (%.1f h, %s trusted deploy failures) — no rollback",
+                       watch.get("started_at"), detail["elapsed_hours"], fails)
+        return {"status": "bake_complete", "stale_resolved": True, "fail_tenants": fails, "health": display_health}
     # Full-fleet score is display-only. The auto-rollback DECISION trusts ONLY
     # operator-designated agents/tenants so tenant-controlled telemetry can't
     # force a rollback of a healthy release (4th audit SEC-001/SEC-002).
