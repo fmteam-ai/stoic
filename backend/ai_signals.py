@@ -134,6 +134,32 @@ async def _intraday_entropy_override(symbol: str, daily: dict, user_id: str | No
         return daily
 
 
+async def _gold_trend_pulse_signal(symbol: str, cfg: dict | None, user_id: str | None) -> dict:
+    """gold_trend_pulse evaluation for the account behind `cfg` → {mode, note, summary, signal|None}."""
+    from database import get_db
+    from gold_trend_pulse import engine as gtp
+    db = get_db()
+    acc = None
+    if (cfg or {}).get("account_id"):
+        from bson import ObjectId
+        try:
+            acc = await db.accounts.find_one({"_id": ObjectId(str(cfg["account_id"]))})
+        except Exception:  # noqa: BLE001
+            acc = None
+    if acc is None:
+        acc = await db.accounts.find_one({"user_id": user_id, "status": "connected"}) or await db.accounts.find_one({"user_id": user_id})
+    if acc is None:
+        return {"mode": "shadow", "note": "no account", "summary": None, "signal": None}
+    res = await gtp.evaluate(db, cfg or {}, acc)
+    summary = {"bias": res["bias"], "reasons": res["reasons"], "mode": res["mode"], "note": res["note"], "live_gate": res["live_gate"]}
+    sig = None
+    if res.get("signal"):
+        sig = gtp.pipeline_signal(res["signal"], {"symbol": symbol, "price_source": "broker_tick", "risk_level": "gold_trend_pulse",
+                                                   "min_confidence_required": 0, "macro": None, "session": None})
+        sig["gold_trend_pulse_summary"] = summary
+    return {"mode": res["mode"], "note": res["note"], "summary": summary, "signal": sig}
+
+
 async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
                          strategy: str | None = None,
@@ -179,7 +205,13 @@ async def analyze_symbol(symbol: str, risk_level: str,
     if not entropy.get("tradeable", True):
         entropy = await _intraday_entropy_override(symbol, entropy, user_id)
     # iter-120 · Intraday M15 feature pack — the USER's live EA stream (fix plan A1).
-    intraday_pack = await fetch_intraday_pack(symbol, user_id)
+    # #55 — live-feature pack (broker price for price-dependent features) vs the closed-bar pack. The flag decides which
+    # one the engine TRADES on; the other is always evaluated for the one-week shadow compare (engine_shadow_compare).
+    _live_on = bool((freeze_cfg or {}).get("engine_live_features_enabled"))
+    _pack_closed = await fetch_intraday_pack(symbol, user_id)
+    _pack_live = await fetch_intraday_pack(symbol, user_id, live_price=broker_px) if (broker_px and _pack_closed) else None
+    intraday_pack = (_pack_live or _pack_closed) if _live_on else _pack_closed
+    _pack_other = _pack_closed if _live_on else _pack_live
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
 
@@ -316,6 +348,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # ------------------------------------------------------------------------
     engine = resolve_engine(strategy)
     engine_label = ENGINE_LABELS.get(engine, engine)
+    _cmp = None
     # Regime-adaptive dispatch — ADAPTIVE routes this evaluation to the
     # engine matching the LIVE regime (trend → MTF cascade, range → fade,
     # chop/unknown → stand down) instead of holding for days.
@@ -400,6 +433,18 @@ async def analyze_symbol(symbol: str, risk_level: str,
         return _hold(f"Macro freeze in effect: {macro.get('reason') or 'high-impact event window'}")
     if regime_dispatch and not regime_dispatch["dispatched_engine"]:
         return _hold(f"ADAPTIVE · Regime Dispatch: {regime_dispatch['note']}")
+    # gold_trend_pulse (v1.60.57) — when enabled on this account, XAUUSD is evaluated by the trend-pulse rules INSTEAD of
+    # the preset engine (OFF by default). Shadow decisions are recorded and HOLD is returned; a demo_live decision
+    # (own live gate) becomes a deterministic signal and runs through every downstream guard like any other.
+    from gold_trend_pulse.engine import enabled_for as _gtp_on, SYMBOL as _GTP_SYMBOL
+    from pip_utils import base_symbol as _base_sym
+    if _gtp_on(freeze_cfg) and _base_sym(symbol) == _GTP_SYMBOL:
+        gtp = await _gold_trend_pulse_signal(symbol, freeze_cfg, user_id)
+        if gtp.get("signal"):
+            return gtp["signal"]
+        hold = _hold(f"GOLD TREND PULSE ({gtp.get('mode')}): {gtp.get('note')}")
+        hold.update({"scope": "gold_trend_pulse", "strategy_engine": "gold_trend_pulse", "gold_trend_pulse": gtp.get("summary")})
+        return hold
 
     action = None
     engine_note = ""
@@ -416,8 +461,16 @@ async def analyze_symbol(symbol: str, risk_level: str,
             return _hold(f"{engine_label}: no fresh M15 stream from the EA (bridge "
                          f"must be online and streaming candles) — standing by.")
         sig, note = run_engine(engine, intraday_pack, params=eng_params)
+        if _pack_other is not None:
+            _o_sig, _o_note = run_engine(engine, _pack_other, params=eng_params)
+            _cmp = {"live_features_traded": _live_on, "traded": {"action": sig, "note": note[:160]},
+                    "other": {"action": _o_sig, "note": (_o_note or "")[:160]},
+                    "feature_price_gap": (_pack_live or {}).get("feature_price_gap"), "stale_feature": (_pack_live or {}).get("stale_feature"),
+                    "trend_live": (_pack_live or {}).get("trend"), "trend_closed": (_pack_closed or {}).get("trend"), "differs": _o_sig != sig}
         if not sig:
-            return _hold(f"{engine_label}: {note} — standing by.")
+            h = _hold(f"{engine_label}: {note} — standing by.")
+            h["engine_shadow_compare"] = _cmp
+            return h
         action = sig
         engine_note = note
     # fade-style entries bet against recent drift — tagged so drift-based
@@ -626,6 +679,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "min_confidence_required": adapted_profile["min_confidence"],
         "veto_applied": bool(veto_reason) or bool(rr_veto),
         "engine_params": eng_params,
+        "engine_shadow_compare": _cmp,                                   # #55 — old vs new engine output, 1-week compare
+        "stale_feature_entry": bool((_pack_live or {}).get("stale_feature")),   # #55(5) — anti-tilt ignores losses on these
         "setup_score": _ss,
         "confidence_basis": _ss["basis"],
         "engine_geometry": None if is_hold else {

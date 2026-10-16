@@ -207,6 +207,11 @@ class BotConfigUpdate(BaseModel):
     # trade is +N×R (breakout signals have TP1 = TP, so the TP1 breakeven never fired). 0 = TP1-only (old behaviour).
     # #46 — ONE shared default (BREAKEVEN_TRIGGER_R_DEFAULT) for runtime AND UI; breakeven_enabled is honoured.
     breakeven_enabled: bool = True
+    # gold_trend_pulse (v1.60.57) — XAUUSD-only M5 trend-pullback scalper. OFF by default; shadow until its own live gate passes.
+    gold_trend_pulse_enabled: bool = False
+    gold_trend_pulse_mode: str = "shadow"           # shadow | demo_live (demo_live runs shadow until the gate passes)
+    gold_trend_pulse_layering_enabled: bool = False  # item 11 — up to 3 staggered legs per pullback, one shared stop, ≤0.75 % basket risk
+    engine_live_features_enabled: bool = False       # #55 — engines read the LIVE broker price (+ fast slope / momentum override); OFF = shadow compare only
     breakeven_trigger_r: float = Field(default=BREAKEVEN_TRIGGER_R_DEFAULT, ge=0.0, le=5.0)
     daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)
     daily_drawdown_enabled: bool = True

@@ -24,6 +24,8 @@ def classify_loss(trade: dict, account: dict | None = None) -> dict:
     pnl = float(trade.get("pnl") or 0)
     if pnl >= 0:
         return {"counts": False, "r": None, "why": "pnl ≥ 0 — not a loss"}
+    if trade.get("stale_feature_entry"):
+        return {"counts": False, "r": None, "why": "stale-feature entry (#55: live price > 0.5×ATR15 from the closed-bar features) — not a tilt loss"}
     # a scratch is a stop the EA CONFIRMED moved to break-even (`breakeven_set`), not merely a requested BE rule
     if trade.get("scalp_exit_rule") in BREAKEVEN_EXIT_RULES and trade.get("breakeven_set"):
         return {"counts": False, "r": None, "why": "breakeven scratch (EA confirmed BE stop) — not a loss"}

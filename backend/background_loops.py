@@ -191,6 +191,8 @@ async def _analytics_loop():
             try:
                 from deferred_shadow import sweep_deferred_shadows
                 await sweep_deferred_shadows(get_db())
+                from gold_trend_pulse.engine import label_pending as _gtp_label
+                await _gtp_label(get_db())
             except Exception as _de:  # noqa: BLE001
                 logger.debug("deferred shadow sweep skipped: %s", _de)
             record_progress("_analytics_loop", processed=1,

@@ -442,6 +442,9 @@ class MT5BridgeEngine(ExecutionEngine):
             "origin": signal.get("origin", "manual"),
             "engine": engine_for_signal(signal),      # N99-1 / v1.60.32 — persisted at open (scope fallback), never None for a known engine
             "scope": signal.get("scope"),
+            "gold_trend_pulse": signal.get("gold_trend_pulse"),   # v1.60.57 — regime / trigger / basket / time-stop for the exit rules
+            "stale_feature_entry": bool(signal.get("stale_feature_entry")),   # #55(5) — live price was > 0.5×ATR15 from the closed-bar features
+            "engine_shadow_compare": signal.get("engine_shadow_compare"),
             "strategy_class": signal.get("strategy_class"),
             "market_regime": signal.get("market_regime"),
             "risk_pct": (signal.get("risk_pct")

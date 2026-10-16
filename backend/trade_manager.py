@@ -211,6 +211,49 @@ async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_u
             "from_lot": float(trade.get("lot_size") or 0), "to_lot": 0.0})
         return True
     return False
+async def _gold_trend_pulse_exits(db, trade: dict, current: float, pips_up: float) -> bool:
+    """gold_trend_pulse (v1.60.57): BE once 60 % of the TP distance is reached — stop → entry ± (spread + commission),
+    BUY above / SELL below entry — and a time-stop (45 min TREND, 20 min RANGE) at the broker price. Returns True when it acted."""
+    from gold_trend_pulse import rules as R
+    meta = trade.get("gold_trend_pulse") or {}
+    entry, action = float(trade["entry_price"]), trade.get("action")
+    _, tp1_pips, *_ = _trade_targets(trade)
+    from pip_utils import pips_to_price
+    tp_dist = pips_to_price(trade["symbol"], tp1_pips)
+    if tp_dist > 0 and R.breakeven_due(action, entry, tp_dist, current) and not trade.get("breakeven_set") and not trade.get("be_target_sl"):
+        new_sl = scalp_breakeven_sl(trade)          # entry ± (spread_at_entry + commission) in price units, sign by direction
+        if tightened_sl(trade, new_sl) is None:
+            await record_sl_loosen_refusal(trade, new_sl, "gtp_breakeven_60pct")
+        elif await be_clamped_skip(db, trade, new_sl, current, "gtp_breakeven_60pct"):
+            return True
+        else:
+            stamped = await stamp_pending_modification(
+                db, _free_slot_filter(trade["_id"]), {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "gtp_breakeven_60pct"},
+                {"be_target_sl": new_sl, "scalp_exit_rule": "gtp_breakeven_60pct", "scalp_be_armed_at": datetime.now(timezone.utc).isoformat(),
+                 "be_cost_pips": round(scalp_cost_pips(trade), 2)})
+            if stamped is not None:
+                await ws_manager.broadcast(trade["user_id"], "trade_management", {
+                    "trade_id": str(trade["_id"]), "action": "GTP_BE_60PCT", "new_sl": new_sl, "pips": round(pips_up, 1),
+                    "from_lot": float(trade.get("lot_size") or 0), "to_lot": float(trade.get("lot_size") or 0)})
+            return True
+    ts_min = int(meta.get("time_stop_min") or (R.RANGE_TIME_STOP_MIN if meta.get("regime") == "RANGE" else R.TIME_STOP_MIN))
+    opened = trade.get("opened_at") or trade.get("created_at")
+    try:
+        dt = datetime.fromisoformat(str(opened).replace("Z", "+00:00"))
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    if (datetime.now(timezone.utc) - dt).total_seconds() >= ts_min * 60:
+        await request_close(db, {"_id": trade["_id"]}, reason="time_stop", actor="trade_manager", stamp={
+            "time_stop_minutes": ts_min, "scalp_exit_rule": f"gtp_time_stop_{ts_min}m",
+            "pending_modification": {"type": "FULL_CLOSE", "reason": "gtp_time_stop", "requested_at": datetime.now(timezone.utc).isoformat()}})
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {
+            "trade_id": str(trade["_id"]), "action": "GTP_TIME_STOP", "pips": round(pips_up, 1),
+            "from_lot": float(trade.get("lot_size") or 0), "to_lot": 0.0})
+        return True
+    return False
+
+
 DEFAULT_BE_TRIGGER_PIPS = 100        # move SL to entry at +100 pips
 
 
@@ -361,6 +404,11 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     _, tp1_pips, tp2_pips, tp3_pips = _trade_targets(trade)
     pips_up = _pips_in_profit(entry, current, action, symbol)
 
+    # v1.60.57 — gold_trend_pulse: BE at 60 % of TP (stop → entry ± spread+commission), 45-min (TREND) / 20-min (RANGE)
+    # time-stop, broker TP does the exit. No tiers, no breakeven_trigger_r, no TP rescale / stretch / trend-ride.
+    if (trade.get("scope") or trade.get("engine")) == "gold_trend_pulse":
+        await _gold_trend_pulse_exits(db, trade, current, pips_up)
+        return
     # v1.60.32 C8/C9 — hf_scalp / hf_scalp_fast exits (demo engines): breakeven at +0.5R, 90-minute time-stop.
     if is_scalp_engine_trade(trade):
         if await _scalp_engine_exits(db, trade, cfg, current, pips_up):
