@@ -126,7 +126,7 @@ def test_shadow_label_walks_m1_with_be_time_stop_and_costs():
     assert lab["exit_reason"] == "breakeven" and lab["exit_price"] == 4000.32 and lab["net_price"] == 0.0 and lab["be_armed"]
     flat = [{"t": t0 + 60 * i, "o": 4000, "h": 4000.3, "l": 3999.7, "c": 4000.1} for i in range(50)]
     lab = label_with_bars(d, flat, now + timedelta(minutes=60))
-    assert lab["exit_reason"] == "time_stop" and lab["time_in_trade_min"] == 45.0 and lab["result"] == "loss"
+    assert lab["exit_reason"] == "time_stop" and lab["time_in_trade_min"] == 45.0 and lab["result"] in ("loss", "scratch") and (lab["result"] == "scratch") == (abs(lab["net_price"]) <= lab["costs_price"])
     assert label_with_bars(d, flat[:5], now + timedelta(minutes=6)) is None                 # still pending
 
 

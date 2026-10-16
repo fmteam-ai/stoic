@@ -23,7 +23,8 @@ def _minutes(cfg: dict) -> float:
 
 
 def trade_r_multiple(t: dict) -> float | None:
-    """r_multiple when recorded, else (exit − entry) / |entry − stop| signed by direction; None when not derivable."""
+    """r_multiple when recorded, else (exit − entry) / |entry − ORIGINAL stop| signed by direction (#60 — a BE-moved
+    `stop_loss` sits at entry and would turn a scratch into a huge loss); None when not derivable."""
     r = t.get("r_multiple")
     if r is not None:
         try:
@@ -31,7 +32,7 @@ def trade_r_multiple(t: dict) -> float | None:
         except (TypeError, ValueError):
             return None
     try:
-        entry, stop = float(t.get("entry_price")), float(t.get("stop_loss") or t.get("initial_stop_loss"))
+        entry, stop = float(t.get("entry_price")), float(t.get("original_stop_loss") or t.get("stop_loss"))
         exit_px = float(t.get("exit_price") or t.get("close_price"))
     except (TypeError, ValueError):
         return None

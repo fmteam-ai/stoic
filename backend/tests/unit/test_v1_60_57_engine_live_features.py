@@ -98,7 +98,7 @@ def test_flag_default_off_and_shadow_compare_wiring():
     src = open(os.path.join(BACKEND, "ai_signals.py")).read()
     assert 'bool((freeze_cfg or {}).get("engine_live_features_enabled"))' in src
     assert "intraday_pack = (_pack_live or _pack_closed) if _live_on else _pack_closed" in src       # OFF → old features trade
-    assert '"engine_shadow_compare": _cmp' in src and '"stale_feature_entry": bool((_pack_live or {}).get("stale_feature"))' in src
+    assert '"engine_shadow_compare": _cmp' in src and '"stale_feature_entry": bool(_live_on and (_pack_live or {}).get("stale_feature"))' in src
     ex = open(os.path.join(BACKEND, "execution.py")).read()
     assert '"stale_feature_entry": bool(signal.get("stale_feature_entry"))' in ex and '"engine_shadow_compare": signal.get("engine_shadow_compare")' in ex
     # legacy packs (no live price) must behave exactly as before: no override, no live breakout check
@@ -111,7 +111,7 @@ def test_flag_default_off_and_shadow_compare_wiring():
 
 
 def test_engine_replay_reports_old_vs_new_on_a_rally_window():
-    from gold_trend_pulse.synthetic import synthetic_m1
+    from bars_util import synthetic_m1
     from scripts.engine_live_features_replay import markdown, replay_engines
     bars = synthetic_m1(days=6, seed=11)
     rep = replay_engines(bars)

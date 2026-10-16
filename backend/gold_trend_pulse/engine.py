@@ -14,6 +14,9 @@ logger = logging.getLogger("gold_trend_pulse")
 SYMBOL = "XAUUSD"
 PIP_PRICE = 0.10
 MODES = ("shadow", "demo_live")
+H4_MIN_BARS = 200             # #67 — EMA50(H4) warm-up
+SPREAD_MAX_AGE_SEC = 120      # #63 — EA spread older than this → fail closed
+GATE_WINDOW_DAYS = 30         # #64 — rolling live-gate window (shadow + live)
 
 
 def enabled_for(cfg: dict | None) -> bool:
@@ -37,13 +40,22 @@ async def load_bars(db, user_id: str, account: dict | None, now: datetime) -> di
     doc = await load_user_candles(SYMBOL, user_id, "M15", last_n=800, max_age_min=30)
     m15 = list((doc or {}).get("bars") or [])
     out["m15"] = m15
+    out["t_basis"] = (doc or {}).get("t_basis")
     if m15:
-        out["h1"], out["h4"] = R.resample(m15, 3600), R.resample(m15, 14400)
-        d0 = int(_utc_day_start(now).timestamp())
-        today = [b for b in m15 if int(b["t"]) >= d0]
-        prior = [b for b in m15 if d0 - 86400 <= int(b["t"]) < d0]
-        out["today_open"] = today[0]["o"] if today else None
-        out["prior_day_mid"] = (max(b["h"] for b in prior) + min(b["l"] for b in prior)) / 2.0 if prior else None
+        ts = now.timestamp()
+        out["h1"] = R.completed(R.resample(m15, 3600), 3600, ts)               # #67 — completed H1/H4 bars only
+        h4doc = await load_user_candles(SYMBOL, user_id, "H4", last_n=400, max_age_min=6 * 60)
+        h4 = list((h4doc or {}).get("bars") or []) or R.resample(m15, 14400)
+        out["h4"] = R.completed(h4, 14400, ts)
+        out["h4_warm"] = len(out["h4"]) >= H4_MIN_BARS
+        if out["t_basis"] == "broker_unknown":                                   # #67 — no UTC anchor → no daily levels
+            out["today_open"] = out["prior_day_mid"] = None
+        else:
+            d0 = int(_utc_day_start(now).timestamp())
+            today = [b for b in m15 if int(b["t"]) >= d0]
+            prior = [b for b in m15 if d0 - 86400 <= int(b["t"]) < d0]
+            out["today_open"] = today[0]["o"] if today else None
+            out["prior_day_mid"] = (max(b["h"] for b in prior) + min(b["l"] for b in prior)) / 2.0 if prior else None
     m1doc = await load_user_candles(SYMBOL, user_id, "M1", last_n=1600, max_age_min=10)
     m1 = list((m1doc or {}).get("bars") or [])
     if m1:
@@ -63,8 +75,13 @@ async def load_bars(db, user_id: str, account: dict | None, now: datetime) -> di
         m1 = [buckets[t] for t in sorted(buckets)]
         out["source"] = "scalp_ticks" if m1 else None
     out["m1"] = m1
-    out["m5"] = R.completed(R.m5_from_m1(m1), 300, now.timestamp()) if m1 else []
+    out["m5"] = complete_m5(m1, now.timestamp()) if m1 else []
     return out
+
+
+def complete_m5(m1: list, now_epoch: float) -> list:
+    """#67 — an M5 bar is evaluated only when its window has elapsed AND all 5 M1 bars are present."""
+    return [b for b in R.completed(R.m5_from_m1(m1), 300, now_epoch) if int(b.get("n") or 0) >= 5]
 
 
 async def usd_high_impact_events(cfg: dict | None) -> list:
@@ -86,32 +103,73 @@ async def recent_outcomes(db, account_id: str, mode: str, since: datetime | None
         q = {"account_id": account_id, "scope": R.ENGINE, "status": "closed", "closed_at": {"$ne": None}}
         if since:
             q["closed_at"] = {"$gte": since.isoformat()}
-        rows = await db.trades.find(q, {"closed_at": 1, "pnl": 1, "r_multiple": 1, "entry_price": 1, "stop_loss": 1, "exit_price": 1, "action": 1}).sort("closed_at", 1).to_list(length=2000)
+        rows = await db.trades.find(q, {"closed_at": 1, "pnl": 1, "entry_price": 1, "stop_loss": 1, "original_stop_loss": 1, "exit_price": 1,
+                                        "action": 1, "gold_trend_pulse": 1}).sort("closed_at", 1).to_list(length=2000)
         out = []
         for t in rows:
-            r = t.get("r_multiple")
-            if r is None and t.get("entry_price") and t.get("stop_loss") and t.get("exit_price"):
-                sl = abs(float(t["entry_price"]) - float(t["stop_loss"])) or 1e-9
+            stop = t.get("original_stop_loss") or t.get("stop_loss")           # #69 — R always from the ORIGINAL stop
+            r = 0.0
+            if t.get("entry_price") and stop and t.get("exit_price"):
+                sl = abs(float(t["entry_price"]) - float(stop)) or 1e-9
                 r = (float(t["exit_price"]) - float(t["entry_price"])) / sl * (1 if t.get("action") == "BUY" else -1)
-            out.append({"r": float(r or 0), "pnl_usd": t.get("pnl"), "closed_at": t.get("closed_at")})
-        return out
+            out.append({"r": r, "pnl_usd": t.get("pnl"), "closed_at": t.get("closed_at"), "basket_id": (t.get("gold_trend_pulse") or {}).get("basket_id"),
+                        "result": "scratch" if abs(r) < 0.05 else ("win" if r > 0 else "loss")})
+        return collapse_baskets(out)
     q = {"account_id": account_id, "verdict": "shadow", "outcome.result": {"$exists": True}}
     if since:
         q["outcome.exit_at"] = {"$gte": since.isoformat()}
-    rows = await db.gtp_decisions.find(q, {"outcome": 1}).sort("outcome.exit_at", 1).to_list(length=2000)
-    return [{"r": (x["outcome"] or {}).get("r"), "pnl_usd": (x["outcome"] or {}).get("pnl_usd"), "closed_at": (x["outcome"] or {}).get("exit_at")} for x in rows]
+    rows = await db.gtp_decisions.find(q, {"outcome": 1, "basket_id": 1}).sort("outcome.exit_at", 1).to_list(length=2000)
+    return collapse_baskets([{**(x["outcome"] or {}), "closed_at": (x["outcome"] or {}).get("exit_at"), "basket_id": x.get("basket_id")} for x in rows])
 
 
-async def live_gate(db, account_id: str) -> dict:
-    stats = R.outcome_stats(await recent_outcomes(db, account_id, "shadow"))
-    return {**R.live_gate(stats), "stats": stats}
+def collapse_baskets(rows: list) -> list:
+    """#64 — a basket (layered legs / sweep scalp+runner) counts ONCE: legs with the same basket_id are merged (R and
+    P&L summed, closed at the last leg's exit)."""
+    out, by = [], {}
+    for x in rows:
+        bid = x.get("basket_id")
+        if not bid:
+            out.append(x); continue
+        g = by.get(bid)
+        if g is None:
+            g = by[bid] = {**x, "legs": 1}
+            out.append(g)
+        else:
+            g["r"] = round(float(g.get("r") or 0) + float(x.get("r") or 0), 3)
+            g["pnl_usd"] = round(float(g.get("pnl_usd") or 0) + float(x.get("pnl_usd") or 0), 2)
+            g["closed_at"] = max(str(g.get("closed_at") or ""), str(x.get("closed_at") or ""))
+            g["legs"] += 1
+            g["result"] = "win" if g["r"] > 0 else ("scratch" if g["r"] == 0 else "loss")
+    return out
 
 
-async def effective_mode(db, cfg: dict, account_id: str) -> tuple[str, dict]:
+async def live_gate(db, account_id: str, now: datetime | None = None) -> dict:
+    """#64 — rolling GATE_WINDOW_DAYS window of shadow AND live outcomes (never frozen once passed)."""
+    since = (now or datetime.now(timezone.utc)) - timedelta(days=GATE_WINDOW_DAYS)
+    rows = sorted(await recent_outcomes(db, account_id, "shadow", since) + await recent_outcomes(db, account_id, "demo_live", since),
+                  key=lambda x: str(x.get("closed_at") or ""))
+    stats = R.outcome_stats(rows)
+    return {**R.live_gate(stats), "stats": stats, "window_days": GATE_WINDOW_DAYS}
+
+
+def demo_attested(account: dict | None) -> bool:
+    """#64 — demo_live may only send orders on an account the server classifies as DEMO."""
+    try:
+        from broker_env import attested_environment
+        return attested_environment(account or {}) == "DEMO"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+async def effective_mode(db, cfg: dict, account_id: str, account: dict | None = None) -> tuple[str, dict]:
     want = requested_mode(cfg)
     gate = await live_gate(db, account_id)
-    if want == "demo_live" and not gate["eligible"]:
-        return "shadow", gate
+    if want == "demo_live":
+        if account is not None and not demo_attested(account):
+            gate = {**gate, "eligible": False, "reasons": ["account is not attested DEMO — demo_live refused"] + list(gate.get("reasons") or [])}
+            return "shadow", gate
+        if not gate["eligible"]:
+            return "shadow", gate
     return want, gate
 
 
@@ -119,7 +177,8 @@ async def card(db, user_id: str, account_id: str, now: datetime | None = None) -
     now = now or datetime.now(timezone.utc)
     st = await _state(db, account_id)
     cfg = await db.bot_configs.find_one({"user_id": user_id, "account_id": account_id}) or await db.bot_configs.find_one({"user_id": user_id}) or {}
-    mode, gate = await effective_mode(db, cfg, account_id)
+    acc_doc = await db.accounts.find_one({"_id": __import__("bson").ObjectId(account_id)}) if len(account_id) == 24 else None
+    mode, gate = await effective_mode(db, cfg, account_id, acc_doc)
     out = {"engine": R.ENGINE, "symbol": SYMBOL, "enabled": enabled_for(cfg), "requested_mode": requested_mode(cfg), "mode": mode,
            "live_gate": gate, "bias": R.BiasTracker.from_dict(st.get("bias")).to_dict(), "last_eval": st.get("last_eval"),
            "regime": st.get("regime") or "NO_TRADE", "range": st.get("range"), "basket": st.get("basket"), "last_note": st.get("last_note"),
@@ -188,6 +247,10 @@ async def _news_protect(db, live: list, shadow: list, price: float, policy: str,
     for t in live:
         if t.get("gtp_news_protected") == key:
             continue
+        if t.get("gtp_news_protect_pending") == key:              # #66 — "protected" only once the EA acked the modify
+            if not t.get("pending_modification"):
+                await db.trades.update_one({"_id": t["_id"]}, {"$set": {"gtp_news_protected": key}})
+            continue
         entry = float(t["entry_price"])
         sl_dist = abs(entry - float(t.get("stop_loss") or 0)) if t.get("stop_loss") else float((t.get("gold_trend_pulse") or {}).get("sl_dist") or 0)
         act = R.news_pre_action(t["action"], entry, sl_dist, price, policy)
@@ -195,15 +258,24 @@ async def _news_protect(db, live: list, shadow: list, price: float, policy: str,
             await request_close(db, {"_id": t["_id"]}, reason="gtp_news_pre_close", actor="gold_trend_pulse",
                                 pending_modification={"type": "FULL_CLOSE", "reason": "gtp_news_pre_close", "requested_at": now.isoformat()})
         elif act["action"] in ("breakeven", "tighten"):
-            from trade_manager import _free_slot_filter, scalp_breakeven_sl, stamp_pending_modification, tightened_sl
+            from trade_manager import _free_slot_filter, be_clamped_skip, scalp_breakeven_sl, stamp_pending_modification, tightened_sl
             new_sl = scalp_breakeven_sl(t) if act["action"] == "breakeven" else act["new_sl"]
-            if tightened_sl(t, new_sl) is not None:
-                await stamp_pending_modification(db, _free_slot_filter(t["_id"]), {"type": "MODIFY_SL", "new_sl": new_sl, "reason": f"gtp_news_pre_{act['action']}"},
-                                                 {"scalp_exit_rule": f"gtp_news_pre_{act['action']}"})
-                act["new_sl"] = new_sl
-            else:
+            if tightened_sl(t, new_sl) is None:
                 act["action"] = "keep (stop already tighter)"
-        await db.trades.update_one({"_id": t["_id"]}, {"$set": {"gtp_news_protected": key}})
+            elif await be_clamped_skip(db, t, new_sl, price, f"gtp_news_pre_{act['action']}"):   # #66 — broker min stop distance
+                act["action"] = f"{act['action']} deferred (inside broker min stop distance)"
+                acts.append({"trade_id": str(t["_id"]), "at": now.isoformat(), **act}); continue
+            else:
+                stamped = await stamp_pending_modification(db, _free_slot_filter(t["_id"]), {"type": "MODIFY_SL", "new_sl": new_sl, "reason": f"gtp_news_pre_{act['action']}"},
+                                                           {"scalp_exit_rule": f"gtp_news_pre_{act['action']}", "gtp_news_protect_pending": key})
+                act["new_sl"] = new_sl
+                if stamped is None:
+                    act["action"] = f"{act['action']} pending (modification slot busy)"
+                acts.append({"trade_id": str(t["_id"]), "at": now.isoformat(), **act}); continue
+        if act["action"] == "close":
+            await db.trades.update_one({"_id": t["_id"]}, {"$set": {"gtp_news_protected": key}})
+        else:
+            await db.trades.update_one({"_id": t["_id"]}, {"$set": {"gtp_news_protect_pending": key}})
         acts.append({"trade_id": str(t["_id"]), "at": now.isoformat(), **act})
     for d in shadow:
         if d.get("news_protected") == key:
@@ -223,9 +295,24 @@ async def _news_protect(db, live: list, shadow: list, price: float, policy: str,
     return acts
 
 
-def _spread_price(account: dict, spread_price: float | None) -> float:
-    sp = float(spread_price if spread_price is not None else (((account.get("current_spreads") or {}).get(SYMBOL) or 0) * PIP_PRICE))
-    return sp or 0.25
+def _spread_price(account: dict, spread_price: float | None, now: datetime | None = None) -> tuple[float | None, str | None]:
+    """#63 — the EA keys spreads by BROKER symbol (GOLD#, XAUUSD+, XAUUSD.crp …): resolve via base_symbol; missing or
+    older than SPREAD_MAX_AGE_SEC → (None, reason) and the caller FAILS CLOSED (no entry)."""
+    if spread_price is not None:
+        return float(spread_price), None
+    from entry_costs import spread_at_entry
+    pips = spread_at_entry(account, SYMBOL)
+    if pips is None:
+        keys = ", ".join(sorted((account.get("current_spreads") or {}).keys())) or "none"
+        return None, f"spread unknown for XAUUSD (EA spread keys: {keys}) — entry refused"
+    upd = account.get("spreads_updated_at")
+    try:
+        age = ((now or datetime.now(timezone.utc)) - datetime.fromisoformat(str(upd).replace("Z", "+00:00"))).total_seconds() if upd else None
+    except (TypeError, ValueError):
+        age = None
+    if age is None or age > SPREAD_MAX_AGE_SEC:
+        return None, f"XAUUSD spread stale ({'no timestamp' if age is None else f'{age:.0f}s old'} > {SPREAD_MAX_AGE_SEC}s) — entry refused"
+    return round(pips * PIP_PRICE, 3), None
 
 
 def _costs(account: dict, cfg: dict, pip_usd: float) -> float:
@@ -282,14 +369,15 @@ def _signal_from(decision: dict) -> dict:
             "sweep": decision.get("sweep"), "news": decision.get("news"), "sl_dist": decision.get("sl_dist")}
 
 
-async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *, spread_price: float | None = None) -> dict:
+async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *, spread_price: float | None = None,
+                   management_only: bool = False) -> dict:
     """One pass for an account. Returns {mode, regime, bias, reasons, note, decision, signal}; `signal` is set only for a
     demo_live decision that passed every engine-level filter (the main pipeline's guards run after this)."""
     now = now or datetime.now(timezone.utc)
     account_id, user_id = str(account["_id"]), str(account.get("user_id") or cfg.get("user_id"))
     st = await _state(db, account_id)
     tracker = R.BiasTracker.from_dict(st.get("bias"))
-    mode, gate = await effective_mode(db, cfg, account_id)
+    mode, gate = await effective_mode(db, cfg, account_id, account)
     res = {"mode": mode, "requested_mode": requested_mode(cfg), "live_gate": gate, "bias": tracker.bias, "reasons": tracker.reasons,
            "regime": st.get("regime") or "NO_TRADE", "range": st.get("range"), "basket": st.get("basket"), "note": None, "decision": None, "signal": None}
     data = await load_bars(db, user_id, account, now)
@@ -298,7 +386,12 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         res["note"] = "no fresh XAUUSD stream from the EA"
         return res
     if tracker.due(now):
-        tracker.update(R.daily_bias(data["h4"], data["h1"], price, data["today_open"], data["prior_day_mid"]), now)
+        if data.get("t_basis") == "broker_unknown":
+            tracker.update({"bias": "NONE", "reasons": [{"ok": False, "text": "broker clock offset unknown (t_basis=broker_unknown) — no daily open / prior-day mid"}]}, now)
+        elif not data.get("h4_warm", True):
+            tracker.update({"bias": "NONE", "reasons": [{"ok": False, "text": f"H4 warm-up: {len(data['h4'])}/{H4_MIN_BARS} completed H4 bars for EMA50"}]}, now)
+        else:
+            tracker.update(R.daily_bias(data["h4"], data["h1"], price, data["today_open"], data["prior_day_mid"]), now)
     res["bias"], res["reasons"] = tracker.bias, tracker.reasons
     upd = {"bias": tracker.to_dict(), "last_eval": now.isoformat(), "user_id": user_id, "bars_source": data["source"]}
 
@@ -389,6 +482,8 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
             news_bias = nbias["bias"]
             before = [b for b in data["m5"] if int(b["t"]) < ph["t"]]
             news_pre_close = before[-1]["c"] if before else price
+    if management_only:                                           # #66 — macro freeze: management ran (news PRE, basket, breakout), no entries
+        return await _done("macro freeze — management only, no entries")
     if reg["regime"] == "NO_TRADE" and not news_bias:
         return await _done("regime NO_TRADE (bias NONE, no confirmed range) — no new trades")
     ok, why = R.session_ok(now)
@@ -396,26 +491,25 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         return await _done(why)
     # --- daily limits / cooldown (shared by both modes; legs count as trades)
     outcomes = await recent_outcomes(db, account_id, mode, _utc_day_start(now))
-    consec = 0
-    for o in reversed(outcomes):
-        if float(o.get("r") or 0) <= 0:
-            consec += 1
-        else:
-            break
+    consec = R.consecutive_losses(outcomes)                      # #69 — scratch / BE exits do not count
     equity = float(account.get("equity") or account.get("balance") or 0)
     day_pnl_pct = (sum(float(o.get("pnl_usd") or 0) for o in outcomes) / equity * 100) if equity else 0.0
-    stop = R.daily_stop(consec, day_pnl_pct, len(outcomes))
+    opened_today = await db.gtp_decisions.count_documents({"account_id": account_id, "verdict": {"$in": ["shadow", "live", "live_pending"]},
+                                                           "created_at": {"$gte": _utc_day_start(now).isoformat()}})     # #70 — cap counts OPENED trades
+    stop = R.daily_stop(consec, day_pnl_pct, max(opened_today, len(outcomes)))
     if stop:
         return await _done(stop)
     if outcomes and outcomes[-1].get("closed_at"):
         last = outcomes[-1]
-        until = R.cooldown_until("loss" if float(last.get("r") or 0) <= 0 else "win", datetime.fromisoformat(str(last["closed_at"])))
+        until = R.cooldown_until("loss" if R.is_loss(last) else "win", datetime.fromisoformat(str(last["closed_at"])))
         if until and now < until:
             return await _done(f"cooldown until {until:%H:%M:%S} UTC")
     nb = R.news_blackout(events, now)
     if nb and not news_bias:                     # the POST phase of the configured event is the news trade itself
         return await _done(nb)
-    spread = _spread_price(account, spread_price)
+    spread, sp_why = _spread_price(account, spread_price, now)
+    if spread is None:
+        return await _done(sp_why)
     pip_usd = float(pip_value_usd_per_lot(SYMBOL, account.get("account_type"), price=price) or 0)
     comm = _costs(account, cfg, pip_usd)
     max_lot = float(cfg.get("max_lot_size") or 0) or None
@@ -480,8 +574,6 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         if st.get("last_m1_t") == int(m1[-1]["t"]):
             return await _done("RANGE: waiting for the next M1 close")
         upd["last_m1_t"] = int(m1[-1]["t"])
-        if (st.get("last_breakout") or {}).get("at") and reg["range"] is None:
-            return await _done("RANGE: breakout — no new range trades")
         cand = R.detect_range_entry(m1[-1], reg["range"])
         if not cand:
             return await _done("RANGE: no edge rejection on the last M1 close")
@@ -524,10 +616,20 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         leg, lvl = hit
         if len(outcomes) + len(basket["legs"]) >= R.DAILY_MAX_LEGS:
             return await _done(f"daily cap: {R.DAILY_MAX_LEGS} legs")
+        conf = R.detect_entry(data["m5"], tracker.bias, vwap)                 # #65 — every leg needs the L1 confirmation
+        if not conf or conf.get("blocked"):
+            return await _done(f"LAYERING {leg}: level touched but no RSI-reset / M5-close confirmation" + (f" ({conf['blocked']})" if conf and conf.get("blocked") else ""))
         entry = bar["c"]
         tp = max(R.TP_MIN, min(R.TP_MAX, R.TP_ATR_MULT * a14))
         sgn = 1 if direction == "BUY" else -1
-        plan = {"ok": True, "tp": round(tp, 2), "sl": round(abs(entry - basket["shared_stop"]), 2), "take_profit": round(entry + sgn * tp, 2),
+        if (entry - basket["shared_stop"]) * sgn <= 0:                           # #65 — shared stop must be beyond the entry
+            basket["legs"].append({"leg": leg, "skipped": "shared stop not beyond entry", "at": now.isoformat()}); upd["basket"] = basket
+            return await _done(f"LAYERING {leg} skipped: shared stop {basket['shared_stop']} is not beyond entry {entry}")
+        sl_dist = round(abs(entry - basket["shared_stop"]), 2)
+        if sl_dist > R.SL_MAX_TP_MULT * tp:                                      # #65 — 1.3×TP cap per leg
+            basket["legs"].append({"leg": leg, "skipped": f"SL {sl_dist} > 1.3×TP {tp:.2f}", "at": now.isoformat()}); upd["basket"] = basket
+            return await _done(f"LAYERING {leg} skipped: SL {sl_dist} > {R.SL_MAX_TP_MULT}×TP {tp:.2f}")
+        plan = {"ok": True, "tp": round(tp, 2), "sl": sl_dist, "take_profit": round(entry + sgn * tp, 2),
                 "stop_loss": basket["shared_stop"], "time_stop_min": R.TIME_STOP_MIN}
         cand = {"direction": direction, "entry": entry, "trigger": leg, "atr": a14, "reason": f"layered pullback leg {leg} at {lvl}"}
         decision = _decision(now, user_id, account_id, mode, "TREND", tracker, cand, plan, spread, data["source"], basket_id=basket["id"], leg=leg,
@@ -642,7 +744,9 @@ def label_with_bars(decision: dict, bars: list, now: datetime, force_exit: str |
     sl_dist = float(d["sl_dist"]) or 1e-9
     lots = float(d.get("lots") or 0.01)
     pip_usd = pip_value_usd_per_lot(SYMBOL, None, price=entry) or 10.0
-    return {"result": "win" if net > 0 else "loss", "exit_price": exit_px, "exit_reason": exit_reason, "exit_at": exit_at.isoformat(),
+    costs = spread + comm
+    result = "scratch" if abs(net) <= costs + 1e-9 or exit_reason == "breakeven" else ("win" if net > 0 else "loss")   # #69
+    return {"result": result, "costs_price": round(costs, 3), "exit_price": exit_px, "exit_reason": exit_reason, "exit_at": exit_at.isoformat(),
             "gross_price": round(gross, 2), "net_price": round(net, 2), "r": round(net / sl_dist, 3), "mfe": round(mfe, 2), "mae": round(mae, 2),
             "pnl_usd": round(net / PIP_PRICE * pip_usd * lots, 2), "time_in_trade_min": round((exit_at - opened).total_seconds() / 60, 1),
             "be_armed": sl == be, "label_version": 1}

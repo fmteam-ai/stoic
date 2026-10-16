@@ -145,6 +145,8 @@ def scalp_cost_pips(trade: dict) -> float:
         spread = float(spread or 0)
     except (TypeError, ValueError):
         spread = 0.0
+    if spread <= 0 and (trade.get("gold_trend_pulse") or {}).get("spread_at_entry") is not None:
+        spread = float(trade["gold_trend_pulse"]["spread_at_entry"]) / 0.10      # #69 — GTP decision spread (price units, 1 pip = 0.10)
     if spread <= 0:
         spread = SCALP_DEFAULT_COST_PIPS.get(base_symbol(trade.get("symbol")), SCALP_DEFAULT_COST_PIPS_FX)
     return spread + float(trade.get("commission_pips") or 0)

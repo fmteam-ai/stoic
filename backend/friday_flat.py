@@ -125,7 +125,8 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
             eff = "tighten"  # EA <v1.40 ignores FULL_CLOSE — degrade gracefully
         if eff == "close":
             from close_commands import mandatory_close
-            first_touch = not tr.get("friday_flat_at")
+            # #61 — "first touch" of the CLOSE action: an earlier tighten also set friday_flat_at, the close must still notify
+            first_touch = not tr.get("friday_flat_at") or tr.get("friday_flat_action") != "close"
             outcome = await mandatory_close(db, tr, reason="friday_flat", actor="friday_flat", account=acc,
                                             stamp={"close_reason_pending": "friday_flat", "friday_flat_action": "close",
                                                    **({"friday_flat_at": now_iso} if first_touch else {})})

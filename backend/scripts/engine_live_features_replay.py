@@ -21,7 +21,7 @@ PIP = 0.10
 
 def replay_engines(m1: list, *, spread: float = 0.25, commission_price: float = 0.07, start: float | None = None, end: float | None = None,
                    max_hold_min: int = 90) -> dict:
-    from gold_trend_pulse.rules import resample
+    from bars_util import resample
     from intraday_features import compute_intraday_features
     from strategy_engines import run_engine
     m15_all = resample(m1, 900)
@@ -108,7 +108,7 @@ def main() -> int:
     ap.add_argument("--csv", required=True); ap.add_argument("--from", dest="start"); ap.add_argument("--to", dest="end")
     ap.add_argument("--days", type=int, default=0); ap.add_argument("--spread", type=float, default=0.25); ap.add_argument("--commission", type=float, default=0.07)
     a = ap.parse_args()
-    from gold_trend_pulse.replay import load_csv
+    from bars_util import load_csv
     bars = load_csv(a.csv)
     if a.days:
         bars = [b for b in bars if b["t"] >= bars[-1]["t"] - a.days * 86400]

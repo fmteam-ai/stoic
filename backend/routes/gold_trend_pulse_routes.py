@@ -45,9 +45,13 @@ async def gtp_config(req: GtpConfig, user=Depends(get_current_user)):
     if req.news_pre_action not in ("protect", "close", "tighten") or not (1 <= req.news_release_min <= 30):
         raise HTTPException(status_code=422, detail="news_pre_action must be protect|close|tighten; news_release_min 1–30")
     db = get_db()
-    acc = await db.accounts.find_one({"_id": parse_object_id(req.account_id, "Account"), "user_id": user["id"]}, {"_id": 1})
+    acc = await db.accounts.find_one({"_id": parse_object_id(req.account_id, "Account"), "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
+    if req.mode == "demo_live":
+        from gold_trend_pulse.engine import demo_attested
+        if not demo_attested(acc):
+            raise HTTPException(status_code=422, detail="demo_live is allowed only on an account attested DEMO (#64)")
     res = await db.bot_configs.update_one({"user_id": user["id"], "account_id": req.account_id},
                                           {"$set": {"gold_trend_pulse_enabled": req.enabled, "gold_trend_pulse_mode": req.mode,
                                                     "gold_trend_pulse_layering_enabled": req.layering_enabled,

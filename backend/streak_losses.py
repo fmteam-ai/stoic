@@ -9,7 +9,7 @@ SCRATCH_R = 0.1
 BREAKEVEN_EXIT_RULES = {"breakeven_0_5r"}
 STREAK_FIELDS = {"pnl": 1, "closed_at": 1, "entry_price": 1, "stop_loss": 1, "original_stop_loss": 1, "lot_size": 1,
                  "original_lot_size": 1, "symbol": 1, "scalp_exit_rule": 1, "breakeven_set": 1, "be_target_sl": 1,
-                 "account_id": 1, "origin": 1, "action": 1}
+                 "account_id": 1, "origin": 1, "action": 1, "stale_feature_entry": 1}
 
 
 def _planned_r(trade: dict, account: dict | None = None):

@@ -59,16 +59,17 @@ def plan_sweep_exit(direction: str, entry: float, sweep_low: float, pre_drop_hig
     """SL beyond the sweep extreme − max(0.30, 0.25×ATR). Scalp TP clamp(0.7×ATR, 2.00, 4.50); optional ½-size runner to
     the pre-drop high (only when it lies beyond the scalp TP), moved to BE once the scalp TP is hit. The SL of a sweep is
     structurally wider than the scalp TP, so the 1.3×TP rule of item 3 is applied against the setup's target (runner
-    target when present) with a floor of 3.5×ATR14 — a reclaim that already ran too far from the sweep low is skipped."""
+    target when present) with a floor of 3.5×ATR14 — a reclaim that already ran too far from the sweep low is skipped.
+    #68: the SCALP leg must satisfy SL ≤ 1.3×scalp TP (else the setup is skipped); the runner may use its own cap."""
     sgn = 1 if direction == "BUY" else -1
     tp = max(TP_MIN, min(TP_MAX, TP_ATR_MULT * atr14))
     sl = (entry - sweep_low) * sgn + max(SL_BUFFER, SWEEP_SL_ATR * atr14)
     runner_dist = (pre_drop_high - entry) * sgn
     has_runner = bool(runner and runner_dist > tp)
-    target = runner_dist if has_runner else tp
-    cap = max(SL_MAX_TP_MULT * target, SWEEP_SL_MAX_ATR * atr14)
-    if sl > cap:
-        return {"ok": False, "skip": f"SL too wide for the setup (SL {sl:.2f} > max({SL_MAX_TP_MULT}×target {target:.2f}, {SWEEP_SL_MAX_ATR}×ATR {atr14:.2f}))", "tp": tp, "sl": sl}
+    if sl > SL_MAX_TP_MULT * tp:                                   # #68 — scalp leg obeys the engine's 1.3×TP cap
+        return {"ok": False, "skip": f"SL too wide for target (SL {sl:.2f} > {SL_MAX_TP_MULT}×TP {tp:.2f})", "tp": tp, "sl": sl}
+    if has_runner and sl > max(SL_MAX_TP_MULT * runner_dist, SWEEP_SL_MAX_ATR * atr14):
+        has_runner = False                                          # runner has its own cap; total risk stays 0.25 % either way
     out = {"ok": True, "tp": round(tp, 2), "sl": round(sl, 2), "take_profit": round(entry + sgn * tp, 2), "stop_loss": round(entry - sgn * sl, 2),
            "runner": None}
     if has_runner:
@@ -104,13 +105,18 @@ NEWS_PRE_ACTIONS = ("protect", "close", "tighten")
 
 def news_event_kind(title: str, event_list: list | None = None) -> str | None:
     """Longest alias match wins ('Core CPI' before 'CPI')."""
+    import re
     low = (title or "").lower()
     best = None
     for kind in (event_list or NEWS_EVENTS_DEFAULT):
         for alias in NEWS_ALIASES.get(kind, (kind.lower(),)):
-            if alias in low and (best is None or len(alias) > best[0]):
+            if re.search(rf"(?<![a-z]){re.escape(alias)}(?![a-z])", low) and (best is None or len(alias) > best[0]):   # #70 — whole word, no "ism" in "optimism"
                 best = (len(alias), kind)
     return best[1] if best else None
+
+
+def _news_candidate(e: dict) -> bool:
+    return str(e.get("country") or "USD").upper() == "USD" and e.get("when_ts") is not None and str(e.get("impact") or "high").lower() == "high"
 
 
 def news_phase(events: list, now: datetime, event_list: list | None = None, release_min: int = NEWS_RELEASE_MIN_DEFAULT) -> dict | None:
@@ -118,7 +124,7 @@ def news_phase(events: list, now: datetime, event_list: list | None = None, rele
     kind, t, key}. The nearest release wins when windows overlap."""
     best = None
     for e in events or []:
-        if str(e.get("country") or "USD").upper() != "USD" or e.get("when_ts") is None:
+        if not _news_candidate(e):
             continue
         kind = news_event_kind(e.get("title") or "", event_list)
         if not kind:
@@ -254,7 +260,7 @@ def next_news_event(events: list, now: datetime, event_list: list | None = None,
     """The next configured USD event (or the one in progress) for the Market Intel card."""
     cands = []
     for e in events or []:
-        if str(e.get("country") or "USD").upper() != "USD" or e.get("when_ts") is None:
+        if not _news_candidate(e):
             continue
         kind = news_event_kind(e.get("title") or "", event_list)
         if kind and float(e["when_ts"]) >= now.timestamp() - NEWS_POST_MIN * 60:

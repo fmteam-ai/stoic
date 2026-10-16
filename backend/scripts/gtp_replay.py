@@ -69,7 +69,7 @@ def main() -> int:
         ap.error("--csv or --user required")
     if not bars:
         print("no XAUUSD M1 coverage — export M1 from MT5 (History Center / Export) and pass --csv"); return 2
-    offset = int(a.tz_offset * 3600) + a.offset_sec
+    offset = (int(a.tz_offset * 3600) + a.offset_sec) if a.csv else 0        # #70 — DB bars are already UTC
     if a.days:
         cutoff = bars[-1]["t"] - a.days * 86400
         bars = [b for b in bars if b["t"] >= cutoff]
