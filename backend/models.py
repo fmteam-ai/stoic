@@ -202,6 +202,9 @@ class BotConfigUpdate(BaseModel):
     daily_profit_target_escalate_step_r: float = Field(default=1.0, ge=0.25, le=10.0)
     # v1.60.48 (audit item 7) — open automated positions per (symbol, direction) across ALL accounts; 0 = off
     user_direction_cap: int = Field(default=1, ge=0, le=10)
+    # v1.60.52 — optional H1 alignment gate for hf_scalp / hf_scalp_fast: skip when the dominant higher-TF bias
+    # opposes the entry (mtf_gate.aligned False). Default OFF — enabled per account from evidence (6/6, 16 Oct).
+    require_h1_alignment: bool = False
     # Spread Filter — ON by default (audit C3): spread is a first-order
     # execution cost; thresholds are per-symbol and broker-tunable.
     spread_filter_enabled: bool = True

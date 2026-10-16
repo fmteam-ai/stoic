@@ -193,7 +193,8 @@ export default function BotConfig() {
             // v1.60.50 — the preset's fields are now DIRTY relative to the server: keep the baseline as the server state
             // (so every preset-touched field is sent on SAVE) but remember which fields the preset touched so a user
             // reverting one of them still sends it (otherwise the server would keep the preset value).
-            presetTouchedRef.current = new Set([...(presetTouchedRef.current || []), ...Object.keys(data.config || {})]);
+            // v1.60.52 — only the fields the preset actually changed stay dirty (not the whole returned config)
+            presetTouchedRef.current = new Set([...(presetTouchedRef.current || []), ...(data.preset_fields || [])]);
             setCfg(withFlatDefaults(data.config));
             toast.success(`Preset applied · ${label}`, {
                 description: "Behaviour knobs updated. Click SAVE CONFIGURATION to persist.",
@@ -282,6 +283,7 @@ export default function BotConfig() {
                 gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "06:00",
                 asia_session_skip_xau: cfg.asia_session_skip_xau !== false,
                 user_direction_cap: cfg.user_direction_cap ?? 1,
+                require_h1_alignment: cfg.require_h1_alignment ?? false,
                 macro_freeze_before_min: cfg.macro_freeze_before_min ?? 15,
                 macro_freeze_after_min: cfg.macro_freeze_after_min ?? 10,
                 macro_freeze_medium_usd_enabled: cfg.macro_freeze_medium_usd_enabled ?? true,
@@ -899,6 +901,18 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                         onClick={() => setCfg({ ...cfg, asia_session_skip_xau: cfg.asia_session_skip_xau === false })}
                         className={`px-3 py-1 text-[10px] font-mono tracking-widest border ${cfg.asia_session_skip_xau !== false ? "border-[#00FF41] text-[#00FF41]" : "border-[#52525B] text-[#52525B]"}`}>
                         {cfg.asia_session_skip_xau !== false ? "ON" : "OFF"}
+                    </button>
+                </div>
+                {/* v1.60.52 — optional H1 alignment gate for the HF scalp engines (default OFF) */}
+                <div className="flex items-start justify-between gap-4 p-3 border border-[#1F1F1F] bg-[#0D0D0D]" data-testid="require-h1-alignment-row">
+                    <div>
+                        <div className="text-xs font-mono text-[#E4E4E7]">REQUIRE H1 ALIGNMENT (HF SCALP)</div>
+                        <div className="text-[10px] text-white/40 mt-1">hf_scalp / hf_scalp_fast entries are skipped when the dominant H1 bias is against the trade ("H1 against trade — skipped"). Off by default — enable per account from your own evidence.</div>
+                    </div>
+                    <button type="button" data-testid="require-h1-alignment-toggle"
+                        onClick={() => setCfg({ ...cfg, require_h1_alignment: !cfg.require_h1_alignment })}
+                        className={`px-3 py-1 text-[10px] font-mono tracking-widest border ${cfg.require_h1_alignment ? "border-[#00FF41] text-[#00FF41]" : "border-[#52525B] text-[#52525B]"}`}>
+                        {cfg.require_h1_alignment ? "ON" : "OFF"}
                     </button>
                 </div>
                 {/* v1.60.50 — per-user cross-account cap (item 7 of the 15 Oct audit) */}

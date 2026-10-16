@@ -133,7 +133,14 @@ async def sweep_all(db) -> int:
     # v1.60.50 — a PAUSED per-account config still protects its open positions (its trades are not managed by the
     # default config any more, see trade_manager v1.60.48 item 16)
     cursor = db.bot_configs.find({"$or": [{"active": True}, {"account_id": {"$nin": [None]}, "pre_news_protect_enabled": {"$ne": False}}]})
-    cfgs = await cursor.to_list(length=200)
+    cfgs = await cursor.sort("_id", 1).to_list(length=200)
+    # v1.60.52 — per-account configs whose account was deleted are orphans: skip them (their trades are gone too)
+    acct_ids = [c["account_id"] for c in cfgs if c.get("account_id")]
+    live_accounts = set()
+    if acct_ids:
+        oids = [ObjectId(a) for a in acct_ids if ObjectId.is_valid(a)]
+        live_accounts = {str(a["_id"]) for a in await db.accounts.find({"_id": {"$in": oids}}, {"_id": 1}).to_list(length=200)}
+    cfgs = [c for c in cfgs if not c.get("account_id") or c["account_id"] in live_accounts]
     for cfg in cfgs:
         try:
             n = await sweep_user(db, cfg["user_id"], cfg)

@@ -733,6 +733,19 @@ async def _close_txn_unavailable(_request: Request, exc: TransactionsUnavailable
         "reason": str(exc)[:300]}})
 
 
+# v1.60.52 — a trading path that refuses a stale quote (manual order, paper execute, NL trigger) answers a
+# deterministic 409 instead of a 500: nothing was sent to the broker.
+from market import StaleQuoteError
+
+
+@app.exception_handler(StaleQuoteError)
+async def _stale_quote_refused(_request: Request, exc: StaleQuoteError):
+    return JSONResponse(status_code=409, content={"detail": {
+        "code": "price_feed_stale",
+        "message": "Price feed stale — the order was not placed. Retry when live quotes resume.",
+        "reason": str(exc)[:200]}})
+
+
 # v1.60.32 — validation-error hygiene: FastAPI's default 422 echoes the offending request body back in
 # `input`, so a mistyped login / step-up / password-change payload returned the password to the caller (and to
 # anything logging the response). Keep loc / msg / type, drop the body.

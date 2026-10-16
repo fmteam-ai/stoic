@@ -393,20 +393,31 @@ def quote_is_stale(q: dict | None) -> bool:
 
 
 # ---------- Public API ----------
+def _stale_checked(sym: str, cache_key: str, cached: dict | None, allow_stale: bool) -> dict | None:
+    """A cached STALE copy is served only while the last good quote is within its age limit (v1.60.52) and only to
+    callers that accept stale; trading paths (`allow_stale=False`) get StaleQuoteError instead."""
+    if not cached or not cached.get("stale"):
+        return cached
+    last = _LAST_GOOD.get(sym)
+    max_age = STALE_MAX_AGE_SEC.get((SYMBOL_MAP.get(sym) or {}).get("asset"), 60)
+    if not last or time.time() - last[0] > max_age:
+        _cache.pop(cache_key, None)                  # past the limit: drop the copy and re-fetch
+        return None
+    if not allow_stale:
+        raise StaleQuoteError(f"stale quote for {sym} refused by trading path")
+    return {**cached, "stale_age_sec": round(time.time() - last[0], 1)}
+
+
 async def get_quote(symbol: str, *, allow_stale: bool = True) -> dict:
     sym = _key(symbol)
     cache_key = f"quote:{sym}"
-    cached = _cache_get(cache_key)
+    cached = _stale_checked(sym, cache_key, _cache_get(cache_key), allow_stale)
     if cached:
-        if cached.get("stale") and not allow_stale:
-            raise StaleQuoteError(f"stale quote for {sym} refused by trading path")
         return {**cached, "cached": True}
 
     async with _lock_for(cache_key):
-        cached = _cache_get(cache_key)
+        cached = _stale_checked(sym, cache_key, _cache_get(cache_key), allow_stale)
         if cached:
-            if cached.get("stale") and not allow_stale:
-                raise StaleQuoteError(f"stale quote for {sym} refused by trading path")
             return {**cached, "cached": True}
 
         meta = SYMBOL_MAP.get(sym)
@@ -456,9 +467,11 @@ async def get_quote(symbol: str, *, allow_stale: bool = True) -> dict:
                     await asyncio.sleep(QUOTE_RETRY_DELAY_SEC * (attempt + 1))
         last = _LAST_GOOD.get(sym)
         age = (time.time() - last[0]) if last else None
-        if last and age <= STALE_MAX_AGE_SEC.get(meta["asset"], 60):
+        max_age = STALE_MAX_AGE_SEC.get(meta["asset"], 60)
+        if last and age <= max_age:
             stale_q = {**last[1], "cached": True, "stale": True, "stale_age_sec": round(age, 1)}
-            _cache_set(cache_key, stale_q, STALE_RECHECK_SEC)     # brief: callers don't each wait ~12 s
+            # brief: callers don't each wait ~12 s — but never beyond the age limit (v1.60.52)
+            _cache_set(cache_key, stale_q, max(1, min(STALE_RECHECK_SEC, int(max_age - age))))
             log.warning("Quote fetch failed for %s after %d attempts (%s) — serving %.0fs-old quote (stale)",
                         sym, QUOTE_ATTEMPTS, last_err, age)
             if not allow_stale:

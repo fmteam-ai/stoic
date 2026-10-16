@@ -69,3 +69,17 @@ def ack_type_mismatch(trade: dict, ack_type: str | None) -> bool:
 def is_close_leg_ack(trade: dict, ack_intent_id: str | None) -> bool:
     """v1.60.50 — an ack for the durable close path (intent == close_idem_key) outranks any pending modify."""
     return bool(ack_intent_id) and bool(trade.get("close_requested")) and ack_intent_id == trade.get("close_idem_key")
+
+
+def is_duplicate_close_leg_ack(trade: dict, ack_intent_id: str | None) -> bool:
+    """v1.60.52 — the close leg outranks a pending modify, but a REPLAYED close-leg ack (intent already executed)
+    is still stale."""
+    return is_close_leg_ack(trade, ack_intent_id) and ack_intent_id in (trade.get("executed_intents") or [])
+
+
+def ack_clears_pending(trade: dict, ack_intent_id: str | None, success: bool, close_leg: bool) -> bool:
+    """v1.60.52 — a FAILED close-leg ack must not clear a pending command owned by another intent (the MODIFY_SL
+    is still owed: the position is still open). Every other ack consumes the pending slot as before."""
+    pm = trade.get("pending_modification") or {}
+    other = bool(pm.get("intent_id")) and pm.get("intent_id") != ack_intent_id
+    return not (close_leg and not success and other)

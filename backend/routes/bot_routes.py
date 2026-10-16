@@ -1321,7 +1321,9 @@ async def apply_strategy_preset(key: str, account_id: Optional[str] = None,
         _config_filter(user["id"], account_id), {"$set": overlay}
     )
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
-    return {"applied": key, "label": preset_label, "config": _serialize(cfg)}
+    # v1.60.52 — only the fields this preset actually changed (the UI keeps them dirty until the next SAVE)
+    return {"applied": key, "label": preset_label, "config": _serialize(cfg),
+            "preset_fields": sorted(k for k in overlay if k != "updated_at")}
 
 
 @router.post("/my-presets")

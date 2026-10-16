@@ -246,6 +246,8 @@ def _stricter(field: str, user_v, preset_v):
     if field == "risk_level":
         return user_v if _RISK_RANK.get(str(user_v), 9) <= _RISK_RANK.get(str(preset_v), 9) else preset_v
     if field in STRICTER_OR:
+        if field == "asia_session_skip_xau" and user_v is False:
+            return False                 # v1.60.52 — an explicit user OFF is a deliberate choice; presets tighten the rest
         return bool(user_v) or bool(preset_v)
     try:
         if field in STRICTER_MIN:

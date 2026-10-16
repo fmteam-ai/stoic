@@ -8,7 +8,7 @@ When the planned risk cannot be reconstructed, any negative pnl still counts (co
 SCRATCH_R = 0.1
 BREAKEVEN_EXIT_RULES = {"breakeven_0_5r"}
 STREAK_FIELDS = {"pnl": 1, "closed_at": 1, "entry_price": 1, "stop_loss": 1, "original_stop_loss": 1, "lot_size": 1,
-                 "original_lot": 1, "symbol": 1, "scalp_exit_rule": 1, "breakeven_set": 1, "be_target_sl": 1}
+                 "original_lot_size": 1, "symbol": 1, "scalp_exit_rule": 1, "breakeven_set": 1, "be_target_sl": 1}
 
 
 def _planned_r(trade: dict):
@@ -17,8 +17,8 @@ def _planned_r(trade: dict):
     from analytics import _r_multiple
     osl = trade.get("original_stop_loss")
     row = {**trade, "stop_loss": osl} if osl else trade
-    if trade.get("original_lot"):
-        row = {**row, "lot_size": trade["original_lot"]}
+    if trade.get("original_lot_size"):               # v1.60.52 — the field trades actually store (filled volume)
+        row = {**row, "lot_size": trade["original_lot_size"]}
     return _r_multiple(row)
 
 

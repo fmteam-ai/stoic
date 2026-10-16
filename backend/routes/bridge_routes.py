@@ -2005,12 +2005,15 @@ async def modification_ack(payload: BridgeModificationAck):
 
     # audit r3 P0 · sequence fence: a delayed/replayed ack for a SUPERSEDED
     # command must never clear the current one or apply an older stop.
-    from command_fence import is_stale_ack, ack_type_mismatch, is_close_leg_ack
+    from command_fence import (is_stale_ack, ack_type_mismatch, is_close_leg_ack, is_duplicate_close_leg_ack,
+                               ack_clears_pending)
     # v1.60.50 (PR #100 item 9) — the netting ClosePosition path acks with intent == close_idem_key. While a
     # MODIFY_SL is pending that ack was judged stale and the close leg was re-dispatched every poll. Close intents
     # take priority over a pending modify: they are never stale / mismatched against the modify slot.
     _close_leg = is_close_leg_ack(trade, payload.intent_id)
-    if not _close_leg and is_stale_ack(trade, payload.intent_id):
+    # v1.60.52 — a DUPLICATE close-leg ack (intent already executed) is still stale
+    _dup_close = is_duplicate_close_leg_ack(trade, payload.intent_id)
+    if _dup_close or (not _close_leg and is_stale_ack(trade, payload.intent_id)):
         logger.warning("stale modification-ack ignored trade=%s intent=%s",
                        payload.trade_id, payload.intent_id)
         return {"status": "stale_intent_ignored"}
@@ -2061,7 +2064,9 @@ async def modification_ack(payload: BridgeModificationAck):
         payload.type = "FULL_CLOSE"
         payload.netting_volume_limited = True
 
-    update = {"pending_modification": None}
+    # v1.60.52 — a FAILED close-leg ack must not clear a pending MODIFY_SL that belongs to another intent: the
+    # position is still open and its stop move is still owed. Only a successful close consumes that slot.
+    update = {"pending_modification": None} if ack_clears_pending(trade, payload.intent_id, bool(payload.success), _close_leg) else {}
     push_ops: dict = {}
     # Round 11 item 9 — protection-ack policy lives in a dependency-free
     # function (protection_guard.apply_protection_ack) so it is unit-testable

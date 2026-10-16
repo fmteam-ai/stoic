@@ -116,7 +116,7 @@ def test_user_direction_cap_reservation_is_atomic_counts_live_only_and_releases(
     assert _run(udc.reserve_user_direction(db, account_id="C", **kw)) == (None, 1)
     src = open(os.path.join(BACKEND, "bot_runner.py")).read()
     assert src.index("reserve_user_direction(") < src.index("trade_doc = await engine.execute(")
-    assert src.count("await _udc_release(db, _udc_res)") >= 2
+    assert "finally:\n            # v1.60.52" in src and "await _udc_release(db, _udc_res)" in src   # released in finally (v1.60.52)
 
 
 # ----------------------------------------------------------------------------------------------- 4. relabel pagination
@@ -171,7 +171,7 @@ def test_strategies_preview_resets_on_target_change_and_bot_config_sends_preset_
     assert "useEffect(() => { setDeployPreview(null); }, [applyTarget, compiled]);" in page
     assert "confirm_multi: multi && Boolean(deployPreview)" in page
     bc = open(os.path.join(FRONTEND, "pages", "BotConfig.jsx")).read()
-    assert "presetTouchedRef.current = new Set([...(presetTouchedRef.current || []), ...Object.keys(data.config || {})])" in bc
+    assert "presetTouchedRef.current = new Set([...(presetTouchedRef.current || []), ...(data.preset_fields || [])])" in bc
     assert "for (const f of presetTouchedRef.current) if (f in fullPayload && !(f in payload)) payload[f] = fullPayload[f];" in bc
 
 
@@ -224,7 +224,7 @@ def test_close_leg_ack_outranks_pending_modify():
     assert is_stale_ack(trade, "ck1") is True, "the raw fence still says stale — the route must bypass it"
     src = open(os.path.join(BACKEND, "routes", "bridge_routes.py")).read()
     assert "_close_leg = is_close_leg_ack(trade, payload.intent_id)" in src
-    assert "if not _close_leg and is_stale_ack(trade, payload.intent_id):" in src
+    assert "if _dup_close or (not _close_leg and is_stale_ack(trade, payload.intent_id)):" in src
     assert "if not _close_leg and ack_type_mismatch(trade, payload.type):" in src
 
 

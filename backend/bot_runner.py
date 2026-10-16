@@ -1051,6 +1051,19 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "loss_cooldown_block")
                 continue
 
+        # v1.60.52 — optional per-account H1 alignment gate for the HF scalp engines (default OFF)
+        if signal.get("action") in ("BUY", "SELL") and cfg.get("require_h1_alignment"):
+            from mtf_check import h1_alignment
+            from strategy_engines import SCALP_ENGINES as _h1_scopes
+            if signal.get("scope") in _h1_scopes:
+                h1 = h1_alignment(signal)
+                signal["h1_align_gate"] = h1
+                if h1["checked"] and h1["aligned"] is False:
+                    await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn",
+                        reason=f"H1 against trade — skipped ({signal['action']} vs dominant {h1['dominant']}).")
+                    await inc_intel_counter(user_id, "h1_align_block")
+                    continue
+
         # iter-60 · Structure / Range / Fed-tone gates (Market Structure,
         # Quant and Macro agents). All fail-open: missing data → no veto.
         if signal.get("action") in ("BUY", "SELL"):
@@ -2595,7 +2608,9 @@ async def _process_user_account_locked(db, cfg: dict):
         # v1.60.48/50 — per-USER cross-account exposure cap, reserved atomically right before the order is sent
         user_dir_cap = int(cfg.get("user_direction_cap", USER_DIRECTION_CAP_DEFAULT) or 0)
         _udc_res = None
-        if user_dir_cap > 0:
+        # v1.60.52 — paper / shadow entries never count against the cap, so they take no reservation either
+        _udc_live = (target_account.get("mode") or "live") != "paper" and not shadow_only
+        if user_dir_cap > 0 and _udc_live:
             # v1.60.50 — atomic: account loops run concurrently, so the slot is a unique reservation doc (TTL),
             # released below when the entry is blocked / rejected; only LIVE automated trades count.
             from user_direction_cap import reserve_user_direction
@@ -2612,61 +2627,64 @@ async def _process_user_account_locked(db, cfg: dict):
                 continue
 
         try:
-            trade_doc = await engine.execute(
-                user_id=user_id,
-                account=target_account,
-                signal={
-                    "signal_id": signal_id,
-                    "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
-                    "decision_id": signal.get("decision_id"),
-                    "latency_trace": signal.get("latency_trace"),
-                    "symbol": signal["symbol"],
-                    "action": signal["action"],
-                    "lot_size": effective_lot,
-                    "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd")},
-                    "entry_price": signal["entry_price"],
-                    "stop_loss": signal["stop_loss"],
-                    "take_profit": signal["take_profit"],
-                    "tp1": signal.get("tp1"),
-                    "tp2": signal.get("tp2"),
-                    "tp3": signal.get("tp3"),
-                    "sl_pips": signal.get("sl_pips"),
-                    "tp_pips": signal.get("tp_pips"),
-                    "risk_pct_cap": signal.get("risk_pct_cap"),
-                    "origin": "auto",
-                    "scope": signal.get("scope"),
-                    "trend_ride": signal.get("trend_ride"),
-                    "trend_ride_applied": bool(signal.get("trend_ride")),
-                    "trend_ride_skipped": signal.get("trend_ride_skipped"),
-                    "strategy_class": signal.get("strategy_class"),   # v1.60.48 — were dropped here → trades stored None
-                    "market_regime": signal.get("market_regime"),     #   and Regime Gating could not be measured
-                    "entry_context": signal.get("entry_context"),
-                    "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
-                    "news_ai": signal.get("news_ai"),
-                    "sentiment": signal.get("sentiment"),
-                    "versions": version_stamp(signal.get("scope")),
-                },
-                max_concurrent=max_concurrent,
-                cfg_account_id=cfg_account_id,
-            )
-        except StaleQuoteError as _sq:
+            try:
+                trade_doc = await engine.execute(
+                    user_id=user_id,
+                    account=target_account,
+                    signal={
+                        "signal_id": signal_id,
+                        "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
+                        "decision_id": signal.get("decision_id"),
+                        "latency_trace": signal.get("latency_trace"),
+                        "symbol": signal["symbol"],
+                        "action": signal["action"],
+                        "lot_size": effective_lot,
+                        "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd")},
+                        "entry_price": signal["entry_price"],
+                        "stop_loss": signal["stop_loss"],
+                        "take_profit": signal["take_profit"],
+                        "tp1": signal.get("tp1"),
+                        "tp2": signal.get("tp2"),
+                        "tp3": signal.get("tp3"),
+                        "sl_pips": signal.get("sl_pips"),
+                        "tp_pips": signal.get("tp_pips"),
+                        "risk_pct_cap": signal.get("risk_pct_cap"),
+                        "origin": "auto",
+                        "scope": signal.get("scope"),
+                        "trend_ride": signal.get("trend_ride"),
+                        "trend_ride_applied": bool(signal.get("trend_ride")),
+                        "trend_ride_skipped": signal.get("trend_ride_skipped"),
+                        "strategy_class": signal.get("strategy_class"),   # v1.60.48 — were dropped here → trades stored None
+                        "market_regime": signal.get("market_regime"),     #   and Regime Gating could not be measured
+                        "entry_context": signal.get("entry_context"),
+                        "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
+                        "news_ai": signal.get("news_ai"),
+                        "sentiment": signal.get("sentiment"),
+                        "versions": version_stamp(signal.get("scope")),
+                    },
+                    max_concurrent=max_concurrent,
+                    cfg_account_id=cfg_account_id,
+                )
+            except StaleQuoteError as _sq:
+                # v1.60.50 — a stale quote never fills: skip this cycle (as before the stale fallback existed)
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=f"Quote stale — entry skipped this cycle ({_sq})")
+                await inc_intel_counter(user_id, "stale_quote_skip")
+                continue
+            if trade_doc.get("blocked"):
+                logger.warning(
+                    "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
+                    user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),
+                )
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="BLOCKED", level="block",
+                    reason=f"Safety Guardian blocked execution: {trade_doc.get('blocked')}",
+                    signal=signal,
+                )
+                continue
+        finally:
+            # v1.60.52 — the slot is held only while the order is in flight: an inserted trade counts itself from
+            # here on (no double count for the 180 s TTL), and ANY exception / block / stale quote frees it.
             await _udc_release(db, _udc_res)
-            # v1.60.50 — a stale quote never fills: skip this cycle (as before the stale fallback existed)
-            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=f"Quote stale — entry skipped this cycle ({_sq})")
-            await inc_intel_counter(user_id, "stale_quote_skip")
-            continue
-        if trade_doc.get("blocked"):
-            await _udc_release(db, _udc_res)
-            logger.warning(
-                "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
-                user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),
-            )
-            await _record_pulse(db, cfg, symbol=sym,
-                action="BLOCKED", level="block",
-                reason=f"Safety Guardian blocked execution: {trade_doc.get('blocked')}",
-                signal=signal,
-            )
-            continue
         logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
                     user_id, cfg_account_id or "default", sym, trade_doc.get("id"))
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {

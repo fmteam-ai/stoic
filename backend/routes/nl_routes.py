@@ -153,14 +153,17 @@ async def nl_strategy_apply(payload: dict, request: Request = None, user=Depends
     #  (c) auto_execute is only written when the prompt asked for it — a deploy never silently stops an autopilot bot
     #  (d) the default target is ONE bot; "matching" / "all" need confirm_multi; every touched config gets an undo
     #      snapshot (config_versions) and the response carries the per-field diff. preview=true returns the diff only.
+    def _enum(key, default):            # v1.60.52 — LLM output is case-loose ("Medium", "London"): normalise first
+        v = compiled.get(key)
+        return str(v).strip().lower() if isinstance(v, str) and v.strip() else default
     update_fields = {
-        "risk_level": compiled.get("risk_level", "medium"),
+        "risk_level": _enum("risk_level", "medium"),
         "symbols": [s.upper() for s in (compiled.get("symbols") or ["XAUUSD", "BTCUSD"])],
-        "session_preference": compiled.get("session_preference", "any"),
-        "strategy_style": compiled.get("strategy_style", "trend_following"),
-        "active_preset": STYLE_PRESET.get(compiled.get("strategy_style") or "", "adaptive"),
+        "session_preference": _enum("session_preference", "any"),
+        "strategy_style": _enum("strategy_style", "trend_following"),
         "source": "nl_strategy_builder",
     }
+    update_fields["active_preset"] = STYLE_PRESET.get(update_fields["strategy_style"], "adaptive")
     # v1.60.50 (PR #100 item 7) — validate enums like BotConfigUpdate does; reject instead of writing junk
     if update_fields["risk_level"] not in VALID_RISK_LEVELS:
         raise HTTPException(status_code=422, detail=f"risk_level must be one of {sorted(VALID_RISK_LEVELS)}")
@@ -195,8 +198,10 @@ async def nl_strategy_apply(payload: dict, request: Request = None, user=Depends
     if payload.get("preview"):
         return {"ok": True, "preview": True, "target_mode": resolved_mode, "diff": diff, "update_fields": update_fields}
     # v1.60.50 (PR #100 item 7) — same rule as PUT /bot/config: a risk raise on a live-capable config needs step-up
-    from routes.bot_routes import _is_risk_raise, _live_context
+    from routes.bot_routes import _is_risk_raise, _live_context, _refuse_risk_above_policy_cap
     from step_up import require_step_up, audit_event
+    for c in configs:
+        await _refuse_risk_above_policy_cap(db, c, update_fields)   # v1.60.52 — the policy cap applies here too (409)
     for c in configs:
         if _is_risk_raise(update_fields, c) and await _live_context(db, user["id"], c.get("account_id")):
             await require_step_up(db, user, request, "risk_raise")
