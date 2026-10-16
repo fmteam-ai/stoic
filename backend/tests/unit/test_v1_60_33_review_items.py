@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from tests.unit.broker_price_stub import broker_snapshot_from_quote  # noqa: E402
 from bson import ObjectId
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -60,7 +61,7 @@ def test_legacy_tp1_path_never_moves_a_sell_stop_back_up_to_raw_entry():
         t = _trade()
         db.trades.rows.append(t)
         quote = AsyncMock(return_value={"price": 4000.0 - 0.1 * 120})          # +120 pips, past TP1 (100)
-        with patch.object(tm, "get_db", lambda: db), patch.object(tm, "get_quote", quote), \
+        with patch.object(tm, "get_db", lambda: db), patch.object(tm, "_broker_snapshot", broker_snapshot_from_quote(quote)), \
                 patch.object(tm, "ws_manager") as ws, patch("adaptive_exits.manage_exits", AsyncMock()):
             ws.broadcast = AsyncMock()
             _run(tm._manage_one_trade(t, cfg))
@@ -80,7 +81,7 @@ def test_legacy_tp1_path_still_moves_the_stop_when_it_tightens():
     t = _trade(action="BUY", stop_loss=3996.0, be_target_sl=None, scalp_exit_rule=None, scope="breakout_m15")
     db.trades.rows.append(t)
     quote = AsyncMock(return_value={"price": 4000.0 + 0.1 * 120})
-    with patch.object(tm, "get_db", lambda: db), patch.object(tm, "get_quote", quote), patch.object(tm, "ws_manager") as ws:
+    with patch.object(tm, "get_db", lambda: db), patch.object(tm, "_broker_snapshot", broker_snapshot_from_quote(quote)), patch.object(tm, "ws_manager") as ws:
         ws.broadcast = AsyncMock()
         _run(tm._manage_one_trade(t, {"let_winners_run": True}))
     pm = db.trades.rows[0]["pending_modification"]

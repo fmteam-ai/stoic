@@ -27,9 +27,17 @@ async def all_events(user=Depends(get_current_user)):
 async def upcoming(symbol: str, hours: int = Query(24, ge=1, le=168), account_id: str | None = None,
                    user=Depends(get_current_user)):
     cfg = await user_freeze_cfg(user, account_id)
+    from economic_calendar import feed_status, released_surprises
+    fs = feed_status()
+    act = fs.get("active_source")
     return {"symbol": symbol.upper(),
             "hours": hours,
-            "events": await upcoming_for(symbol, hours, cfg)}
+            "events": await upcoming_for(symbol, hours, cfg),
+            # v1.60.53 (A6) — source + last refresh + released actual/forecast/surprise (advisory)
+            "feed": {"active_source": act, "status": fs.get("status"),
+                     "last_refresh": ((fs.get("sources") or {}).get(act) or {}).get("last_fetch_at") if act else None,
+                     "finnhub": (fs.get("finnhub") or {}).get("configured")},
+            "released": await released_surprises(symbol, hours=6, cfg=cfg)}
 
 
 @router.get("/freeze/{symbol}")

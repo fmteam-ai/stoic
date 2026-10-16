@@ -1933,6 +1933,43 @@ async def bot_health_score(user=Depends(get_current_user)):
     except Exception as _e:  # noqa: BLE001
         logger.debug("dxy staleness check skipped: %s", _e)
 
+    # v1.60.53 — Finnhub (info when not configured), GVZ/VIX staleness (amber), broker-price age per account (amber)
+    _broker_price_health: dict = {}
+    try:
+        from providers.finnhub import status as _fh_status
+        _fh = _fh_status()
+        if not _fh.get("configured"):
+            issues.append({"severity": "info", "code": "finnhub_not_configured", "label": _fh["message"],
+                           "fix": "Set FINNHUB_API_KEY (or FINNHUB_API_KEY_FILE) on the backend to enable the primary "
+                                  "economic calendar + forex news feed (advisory)."})
+        from macro.fred import vol_context
+        _fred = await db.fred_cache.find_one({"_id": "snapshot"}, {"payload.series": 1})
+        _vol = vol_context(((_fred or {}).get("payload") or {}).get("series"))
+        for _k, _name in (("gvz", "GVZ"), ("vix", "VIX")):
+            if _vol.get(f"{_k}_stale"):
+                score -= 3
+                issues.append({"severity": "warning", "code": f"{_k}_stale",
+                               "label": f"{_name} (FRED) older than 4 trading days — ignored in the risk advisory",
+                               "fix": "FRED fetch is failing or lagging; check the macro worker log."})
+        import broker_price as _bp
+        _open = await db.trades.find({"user_id": user["id"], "status": "open", "mode": {"$ne": "paper"}},
+                                     {"account_id": 1, "mode": 1, "status": 1, "mt5_ticket": 1, "live_price": 1,
+                                      "live_price_at": 1, "live_at": 1}).to_list(length=500)
+        _bph = _bp.health_for_trades(_open)
+        for _acc, _row in _bph.items():
+            if _row["amber"]:
+                score -= 3
+                _age = _row["max_age_ms"]
+                issues.append({"severity": "warning", "code": "broker_price_stale",
+                               "label": (f"Account {_acc[-6:]}: {_row['open_trades']} open trade(s) without a fresh broker "
+                                         f"price ({'none reported' if _age is None else f'{_age // 1000}s old'} > "
+                                         f"{_bp.HEALTH_AMBER_MS // 1000}s) — tier management is skipping"),
+                               "fix": "The EA heartbeat / position report is late — check the terminal is connected.",
+                               "details": {"account_id": _acc, **_row}})
+        _broker_price_health = _bph
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("v1.60.53 health checks skipped: %s", _e)
+
     if dormant_account_ids:
         score -= 5
         dormant_labels = [str(a.get("label")) for a in accs
@@ -2237,6 +2274,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         "issues": issues,
         "hard_caps": hard_caps,
         "checked_at": now.isoformat(),
+        "broker_price": _broker_price_health,          # v1.60.53 (D5) per-account broker-price age for open trades
         "context": {
             # audit v3 P0-2 — canonical inventory counters, never recomputed
             "accounts_connected": inv["ea_connection"]["fresh"]

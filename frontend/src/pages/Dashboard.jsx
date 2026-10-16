@@ -393,7 +393,7 @@ export default function Dashboard() {
                 api.get(`/calendar/upcoming/${sym}?hours=48`),
                 api.get(`/calendar/freeze/${sym}`),
             ]);
-            setMacro({ events: upcoming.data.events || [], freeze: freeze.data });
+            setMacro({ events: upcoming.data.events || [], freeze: freeze.data, feed: upcoming.data.feed, released: upcoming.data.released || [] });
         } catch (e) {
             console.warn("[dashboard] macro load failed", sym, e?.message);
         }
@@ -705,6 +705,37 @@ export default function Dashboard() {
                             {new Date(macro.freeze.next_freeze.freeze_start).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                             <span className="text-[#52525B]"> → {new Date(macro.freeze.next_freeze.freeze_end).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })} · {String(macro.freeze.next_freeze.freeze_kind).toUpperCase()}</span>
                         </span>
+                    </div>
+                )}
+
+                {/* v1.60.53 (A6) — calendar source + last refresh, released prints with actual / forecast / surprise */}
+                {macro.feed && (
+                    <div className="font-mono text-[9px] text-[#52525B] tracking-widest px-1" data-testid="calendar-feed-status">
+                        CALENDAR SOURCE · {(macro.feed.active_source || "none").toUpperCase()} · {macro.feed.status || "?"}
+                        {macro.feed.last_refresh ? ` · REFRESHED ${new Date(macro.feed.last_refresh).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                        {macro.feed.finnhub === false ? " · FINNHUB NOT CONFIGURED" : ""}
+                    </div>
+                )}
+                {macro.released?.length > 0 && (
+                    <div className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="calendar-released-panel">
+                        <div className="px-5 py-2 border-b border-[#1F1F1F] font-mono text-[10px] text-[#52525B] tracking-widest">
+                            RELEASED · LAST 6H · ACTUAL / FORECAST / SURPRISE (ADVISORY)
+                        </div>
+                        <div className="divide-y divide-[#1F1F1F]">
+                            {macro.released.slice(0, 6).map((e) => {
+                                const sp = e.surprise || {};
+                                const v = sp.z ?? sp.pct;
+                                const label = sp.z != null ? `${sp.z > 0 ? "+" : ""}${sp.z}σ` : sp.pct != null ? `${sp.pct > 0 ? "+" : ""}${(sp.pct * 100).toFixed(1)}%` : "—";
+                                return (
+                                    <div key={`${e.country}-${e.when}-${e.title}`} className="px-5 py-2 flex items-center gap-3" data-testid="calendar-released-row">
+                                        <span className="font-mono text-[10px] text-[#A1A1AA] w-10">{e.country}</span>
+                                        <span className="font-mono text-xs flex-1 truncate">{e.title}</span>
+                                        <span className="font-mono text-[10px] tabular-nums text-[#E4E4E7]">{e.actual} <span className="text-[#52525B]">/ {e.forecast || "—"}</span></span>
+                                        <span className={`font-mono text-[10px] tabular-nums w-14 text-right ${v > 0 ? "text-[#00FF41]" : v < 0 ? "text-[#FF3B30]" : "text-[#52525B]"}`}>{label}</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
                     </div>
                 )}
 

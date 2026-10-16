@@ -284,6 +284,7 @@ export default function BotConfig() {
                 asia_session_skip_xau: cfg.asia_session_skip_xau !== false,
                 user_direction_cap: cfg.user_direction_cap ?? 1,
                 require_h1_alignment: cfg.require_h1_alignment ?? false,
+                geo_risk_gate_enabled: cfg.geo_risk_gate_enabled ?? false,
                 macro_freeze_before_min: cfg.macro_freeze_before_min ?? 15,
                 macro_freeze_after_min: cfg.macro_freeze_after_min ?? 10,
                 macro_freeze_medium_usd_enabled: cfg.macro_freeze_medium_usd_enabled ?? true,
@@ -913,6 +914,18 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                         onClick={() => setCfg({ ...cfg, require_h1_alignment: !cfg.require_h1_alignment })}
                         className={`px-3 py-1 text-[10px] font-mono tracking-widest border ${cfg.require_h1_alignment ? "border-[#00FF41] text-[#00FF41]" : "border-[#52525B] text-[#52525B]"}`}>
                         {cfg.require_h1_alignment ? "ON" : "OFF"}
+                    </button>
+                </div>
+                {/* v1.60.53 (B4) — plumbing only: the risk-off advisory is SHADOW until approved after the review */}
+                <div className="flex items-start justify-between gap-4 p-3 border border-[#1F1F1F] bg-[#0D0D0D]" data-testid="geo-risk-gate-row">
+                    <div>
+                        <div className="text-xs font-mono text-[#E4E4E7]">GEO / RISK-OFF GATE <span className="text-[#FFB000]">· SHADOW</span></div>
+                        <div className="text-[10px] text-white/40 mt-1">The geopolitical / central-bank / GVZ-VIX risk score is logged and stamped on every decision but never blocks, sizes or closes a trade. Kept OFF until the 2–3 week shadow review is approved — the switch has no trading effect yet.</div>
+                    </div>
+                    <button type="button" data-testid="geo-risk-gate-toggle"
+                        onClick={() => setCfg({ ...cfg, geo_risk_gate_enabled: !cfg.geo_risk_gate_enabled })}
+                        className={`px-3 py-1 text-[10px] font-mono tracking-widest border ${cfg.geo_risk_gate_enabled ? "border-[#FFB000] text-[#FFB000]" : "border-[#52525B] text-[#52525B]"}`}>
+                        {cfg.geo_risk_gate_enabled ? "ON (NO EFFECT YET)" : "OFF"}
                     </button>
                 </div>
                 {/* v1.60.50 — per-user cross-account cap (item 7 of the 15 Oct audit) */}

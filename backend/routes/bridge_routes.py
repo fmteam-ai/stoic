@@ -813,7 +813,11 @@ async def heartbeat(payload: BridgeHeartbeat):
                 if existing.get("status") == "open":
                     _live = {"live_volume": float(p.volume), "live_at": now_iso}   # R-6 — broker position volume
                     if p.current_price is not None:
-                        _live.update({"live_pnl": float(p.profit or 0.0), "live_price": float(p.current_price)})
+                        _live.update({"live_pnl": float(p.profit or 0.0), "live_price": float(p.current_price),
+                                      "live_price_at": now_iso})                  # v1.60.53 (D) receive timestamp
+                        for _k in ("bid", "ask"):                                 # EA ≥1.66 may report both
+                            if getattr(p, _k, None) is not None:
+                                _live[f"live_{_k}"] = float(getattr(p, _k))
                     # Q-1 — netting: every open leg sharing this position ticket carries the
                     # broker volume, so any leg can be closed by ticket without flattening blind.
                     await db.trades.update_many({"account_id": account_id, "mt5_ticket": int(p.ticket),

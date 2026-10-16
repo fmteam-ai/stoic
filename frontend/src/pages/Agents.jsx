@@ -184,12 +184,13 @@ function MacroSnapshot({ macro }) {
     const series = macro.series || {};
     // v1.60.48 — the real yield (DFII10) is what the gold verdict is judged on; the nominal 10Y (DGS10) sat next to
     // that verdict and read as if it were the input. REAL10Y carries value + change (5d) + regime from macro/tips.
-    const order = ["DFF", "REAL10Y", "T10YIE", "UNRATE", "VIXCLS"];
+    // v1.60.53 (C3) — GVZ (CBOE gold vol) + VIX sit next to the real yield; vol_regime is advisory (shadow)
+    const order = ["DFF", "REAL10Y", "GVZCLS", "VIXCLS", "T10YIE", "UNRATE"];
     const labels = {
         DFF: "Fed Funds", REAL10Y: "10Y Real Yield (TIPS)", T10YIE: "10Y Breakeven",
-        UNRATE: "Unemployment", VIXCLS: "VIX",
+        UNRATE: "Unemployment", VIXCLS: "VIX", GVZCLS: "GVZ (Gold Vol)",
     };
-    const suffix = { DFF: "%", REAL10Y: "%", T10YIE: "%", UNRATE: "%", VIXCLS: "" };
+    const suffix = { DFF: "%", REAL10Y: "%", T10YIE: "%", UNRATE: "%", VIXCLS: "", GVZCLS: "" };
     return (
         <section className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid="macro-snapshot">
             <div className="px-5 py-3 border-b border-[#1F1F1F] flex items-center justify-between flex-wrap gap-2">
@@ -222,6 +223,11 @@ function MacroSnapshot({ macro }) {
                             </div>
                             <div className="flex items-center gap-2 mt-1.5">
                                 <span className="font-mono text-[9px] text-[#00FF41]/80 tracking-widest uppercase">{s.regime?.replace(/_/g, " ")}</span>
+                                {s.vol_regime && (
+                                    <span data-testid={`macro-${k}-vol-regime`} className={`font-mono text-[9px] tracking-widest uppercase ${s.vol_regime === "stressed" ? "text-[#FF3B30]" : s.vol_regime === "elevated" ? "text-[#FFB000]" : "text-[#52525B]"}`}>
+                                        {s.vol_regime} · P{s.pct_20d}
+                                    </span>
+                                )}
                                 {delta !== null && delta !== undefined && (
                                     <span className={`font-mono text-[10px] tabular-nums ${
                                         delta > 0 ? "text-[#00FF41]" : delta < 0 ? "text-[#FF3B30]" : "text-[#52525B]"

@@ -289,7 +289,7 @@ def test_unknown_outcome_keeps_reservation_held_and_engine_inserts_once():
 # ── Q-1 netting volume on every leg · Q-2 installer re-run ───────────────────
 def test_q1_live_volume_updates_every_open_leg_of_the_ticket():
     src = _src("backend", "routes", "bridge_routes.py")
-    seg = src.split('"live_volume": float(p.volume)')[1][:600]
+    seg = src.split('"live_volume": float(p.volume)')[1][:1000]   # v1.60.53 added bid/ask lines
     assert 'db.trades.update_many({"account_id": account_id, "mt5_ticket": int(p.ticket),' in seg
     assert 'update_one({"_id": existing["_id"]}, {"$set": _live})' not in seg
 

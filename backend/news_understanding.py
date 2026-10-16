@@ -157,10 +157,41 @@ async def fetch_market_news(base: str, limit: int = MAX_HEADLINES) -> list:
         if a["title"].lower() not in seen:
             seen.add(a["title"].lower())
             out.append(a)
+    # v1.60.53 (A5) — Finnhub forex/general news, deduped by URL/title hash, relevance pre-filtered (LLM cost)
+    finnhub_items = 0
+    try:
+        from providers import finnhub as _fh
+        if _fh.configured():
+            cached = _finnhub_news_cached()
+            if cached is None:
+                cached = await _fh.fetch_news()
+                _finnhub_cache.update({"items": cached, "at": datetime.now(timezone.utc).timestamp()})
+            known = {_fh.news_fingerprint({"title": t}) for t in seen}
+            for it in _fh.dedupe([i for i in cached if i.get("relevant")], known):
+                if it["title"].lower() in seen:
+                    continue
+                seen.add(it["title"].lower())
+                out.append({"title": it["title"], "source": it["source"], "publishedAt": it.get("published_at") or "",
+                            "currencies": it.get("currencies") or []})
+                finnhub_items += 1
+    except Exception as e:  # noqa: BLE001 — advisory feed never breaks the wire
+        logger.debug("finnhub news skipped: %s", e)
     _status.update({"last_fetch_at": datetime.now(timezone.utc).isoformat(), "rss_items": len(rss),
-                    "newsapi_items": len(macro) + len(geo) + len(asset), "headlines": min(len(out), limit),
+                    "newsapi_items": len(macro) + len(geo) + len(asset), "finnhub_items": finnhub_items,
+                    "headlines": min(len(out), limit),
                     "last_error": None if out else "no headlines returned by RSS wire"})
     return out[:limit]
+
+
+_finnhub_cache: dict = {"items": None, "at": 0.0}
+
+
+def _finnhub_news_cached() -> list | None:
+    """Finnhub news is polled at most every NEWS_INTERVAL_SEC (2 min) regardless of how many symbols ask."""
+    from providers.finnhub import NEWS_INTERVAL_SEC
+    if _finnhub_cache["items"] is not None and datetime.now(timezone.utc).timestamp() - _finnhub_cache["at"] < NEWS_INTERVAL_SEC:
+        return _finnhub_cache["items"]
+    return None
 
 
 def _recency_weight(published_at: str, now: datetime) -> float:

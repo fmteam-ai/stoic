@@ -66,7 +66,7 @@ def test_stale_quote_has_max_age_is_cached_briefly_and_refused_by_trading_paths(
         _run(market.get_quote("XAUUSD"))
     market._LAST_GOOD.clear()
     market._cache.clear()
-    for rel, needle in (("trade_manager.py", "get_quote(symbol, allow_stale=False)"),
+    for rel, needle in (("trade_manager.py", "snap = await _broker_snapshot(trade)"),      # v1.60.53 — broker price
                         ("execution.py", 'get_quote(signal["symbol"], allow_stale=False)'),
                         ("execution.py", "get_quote(sym, allow_stale=False)"),
                         ("ai_signals.py", "get_quote(symbol, allow_stale=False)"),

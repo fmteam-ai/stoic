@@ -117,4 +117,15 @@ async def build_entry_context(signal: dict) -> dict:
         dxy = await cached_dxy()
         if dxy:
             signal = {**signal, "dxy": dxy}
-    return context_from_signal(signal, await cached_fred_series())
+    fred = await cached_fred_series()
+    ctx = context_from_signal(signal, fred)
+    # v1.60.53 — SHADOW stamps: risk-off advisory + GVZ/VIX regimes (never read by any gate)
+    try:
+        from macro.fred import vol_context
+        ctx.update({k: v for k, v in vol_context(fred).items() if k.endswith("_regime")})
+        from database import get_db
+        from risk_regime import latest_advisory, stamp_for_entry
+        ctx["risk_regime"] = stamp_for_entry(await latest_advisory(get_db()))
+    except Exception as e:  # noqa: BLE001 — context must never block an entry
+        logger.debug("entry context: risk regime unavailable: %s", e)
+    return ctx
