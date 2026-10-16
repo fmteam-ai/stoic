@@ -283,7 +283,7 @@ async def fetch_intraday_pack(symbol: str, user_id: str | None = None, timeframe
             m1doc = await load_user_candles(symbol, user_id, "M1", last_n=20, max_age_min=10)
             m1 = (m1doc or {}).get("bars") or []
             if m1:
-                from gold_trend_pulse.rules import m5_from_m1
+                from bars_util import m5_from_m1
                 m5 = m5_from_m1(m1)
         return compute_intraday_features(doc.get("bars") or [], live_price=live_price, m5_bars=m5)
     except Exception as e:  # noqa: BLE001

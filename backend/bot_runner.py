@@ -1157,6 +1157,9 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "range_gate_veto")
                     continue
                 signal["range_gate_advisory"] = rg
+            if ride and _det_scope:                     # #62 — deterministic scopes (gold_trend_pulse, hf_scalp…) keep their own TP clamp / BE geometry
+                signal["trend_ride_skipped"] = "deterministic scope — engine TP clamp kept (no trend-ride / TP rescale)"
+                ride = None
             if ride:
                 try:
                     _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)

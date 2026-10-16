@@ -1,4 +1,8 @@
-# PR: v1.60.57 — gold_trend_pulse (NEW XAUUSD engine, SHADOW first) + #55 live-feature engines (shadow compare)
+# PR: v1.60.57b — gold_trend_pulse (NEW XAUUSD engine, SHADOW first)
+
+**Sequencing:** #55 + #56 ship first as the small PR **v1.60.57a** (branch `release/v1.60.57a-55-56`, patch
+`release/patches/v1.60.57a-55-56.patch`, text `docs/PR_v1.60.57a.md`) for the Sunday deploy; this PR is the remainder (gold_trend_pulse
+items 1–14) and applies on top of it.
 
 Base: GitHub `main` @ `347f421` (v1.60.55). **Sync note:** this sandbox has no `origin` remote / token, so the branch
 was built on the local tree (v1.60.55 + v1.60.56 follow-ups) — open the PR with *Save to GitHub* onto `main@347f421`
@@ -79,5 +83,6 @@ entries flagged; per-trade expectancy −0.73 R (new) vs −0.88 R (old) on nois
   news_surprise_bias, fomc_bias, news_confirmation, detect_news_entry, plan_news_exit, news_pre_action, next_news_event`,
   engine PRE/RELEASE/POST + `_news_protect`, `gtp_news_events` report rows, Market Intel plan line, `scripts/gtp_news_events.py`.
 * #56 `loss_cooldown.py` (`is_real_loss`, `trade_r_multiple`, cross-account scan), `bot_runner` pulse / counter.
+* Review #62–#70 fixed (trend-ride exclusion, fail-closed spread by broker symbol, demo-attested demo_live + enum + PATCH guard + rolling gate + basket-once, layered-leg checks, management during freezes + ack-based protection, complete M5 / completed H1-H4 / H4 warm-up / t_basis, sweep scalp cap, scratch outcomes + original-stop R + stored costs, exact event match) — `test_gold_trend_pulse_review_62_70.py` (9).
 * Tests: `tests/unit/test_gold_trend_pulse.py` (20), `tests/unit/test_gold_trend_pulse_news_sweep.py` (16), `tests/unit/test_v1_60_57_cross_account_loss_cooldown.py` (4),
   `tests/unit/test_v1_60_57_engine_live_features.py` (7).

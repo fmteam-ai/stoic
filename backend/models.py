@@ -209,7 +209,7 @@ class BotConfigUpdate(BaseModel):
     breakeven_enabled: bool = True
     # gold_trend_pulse (v1.60.57) — XAUUSD-only M5 trend-pullback scalper. OFF by default; shadow until its own live gate passes.
     gold_trend_pulse_enabled: bool = False
-    gold_trend_pulse_mode: str = "shadow"           # shadow | demo_live (demo_live runs shadow until the gate passes)
+    gold_trend_pulse_mode: Literal["shadow", "demo_live"] = "shadow"   # #64 — enum validated; demo_live only via POST /gold-trend-pulse/config confirm_live on an attested DEMO account
     gold_trend_pulse_layering_enabled: bool = False  # item 11 — up to 3 staggered legs per pullback, one shared stop, ≤0.75 % basket risk
     gold_trend_pulse_sweep_runner_enabled: bool = True   # item 13 — ½-size runner leg to the pre-drop high after a sweep & reclaim
     gold_trend_pulse_news_mode_enabled: bool = True      # item 14 — PRE protect / RELEASE block / POST surprise-bias trades (engine itself is OFF)

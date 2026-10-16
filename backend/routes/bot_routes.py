@@ -843,6 +843,10 @@ async def update_config(payload: BotConfigUpdate,
     # PATCH semantics — only fields explicitly sent by the client are written.
     # Lets the UI / API do partial updates without nuking other settings.
     update = payload.model_dump(exclude_unset=True)
+    if update.get("gold_trend_pulse_mode") == "demo_live":
+        # #64 — every path to demo_live goes through the confirm_live + attested-DEMO check of POST /gold-trend-pulse/config
+        raise HTTPException(status_code=422, detail={"code": "gtp_confirm_live_required",
+                                                     "message": "gold_trend_pulse_mode=demo_live must be set via POST /api/gold-trend-pulse/config with confirm_live=true on an attested DEMO account"})
     if "pattern_gate_enabled" in update:
         # Spec B — enforcing the chart-pattern gate is an OPERATOR decision: admin-only, audited.
         # SEC-022-2: the TOTP-enrolled admin gate (require_admin), not the bare role string.

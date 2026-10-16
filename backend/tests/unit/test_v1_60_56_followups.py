@@ -35,7 +35,7 @@ def test_watchdog_alerts_are_deduped_per_trade_reason_and_escalate_15m_1h():
     src = inspect.getsource(cw.sweep)
     assert 'dedup_key=f"close_unacked:{tid}:{row.get(\'reason\')}"' in src          # per trade+reason, not per row
     assert "if new is not None:" in src                                               # pulse only on a NEW alert
-    assert "ea_quiet(acc, now)" in src and 'out["quiet"] += 1' in src                # quiet window → no re-send, no alert
+    assert 'ea_quiet(acc, now, row.get("reason"))' in src and 'out["quiet"] += 1' in src   # quiet window → no re-send, no alert (#61: never for panic/protection)
     assert cw.ESCALATION_STEPS == ((900, "15m", "critical"), (3600, "1h", "critical"))
     esc = inspect.getsource(cw._escalate)
     assert 'dedup_key=f"close_unacked:{tid}:{reason}:{label}"' in esc and "close_unacked_escalations" in esc

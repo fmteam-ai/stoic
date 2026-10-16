@@ -134,7 +134,7 @@ async def _intraday_entropy_override(symbol: str, daily: dict, user_id: str | No
         return daily
 
 
-async def _gold_trend_pulse_signal(symbol: str, cfg: dict | None, user_id: str | None) -> dict:
+async def _gold_trend_pulse_signal(symbol: str, cfg: dict | None, user_id: str | None, management_only: bool = False) -> dict:
     """gold_trend_pulse evaluation for the account behind `cfg` → {mode, note, summary, signal|None}."""
     from database import get_db
     from gold_trend_pulse import engine as gtp
@@ -150,7 +150,7 @@ async def _gold_trend_pulse_signal(symbol: str, cfg: dict | None, user_id: str |
         acc = await db.accounts.find_one({"user_id": user_id, "status": "connected"}) or await db.accounts.find_one({"user_id": user_id})
     if acc is None:
         return {"mode": "shadow", "note": "no account", "summary": None, "signal": None}
-    res = await gtp.evaluate(db, cfg or {}, acc)
+    res = await gtp.evaluate(db, cfg or {}, acc, management_only=management_only)
     summary = {"bias": res["bias"], "reasons": res["reasons"], "mode": res["mode"], "note": res["note"], "live_gate": res["live_gate"]}
     sig = None
     if res.get("signal"):
@@ -430,6 +430,15 @@ async def analyze_symbol(symbol: str, risk_level: str,
             closure=market_closure,
         )
     if macro.get("frozen"):
+        # #66 — management ≠ entry: open gold_trend_pulse positions still get news PRE protection, basket invalidation
+        # and range-breakout closes during a freeze (no entries are produced on a management-only pass).
+        from gold_trend_pulse.engine import enabled_for as _gtp_on_m, SYMBOL as _GTP_SYM_M
+        from pip_utils import base_symbol as _bs_m
+        if _gtp_on_m(freeze_cfg) and _bs_m(symbol) == _GTP_SYM_M:
+            try:
+                await _gold_trend_pulse_signal(symbol, freeze_cfg, user_id, management_only=True)
+            except Exception as _ge:  # noqa: BLE001
+                logger.debug("gtp management pass skipped: %s", _ge)
         return _hold(f"Macro freeze in effect: {macro.get('reason') or 'high-impact event window'}")
     if regime_dispatch and not regime_dispatch["dispatched_engine"]:
         return _hold(f"ADAPTIVE · Regime Dispatch: {regime_dispatch['note']}")
@@ -680,7 +689,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "veto_applied": bool(veto_reason) or bool(rr_veto),
         "engine_params": eng_params,
         "engine_shadow_compare": _cmp,                                   # #55 — old vs new engine output, 1-week compare
-        "stale_feature_entry": bool((_pack_live or {}).get("stale_feature")),   # #55(5) — anti-tilt ignores losses on these
+        "stale_feature_entry": bool(_live_on and (_pack_live or {}).get("stale_feature")),   # #55(5)/#58 — only when the flag is ON
         "setup_score": _ss,
         "confidence_basis": _ss["basis"],
         "engine_geometry": None if is_hold else {

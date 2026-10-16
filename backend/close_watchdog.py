@@ -70,9 +70,12 @@ def strongest_reason(a: str | None, b: str | None) -> str:
     return a if reason_rank(a) <= reason_rank(b) else b
 
 
-def ea_quiet(account: dict | None, now: datetime) -> bool:
+def ea_quiet(account: dict | None, now: datetime, reason: str | None = None) -> bool:
     """#49 — the EA drops FULL_CLOSE during its EOD quiet window (23:40–00:05 broker time, ApplyFullClose); the
-    server mirrors that window from the account's learned broker offset (and honours an explicit heartbeat flag)."""
+    server mirrors that window from the account's learned broker offset (and honours an explicit heartbeat flag).
+    #61 — panic / protection closes are NEVER paused (the window is only a mirror of an offset that may be unknown=0)."""
+    if reason is not None and reason_rank(reason) <= 1:
+        return False
     from eod_quiet import is_eod_quiet
     acc = account or {}
     if acc.get("ea_quiet_window") is True:
@@ -189,7 +192,7 @@ async def sweep(db, now: datetime | None = None) -> dict:
         ack = row.get("terminal_ack")
         mandatory = is_mandatory_close(row.get("reason"))
         acc = await _account(db, trade)
-        if mandatory and ea_quiet(acc, now):
+        if mandatory and ea_quiet(acc, now, row.get("reason")):
             # #49 — the EA defers FULL_CLOSE in its EOD quiet window: no re-send, no alert until it reopens
             if not row.get("quiet_paused_at"):
                 await db.close_commands.update_one({"_id": row["_id"]}, {"$set": {"quiet_paused_at": now.isoformat()}})

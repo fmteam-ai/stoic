@@ -59,21 +59,7 @@ def atr(bars: list, period: int = 14) -> float:
     return sum(trs) / len(trs) if trs else 0.0
 
 
-def resample(bars: list, seconds: int) -> list:
-    """OHLC bars [{t,o,h,l,c,(v)}] (any lower TF, UTC epoch t) → bars of `seconds`."""
-    out: dict = {}
-    for b in bars:
-        key = int(b["t"]) // seconds * seconds
-        g = out.get(key)
-        if g is None:
-            out[key] = {"t": key, "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"], "v": b.get("v") or b.get("n") or 0}
-        else:
-            g["h"] = max(g["h"], b["h"]); g["l"] = min(g["l"], b["l"]); g["c"] = b["c"]; g["v"] += b.get("v") or b.get("n") or 0
-    return [out[k] for k in sorted(out)]
-
-
-def m5_from_m1(m1: list) -> list:
-    return resample(m1, 300)
+from bars_util import m5_from_m1, resample  # noqa: E402,F401
 
 
 def completed(bars: list, seconds: int, now_epoch: float) -> list:
@@ -303,17 +289,43 @@ def live_gate(stats: dict) -> dict:
     return {"eligible": not reasons, "reasons": reasons, "progress": min(n, GATE_MIN_TRADES), "needed": GATE_MIN_TRADES}
 
 
+def is_loss(row: dict) -> bool:
+    """#69 — a labeled outcome counts as a LOSS only when it is not a scratch: result == 'scratch' never, otherwise r < 0
+    beyond the cost band (|net| ≤ costs → scratch)."""
+    if (row.get("result") or "").lower() == "scratch":
+        return False
+    r = float(row.get("r") or 0)
+    if r > 0:
+        return False
+    costs = row.get("costs_price")
+    net = row.get("net_price")
+    if costs is not None and net is not None and abs(float(net)) <= float(costs) + 1e-9:
+        return False
+    return r < 0
+
+
+def consecutive_losses(rows: list) -> int:
+    n = 0
+    for x in reversed(rows):
+        if is_loss(x):
+            n += 1
+        elif float(x.get("r") or 0) > 0:
+            break
+    return n
+
+
 def outcome_stats(rows: list) -> dict:
     """rows: [{r, pnl_usd?}] labeled outcomes in time order → n, win_rate, pf, expectancy_r, max_dd_r, avg win/loss $."""
     rs = [float(x.get("r") or 0) for x in rows]
-    wins, losses = [r for r in rs if r > 0], [r for r in rs if r <= 0]
+    wins = [r for r in rs if r > 0]
+    losses = [float(x.get("r") or 0) for x in rows if is_loss(x)]            # #69 — scratch (BE, |net| ≤ costs) is not a loss
     gp, gl = sum(wins), -sum(losses)
     peak = dd = cum = 0.0
     for r in rs:
         cum += r; peak = max(peak, cum); dd = max(dd, peak - cum)
     usd_w = [float(x["pnl_usd"]) for x in rows if x.get("pnl_usd") is not None and float(x["pnl_usd"]) > 0]
     usd_l = [float(x["pnl_usd"]) for x in rows if x.get("pnl_usd") is not None and float(x["pnl_usd"]) <= 0]
-    return {"n": len(rs), "wins": len(wins), "losses": len(losses),
+    return {"n": len(rs), "wins": len(wins), "losses": len(losses), "scratch": len(rs) - len(wins) - len(losses),
             "win_rate": round(len(wins) / len(rs), 3) if rs else None,
             "profit_factor": (round(gp / gl, 2) if gl > 0 else (None if not wins else 99.0)),
             "expectancy_r": round(sum(rs) / len(rs), 3) if rs else 0.0, "max_dd_r": round(dd, 2),

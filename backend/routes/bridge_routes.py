@@ -2921,7 +2921,6 @@ async def _absorb_duplicate_ticket_row(db, account_id: str, ticket, position_leg
     return str(dup["_id"])
 
 
-@router.post("/external-deal")
 async def _stamp_entry_costs(db, trade: dict, acc: dict, payload) -> None:
     """#53 — the IN deal of a STOIC trade carries the entry commission: store it (once) for the BE cost buffer."""
     if payload.deal_entry != "in" or trade.get("origin") not in ("auto", None) or trade.get("commission_entry") is not None:
@@ -2932,6 +2931,7 @@ async def _stamp_entry_costs(db, trade: dict, acc: dict, payload) -> None:
         await db.trades.update_one({"_id": trade["_id"], "commission_entry": {"$exists": False}}, {"$set": upd})
 
 
+@router.post("/external-deal")
 async def external_deal(payload: BridgeExternalDeal):
     """Report any broker-side deal — bot-initiated AND manual.
 

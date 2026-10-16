@@ -157,6 +157,36 @@ Tests: `tests/unit/test_v1_60_57_cross_account_loss_cooldown.py` (4).
    switching the flag ON. `scripts/engine_live_features_replay.py --csv … --from 2026-10-16T13:00 --to 2026-10-16T14:30`
    prints old vs new signals and 30-day win rate / PF after costs.
 
+## Review items #62–#70 (fixed before shadow enable)
+* **#62** `bot_runner`: trend-ride TP widening (×1.8), and therefore any TP rescale, is skipped for every deterministic
+  scope (`gold_trend_pulse`, hf_scalp, hf_scalp_fast, range_fade, breakout_m15) — `trend_ride_skipped` says so; GTP exits
+  in trade_manager already return before vol-retarget / tiers.
+* **#63** Spread is resolved via `entry_costs.spread_at_entry` (broker symbol GOLD# / XAUUSD+ / XAUUSD.crp / XAUUSD →
+  base symbol); missing spread or `spreads_updated_at` older than 120 s → **fail closed** (no entry, note / pulse
+  "spread unknown … entry refused" / "spread stale").
+* **#64** `gold_trend_pulse_mode` is a validated enum (`shadow` | `demo_live`); the generic Bot Config PATCH refuses
+  `demo_live` (422 `gtp_confirm_live_required`) — only `POST /api/gold-trend-pulse/config` with `confirm_live=true` on an
+  account whose server-side attestation is DEMO (`broker_env.attested_environment`) may set it; `effective_mode` falls back
+  to shadow on a non-DEMO account. Live gate = rolling 30-day window of shadow **and** live outcomes (re-evaluated every
+  pass, never frozen); a basket (layered legs / sweep scalp+runner) counts once (`collapse_baskets`).
+* **#65** Layered legs: the shared stop must lie beyond the leg's entry, SL ≤ 1.3×TP per leg, and every leg needs the
+  same RSI-reset / M5-close confirmation as L1 (`detect_entry`); skipped legs are recorded on the basket.
+* **#66** Management ≠ entry: during a macro freeze `ai_signals` runs a management-only GTP pass (news PRE protection,
+  basket invalidation, range-breakout closes; no entries). `_news_protect` honours the broker min stop distance
+  (`be_clamped_skip`) and marks a live trade "protected" only after the EA cleared the MODIFY_SL (`gtp_news_protect_pending`
+  → `gtp_news_protected`).
+* **#67** An M5 bar is evaluated only when its window elapsed AND all 5 M1 bars are present (`complete_m5`; `last_m5_t`
+  never advances on an incomplete bar); bias uses completed H1/H4 only; H4 is read from the EA H4 stream (fallback
+  resample) and needs ≥ 200 completed bars for EMA50 (else bias NONE "H4 warm-up"); `t_basis=broker_unknown` → no
+  today-open / prior-day mid → bias NONE.
+* **#68** Sweep: the scalp leg must satisfy SL ≤ 1.3×scalp TP (else skip); the runner keeps its own cap; total 0.25 %.
+* **#69** Break-even / |net| ≤ costs exits are **scratch**, not loss (daily 3-loss stop, cooldown, live-gate PF/expectancy:
+  `is_loss`, `consecutive_losses`); R always from `original_stop_loss`; live BE cost buffer uses the stored
+  `spread_at_entry` + commission (#53) instead of the 2.5-pip default.
+* **#70** Event matching is whole-word (no "ism" inside "optimism") and HIGH impact only; the 15/day cap counts opened
+  trades; dead RANGE breakout line removed; `--tz-offset` applies to CSV bars only (DB bars are already UTC).
+* Tests: `tests/unit/test_gold_trend_pulse_review_62_70.py` (9).
+
 ## Tests
 `tests/unit/test_gold_trend_pulse.py` (20: bias UP/DOWN/NONE + hysteresis, both triggers, spike filter, TP/SL clamps
 incl. skip, BE sign BUY/SELL with costs, time-stop, labeling, every filter/limit, sizing via pip value, live gate,

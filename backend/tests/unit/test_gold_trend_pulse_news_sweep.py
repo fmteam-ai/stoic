@@ -33,19 +33,20 @@ def _flat(n, px=4150.0, t0=T0, step=300, wig=0.5):
     return out
 
 
-def _sweep_up_series(reclaim_close=4149.8, body_frac_ok=True, bump=None):
-    """30 quiet bars (2 h low ≈ 4149.3) [+ a pre-drop high `bump`] → 3-bar fast drop to 4145 (sweep) → reclaim bar closing
-    back above 4149.3."""
+def _sweep_up_series(reclaim_close=4146.0, body_frac_ok=True, bump=None):
+    """30 quiet bars at 4150 with one earlier dip to 4145.5 (= the 2 h low) [+ a pre-drop high `bump`] → 3-bar fast drop
+    to 4145.0 (sweeps the 4145.5 low) → reclaim bar closing back above it. #68: SL (≈1.4) ≤ 1.3×TP (2.00)."""
     m5 = _flat(30)
+    m5[10] = _bar(m5[10]["t"], 4150.0, 4150.4, 4145.5, 4149.8)
     t = m5[-1]["t"] + 300
     if bump:
         m5.append(_bar(t, 4150.0, bump, 4149.6, 4150.1)); t += 300
     m5 += [_bar(t, 4150.0, 4150.2, 4148.5, 4148.6), _bar(t + 300, 4148.6, 4148.7, 4146.5, 4146.6), _bar(t + 600, 4146.6, 4146.8, 4145.0, 4145.4)]
-    o = 4146.0
+    o = 4145.3
     if body_frac_ok:
-        m5.append(_bar(t + 900, o, reclaim_close + 0.2, 4145.6, reclaim_close))          # body 3.8 of range 4.4
+        m5.append(_bar(t + 900, o, reclaim_close + 0.1, 4145.2, reclaim_close))          # body 0.7 of range 0.9
     else:
-        m5.append(_bar(t + 900, o, 4156.0, 4145.6, reclaim_close))                       # long wick, body < 50 %
+        m5.append(_bar(t + 900, o, 4149.0, 4145.2, reclaim_close))                       # long wick, body < 50 %
     return m5
 
 
@@ -58,14 +59,14 @@ def _mirror(m5):
 def test_sweep_and_reclaim_detected_in_bias_direction_only_and_mirrored():
     m5 = _sweep_up_series()
     s = R.detect_sweep_reclaim(m5, "UP")
-    assert s and s["trigger"] == "sweep" and s["direction"] == "BUY" and s["entry"] == 4149.8
-    assert s["sweep_low"] == 4145.0 and s["swept_level"] == pytest.approx(4149.3, abs=0.01) and s["drop"] >= R.SWEEP_DROP_ATR * s["atr"]
+    assert s and s["trigger"] == "sweep" and s["direction"] == "BUY" and s["entry"] == 4146.0
+    assert s["sweep_low"] == 4145.0 and s["swept_level"] == pytest.approx(4145.5, abs=0.01) and s["drop"] >= R.SWEEP_DROP_ATR * s["atr"]
     assert R.detect_sweep_reclaim(m5, "DOWN") is None          # never the opposite trade (no SELL on the breakdown)
     assert R.detect_sweep_reclaim(m5, "NONE") is None
     d = R.detect_sweep_reclaim(_mirror(m5), "DOWN")
     assert d and d["direction"] == "SELL" and d["sweep_low"] == pytest.approx(4155.0, abs=0.01)
     # no reclaim (close below the swept level) / weak body → nothing
-    assert R.detect_sweep_reclaim(_sweep_up_series(reclaim_close=4148.0), "UP") is None
+    assert R.detect_sweep_reclaim(_sweep_up_series(reclaim_close=4145.45), "UP") is None
     assert R.detect_sweep_reclaim(_sweep_up_series(body_frac_ok=False), "UP") is None
     # small drop (< 1.5×ATR) that does not take out the 2 h low → nothing
     m5b = _flat(30) + [_bar(T0 + 30 * 300, 4150.0, 4150.5, 4149.6, 4149.8), _bar(T0 + 31 * 300, 4149.8, 4151.2, 4149.7, 4151.0)]
@@ -75,7 +76,7 @@ def test_sweep_and_reclaim_detected_in_bias_direction_only_and_mirrored():
 def test_sweep_exit_geometry_runner_and_split():
     s = R.detect_sweep_reclaim(_sweep_up_series(), "UP")
     p = R.plan_sweep_exit("BUY", s["entry"], s["sweep_low"], 4160.0, s["atr"])            # pre-drop high far above → runner
-    assert p["ok"] and R.TP_MIN <= p["tp"] <= R.TP_MAX
+    assert p["ok"] and R.TP_MIN <= p["tp"] <= R.TP_MAX and p["sl"] <= R.SL_MAX_TP_MULT * p["tp"]      # #68 scalp cap
     assert p["stop_loss"] == pytest.approx(s["sweep_low"] - max(0.30, 0.25 * s["atr"]), abs=0.01)
     assert p["runner"] and p["runner"]["take_profit"] == 4160.0 and p["runner"]["be_trigger_price"] == p["take_profit"]
     assert p["runner"]["time_stop_min"] == R.RUNNER_TIME_STOP_MIN
@@ -84,11 +85,12 @@ def test_sweep_exit_geometry_runner_and_split():
     assert one["ok"] and one["runner"] is None and one["sl"] <= 3.5 * s["atr"]
     assert R.plan_sweep_exit("BUY", s["entry"], s["sweep_low"], 4160.0, s["atr"], runner=False)["runner"] is None
     # SELL mirror: stop above the sweep high
-    q = R.plan_sweep_exit("SELL", 4147.0, 4155.0, 4140.0, 1.0)
-    assert q["ok"] and q["stop_loss"] > 4155.0 and q["take_profit"] < 4147.0
+    q = R.plan_sweep_exit("SELL", 4153.0, 4155.0, 4140.0, 1.0)
+    assert q["ok"] and q["stop_loss"] > 4155.0 and q["take_profit"] < 4153.0
     # SL far wider than the target → skip
     bad = R.plan_sweep_exit("BUY", 4153.0, 4130.0, 4154.0, 1.0)
     assert not bad["ok"] and "SL too wide" in bad["skip"]
+    assert not R.plan_sweep_exit("BUY", 4149.8, 4145.0, 4158.0, 1.7)["ok"]                        # #68 — SL 5.2 > 1.3×2.0 even with a far runner
     assert R.split_runner_lots(0.04) == (0.02, 0.02) and R.split_runner_lots(0.03) == (0.02, 0.01) and R.split_runner_lots(0.01) == (0.01, None)
 
 
@@ -300,14 +302,14 @@ def test_engine_news_pre_protects_open_shadow_and_blocks_entries(monkeypatch):
     E = _engine_env(monkeypatch, m5, now, [_ev("CPI m/m", t_rel, None, "0.2")])
     db = _DB()
     db.gtp_state.rows.append({"_id": "acc1", "bias": {"bias": "UP", "candidate": "UP", "confirmations": 0, "computed_at": now.isoformat(), "reasons": []}, "regime": "TREND"})
-    db.gtp_decisions.rows.append({"_id": "d0", "decision_id": "open1", "account_id": "acc1", "verdict": "shadow", "outcome": None, "direction": "BUY", "entry": 4147.0,
-                                  "sl_dist": 4.0, "tp_dist": 3.0, "take_profit": 4150.0, "stop_loss": 4143.0, "spread_at_entry": 0.25, "commission_price": 0.07,
+    db.gtp_decisions.rows.append({"_id": "d0", "decision_id": "open1", "account_id": "acc1", "verdict": "shadow", "outcome": None, "direction": "BUY", "entry": 4143.5,
+                                  "sl_dist": 4.0, "tp_dist": 3.0, "take_profit": 4146.5, "stop_loss": 4139.5, "spread_at_entry": 0.25, "commission_price": 0.07,
                                   "created_at": (now - timedelta(minutes=10)).isoformat(), "regime": "TREND"})
     acc = {"_id": "acc1", "user_id": "u1", "equity": 10_000.0, "account_type": "demo"}
     res = _run(E.evaluate(db, {"gold_trend_pulse_enabled": True}, acc, now, spread_price=0.25))
     assert res["note"].startswith("NEWS PRE CPI") and res["decision"] is None and res["signal"] is None   # no entry even though a sweep setup exists
     row = db.gtp_decisions.rows[0]
-    assert row["news_pre_action"]["action"] == "breakeven" and row["stop_loss"] == R.breakeven_level("BUY", 4147.0, 0.25, 0.07)   # +0.7R → BE+costs
+    assert row["news_pre_action"]["action"] == "breakeven" and row["stop_loss"] == R.breakeven_level("BUY", 4143.5, 0.25, 0.07)   # +0.62R → BE+costs
     ev = db.gtp_news_events.rows[0]
     assert ev["kind"] == "CPI" and ev["phase"] == "PRE" and ev["pre_actions"][0]["action"] == "breakeven"
     # close policy on a losing position → labeled closed

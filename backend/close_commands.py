@@ -253,8 +253,8 @@ async def mandatory_close(db, trade: dict, *, reason: str, actor: str, stamp: di
         last = _parse(rd.get("last_at")) or _parse(cmd.get("requested_at")) or now
         if not redispatch_due(count, (now - last).total_seconds()):
             return "backoff"
-        if ea_quiet(account, now):
-            return "quiet"           # #49 — the EA drops FULL_CLOSE in its quiet window; re-issue when it reopens
+        if ea_quiet(account, now, reason):
+            return "quiet"           # #49 — the EA drops FULL_CLOSE in its quiet window; re-issue when it reopens (#61: never for panic/protection)
     pm = {"type": "FULL_CLOSE", "reason": reason, "requested_at": now.isoformat()} if full_close else None
     st = dict(stamp or {})
     if "close_reason_pending" in st:

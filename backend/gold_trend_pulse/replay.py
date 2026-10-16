@@ -15,35 +15,7 @@ from gold_trend_pulse import rules as R
 PIP_PRICE = 0.10
 
 
-def load_csv(path: str) -> list:
-    """XAUUSD M1 bars from (a) an MT5 History export — tab- or comma-separated, header `<DATE> <TIME> <OPEN> <HIGH> <LOW>
-    <CLOSE> <TICKVOL> <VOL> <SPREAD>` (header skipped, `2026.10.16` or `2026-10-16` dates, `13:15` / `13:15:00`) — or (b)
-    `iso_ts,o,h,l,c[,v]`. Times are taken verbatim (broker clock) — shift with replay(broker_offset_sec=…) /
-    `--tz-offset`. Spread (points) is kept as `s` when the column exists."""
-    bars = []
-    with open(path, newline="", encoding="utf-8-sig") as f:
-        for line in f:
-            line = line.rstrip("\r\n")
-            if not line or not line[:1].isdigit():
-                continue
-            row = line.split("\t") if "\t" in line else [x.strip() for x in line.split(",")]
-            try:
-                if len(row) >= 6 and ":" in row[1]:
-                    ts = datetime.strptime(f"{row[0].replace('-', '.')} {row[1]}", "%Y.%m.%d %H:%M:%S" if row[1].count(":") == 2 else "%Y.%m.%d %H:%M")
-                    o, h, l, c = map(float, row[2:6])
-                    v = float(row[6] or 0) if len(row) > 6 else 0.0
-                    s = float(row[8]) if len(row) > 8 and row[8] else None
-                else:
-                    ts = datetime.fromisoformat(row[0]); o, h, l, c = map(float, row[1:5]); v = float(row[5] or 0) if len(row) > 5 else 0.0; s = None
-            except (ValueError, IndexError):
-                continue
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=timezone.utc)
-            b = {"t": int(ts.timestamp()), "o": o, "h": h, "l": l, "c": c, "v": v}
-            if s is not None:
-                b["s"] = s
-            bars.append(b)
-    return bars
+from bars_util import load_csv  # noqa: E402,F401
 
 
 def load_news_events(path: str) -> list:
@@ -132,7 +104,7 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
             i15 += 1
         hist15 = m15[max(0, i15 - 800):i15]
         if m5_close:
-            m5 = [b for b in m5_all if b["t"] + 300 <= t + 60][-80:]
+            m5 = [b for b in m5_all if b["t"] + 300 <= t + 60 and int(b.get("n") or 5) >= 5][-80:]     # #67 — complete M5 bars only
             if tracker.due(now) and len(hist15) >= 200:
                 d0 = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
                 today = [b for b in hist15 if b["t"] >= d0]
@@ -211,16 +183,11 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
         ok, _ = R.session_ok(now)
         if not ok:
             continue
-        consec = 0
-        for r in reversed(day_rows):
-            if r["r"] <= 0:
-                consec += 1
-            else:
-                break
-        if R.daily_stop(consec, sum(r["pnl_usd"] for r in day_rows) / equity * 100, len(day_rows)):
+        consec = R.consecutive_losses(day_rows)                     # #69 — scratch exits do not count
+        if R.daily_stop(consec, sum(r["pnl_usd"] for r in day_rows) / equity * 100, len(day_rows) + len(positions)):   # #70 — opened trades count
             skips["daily_stop"] += 1 if m5_close else 0; continue
         if day_rows:
-            until = R.cooldown_until("loss" if day_rows[-1]["r"] <= 0 else "win", datetime.fromisoformat(day_rows[-1]["exit_at"]))
+            until = R.cooldown_until("loss" if R.is_loss(day_rows[-1]) else "win", datetime.fromisoformat(day_rows[-1]["exit_at"]))
             if until and now < until:
                 continue
         d0 = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
@@ -405,7 +372,9 @@ def R_label_step(pos: dict, bar: dict, now: datetime, force: str | None = None) 
             pos["sl_live"] = be
         return None
     net = (exit_px - entry) * sgn - pos["spread_at_entry"] - pos["commission_price"]
-    return {"r": round(net / pos["sl_dist"], 3), "pnl_usd": round(net / PIP_PRICE * 10.0 * pos["lots"], 2), "exit_reason": reason, "direction": pos["direction"],
+    costs = pos["spread_at_entry"] + pos["commission_price"]
+    result = "scratch" if abs(net) <= costs + 1e-9 or reason == "breakeven" else ("win" if net > 0 else "loss")    # #69
+    return {"r": round(net / pos["sl_dist"], 3), "result": result, "net_price": round(net, 3), "costs_price": round(costs, 3), "pnl_usd": round(net / PIP_PRICE * 10.0 * pos["lots"], 2), "exit_reason": reason, "direction": pos["direction"],
             "exit_at": now.isoformat(), "entry_at": pos["created_at"], "trigger": pos["trigger"], "bias": pos["bias"], "regime": pos.get("regime", "TREND"),
             "hour": opened.hour, "mfe": round(pos["mfe"], 2), "mae": round(pos["mae"], 2), "lots": pos["lots"], "event": pos.get("event")}
 
