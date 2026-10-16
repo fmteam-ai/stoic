@@ -42,3 +42,23 @@ Scope: items #39, #40, #41. No trading-behaviour change except the corrected los
 ## Tests
 `tests/unit/test_v1_60_54_anti_tilt_r_multiple_market_intel.py` (19). Updated: `test_iter45_ghost_close_recovery`,
 `test_v1_60_48_audit_p1` (source-grep assertions → shared helper).
+
+## #42 — RoboForex XAUUSD pip value ×1000 off (HIGH)
+* Root cause in this tree: `compute_lot_for_account` derived the pip value ONLY from the account's `account_type`
+  label (`ACCOUNT_TYPE_LOT_MULTIPLIER`: microcent = ×0.001 → $0.01/pip for XAUUSD); the EA-reported symbol spec
+  was never consulted. A RoboForex account carrying a cent/microcent label (or a mis-set type) sized 25 lots raw and
+  only the 0.25 % risk clamp saved it.
+* (a) `risk.broker_pip_value_usd_per_lot(symbol, account)` = tick_value × pip_size / tick_size from the EA spec
+  (keyed by base symbol — GOLD#, XAUUSD+, XAUUSD.crp resolve to XAUUSD). `risk.resolve_pip_value()` prefers it,
+  then the account_type table.
+* (b) Sanity guard: the chosen value is compared with the instrument table for a standard contract (XAU $10 per
+  0.10 pip, forex majors ~$10/pip/lot). More than ×3 off either way → table value used, WARNING logged, ops alert
+  `pip_value_anomaly` (high, dedupe per account+symbol), `pip_value_source` (`broker_spec` | `account_type_table` |
+  `table_override`) + `pip_value_anomaly` stamped on the signal, the decision-ledger snapshot and the decision
+  context stage `sizing`. Paper accounts keep their microcent convention (guard targets live broker specs).
+* (c) `risk.raw_lot_anomaly()`: raw lot > max_lot × 10 BEFORE any trim → pulse "Sizing anomaly: raw lot … —
+  trade rejected", signal `sizing_rejected`, counter `sizing_anomaly_block`. No clamp-down.
+* (d) `tests/unit/test_v1_60_54_pip_value_sanity.py` (11): STARTRADER / OnEquity / VTMarkets / RoboForex gold
+  specs, the 16 Oct incident ($0.01 → $10, 25 lots → 0.25), cent spec override, EURUSD spec + mislabelled
+  account, within-×3 kept, paper exemption, raw-lot hard reject placement.
+* Constants: `PIP_VALUE_SANITY_RATIO = 3.0`, `RAW_LOT_ANOMALY_MULT = 10.0` (risk.py). No new env vars.

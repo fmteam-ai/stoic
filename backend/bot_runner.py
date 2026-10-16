@@ -30,7 +30,7 @@ from friday_flat import sweep_all as sweep_friday_flat, in_friday_flat_window
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
-from risk import get_profile, compute_lot_for_account
+from risk import get_profile, compute_lot_for_account, RAW_LOT_ANOMALY_MULT, raw_lot_anomaly
 from pip_utils import floor_to_lot_step, symbol_match, lot_spec, base_symbol
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
@@ -1949,6 +1949,35 @@ async def _process_user_account_locked(db, cfg: dict):
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)
         absolute_lot = float(sized["lot_size"])
+        # #42 — pip value provenance on the signal → decision ledger snapshot + decision context stage
+        signal["pip_value_source"] = sized.get("pip_value_source")
+        signal["pip_value_anomaly"] = bool(sized.get("pip_value_anomaly"))
+        try:
+            from decision_context import record_stage as _dcs
+            await _dcs(db, signal.get("decision_id"), "sizing",
+                       {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "pip_value_source", "pip_value_anomaly",
+                                                  "pip_value_candidate", "risk_amount_usd", "lot_size")})
+        except Exception:  # noqa: BLE001
+            pass
+        # #42 (b) — a pip value the sizer had to override is an ops event (dedupe per account+symbol)
+        if sized.get("pip_value_anomaly"):
+            try:
+                from alerting import raise_alert
+                await raise_alert(db, "pip_value_anomaly", "high", f"{target_account.get('label')} {sym}: {sized.get('pip_value_note')}",
+                                  dedup_key=f"pip_value_anomaly:{target_account.get('_id')}:{sym}",
+                                  meta={"account_id": str(target_account.get("_id")), "symbol": sym, "user_id": user_id,
+                                        "candidate": sized.get("pip_value_candidate"), "used": sized.get("pip_usd_per_lot")})
+            except Exception as _pe:  # noqa: BLE001 — alerting never changes sizing
+                logger.warning("pip value anomaly alert failed: %s", _pe)
+        # #42 (c) — hard reject BEFORE any trim: a raw lot above max_lot × 10 is a sizing anomaly, never "clamped down"
+        if raw_lot_anomaly(absolute_lot, max_lot_cap):
+            _msg = (f"Sizing anomaly: raw lot {absolute_lot:.2f} > {RAW_LOT_ANOMALY_MULT:.0f}× max lot {max_lot_cap} "
+                    f"(pip value ${sized.get('pip_usd_per_lot')} source={sized.get('pip_value_source')}) — trade rejected")
+            logger.error("%s user=%s sym=%s", _msg, user_id, sym)
+            await db.signals.update_one({"_id": result.inserted_id}, {"$set": {"sizing_rejected": _msg, "tradeable": False}})
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=_msg, signal=signal)
+            await inc_intel_counter(user_id, "sizing_anomaly_block")
+            continue
         _floored_trims: list[str] = []          # stages whose trim was floored to the broker minimum (audit)
         _min_lot, _lot_step = lot_spec(target_account, sym)
 
@@ -2618,7 +2647,8 @@ async def _process_user_account_locked(db, cfg: dict):
                         "symbol": signal["symbol"],
                         "action": signal["action"],
                         "lot_size": effective_lot,
-                        "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd")},
+                        "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd",
+                                                              "pip_value_source", "pip_value_anomaly")},
                         "entry_price": signal["entry_price"],
                         "stop_loss": signal["stop_loss"],
                         "take_profit": signal["take_profit"],

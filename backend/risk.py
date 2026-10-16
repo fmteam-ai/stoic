@@ -1,13 +1,65 @@
 """Risk management profiles + Kelly-modified dynamic position sizing."""
 from typing import Literal
 
-from pip_utils import price_to_pips, pip_value_usd_per_lot, floor_to_lot_step, lot_spec
+import logging
+
+from pip_utils import price_to_pips, pip_value_usd_per_lot, floor_to_lot_step, lot_spec, pip_size, base_symbol
+
+logger = logging.getLogger("risk")
 
 RiskLevel = Literal["low", "medium", "high", "extreme"]
 
 # C5: broker-minimum rounding may only overshoot the approved risk budget by
 # this factor before the trade is rejected outright (fail-closed sizing).
 RISK_OVERSHOOT_TOLERANCE = 1.5
+PIP_VALUE_SANITY_RATIO = 3.0        # #42 — broker-derived pip value must be within ×3 of the instrument table
+RAW_LOT_ANOMALY_MULT = 10.0         # #42 — raw lot > max_lot × 10 before any trim → "sizing anomaly", trade rejected
+
+
+def raw_lot_anomaly(raw_lot: float, max_lot_cap: float) -> bool:
+    """#42 (c) — True when the sizer's RAW lot (before any trim/clamp) exceeds max_lot × RAW_LOT_ANOMALY_MULT."""
+    return float(max_lot_cap or 0) > 0 and float(raw_lot or 0) > float(max_lot_cap) * RAW_LOT_ANOMALY_MULT
+
+
+def broker_pip_value_usd_per_lot(symbol: str, account: dict | None) -> float | None:
+    """#42 (a) — pip value per 1.00 lot from the EA-reported symbol spec: tick_value × pip_size / tick_size.
+    None when the account has no usable spec for the symbol."""
+    base = base_symbol(symbol)
+    spec = ((account or {}).get("symbol_specs") or {}).get(base) or {}
+    try:
+        tv, ts = float(spec.get("tick_value") or 0), float(spec.get("tick_size") or 0)
+    except (TypeError, ValueError):
+        return None
+    if tv <= 0 or ts <= 0:
+        return None
+    return tv * pip_size(base) / ts
+
+
+def resolve_pip_value(symbol: str, account: dict | None, price: float | None = None,
+                      quote_usd: float | None = None) -> dict:
+    """#42 (a)+(b) — ONE pip value for the sizer, with its provenance.
+
+    Order: broker spec (tick_value/tick_size) → account_type table. The result is checked against the instrument
+    table for a STANDARD contract (XAU $10 per 0.10 pip, forex majors ~$10/pip/lot); more than ×3 off either way →
+    the table value is used, `anomaly` is set (caller logs a WARNING + ops alert) and `source` says so.
+    RoboForex 16 Oct: account_type-derived $0.01 for XAUUSD (×1000 off) → raw 25 lots. Paper accounts keep the
+    account_type convention (the guard is about live broker specs)."""
+    account = account or {}
+    table = pip_value_usd_per_lot(symbol, "standard", price=price, quote_usd=quote_usd)
+    typed = pip_value_usd_per_lot(symbol, account.get("account_type"), price=price, quote_usd=quote_usd)
+    broker = broker_pip_value_usd_per_lot(symbol, account)
+    candidate, source = (broker, "broker_spec") if broker else (typed, "account_type_table")
+    out = {"pip_usd": candidate, "source": source, "candidate": round(candidate, 6) if candidate else candidate,
+           "table": round(table, 6), "anomaly": False, "ratio": None}
+    if (account.get("mode") or "live") == "paper":
+        return out
+    ratio = (candidate / table) if table > 0 and candidate and candidate > 0 else None
+    out["ratio"] = round(ratio, 4) if ratio else None
+    if ratio is None or ratio > PIP_VALUE_SANITY_RATIO or ratio < 1.0 / PIP_VALUE_SANITY_RATIO:
+        out.update({"pip_usd": table, "source": "table_override", "anomaly": True,
+                    "note": (f"{source} pip value ${candidate} for {symbol} is {('×%.0f' % ratio) if ratio and ratio >= 1 else ('÷%.0f' % (1 / ratio)) if ratio else 'invalid'} "
+                             f"vs the instrument table ${table:.4g} — table value used")})
+    return out
 
 # `kelly_cap` is the maximum fraction of profile risk to deploy on a 100%-confidence
 # signal. Lower-risk profiles cap Kelly tighter to avoid over-betting.
@@ -156,7 +208,10 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
     # B1/R10 — price-aware pip value (USDCHF/USDCAD/USDJPY use the entry price)
     # H9 — `quote_usd` is today's quote-currency rate (fx_rates.quote_usd_for_symbol);
     # without it the approximate table is used for non-USD crosses.
-    pip_usd = pip_value_usd_per_lot(symbol, account.get("account_type"), price=float(entry_price), quote_usd=quote_usd)
+    pv = resolve_pip_value(symbol, account, price=float(entry_price), quote_usd=quote_usd)
+    pip_usd = float(pv["pip_usd"] or 0)
+    if pv["anomaly"]:
+        logger.warning("PIP VALUE ANOMALY account=%s sym=%s: %s", account.get("label") or account.get("_id"), symbol, pv.get("note"))
     if pip_usd <= 0:
         return {"lot_size": 0.0, "sizing_valid": False,
                 "method": "rejected_zero_pip_value",
@@ -210,6 +265,10 @@ def compute_lot_for_account(account: dict, symbol: str, entry_price: float,
         "effective_risk_pct": round(effective_risk_pct, 3),
         "sl_pips": round(sl_pips, 1),
         "pip_usd_per_lot": round(pip_usd, 4),
+        "pip_value_source": pv["source"],
+        "pip_value_anomaly": pv["anomaly"],
+        "pip_value_note": pv.get("note"),
+        "pip_value_candidate": pv.get("candidate"),
         "min_lot": min_lot,
         "min_lot_risk_usd": round(min_lot * sl_pips * pip_usd, 2),
         "equity": round(equity, 2),

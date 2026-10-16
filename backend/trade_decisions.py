@@ -22,7 +22,7 @@ SNAPSHOT_FIELDS = ("action", "deferred_action", "entry_price", "stop_loss", "tak
                    "tp1", "tp2", "tp3", "confidence", "rr_ratio", "scope",
                    "entry_style", "session_feats", "news_bias",
                    "news_size_scale", "trend_ride", "regime",
-                   "pipeline_safe_to_execute")
+                   "pipeline_safe_to_execute", "pip_value_source", "pip_value_anomaly")
 
 
 def _snapshot(signal: dict | None) -> dict:
