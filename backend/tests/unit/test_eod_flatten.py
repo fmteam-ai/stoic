@@ -66,16 +66,16 @@ class TestSweep:
                   {"_id": "t2", "origin": "auto", "status": "open",
                    "pending_modification": {"type": "MODIFY_SL"}}]
         db = self._db([acc], trades)
-        rc = AsyncMock(return_value={"trades_marked_for_close": 1})   # r25 P2-01 close protocol
-        with patch("eod_flatten.request_close", rc):
+        # v1.60.55 #48 — closes go through close_commands.mandatory_close (takeover of unacked closes + re-issue with
+        # backoff); a pending MODIFY_SL no longer shields a trade from the end-of-day flatten.
+        mc = AsyncMock(return_value="issued")
+        with patch("eod_flatten.mandatory_close", mc):
             out = asyncio.run(sweep_eod_flatten(db, now=_utc(23, 20)))
-        assert out == {"enabled": True, "queued": 1, "accounts": 1}
-        args = rc.await_args
-        assert args.args[1] == {"_id": "t1"}       # pending one untouched
-        assert args.kwargs["reason"] == "eod_flatten"
-        sets = args.kwargs["stamp"]
-        assert sets["pending_modification"]["type"] == "FULL_CLOSE"
-        assert sets["pending_modification"]["reason"] == "eod_flatten"
+        assert out == {"enabled": True, "queued": 2, "accounts": 1}
+        assert sorted(c.args[1]["_id"] for c in mc.await_args_list) == ["t1", "t2"]
+        for c in mc.await_args_list:
+            assert c.kwargs["reason"] == "eod_flatten" and c.kwargs["actor"] == "eod_flatten"
+            assert "eod_flatten_queued_at" in c.kwargs["stamp"]
         db.trades.update_one.assert_not_awaited()
         db.notifications.insert_one.assert_awaited_once()
 

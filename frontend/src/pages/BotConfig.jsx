@@ -9,6 +9,9 @@ import AiOptimizerSection from "@/components/AiOptimizerSection";
 import { OperationalModeCard } from "@/components/OperationalModeCard";
 import { ConfigVersionsCard } from "@/components/ConfigVersionsCard";
 import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, ShieldAlert, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass, ArrowRight } from "lucide-react";
+
+// #46 — mirrors backend models.BREAKEVEN_TRIGGER_R_DEFAULT (one shared break-even default)
+const BREAKEVEN_TRIGGER_R_DEFAULT = 1.0;
 import { toast } from "sonner";
 
 // v1.60.39 C8 — currencies whose HIGH-impact prints may freeze gold
@@ -295,7 +298,8 @@ export default function BotConfig() {
                 paper_shadow_mode: cfg.paper_shadow_mode,
                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
                 let_winners_run: cfg.let_winners_run ?? false,
-                breakeven_trigger_r: cfg.breakeven_trigger_r ?? 1.0,
+                breakeven_enabled: cfg.breakeven_enabled ?? true,
+                breakeven_trigger_r: cfg.breakeven_trigger_r ?? BREAKEVEN_TRIGGER_R_DEFAULT,
             };
             // v1.60.48 — send only what changed since load/last save (PATCH), never the whole form
             const payload = changedFields(fullPayload, baselineRef.current);
@@ -1196,9 +1200,13 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                         <TrendingUp className="w-3.5 h-3.5 text-[#FFD700]" />
                         <span className="font-mono text-[10px] text-white tracking-widest">BREAK-EVEN TRIGGER (NON-SCALP ENGINES)</span>
                     </div>
-                    <div className="text-[11px] text-white/60 mb-2">Stop moves to entry once the trade is this many R in profit — independent of TP1 (breakout signals have TP1 = TP, so the TP1 break-even never fired). Scalp engines keep their fixed +0.5R rule. 0 = TP1-only.</div>
-                    <div className="grid grid-cols-2 gap-3">
-                        <PPNumInput cfg={cfg} setCfg={setCfg} field="breakeven_trigger_r" label="BREAK-EVEN AT" suffix="× R" step={0.1} min={0} max={5} fallback={1.0} />
+                    <div className="text-[11px] text-white/60 mb-2">Stop moves to entry + round-trip costs (spread + commission) once the trade is this many R in profit — independent of TP1 (breakout signals have TP1 = TP, so the TP1 break-even never fired). Scalp engines keep their fixed +0.5R rule. Default {BREAKEVEN_TRIGGER_R_DEFAULT}R · 0 = TP1-only.</div>
+                    <div className="grid grid-cols-2 gap-3 items-end">
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="breakeven_trigger_r" label="BREAK-EVEN AT" suffix="× R" step={0.1} min={0} max={5} fallback={BREAKEVEN_TRIGGER_R_DEFAULT} />
+                        <label className="flex items-center gap-2 font-mono text-[10px] text-white/80 cursor-pointer" data-testid="breakeven-enabled-toggle">
+                            <input type="checkbox" checked={cfg.breakeven_enabled ?? true} onChange={(e) => setCfg({ ...cfg, breakeven_enabled: e.target.checked })} />
+                            BREAK-EVEN RULE {(cfg.breakeven_enabled ?? true) ? "ON" : "OFF"}
+                        </label>
                     </div>
                 </div>
 

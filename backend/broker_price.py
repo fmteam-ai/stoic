@@ -23,10 +23,23 @@ def _epoch_ms(ts) -> float | None:
         return None
 
 
-def from_report(trade: dict, now_ms: float | None = None) -> dict | None:
-    """Broker snapshot carried on the trade doc (live_price / live_bid / live_ask + live_at)."""
+def ea_at_least(ea_version, major: int, minor: int) -> bool:
+    try:
+        parts = str(ea_version or "0").split(".")
+        return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 0) >= (major, minor)
+    except (TypeError, ValueError):
+        return False
+
+
+def from_report(trade: dict, now_ms: float | None = None, ea_version=None) -> dict | None:
+    """Broker snapshot carried on the trade doc (live_price / live_bid / live_ask + live_price_at).
+    #47 — `live_at` is refreshed by EVERY heartbeat (R-6 volume), also by EAs that report no current_price: a
+    live_price paired only with legacy `live_at` is treated as fresh ONLY when the EA is ≥ 1.66 (reports a price on
+    every heartbeat); otherwise `live_price_at` (v1.60.53 receive stamp) is required."""
     price = trade.get("live_price")
-    at = _epoch_ms(trade.get("live_price_at") or trade.get("live_at"))
+    at = _epoch_ms(trade.get("live_price_at"))
+    if at is None and ea_at_least(ea_version, 1, 66):
+        at = _epoch_ms(trade.get("live_at"))
     if price is None or at is None:
         return None
     now_ms = now_ms if now_ms is not None else datetime.now(timezone.utc).timestamp() * 1000.0
@@ -58,11 +71,11 @@ def management_price(snap: dict, action: str) -> tuple[float, str]:
 
 
 def for_trade(trade: dict, scalp_tick: dict | None = None, now_ms: float | None = None,
-              fresh_ms: int | None = None) -> dict:
+              fresh_ms: int | None = None, ea_version=None) -> dict:
     """{price, bid, ask, age_ms, source, fresh, used, note}. Never falls back to web quotes: stale/missing →
     fresh=False and the caller skips this management cycle."""
     fresh_ms = FRESH_MS if fresh_ms is None else fresh_ms
-    broker = from_report(trade, now_ms)
+    broker = from_report(trade, now_ms, ea_version)
     tick = from_scalp_tick(scalp_tick, now_ms)
     cands = [c for c in (broker, tick) if c]
     if broker and broker["age_ms"] <= fresh_ms:

@@ -215,18 +215,20 @@ DEFAULT_BE_TRIGGER_PIPS = 100        # move SL to entry at +100 pips
 
 
 async def _breakeven_trigger_r(db, trade: dict, cfg: dict, current: float, pips_up: float) -> bool:
-    """Stop to entry once pips_up ≥ breakeven_trigger_r × sl_pips (0 / missing = disabled). Returns True when it
-    acted or deliberately deferred (clamp) — the tiers run next cycle. Never loosens, never re-arms."""
-    try:
-        trigger_r = float(cfg.get("breakeven_trigger_r") or 0)
-    except (TypeError, ValueError):
-        return False
+    """Stop to entry + round-trip costs once pips_up ≥ breakeven_trigger_r × sl_pips. #46: the trigger comes from
+    models.effective_breakeven_trigger_r (shared default 1.0R, breakeven_enabled honoured, 0 = disabled) and the stop
+    sits on the profitable side of entry by spread + commission (scalp_breakeven_sl) so a BE fill nets ≥ 0.
+    Returns True when it acted or deliberately deferred (clamp) — the tiers run next cycle. Never loosens, never re-arms."""
+    from models import effective_breakeven_trigger_r
+    trigger_r = effective_breakeven_trigger_r(cfg)
     if trigger_r <= 0 or trade.get("breakeven_set") or trade.get("be_target_sl") or trade.get("tp1_closed"):
         return False
     sl_pips, *_ = _trade_targets(trade)
     if sl_pips <= 0 or pips_up < trigger_r * sl_pips:
         return False
-    entry = round(float(trade.get("entry_price") or 0), 5)
+    entry = scalp_breakeven_sl(trade)          # entry ± (spread + commission) on the profitable side
+    if pips_up <= scalp_cost_pips(trade):
+        return False                           # not yet past costs — a BE stop here would still be a loss
     be_sl = tightened_sl(trade, entry)
     if be_sl is None:
         return False          # stop already at/beyond entry — nothing to tighten (not a refusal worth recording)
@@ -235,7 +237,7 @@ async def _breakeven_trigger_r(db, trade: dict, cfg: dict, current: float, pips_
     stamped = await stamp_pending_modification(
         db, _free_slot_filter(trade["_id"]),
         {"type": "MODIFY_SL", "new_sl": be_sl, "reason": "breakeven_trigger_r"},
-        {"be_target_sl": be_sl, "be_rule": f"breakeven_trigger_r:{trigger_r:g}",
+        {"be_target_sl": be_sl, "be_rule": f"breakeven_trigger_r:{trigger_r:g}", "be_cost_pips": round(scalp_cost_pips(trade), 2),
          "be_armed_at": datetime.now(timezone.utc).isoformat(), "be_armed_pips": round(pips_up, 1)})
     if stamped is None:
         return True
@@ -273,7 +275,14 @@ def _trade_targets(trade: dict) -> tuple:
 async def _broker_snapshot(trade: dict) -> dict:
     """broker_price.for_trade with the scalp tick fallback — the single price seam for live tier management."""
     import broker_price as _bp
-    return _bp.for_trade(trade, await _scalp_tick_for(trade))
+    ea_version = None
+    try:
+        from protection_guard import find_account
+        acc, _ = await find_account(get_db(), str(trade.get("account_id") or ""))
+        ea_version = (acc or {}).get("ea_version")
+    except Exception:  # noqa: BLE001 — unknown EA version → strict (live_price_at required)
+        pass
+    return _bp.for_trade(trade, await _scalp_tick_for(trade), ea_version=ea_version)
 
 
 async def _scalp_tick_for(trade: dict) -> dict | None:
@@ -296,9 +305,13 @@ async def _management_skipped_pulse(db, trade: dict, cfg: dict, snap: dict) -> N
     """One pulse per trade per 5 min: 'broker price stale — management skipped'."""
     import time as _t
     tid = str(trade.get("_id"))
-    if _t.time() - _skip_pulse_at.get(tid, 0) < 300:
+    now_t = _t.time()
+    if now_t - _skip_pulse_at.get(tid, 0) < 300:
         return
-    _skip_pulse_at[tid] = _t.time()
+    _skip_pulse_at[tid] = now_t
+    if len(_skip_pulse_at) > 500:                       # #47 — prune: closed trades never come back
+        for k in [k for k, v in _skip_pulse_at.items() if now_t - v > 3600]:
+            _skip_pulse_at.pop(k, None)
     age = snap.get("age_ms")
     try:
         from bot_runner import _record_pulse

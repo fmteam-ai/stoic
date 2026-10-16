@@ -1720,13 +1720,14 @@ class ScalpRunner:
         # stack on a main-bot XAUUSD BUY (or vice versa). Same atomic reservation as bot_runner; released once the
         # trade row exists (it then counts itself) or on any refusal / failure.
         from user_direction_cap import reserve_user_direction, release_user_direction, user_direction_cap_for
-        from pip_utils import symbol_match
+        from pip_utils import symbol_match, base_symbol as _base_symbol
         from intelligence_counters import increment as inc_intel_counter
         _udc_res = None
         _udc_cap = await user_direction_cap_for(db, self.user_id, self.account_id)
         if _udc_cap > 0:
             _udc_res, _udc_occ = await reserve_user_direction(
-                db, user_id=self.user_id, base_symbol=self.symbol, action=decision["direction"], cap=_udc_cap,
+                db, user_id=self.user_id, base_symbol=_base_symbol(self.symbol) or self.symbol,   # #47 — GOLD# → XAUUSD
+                action=decision["direction"], cap=_udc_cap,
                 account_id=self.account_id, symbol_match_q=symbol_match(self.symbol))
             if _udc_res is None:
                 await release_broker_submission_slot(db, slot)

@@ -25,7 +25,7 @@ PRESET_FIELD_WHITELIST = {
     "trade_of_day_cap", "max_concurrent_trades",
     "trailing_enabled", "trailing_start_r", "trailing_distance_r",
     "partial_close_enabled", "partial_close_trigger_r", "partial_close_fraction",
-    "breakeven_trigger_r",
+    "breakeven_enabled", "breakeven_trigger_r",
     "sl_cooldown_enabled", "sl_cooldown_minutes",
     "pre_news_protect_enabled", "pre_news_protect_minutes",
     "anti_tilt_enabled", "anti_tilt_consecutive_losses", "anti_tilt_freeze_hours",

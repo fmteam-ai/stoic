@@ -203,6 +203,52 @@ async def _acknowledge_close(db, trade, *, broker_deal_id, occurred_at, result, 
     return ack
 
 
+def close_in_flight(trade: dict) -> bool:
+    """#48 — True only when the terminal has ACKED the outstanding close (it is executing it). A bare
+    `close_requested` flag without a successful terminal ack is NOT in flight and must not stop panic /
+    friday_flat / eod_flatten from taking over with their own fenced FULL_CLOSE."""
+    cmd = trade.get("close_command") or {}
+    ack = cmd.get("terminal_ack") or {}
+    return bool(trade.get("close_requested")) and cmd.get("state") == "requested" and bool(ack.get("success"))
+
+
+async def mandatory_close(db, trade: dict, *, reason: str, actor: str, stamp: dict | None = None,
+                          now: datetime | None = None, full_close: bool = True) -> str:
+    """#48 — issue a MANDATORY close (friday_flat / eod_flatten / protection) that takes over any unacked request
+    and re-issues itself with backoff until the position is confirmed closed.
+    Returns: "in_flight" (terminal already executing a close — leave it), "backoff" (our own request is pending,
+    not due yet), "issued" (first command or takeover), "reissued" (re-dispatch of our own unconfirmed command)."""
+    from close_watchdog import redispatch_due
+    now = now or datetime.now(timezone.utc)
+    if close_in_flight(trade):
+        return "in_flight"
+    cmd = trade.get("close_command") or {}
+    own_pending = bool(trade.get("close_requested")) and cmd.get("state") == "requested" and cmd.get("reason") == reason
+    rd = trade.get("close_redispatch") or {}
+    count = int(rd.get("count") or 0)
+    if own_pending:
+        last = _parse(rd.get("last_at")) or _parse(cmd.get("requested_at")) or now
+        if not redispatch_due(count, (now - last).total_seconds()):
+            return "backoff"
+    pm = {"type": "FULL_CLOSE", "reason": reason, "requested_at": now.isoformat()} if full_close else None
+    st = dict(stamp or {})
+    if own_pending:
+        st["close_redispatch"] = {"count": count + 1, "last_at": now.isoformat(), "of": cmd.get("key")}
+    res = await request_close(db, {"_id": trade["_id"]}, reason=reason, actor=actor, stamp=st,
+                              pending_modification=pm, emergency=True)
+    if not res.get("trades_marked_for_close"):
+        return "gone"
+    return "reissued" if own_pending else "issued"
+
+
+def _parse(v):
+    try:
+        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
 async def record_terminal_ack(db, trade: dict, *, success: bool, error: str | None = None,
                               terminal: bool = False, at: str | None = None) -> dict | None:
     """#43 (b) — the EA acknowledged (or failed) the trade's outstanding close command: stamp `terminal_ack`

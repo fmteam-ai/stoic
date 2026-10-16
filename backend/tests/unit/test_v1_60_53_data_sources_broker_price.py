@@ -191,7 +191,7 @@ def test_broker_price_direction_correct_fresh_fallback_and_skip():
     assert snap["fresh"] and snap["source"] == "broker" and snap["price"] == 4000.3 and snap["used"] == "bid" and snap["age_ms"] == 5000
     sell = {**buy, "action": "SELL"}
     assert bp.for_trade(sell, now_ms=now_ms)["price"] == 4000.7 and bp.for_trade(sell, now_ms=now_ms)["used"] == "ask"
-    only = {"action": "BUY", "live_price": 4000.5, "live_at": at}                          # legacy: current_price only
+    only = {"action": "BUY", "live_price": 4000.5, "live_price_at": at}                    # current_price only (no bid/ask)
     s2 = bp.for_trade(only, now_ms=now_ms)
     assert s2["price"] == 4000.5 and s2["used"] == "current_price" and "current_price" in s2["note"]
     stale = {**buy, "live_price_at": datetime.fromtimestamp((now_ms - 40000) / 1000, tz=timezone.utc).isoformat()}
@@ -211,7 +211,7 @@ def test_broker_price_direction_correct_fresh_fallback_and_skip():
 def test_trade_manager_uses_broker_price_and_paper_path_unchanged():
     tm = open(os.path.join(BACKEND, "trade_manager.py")).read()
     body = tm[tm.index("async def _manage_one_trade"):]
-    assert "snap = await _broker_snapshot(trade)" in body and "_bp.for_trade(trade, await _scalp_tick_for(trade))" in tm
+    assert "snap = await _broker_snapshot(trade)" in body and "_bp.for_trade(trade, await _scalp_tick_for(trade), ea_version=ea_version)" in tm
     assert 'if not snap.get("fresh"):' in body and "_management_skipped_pulse" in body
     assert "get_quote(" not in body, "live tier management never calls the web quote"
     assert "broker price stale — management skipped" in tm
