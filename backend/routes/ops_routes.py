@@ -742,6 +742,25 @@ async def config_drift(request: Request, days: int = 7):
     return {"days": days, "events": events, "users": len(users), "last_at": last, "fields": top}
 
 
+@router.get("/ops/risk-regime")
+async def risk_regime_card(request: Request):
+    """v1.60.53 (B5) — advisory risk regime card: score, components, top drivers, last update. SHADOW — not
+    affecting trades. Also Finnhub + GVZ/VIX status so Bot Health can show 'not configured' / stale (info/amber)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    from risk_regime import latest_advisory
+    from providers.finnhub import status as finnhub_status
+    from macro.fred import vol_context
+    adv = await latest_advisory(db)
+    fred = await db.fred_cache.find_one({"_id": "snapshot"}, {"payload.series": 1})
+    series = ((fred or {}).get("payload") or {}).get("series") or {}
+    return {"advisory": adv, "shadow": True, "note": "SHADOW — not affecting trades",
+            "geo_risk_gate_enabled_default": False, "finnhub": finnhub_status(),
+            "vol": {**vol_context(series), "GVZCLS": series.get("GVZCLS"), "VIXCLS": series.get("VIXCLS")}}
+
+
 @router.get("/ops/news-sources")
 async def news_sources(request: Request):
     """v1.60.39 — calendar ✓ / RSS+AI ✓ / NewsAPI off. Status is read from platform_state.news_sources (written by

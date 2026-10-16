@@ -252,26 +252,41 @@ async def calculate_var(
 STOP_GAP_FACTOR = float(os.environ.get("PORTFOLIO_VAR_STOP_GAP_FACTOR", "1.5"))
 
 
+def open_risk_usd(position: dict, notional: float | None = None) -> float | None:
+    """v1.60.52 (#37) — distance-to-stop risk of ONE position in USD (no gap factor): |entry − stop| / entry × notional.
+    0.0 when the stop sits at or beyond breakeven (BUY stop ≥ entry, SELL stop ≤ entry — zero open risk);
+    None when there is no usable stop (then only the parametric figure can describe it)."""
+    entry = float(position.get("entry_price") or 0)
+    lot = float(position.get("lot_size") or 0)
+    if entry <= 0 or lot <= 0:
+        return None
+    try:
+        sl = float(position.get("stop_loss") or 0)
+    except (TypeError, ValueError):
+        return None
+    if sl <= 0:
+        return None
+    side = str(position.get("action") or position.get("side") or "").upper()
+    if (side in ("BUY", "LONG") and sl >= entry) or (side in ("SELL", "SHORT") and sl <= entry):
+        return 0.0
+    if notional is None:
+        from instruments import notional_usd
+        notional = notional_usd(base_symbol(position.get("symbol")), lot, entry)
+    return abs(entry - sl) / entry * float(notional)
+
+
 def _stop_bounded_loss_usd(positions: list[dict], rows: list[dict]) -> float | None:
-    """Pure — Σ |entry − stop| / entry × notional × gap factor over the priced rows, or None when any priced position
-    has no (valid, loss-side) stop: then the parametric figure stands unbounded."""
+    """Pure — Σ open_risk_usd × gap factor over the priced rows, or None when any priced position has no usable stop:
+    then the parametric figure stands unbounded. v1.60.52 (#37): a stop at/beyond breakeven counts as ZERO risk
+    (it used to return None → unbounded parametric VaR → a protected scratch was closed as 'var_cap')."""
     priced = [p for p in positions if float(p.get("lot_size") or 0) > 0 and float(p.get("entry_price") or 0) > 0
               and base_symbol(p.get("symbol"))]
     if len(priced) != len(rows) or not priced:
         return None
     total = 0.0
     for p, r in zip(priced, rows):
-        entry = float(p.get("entry_price") or 0)
-        try:
-            sl = float(p.get("stop_loss") or 0)
-        except (TypeError, ValueError):
+        risk = open_risk_usd(p, r["notional"])
+        if risk is None:
             return None
-        if sl <= 0 or sl == entry:
-            return None
-        side = str(p.get("action") or p.get("side") or "").upper()
-        if side in ("BUY", "LONG") and sl > entry:
-            return None
-        if side in ("SELL", "SHORT") and sl < entry:
-            return None
-        total += abs(entry - sl) / entry * float(r["notional"])
+        total += risk
     return total * STOP_GAP_FACTOR

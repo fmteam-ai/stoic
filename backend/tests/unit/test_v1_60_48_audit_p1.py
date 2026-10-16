@@ -108,7 +108,8 @@ def test_breakeven_scratches_are_not_streak_losses():
 
 
 def test_anti_tilt_and_learning_freeze_use_streak_losses():
-    assert "is_streak_loss(r) for r in recent" in open(os.path.join(BACKEND, "bot_runner.py")).read()
+    assert "anti_tilt_evaluate(db, user_id, cfg)" in open(os.path.join(BACKEND, "bot_runner.py")).read()   # #39 shared helper
+    assert "all(r[\"counts_as_loss\"] for r in judged)" in open(os.path.join(BACKEND, "anti_tilt.py")).read()
     lp = open(os.path.join(BACKEND, "learning_pipeline.py")).read()
     assert "is_streak_loss(t) for t in recent" in lp and "STREAK_FIELDS" in lp
 

@@ -50,6 +50,26 @@ def spec(symbol: str) -> dict:
             "pip_size": pip_size(base), "min_lot": 0.01, "lot_step": 0.01}
 
 
+def known_contract_size(symbol: str, account: dict | None = None) -> float | None:
+    """#40 — contract size for R / risk math. Broker-reported spec (EA `symbol_specs`, keyed by BASE symbol) first,
+    then the instrument table (forex 100,000, XAU 100, XAG 5,000). None when unknown — callers must NOT fall back
+    to 1 (GOLD# / XAUUSD+ read as contract 1 → R ×100 → every scratch clamped to −10R)."""
+    base = base_symbol((symbol or "").upper())
+    if not base:
+        return None
+    spec_cs = (((account or {}).get("symbol_specs") or {}).get(base) or {}).get("contract_size")
+    try:
+        if spec_cs is not None and float(spec_cs) > 0:
+            return float(spec_cs)
+    except (TypeError, ValueError):
+        pass
+    if base in SPECS:
+        return SPECS[base]["contract_size"]
+    if _is_fx(base):
+        return FX_CONTRACT_UNITS
+    return None
+
+
 def notional_usd(symbol: str, lot: float, price: float) -> float:
     base = base_symbol((symbol or "").upper())
     lot = float(lot or 0)

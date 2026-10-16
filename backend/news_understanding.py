@@ -101,7 +101,8 @@ def _parse_rss(xml_text: str, source: str) -> list:
             iso = parsedate_to_datetime(pub).astimezone(timezone.utc).isoformat()
         except (ValueError, TypeError):
             pass
-        out.append({"title": title, "source": source, "publishedAt": iso})
+        out.append({"title": title, "source": source, "publishedAt": iso,
+                    "url": (item.findtext("link") or "").strip() or None})
     return out
 
 
@@ -152,15 +153,46 @@ async def fetch_market_news(base: str, limit: int = MAX_HEADLINES) -> list:
         seen.add(title.lower())
         out.append({"title": title,
                     "source": (a.get("source") or {}).get("name") or "",
-                    "publishedAt": a.get("publishedAt") or ""})
+                    "publishedAt": a.get("publishedAt") or "", "url": a.get("url")})
     for a in rss:
         if a["title"].lower() not in seen:
             seen.add(a["title"].lower())
             out.append(a)
+    # v1.60.53 (A5) — Finnhub forex/general news, deduped by URL/title hash, relevance pre-filtered (LLM cost)
+    finnhub_items = 0
+    try:
+        from providers import finnhub as _fh
+        if _fh.configured():
+            cached = _finnhub_news_cached()
+            if cached is None:
+                cached = await _fh.fetch_news()
+                _finnhub_cache.update({"items": cached, "at": datetime.now(timezone.utc).timestamp()})
+            known = {_fh.news_fingerprint({"title": t}) for t in seen}
+            for it in _fh.dedupe([i for i in cached if i.get("relevant")], known):
+                if it["title"].lower() in seen:
+                    continue
+                seen.add(it["title"].lower())
+                out.append({"title": it["title"], "source": it["source"], "publishedAt": it.get("published_at") or "",
+                            "currencies": it.get("currencies") or [], "url": it.get("url")})
+                finnhub_items += 1
+    except Exception as e:  # noqa: BLE001 — advisory feed never breaks the wire
+        logger.debug("finnhub news skipped: %s", e)
     _status.update({"last_fetch_at": datetime.now(timezone.utc).isoformat(), "rss_items": len(rss),
-                    "newsapi_items": len(macro) + len(geo) + len(asset), "headlines": min(len(out), limit),
+                    "newsapi_items": len(macro) + len(geo) + len(asset), "finnhub_items": finnhub_items,
+                    "headlines": min(len(out), limit),
                     "last_error": None if out else "no headlines returned by RSS wire"})
     return out[:limit]
+
+
+_finnhub_cache: dict = {"items": None, "at": 0.0}
+
+
+def _finnhub_news_cached() -> list | None:
+    """Finnhub news is polled at most every NEWS_INTERVAL_SEC (2 min) regardless of how many symbols ask."""
+    from providers.finnhub import NEWS_INTERVAL_SEC
+    if _finnhub_cache["items"] is not None and datetime.now(timezone.utc).timestamp() - _finnhub_cache["at"] < NEWS_INTERVAL_SEC:
+        return _finnhub_cache["items"]
+    return None
 
 
 def _recency_weight(published_at: str, now: datetime) -> float:
@@ -274,6 +306,11 @@ async def get_news_understanding(base: str) -> dict | None:
         await _persist_status(base, None)
         return None
     snap["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    # #41 — keep the scored items (not only the top-3 drivers) so the Market Intelligence card can list them
+    snap["items"] = [{"title": it["title"][:160], "source": it.get("source", ""), "publishedAt": it.get("publishedAt"),
+                      "url": it.get("url"), "score": it.get("score"), "why": it.get("why", ""),
+                      "currencies": it.get("currencies") or []}
+                     for it in sorted(items, key=lambda x: abs(x.get("score") or 0), reverse=True)[:12]]
     _status["last_scored_at"] = snap["fetched_at"]
     _cache[base] = (now + CACHE_TTL, snap)
     await _persist_status(base, snap)

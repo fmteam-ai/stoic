@@ -89,10 +89,10 @@ class ScalpConfigRequest(BaseModel):
 
 @router.post("/config")
 async def set_config(req: ScalpConfigRequest, user=Depends(get_current_user)):
-    from scalp.instruments import approved
+    from scalp.instruments import APPROVED, approved
     if approved(req.symbol) is None:
         raise HTTPException(status_code=422,
-                            detail=f"{req.symbol} is not in the approved scalp universe (EURUSD only)")
+                            detail=f"{req.symbol} is not in the approved scalp universe ({', '.join(sorted(APPROVED))})")
     if req.mode not in ("shadow", "demo_live"):
         raise HTTPException(status_code=422, detail="mode must be shadow or demo_live")
     if req.mode == "demo_live" and not req.confirm_live:

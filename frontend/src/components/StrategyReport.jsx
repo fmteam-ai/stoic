@@ -133,6 +133,19 @@ export function StrategyReport() {
                         </div>
                     </div>
                 ))}
+                {d?.risk_off_buckets && (
+                    <div className="border border-[#1F1F1F] p-3" data-testid="strategy-report-risk-off">
+                        <div className="font-mono text-[9px] text-[#52525B] tracking-widest mb-1">RISK-OFF SCORE AT ENTRY (SHADOW · ADVISORY) · WIN RATE / EXPECTANCY R BY BUCKET</div>
+                        <div className="grid grid-cols-4 gap-2">
+                            {d.risk_off_buckets.map((b) => (
+                                <div key={b.bucket} className="font-mono text-[10px]" data-testid={`strategy-report-risk-off-${b.bucket}`}>
+                                    <div className="text-[#A1A1AA] uppercase">{b.bucket} <span className="text-[#52525B]">n={b.n}</span></div>
+                                    <div className="text-[#E4E4E7]">{b.win_rate == null ? "—" : `${b.win_rate}%`} · {b.expectancy_r == null ? "—" : `${b.expectancy_r}R`}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
                 {d && <div className="font-mono text-[9px] text-[#52525B]">{d.dedupe}</div>}
             </div>
         </div>

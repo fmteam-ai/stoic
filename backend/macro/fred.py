@@ -27,7 +27,9 @@ from database import get_db
 
 logger = logging.getLogger("fred")
 
-SERIES = ["DFF", "DGS10", "UNRATE", "T10YIE", "VIXCLS"]
+SERIES = ["DFF", "DGS10", "UNRATE", "T10YIE", "VIXCLS", "GVZCLS"]   # v1.60.53 — GVZ (CBOE gold vol) added
+VOL_SERIES = ("VIXCLS", "GVZCLS")
+VOL_STALE_TRADING_DAYS = 4            # v1.60.53 (C4) — same idea as the DXY 48 h rule: ignore values older than 4 trading days
 CACHE_TTL_HOURS = 6
 FAIL_BACKOFF_MIN = int(os.environ.get("FRED_FAIL_BACKOFF_MIN", "10"))
 HTTP_TIMEOUT = float(os.environ.get("FRED_HTTP_TIMEOUT", "10"))
@@ -144,6 +146,55 @@ def _classify(series_id: str, latest: float, prev30: float | None) -> str:
     return "neutral"
 
 
+def vol_regime(values: list[float]) -> dict:
+    """v1.60.53 (C2) — level, 20-day percentile, 5-day change → calm / normal / elevated / stressed. Pure."""
+    vals = [float(v) for v in values if v is not None]
+    if not vals:
+        return {"vol_regime": None}
+    level = vals[-1]
+    window = vals[-20:]
+    pct20 = round(100.0 * sum(1 for v in window if v <= level) / len(window), 1)
+    chg5 = round(level - vals[-6], 3) if len(vals) >= 6 else None
+    if pct20 >= 90 or (chg5 is not None and len(vals) >= 6 and vals[-6] > 0 and chg5 / vals[-6] >= 0.25):
+        regime = "stressed"
+    elif pct20 >= 70:
+        regime = "elevated"
+    elif pct20 <= 25:
+        regime = "calm"
+    else:
+        regime = "normal"
+    return {"vol_regime": regime, "pct_20d": pct20, "change_5d": chg5, "level": round(level, 3)}
+
+
+def vol_series_stale(entry: dict | None, now: datetime | None = None) -> bool:
+    """v1.60.53 (C4) — a VIX/GVZ observation older than VOL_STALE_TRADING_DAYS trading days is ignored (amber)."""
+    if not entry or not entry.get("date"):
+        return True
+    try:
+        d = datetime.strptime(str(entry["date"]), "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return True
+    now = now or datetime.now(timezone.utc)
+    days, cur = 0, d
+    while cur.date() < now.date():
+        cur += timedelta(days=1)
+        if cur.weekday() < 5:
+            days += 1
+    return days > VOL_STALE_TRADING_DAYS
+
+
+def vol_context(series: dict | None, now: datetime | None = None) -> dict:
+    """gvz_regime / vix_regime for entry_context + risk_off_score — None when missing or stale."""
+    out = {}
+    for sid, key in (("GVZCLS", "gvz"), ("VIXCLS", "vix")):
+        e = (series or {}).get(sid)
+        stale = vol_series_stale(e, now)
+        out[f"{key}_regime"] = None if stale else (e or {}).get("vol_regime")
+        out[f"{key}_level"] = None if stale else (e or {}).get("value")
+        out[f"{key}_stale"] = stale if e else None
+    return out
+
+
 def _fresh(doc: dict | None, hours: float) -> bool:
     """A snapshot is fresh only when it is recent AND carries at least one series — an EMPTY payload (pre-v1.60.31
     cache rows, or a bad write) must never satisfy the 6 h TTL and suppress a refetch."""
@@ -209,6 +260,8 @@ async def get_macro_snapshot() -> dict:
                 "delta_30d": round(latest_val - prev_val, 3) if prev_val is not None else None,
                 "regime": _classify(s, latest_val, prev_val),
             }
+            if s in VOL_SERIES:
+                out["series"][s].update(vol_regime([v for _, v in rows]))   # v1.60.53 (C2) advisory regime
         except Exception as e:  # noqa: BLE001
             # never log str(e) of an httpx error: the request URL would carry the API key
             msg = str(e) if isinstance(e, FredError) else f"{type(e).__name__}"
@@ -239,4 +292,5 @@ async def get_macro_snapshot() -> dict:
     return {**out, "stale": False}
 
 
-__all__ = ["get_macro_snapshot", "fetch_series", "api_key", "transport", "FredError", "SERIES"]
+__all__ = ["get_macro_snapshot", "fetch_series", "api_key", "transport", "FredError", "SERIES", "vol_regime",
+           "vol_series_stale", "vol_context", "VOL_SERIES"]

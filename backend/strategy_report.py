@@ -199,4 +199,7 @@ async def strategy_report(db, user_id: str, days: int = 30) -> dict:
     deferred = await db.trade_decisions.find(
         {"user_id": user_id, "status": "deferred", "ts": {"$gte": since}},
         {"ts": 1, "symbol": 1, "signal.scope": 1, "signal.action": 1, "signal.symbol": 1, "shadow": 1}).to_list(length=5000)
-    return build_report(decisions_from(trades, signals), days, deferred)
+    report = build_report(decisions_from(trades, signals), days, deferred)
+    from risk_regime import bucket_evaluation
+    report["risk_off_buckets"] = bucket_evaluation(trades)      # v1.60.53 (B6) — shadow evaluation, advisory
+    return report

@@ -84,7 +84,7 @@ async def sweep_once() -> dict:
         sym = (t.get("symbol") or "BTCUSD").upper()
         if sym not in quote_cache:
             try:
-                quote_cache[sym] = await get_quote(sym)
+                quote_cache[sym] = await get_quote(sym, allow_stale=False)   # v1.60.52 — never fire on a stale price
             except Exception:
                 continue
         price = quote_cache[sym].get("price")

@@ -215,7 +215,7 @@ def test_two_sweepers_one_claim_and_authority_suppression(world, monkeypatch):
         calls.append(act["type"])
         return {"ok": True}
 
-    async def _quote(sym):
+    async def _quote(sym, **_kw):   # v1.60.52 — sweeper passes allow_stale=False
         return {"price": 90.0}
 
     async def _blocked(db_, uid_, fresh=False):

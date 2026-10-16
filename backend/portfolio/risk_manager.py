@@ -72,6 +72,31 @@ HIGH_CORR_THRESHOLD = _f("PORTFOLIO_HIGH_CORR_THRESHOLD", 0.70)
 VAR_CAP_PCT = _f("PORTFOLIO_VAR_CAP_PCT", 5.0)
 
 
+def _open_risk(position: dict) -> float | None:
+    from portfolio.var import open_risk_usd
+    return open_risk_usd(position)
+
+
+def var_cap_exempt_reason(open_positions: list[dict], equity: float, cfg: dict | None) -> str | None:
+    """v1.60.52 (#37) — why the var_cap trigger must NOT deleverage this book (None = it may).
+    • every position has zero open risk (stops at/beyond breakeven)            → nothing to de-risk
+    • exactly one position and its distance-to-stop risk ≤ the per-trade cap   → the trade is inside its own budget"""
+    live = [p for p in open_positions if (p.get("status") or "open") in ("open", "pending")]
+    if not live:
+        return None
+    risks = [_open_risk(p) for p in live]
+    if all(r == 0.0 for r in risks):
+        return "all open positions have their stop at/beyond breakeven (zero open risk)"
+    if len(live) == 1 and risks[0] is not None and equity > 0:
+        from rules_policy import effective_max_risk_pct
+        cap_pct = effective_max_risk_pct(cfg or {"risk_level": "low"})
+        risk_pct = risks[0] / equity * 100.0
+        if cap_pct > 0 and risk_pct <= cap_pct + 1e-9:
+            return (f"single position with distance-to-stop risk {risk_pct:.2f}% of equity within the per-trade cap "
+                    f"{cap_pct:g}%")
+    return None
+
+
 async def _sector_exposure(positions: list[dict], equity: float,
                            caps: dict | None = None) -> dict:
     """Group notional by sector. Returns {sector: {notional, pct_equity, positions: [...]}}
@@ -221,6 +246,13 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
                 "reason": "auto_deleverage_combined_corr",
             })
 
+    # v1.60.52 (#37) — 16 Oct: a single 0.04-lot XAUUSD BUY with its stop already at breakeven was closed as
+    # 'var_cap' for −$1.41. Positions with ZERO open risk (stop at/beyond breakeven) are never deleverage candidates,
+    # and a lone position inside the per-trade risk cap is never deleveraged.
+    var_exempt = var_cap_exempt_reason(open_positions, equity, cfg)
+    if var_breach and var_exempt:
+        var_breach = False
+        var.setdefault("notes", []).append(f"var_cap deleverage skipped: {var_exempt}")
     if var_breach:
         triggers.append("var_cap")
         # Close the symbol with the largest weight × atr% contribution.
@@ -236,7 +268,8 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
                 # fix). The previous "first match" pick closed arbitrary
                 # positions and showed up as -$362 avg late-loser closes.
                 matches = [p for p in open_positions
-                           if (p.get("symbol") or "").upper() == r["symbol"]]
+                           if (p.get("symbol") or "").upper() == r["symbol"]
+                           and _open_risk(p) != 0.0]              # zero-risk (BE) positions are not candidates
                 if not matches:
                     continue
                 if any(p.get("live_pnl") for p in matches):

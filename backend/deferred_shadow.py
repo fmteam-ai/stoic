@@ -233,11 +233,19 @@ def _legacy_q(user_id: str) -> dict:
                     {"shadow.label_version": {"$lt": LABEL_VERSION}}]}
 
 
+M15_FIRST_BAR_MAX_GAP_SEC = 900                 # v1.60.52 — the first M15 bar must start within 15 min of the decision
+
+
 async def _m15_after(db, user_id: str, base: str, epoch: float, cache: dict) -> list:
+    """M15 bars after the decision. Empty when the first available bar starts more than 15 min later (v1.60.52):
+    a tape that begins hours after the decision cannot say what happened at the entry."""
     if base not in cache:
         doc = await db.intraday_candles.find_one({"user_id": user_id, "symbol": base, "timeframe": "M15"}, {"bars": 1})
         cache[base] = (doc or {}).get("bars") or []
-    return [b for b in cache[base] if int(b.get("t") or 0) > epoch]
+    after = [b for b in cache[base] if int(b.get("t") or 0) > epoch]
+    if after and int(after[0].get("t") or 0) - epoch > M15_FIRST_BAR_MAX_GAP_SEC:
+        return []
+    return after
 
 
 async def rescore_legacy_shadows(db, user_id: str, limit: int = 200, *, rescore_all: bool = False,
@@ -280,6 +288,9 @@ async def rescore_legacy_shadows(db, user_id: str, limit: int = 200, *, rescore_
                     sim, tf = replay_outcome(action, entry, sl, tp, after), "M15"
                     if sim and sim["outcome"] == "timeout" and len(after) < HORIZON_BARS:
                         sim = None
+        _valid_v2 = int(old.get("label_version") or 1) >= LABEL_VERSION and not old.get("invalid")
+        if sim and tf == "M15" and _valid_v2 and old.get("timeframe") == "M1":
+            sim = None                           # v1.60.52 — a valid v2 M1 label is never replaced by a coarse M15 one
         if sim:
             new = {**sim, "timeframe": tf, "direction": action, "label_version": LABEL_VERSION,
                    "resolved_at": now_iso, "utc_band": old.get("utc_band") or utc_band(d.get("ts")),
@@ -288,12 +299,13 @@ async def rescore_legacy_shadows(db, user_id: str, limit: int = 200, *, rescore_
                 new["coarse"] = True             # corrected direction, but M15 resolution — reported separately
             await db.trade_decisions.update_one({"_id": d["_id"]}, {"$set": {"shadow": new}})
             rescored += 1
-        elif int(old.get("label_version") or 1) >= LABEL_VERSION and not old.get("invalid"):
+        elif _valid_v2:
             kept += 1                            # valid v2 label whose tape has since expired — never downgrade
         else:
             await db.trade_decisions.update_one({"_id": d["_id"]}, {"$set": {
                 "shadow.timeframe": old.get("timeframe") or "M15", "shadow.label_version": LABEL_VERSION,
-                "shadow.invalid": True, "shadow.invalid_reason": "no bars after the decision — pre-v2 label unverifiable",
+                "shadow.invalid": True,
+                "shadow.invalid_reason": "no bars within 15 min of the decision — pre-v2 label unverifiable",
                 "shadow.rescored_from": origin}})
             tagged += 1
     return {"rescored": rescored, "tagged_m15": tagged, "kept": kept, "visited": len(rows),

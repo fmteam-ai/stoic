@@ -165,6 +165,11 @@ async def _analytics_loop():
         try:
             await asyncio.sleep(min(INTERVAL, REPAIR_EVERY))
             import time as _t
+            try:                                           # v1.60.53 (B) — advisory risk regime (GDELT 15 min / CB 2 min)
+                from risk_regime import tick as _rr_tick
+                await _rr_tick(get_db())
+            except Exception as _e:  # noqa: BLE001
+                logger.debug("risk regime tick failed: %s", _e)
             if _t.time() - last_repair >= REPAIR_EVERY:
                 await run_health_repairs_all(get_db())
                 last_repair = _t.time()

@@ -221,7 +221,7 @@ async def _fetch_events() -> list:
 FC_FEED = "https://www.financecalendar.com/wp-json/fc/v1/calendar"
 FC_ATTRIBUTION = {"source": "financecalendar.com", "url": "https://www.financecalendar.com",
                   "terms": "Free for any use with attribution (link to financecalendar.com)"}
-SOURCE_ORDER = ("forexfactory", "financecalendar")
+SOURCE_ORDER = ("finnhub", "forexfactory", "financecalendar")   # v1.60.53 — Finnhub PRIMARY, legacy feeds as fallback
 STALE_AFTER_SEC = 2 * 3600          # Bot Health alert: active source older than this
 FAILSAFE_AFTER_SEC = 6 * 3600       # both sources older than this → conservative default freeze
 _sources: dict = {name: {"events": None, "fetched_at": 0, "last_error": None} for name in SOURCE_ORDER}
@@ -324,6 +324,29 @@ def failsafe_events(now: float | None = None, days: int = 3) -> list:
     return out
 
 
+async def _fetch_finnhub() -> list | None:
+    """v1.60.53 — primary source. Disabled (no key) / plan-restricted / failed → None (last_error set, others kept)."""
+    from providers import finnhub
+    if not finnhub.configured():
+        raise RuntimeError("not configured")
+    evts = await finnhub.fetch_calendar()
+    if evts is None:
+        raise RuntimeError(finnhub.status().get("last_error") or "unavailable")
+    return evts
+
+
+def _ttl_sec(now: float) -> int:
+    """Cache TTL: Finnhub cadence (5 min / 30 s hot) when configured, the legacy 1 h otherwise."""
+    from providers import finnhub
+    return refresh_interval_sec(now) if finnhub.configured() else 3600
+
+
+def refresh_interval_sec(now: float | None = None) -> int:
+    """v1.60.53 — 30 s within ±10 min of a high-impact Finnhub event, else 5 min (worker cadence)."""
+    from providers import finnhub
+    return finnhub.calendar_interval_sec(_sources["finnhub"]["events"] or [], now)
+
+
 async def _refresh_source(name: str, fetch) -> None:
     st = _sources[name]
     try:
@@ -332,7 +355,8 @@ async def _refresh_source(name: str, fetch) -> None:
             raise RuntimeError("empty response")
         st["events"], st["fetched_at"], st["last_error"] = evts, time.time(), None
     except Exception as e:  # noqa: BLE001
-        st["last_error"] = f"{type(e).__name__}: {e}"
+        # v1.60.53 — the Finnhub provider reports plain states ("not configured", "unavailable") — no exception noise
+        st["last_error"] = str(e) if name == "finnhub" and isinstance(e, RuntimeError) else f"{type(e).__name__}: {e}"
 
 
 def _source_age(name: str, now: float) -> float | None:
@@ -363,9 +387,10 @@ def failsafe_active(now: float | None = None) -> bool:
 
 
 def _assemble(now: float) -> list:
+    fh = _sources["finnhub"]["events"] or []
     ff = _sources["forexfactory"]["events"] or []
     fc = _sources["financecalendar"]["events"] or []
-    merged = merge_events(ff, fc)
+    merged = merge_events(merge_events(fh, ff), fc)        # v1.60.53 — Finnhub rows win, legacy prints fill the gaps
     if failsafe_active(now):
         merged = merge_events(merged, failsafe_events(now))     # union: stale real prints + conservative defaults
     return merged
@@ -381,12 +406,18 @@ async def get_events() -> list:
             return _cache["events"]
         if await _load_shared_cache():                  # v1.60.43 — another process fetched recently: reuse, no refetch
             return _cache["events"]
+        await _refresh_source("finnhub", _fetch_finnhub)
         await _refresh_source("forexfactory", _fetch_events)
         await _refresh_source("financecalendar", _fetch_financecalendar)
         now = time.time()
         any_ok = any(_sources[n]["last_error"] is None and _sources[n]["events"] is not None for n in SOURCE_ORDER)
+        # #41 — a fresh process whose every fetch fails (ForexFactory 429 after a reload) must not serve an EMPTY
+        # calendar for 10 min while another process has a good copy: reuse the shared cache even past its TTL.
+        if not any_ok and not any(_sources[n]["events"] for n in SOURCE_ORDER) and await _load_shared_cache(ignore_ttl=True):
+            _cache["expires_at"] = now + 600
+            return _cache["events"]
         _cache["events"] = _assemble(now)
-        _cache["expires_at"] = now + (3600 if any_ok else 600)
+        _cache["expires_at"] = now + (_ttl_sec(now) if any_ok else 600)
         if any_ok:
             _cache["fetched_at"] = now
         _cache["last_error"] = None if any_ok else " | ".join(
@@ -400,7 +431,7 @@ async def get_events() -> list:
 SHARED_CACHE_ID = "economic_calendar_cache"
 
 
-async def _load_shared_cache() -> bool:
+async def _load_shared_cache(ignore_ttl: bool = False) -> bool:
     """v1.60.43 — the per-process 1 h cache made every API/worker process refetch after a restart at once
     (ForexFactory 429 on 15 Oct). The last successful fetch is kept in platform_state and reused by every process
     while it is younger than 1 h; the per-source state is restored so feed_status() stays truthful."""
@@ -413,7 +444,7 @@ async def _load_shared_cache() -> bool:
         return False
     now = time.time()
     fetched = float(doc.get("fetched_at") or 0)
-    if not fetched or now - fetched > 3600:
+    if not fetched or (not ignore_ttl and now - fetched > _ttl_sec(now)):
         return False
     for name in SOURCE_ORDER:
         src = (doc["sources"] or {}).get(name) or {}
@@ -463,7 +494,8 @@ def feed_status() -> dict:
     status = ("FAILSAFE" if fs else "DOWN" if not act else "STALE" if act_age and act_age > STALE_AFTER_SEC
               else "DEGRADED" if any(_sources[n]["last_error"] for n in SOURCE_ORDER) else "OK")
     return {
-        "provider": "ForexFactory (weekly XML) + Finance Calendar (JSON)",
+        "provider": "Finnhub (primary) + ForexFactory (weekly XML) + Finance Calendar (JSON)",
+        "finnhub": __import__("providers.finnhub", fromlist=["status"]).status(),
         "active_source": act,
         "sources": srcs,
         "stale": bool(act_age is not None and act_age > STALE_AFTER_SEC) or act is None,
@@ -508,6 +540,17 @@ async def upcoming_for(symbol: str, hours: int = 24, cfg: dict | None = None) ->
         if now <= ts <= cutoff:
             filtered.append(e)
     return sorted(filtered, key=lambda x: x["when_ts"])
+
+
+async def released_surprises(symbol: str, hours: int = 6, cfg: dict | None = None) -> list:
+    """v1.60.53 (A4) — ADVISORY: events relevant to `symbol` released in the last `hours` that carry an actual
+    (Finnhub rows): {title, country, impact, when, actual, forecast, surprise}. Never gates anything."""
+    events = await get_events()
+    now = time.time()
+    out = [{k: e.get(k) for k in ("title", "country", "impact", "when", "actual", "forecast", "previous", "surprise", "source")}
+           for e in relevant_events_for(symbol, events, cfg)
+           if e.get("actual") not in (None, "") and now - hours * 3600 <= float(e.get("when_ts") or 0) <= now]
+    return sorted(out, key=lambda x: x["when"] or "", reverse=True)
 
 
 async def macro_freeze_check(symbol: str, cfg: dict | None = None) -> dict:

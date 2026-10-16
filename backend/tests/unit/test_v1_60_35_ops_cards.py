@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from tests.unit.broker_price_stub import broker_snapshot_from_quote  # noqa: E402
 from bson import ObjectId
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -67,7 +68,7 @@ def test_refused_stop_loosen_is_recorded_once_per_trade_and_requested_sl():
     t = _trade()
     db.trades.rows.append(t)
     quote = AsyncMock(return_value={"price": 4000.0 - 0.1 * 120})
-    with patch.object(tm, "get_db", lambda: db), patch.object(tm, "get_quote", quote), patch.object(tm, "ws_manager") as ws, \
+    with patch.object(tm, "get_db", lambda: db), patch.object(tm, "_broker_snapshot", broker_snapshot_from_quote(quote)), patch.object(tm, "ws_manager") as ws, \
             patch("adaptive_exits.manage_exits", AsyncMock()):
         ws.broadcast = AsyncMock()
         for _ in range(3):                                   # three manager cycles → ONE audit entry

@@ -684,7 +684,7 @@ async def execute_manual_trade(payload: ManualTradeRequest,
             detail=f"Rate limit: max {rl['limit']} orders/min reached. Retry in {rl['retry_in_s']}s.",
         )
 
-    quote = await get_quote(payload.symbol)
+    quote = await get_quote(payload.symbol, allow_stale=False)   # v1.60.52 — SL/TP never derived from a stale price (→ 409)
     price = quote.get("price")
     if not price or price <= 0:
         raise HTTPException(status_code=502, detail=f"Could not get live quote for {payload.symbol}")

@@ -535,6 +535,13 @@ async def ensure_indexes():
         await _udc_idx(db)
     except Exception as e:  # noqa: BLE001
         logging.getLogger("seed").warning("user_direction_reservations indexes: %s", e)
+    try:                                                              # v1.60.53 — advisory risk regime stores
+        await db.geo_risk_history.create_index("expires_at", expireAfterSeconds=0)
+        await db.geo_risk_history.create_index([("region", 1), ("at", -1)])
+        await db.risk_regime_advisory.create_index([("at", -1)])
+        await db.central_bank_releases.create_index([("kind", 1), ("seen_at", -1)])
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("seed").warning("risk regime indexes: %s", e)
     try:
         # auto-purge 7 days — matches the old timeseries expireAfterSeconds
         await db.price_ticks.create_index("ts", expireAfterSeconds=60 * 60 * 24 * 7)

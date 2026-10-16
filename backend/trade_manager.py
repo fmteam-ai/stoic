@@ -19,7 +19,7 @@ from bson import ObjectId
 from database import get_db
 from close_commands import request_close
 from command_fence import stamp_pending_modification
-from market import get_quote
+from market import get_quote  # noqa: F401 — kept for paper/analysis callers (live mgmt uses broker_price)
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips
 from strategy_engines import SCALP_ENGINES
@@ -238,6 +238,45 @@ def _trade_targets(trade: dict) -> tuple:
     return float(sl_pips), float(tp1), float(tp2), float(tp3)
 
 
+async def _broker_snapshot(trade: dict) -> dict:
+    """broker_price.for_trade with the scalp tick fallback — the single price seam for live tier management."""
+    import broker_price as _bp
+    return _bp.for_trade(trade, await _scalp_tick_for(trade))
+
+
+async def _scalp_tick_for(trade: dict) -> dict | None:
+    """Latest scalp tick for the trade's account+symbol (in-memory runner), if any."""
+    try:
+        from scalp.engine import runners_for_account
+        for r in runners_for_account(str(trade.get("account_id") or "")):
+            if r.symbol == (trade.get("symbol") or "").upper() and r.state.last_tick:
+                t = r.state.last_tick
+                return {"bid": t.bid, "ask": t.ask, "ts_ms": t.received_time_ms}
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+_skip_pulse_at: dict = {}
+
+
+async def _management_skipped_pulse(db, trade: dict, cfg: dict, snap: dict) -> None:
+    """One pulse per trade per 5 min: 'broker price stale — management skipped'."""
+    import time as _t
+    tid = str(trade.get("_id"))
+    if _t.time() - _skip_pulse_at.get(tid, 0) < 300:
+        return
+    _skip_pulse_at[tid] = _t.time()
+    age = snap.get("age_ms")
+    try:
+        from bot_runner import _record_pulse
+        await _record_pulse(db, cfg, symbol=trade.get("symbol"), action="SKIP", level="warn",
+                            reason=(f"broker price stale — management skipped (trade {tid[-6:]}, "
+                                    f"{'no price' if age is None else f'{age / 1000:.0f}s old'}; {snap.get('note') or snap.get('source')})"))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("skip pulse failed: %s", e)
+
+
 async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     """Decide if a single open trade needs a modification, write it to DB."""
     db = get_db()
@@ -264,12 +303,13 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     if not trade.get("mt5_ticket"):
         return  # still pending, EA hasn't filled yet
 
-    try:
-        quote = await get_quote(symbol, allow_stale=False)   # v1.60.50 — never manage a live tier on a stale price
-        current = float(quote.get("price") or 0)
-    except Exception as e:
-        logger.warning("price fetch failed for %s: %s", symbol, e)
+    # v1.60.53 (D) — LIVE trades are managed on the BROKER price the EA reports per position (bid for BUY, ask for
+    # SELL), with the scalp tick stream as the only fallback. Never a web quote: stale/missing → skip this cycle.
+    snap = await _broker_snapshot(trade)
+    if not snap.get("fresh"):
+        await _management_skipped_pulse(db, trade, cfg, snap)
         return
+    current = float(snap["price"] or 0)
     if current <= 0:
         return
 

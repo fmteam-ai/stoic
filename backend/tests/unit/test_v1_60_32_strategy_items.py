@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from tests.unit.broker_price_stub import broker_snapshot_from_quote  # noqa: E402
 from bson import ObjectId
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -150,7 +151,7 @@ def test_manage_one_trade_arms_the_scalp_breakeven_on_a_real_shaped_bot_row():
     assert t["engine"] is None and t["scope"] == "hf_scalp_fast"
     db.trades.rows.append(t)
     quote = AsyncMock(return_value={"price": 4000.0 + 0.1 * 400 * 0.6})      # +0.6R
-    with patch.object(tm, "get_db", lambda: db), patch.object(tm, "get_quote", quote), patch.object(tm, "ws_manager") as ws:
+    with patch.object(tm, "get_db", lambda: db), patch.object(tm, "_broker_snapshot", broker_snapshot_from_quote(quote)), patch.object(tm, "ws_manager") as ws:
         ws.broadcast = AsyncMock()
         _run(tm._manage_one_trade(t, {}))
     pm = db.trades.rows[0]["pending_modification"]

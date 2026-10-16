@@ -87,6 +87,7 @@ from routes.integrity_routes import router as integrity_router
 from routes.diagnostic_routes import router as diagnostic_router
 from routes.safety_blocks_routes import router as safety_blocks_router
 from routes.macro_routes import router as macro_router
+from routes.market_intel_routes import router as market_intel_router
 from routes.strategies_routes import router as strategies_router
 from routes.portfolio_routes import router as portfolio_router
 from routes.performance_routes import router as performance_router, public_router as performance_public_router
@@ -563,6 +564,7 @@ api_router.include_router(integrity_router)
 api_router.include_router(diagnostic_router)
 api_router.include_router(safety_blocks_router)
 api_router.include_router(macro_router)
+api_router.include_router(market_intel_router)
 api_router.include_router(strategies_router)
 api_router.include_router(portfolio_router)
 api_router.include_router(performance_router)
@@ -731,6 +733,19 @@ async def _close_txn_unavailable(_request: Request, exc: TransactionsUnavailable
         "message": "Close refused: this deployment can touch capital but its database cannot run "
                    "transactions (replica set required). Nothing was written.",
         "reason": str(exc)[:300]}})
+
+
+# v1.60.52 — a trading path that refuses a stale quote (manual order, paper execute, NL trigger) answers a
+# deterministic 409 instead of a 500: nothing was sent to the broker.
+from market import StaleQuoteError
+
+
+@app.exception_handler(StaleQuoteError)
+async def _stale_quote_refused(_request: Request, exc: StaleQuoteError):
+    return JSONResponse(status_code=409, content={"detail": {
+        "code": "price_feed_stale",
+        "message": "Price feed stale — the order was not placed. Retry when live quotes resume.",
+        "reason": str(exc)[:200]}})
 
 
 # v1.60.32 — validation-error hygiene: FastAPI's default 422 echoes the offending request body back in

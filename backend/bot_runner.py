@@ -30,12 +30,13 @@ from friday_flat import sweep_all as sweep_friday_flat, in_friday_flat_window
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
-from risk import get_profile, compute_lot_for_account
+from risk import get_profile, compute_lot_for_account, RAW_LOT_ANOMALY_MULT, raw_lot_anomaly
 from pip_utils import floor_to_lot_step, symbol_match, lot_spec, base_symbol
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
 from account_reservations import trade_counter_filter
+from anti_tilt import evaluate as anti_tilt_evaluate
 from streak_losses import is_streak_loss
 from market import StaleQuoteError
 from models import BotConfigUpdate as _BotConfigUpdate
@@ -584,9 +585,7 @@ async def _process_user_account_locked(db, cfg: dict):
     min_conf_override = int(cfg.get("min_confidence_override") or 0)
     spread_filter_enabled = bool(cfg.get("spread_filter_enabled", CFG_DEFAULTS["spread_filter_enabled"]))
     max_spread_pips = cfg.get("max_spread_pips") or {}
-    anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
     anti_tilt_n = int(cfg.get("anti_tilt_consecutive_losses", 3))
-    anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4))
     # main92 P3 — configs without a value fall back to 1 auto trade / symbol /
     # day (the API default); the pulse says so, so operators can review it.
     # main93 — an explicit EMPTY value ("" / None) is "not set", never "unlimited":
@@ -605,30 +604,13 @@ async def _process_user_account_locked(db, cfg: dict):
     cooldown_scope = f"{user_id}:{cfg_account_id or 'default'}"
 
     # === Anti-tilt: freeze auto-execute if last N closed trades all lost ===
-    anti_tilt_active = False
-    if anti_tilt_enabled and anti_tilt_n > 0:
-        # iter-122 · origin=auto: judge the bot by its OWN trades — a $-0.16
-        # manual close must not freeze auto-execution.
-        recent_q = {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True}}
-        if cfg_account_id:
-            recent_q["account_id"] = cfg_account_id
-        recent = await db.trades.find(recent_q).sort(
-            "closed_at", -1
-        ).limit(anti_tilt_n).to_list(length=anti_tilt_n)
-        # A trade counts as a LOSS only when it gave back > 0.1R of its planned risk.
-        # Reconciler ghost-closes (pnl 0.0 / None), breakeven scratches (−0.04 after a
-        # BE move) and true breakevens must NOT trip the freeze — users were frozen on
-        # days with zero actual losing trades (iter-45 bug, v1.60.48 scratches).
-        if len(recent) == anti_tilt_n and all(is_streak_loss(r) for r in recent):
-            last_close = recent[0].get("closed_at")
-            try:
-                lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
-                if datetime.now(timezone.utc) - lc < timedelta(hours=anti_tilt_hours):
-                    anti_tilt_active = True
-                    logger.warning("Anti-tilt active user=%s acct=%s — last %d trades lost",
-                                   user_id, cfg_account_id or "default", anti_tilt_n)
-            except Exception:
-                pass
+    # #39 — ONE shared evaluation (anti_tilt.evaluate) for the runner AND Bot Health / status / pulse:
+    # origin=auto, not stats_excluded, loss = streak_losses.is_streak_loss (scratches/ghost closes never count).
+    tilt = await anti_tilt_evaluate(db, user_id, cfg)
+    anti_tilt_active = tilt["active"]
+    if anti_tilt_active:
+        logger.warning("Anti-tilt active user=%s acct=%s — last %d trades lost",
+                       user_id, cfg_account_id or "default", anti_tilt_n)
 
     # Count current open + pending BOT trades to respect max_concurrent
     # (per-account when scoped). origin=auto only — manual trades must NEVER
@@ -640,10 +622,7 @@ async def _process_user_account_locked(db, cfg: dict):
     inflight = await db.trades.count_documents(inflight_q)
 
     if anti_tilt_active:
-        await _record_pulse(db, cfg,
-            action="BLOCKED", level="warn",
-            reason=f"Anti-tilt freeze — last {anti_tilt_n} trades lost. Resumes in <{anti_tilt_hours}h.",
-        )
+        await _record_pulse(db, cfg, action="BLOCKED", level="warn", reason=tilt["reason"])
         return
 
     for sym in symbols:
@@ -1050,6 +1029,19 @@ async def _process_user_account_locked(db, cfg: dict):
                     action="SKIP", level="warn", reason=lc)
                 await inc_intel_counter(user_id, "loss_cooldown_block")
                 continue
+
+        # v1.60.52 — optional per-account H1 alignment gate for the HF scalp engines (default OFF)
+        if signal.get("action") in ("BUY", "SELL") and cfg.get("require_h1_alignment"):
+            from mtf_check import h1_alignment
+            from strategy_engines import SCALP_ENGINES as _h1_scopes
+            if signal.get("scope") in _h1_scopes:
+                h1 = h1_alignment(signal)
+                signal["h1_align_gate"] = h1
+                if h1["checked"] and h1["aligned"] is False:
+                    await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn",
+                        reason=f"H1 against trade — skipped ({signal['action']} vs dominant {h1['dominant']}).")
+                    await inc_intel_counter(user_id, "h1_align_block")
+                    continue
 
         # iter-60 · Structure / Range / Fed-tone gates (Market Structure,
         # Quant and Macro agents). All fail-open: missing data → no veto.
@@ -1957,6 +1949,35 @@ async def _process_user_account_locked(db, cfg: dict):
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)
         absolute_lot = float(sized["lot_size"])
+        # #42 — pip value provenance on the signal → decision ledger snapshot + decision context stage
+        signal["pip_value_source"] = sized.get("pip_value_source")
+        signal["pip_value_anomaly"] = bool(sized.get("pip_value_anomaly"))
+        try:
+            from decision_context import record_stage as _dcs
+            await _dcs(db, signal.get("decision_id"), "sizing",
+                       {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "pip_value_source", "pip_value_anomaly",
+                                                  "pip_value_candidate", "risk_amount_usd", "lot_size")})
+        except Exception:  # noqa: BLE001
+            pass
+        # #42 (b) — a pip value the sizer had to override is an ops event (dedupe per account+symbol)
+        if sized.get("pip_value_anomaly"):
+            try:
+                from alerting import raise_alert
+                await raise_alert(db, "pip_value_anomaly", "high", f"{target_account.get('label')} {sym}: {sized.get('pip_value_note')}",
+                                  dedup_key=f"pip_value_anomaly:{target_account.get('_id')}:{sym}",
+                                  meta={"account_id": str(target_account.get("_id")), "symbol": sym, "user_id": user_id,
+                                        "candidate": sized.get("pip_value_candidate"), "used": sized.get("pip_usd_per_lot")})
+            except Exception as _pe:  # noqa: BLE001 — alerting never changes sizing
+                logger.warning("pip value anomaly alert failed: %s", _pe)
+        # #42 (c) — hard reject BEFORE any trim: a raw lot above max_lot × 10 is a sizing anomaly, never "clamped down"
+        if raw_lot_anomaly(absolute_lot, max_lot_cap):
+            _msg = (f"Sizing anomaly: raw lot {absolute_lot:.2f} > {RAW_LOT_ANOMALY_MULT:.0f}× max lot {max_lot_cap} "
+                    f"(pip value ${sized.get('pip_usd_per_lot')} source={sized.get('pip_value_source')}) — trade rejected")
+            logger.error("%s user=%s sym=%s", _msg, user_id, sym)
+            await db.signals.update_one({"_id": result.inserted_id}, {"$set": {"sizing_rejected": _msg, "tradeable": False}})
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=_msg, signal=signal)
+            await inc_intel_counter(user_id, "sizing_anomaly_block")
+            continue
         _floored_trims: list[str] = []          # stages whose trim was floored to the broker minimum (audit)
         _min_lot, _lot_step = lot_spec(target_account, sym)
 
@@ -2595,7 +2616,9 @@ async def _process_user_account_locked(db, cfg: dict):
         # v1.60.48/50 — per-USER cross-account exposure cap, reserved atomically right before the order is sent
         user_dir_cap = int(cfg.get("user_direction_cap", USER_DIRECTION_CAP_DEFAULT) or 0)
         _udc_res = None
-        if user_dir_cap > 0:
+        # v1.60.52 — paper / shadow entries never count against the cap, so they take no reservation either
+        _udc_live = (target_account.get("mode") or "live") != "paper" and not shadow_only
+        if user_dir_cap > 0 and _udc_live:
             # v1.60.50 — atomic: account loops run concurrently, so the slot is a unique reservation doc (TTL),
             # released below when the entry is blocked / rejected; only LIVE automated trades count.
             from user_direction_cap import reserve_user_direction
@@ -2612,61 +2635,65 @@ async def _process_user_account_locked(db, cfg: dict):
                 continue
 
         try:
-            trade_doc = await engine.execute(
-                user_id=user_id,
-                account=target_account,
-                signal={
-                    "signal_id": signal_id,
-                    "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
-                    "decision_id": signal.get("decision_id"),
-                    "latency_trace": signal.get("latency_trace"),
-                    "symbol": signal["symbol"],
-                    "action": signal["action"],
-                    "lot_size": effective_lot,
-                    "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd")},
-                    "entry_price": signal["entry_price"],
-                    "stop_loss": signal["stop_loss"],
-                    "take_profit": signal["take_profit"],
-                    "tp1": signal.get("tp1"),
-                    "tp2": signal.get("tp2"),
-                    "tp3": signal.get("tp3"),
-                    "sl_pips": signal.get("sl_pips"),
-                    "tp_pips": signal.get("tp_pips"),
-                    "risk_pct_cap": signal.get("risk_pct_cap"),
-                    "origin": "auto",
-                    "scope": signal.get("scope"),
-                    "trend_ride": signal.get("trend_ride"),
-                    "trend_ride_applied": bool(signal.get("trend_ride")),
-                    "trend_ride_skipped": signal.get("trend_ride_skipped"),
-                    "strategy_class": signal.get("strategy_class"),   # v1.60.48 — were dropped here → trades stored None
-                    "market_regime": signal.get("market_regime"),     #   and Regime Gating could not be measured
-                    "entry_context": signal.get("entry_context"),
-                    "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
-                    "news_ai": signal.get("news_ai"),
-                    "sentiment": signal.get("sentiment"),
-                    "versions": version_stamp(signal.get("scope")),
-                },
-                max_concurrent=max_concurrent,
-                cfg_account_id=cfg_account_id,
-            )
-        except StaleQuoteError as _sq:
+            try:
+                trade_doc = await engine.execute(
+                    user_id=user_id,
+                    account=target_account,
+                    signal={
+                        "signal_id": signal_id,
+                        "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
+                        "decision_id": signal.get("decision_id"),
+                        "latency_trace": signal.get("latency_trace"),
+                        "symbol": signal["symbol"],
+                        "action": signal["action"],
+                        "lot_size": effective_lot,
+                        "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd",
+                                                              "pip_value_source", "pip_value_anomaly")},
+                        "entry_price": signal["entry_price"],
+                        "stop_loss": signal["stop_loss"],
+                        "take_profit": signal["take_profit"],
+                        "tp1": signal.get("tp1"),
+                        "tp2": signal.get("tp2"),
+                        "tp3": signal.get("tp3"),
+                        "sl_pips": signal.get("sl_pips"),
+                        "tp_pips": signal.get("tp_pips"),
+                        "risk_pct_cap": signal.get("risk_pct_cap"),
+                        "origin": "auto",
+                        "scope": signal.get("scope"),
+                        "trend_ride": signal.get("trend_ride"),
+                        "trend_ride_applied": bool(signal.get("trend_ride")),
+                        "trend_ride_skipped": signal.get("trend_ride_skipped"),
+                        "strategy_class": signal.get("strategy_class"),   # v1.60.48 — were dropped here → trades stored None
+                        "market_regime": signal.get("market_regime"),     #   and Regime Gating could not be measured
+                        "entry_context": signal.get("entry_context"),
+                        "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
+                        "news_ai": signal.get("news_ai"),
+                        "sentiment": signal.get("sentiment"),
+                        "versions": version_stamp(signal.get("scope")),
+                    },
+                    max_concurrent=max_concurrent,
+                    cfg_account_id=cfg_account_id,
+                )
+            except StaleQuoteError as _sq:
+                # v1.60.50 — a stale quote never fills: skip this cycle (as before the stale fallback existed)
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=f"Quote stale — entry skipped this cycle ({_sq})")
+                await inc_intel_counter(user_id, "stale_quote_skip")
+                continue
+            if trade_doc.get("blocked"):
+                logger.warning(
+                    "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
+                    user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),
+                )
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="BLOCKED", level="block",
+                    reason=f"Safety Guardian blocked execution: {trade_doc.get('blocked')}",
+                    signal=signal,
+                )
+                continue
+        finally:
+            # v1.60.52 — the slot is held only while the order is in flight: an inserted trade counts itself from
+            # here on (no double count for the 180 s TTL), and ANY exception / block / stale quote frees it.
             await _udc_release(db, _udc_res)
-            # v1.60.50 — a stale quote never fills: skip this cycle (as before the stale fallback existed)
-            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=f"Quote stale — entry skipped this cycle ({_sq})")
-            await inc_intel_counter(user_id, "stale_quote_skip")
-            continue
-        if trade_doc.get("blocked"):
-            await _udc_release(db, _udc_res)
-            logger.warning(
-                "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
-                user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),
-            )
-            await _record_pulse(db, cfg, symbol=sym,
-                action="BLOCKED", level="block",
-                reason=f"Safety Guardian blocked execution: {trade_doc.get('blocked')}",
-                signal=signal,
-            )
-            continue
         logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
                     user_id, cfg_account_id or "default", sym, trade_doc.get("id"))
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {
