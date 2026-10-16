@@ -1036,6 +1036,16 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "cross_account_loss_cooldown_block" if cross else "loss_cooldown_block")
                 continue
 
+        # v1.60.60 #71 — optional: block scalp / fast-scalp / breakout entries AGAINST a strong Gold Daily Bias (flag default OFF)
+        if signal.get("action") in ("BUY", "SELL") and cfg.get("gold_bias_block_counter_enabled") and "XAU" in str(sym).upper():
+            from gold_bias import counter_bias_block, latest as _bias_latest
+            from strategy_engines import engine_for_signal as _efs
+            _blk = counter_bias_block(await _bias_latest(db), signal["action"], _efs(signal), cfg)
+            if _blk:
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=_blk)
+                await inc_intel_counter(user_id, "gold_bias_counter_block")
+                continue
+
         # v1.60.52 — optional per-account H1 alignment gate for the HF scalp engines (default OFF)
         if signal.get("action") in ("BUY", "SELL") and cfg.get("require_h1_alignment"):
             from mtf_check import h1_alignment
@@ -1603,6 +1613,9 @@ async def _process_user_account_locked(db, cfg: dict):
             logger.debug("entry context skipped: %s", e)
         result = await db.signals.insert_one(signal)
         signal_id = str(result.inserted_id)
+        if signal.get("gold_bias"):                                  # v1.60.60 #71 — shadow log (no trading effect)
+            from gold_bias import shadow_log
+            await shadow_log(db, {**signal, "_id": signal_id}, signal["gold_bias"])
         broadcast_payload = {**signal, "id": signal_id}
         broadcast_payload.pop("_id", None)
         await ws_manager.broadcast(user_id, "signal_created", broadcast_payload)

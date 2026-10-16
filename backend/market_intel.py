@@ -386,8 +386,37 @@ async def build(db, user_id: str) -> dict:
         "geo_risk": geo_risk(advisories, latest_adv),
         "risk_regime": risk_regime(latest_adv, flag_on),
         "gold_trend_pulse": await _safe(gold_trend_pulse_section(db, user_id), _unavailable("gold_trend_pulse state not available")),
+        "gold_bias": await _safe(_gold_bias_block(db, user_id, events, cfg), None),       # v1.60.60 #71
         "usage": usage,
         "source_health": source_health(persisted, finnhub_configured(), newsapi_configured(), releases[0].get("seen_at") if releases else None,
                                        cb_1h, latest_adv, adv_1h, ((fred or {}).get("payload") or {}).get("fetched_at"), dxy, now),
     }
     return scrub(payload)
+
+
+async def _gold_bias_block(db, user_id: str, events: list, cfg: dict) -> dict:
+    """v1.60.60 #71 — Gold Daily Bias (score −100..+100 + reasons), 2-week shadow tally and the plan for the next USD HIGH event."""
+    import time as _t
+    from gold_bias import latest, news_plan, shadow_summary
+    bias = await latest(db) or {"bias": "NEUTRAL", "score": 0, "reasons": ["bias not computed yet"], "unavailable": list(__import__("gold_bias").WEIGHTS)}
+    nxt = next((e for e in sorted(events, key=lambda e: float(e.get("when_ts") or 0))
+                if str(e.get("country") or "").upper() == "USD" and str(e.get("impact") or "").lower() == "high"
+                and float(e.get("when_ts") or 0) > _t.time()), None)
+    plan = None
+    if nxt:
+        open_trades = await db.trades.find({"user_id": user_id, "status": "open", "symbol": {"$regex": "^XAU"}},
+                                           {"symbol": 1, "action": 1, "status": 1}).to_list(length=50)
+        pred = None
+        try:
+            from calendar_intel import predict_event_reaction
+            pred = await predict_event_reaction(db, {"title": nxt.get("title"), "when_ts": nxt.get("when_ts")})
+        except Exception:  # noqa: BLE001
+            pred = None
+        plan = news_plan({"event": nxt.get("title"), "at": nxt.get("when"), "forecast": nxt.get("forecast"), "previous": nxt.get("previous"),
+                          "actual": nxt.get("actual")}, open_trades, pred, bias, str(cfg.get("gold_trend_pulse_news_pre_policy") or "protect"))
+    flags = {"gold_bias_gtp_direction_enabled": bool(cfg.get("gold_bias_gtp_direction_enabled")),
+             "gold_bias_block_counter_enabled": bool(cfg.get("gold_bias_block_counter_enabled"))}
+    return {"bias": bias.get("bias"), "score": bias.get("score"), "strong": bias.get("strong"), "reasons": bias.get("reasons"),
+            "unavailable": bias.get("unavailable"), "computed_at": bias.get("computed_at"), "flags": flags,
+            "shadow": await shadow_summary(db, user_id), "news_plan": plan,
+            "note": None if any(flags.values()) else "shadow phase — bias has no trading effect (both gates OFF)"}

@@ -309,6 +309,12 @@ export default function BotConfig() {
                 gold_trend_pulse_news_release_min: cfg.gold_trend_pulse_news_release_min ?? 5,
                 gold_trend_pulse_news_events: cfg.gold_trend_pulse_news_events ?? null,
                 engine_live_features_enabled: cfg.engine_live_features_enabled ?? false,
+                gold_bias_gtp_direction_enabled: cfg.gold_bias_gtp_direction_enabled ?? false,
+                gold_bias_block_counter_enabled: cfg.gold_bias_block_counter_enabled ?? false,
+                exit_policy: cfg.exit_policy ?? "fixed_tp",
+                tp1_close_fraction: cfg.tp1_close_fraction ?? 0.5,
+                be_plus_offset_price: cfg.be_plus_offset_price ?? 1.0,
+                tp2_multiple: cfg.tp2_multiple ?? 2.0,
             };
             // v1.60.48 — send only what changed since load/last save (PATCH), never the whole form
             const payload = changedFields(fullPayload, baselineRef.current);
@@ -1267,6 +1273,37 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                         ENGINE LIVE FEATURES (#55) {(cfg.engine_live_features_enabled ?? false) ? "ON" : "OFF — shadow compare only"}
                     </label>
                     <div className="text-[10px] text-white/40 mt-1">hf_scalp / hf_scalp_fast / breakout_m15 read the LIVE broker price for price features, add a 1 h slope and a momentum-continuation entry, and never sell a breakdown whose live price is back inside the channel. OFF = both engine outputs are recorded side by side (engine_shadow_compare) for a week before switching.</div>
+                    {/* v1.60.60 #71 — Gold Daily Bias gates (shadow first, both OFF) */}
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-3" data-testid="gold-bias-gtp-direction-toggle">
+                        <input type="checkbox" checked={cfg.gold_bias_gtp_direction_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_bias_gtp_direction_enabled: e.target.checked })} />
+                        GOLD BIAS → GTP DIRECTION ONLY (#71) {(cfg.gold_bias_gtp_direction_enabled ?? false) ? "ON" : "OFF — shadow"}
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-2" data-testid="gold-bias-block-counter-toggle">
+                        <input type="checkbox" checked={cfg.gold_bias_block_counter_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_bias_block_counter_enabled: e.target.checked })} />
+                        GOLD BIAS → BLOCK COUNTER-BIAS SCALPS (|score| ≥ 60) (#71) {(cfg.gold_bias_block_counter_enabled ?? false) ? "ON" : "OFF — shadow"}
+                    </label>
+                    <div className="text-[10px] text-white/40 mt-1">Gold Daily Bias (−100…+100, every 15 min from D1/H4 trend, DXY, real yields, news, Fed tone, risk regime, COT, calendar surprise) is logged against every gold signal for two weeks first. With both gates OFF it has no trading effect.</div>
+                    {/* v1.60.60 #72 — exit policy */}
+                    <div className="font-mono text-[10px] text-white/60 mt-4 tracking-widest">EXIT POLICY (#72) — hf_scalp · hf_scalp_fast · breakout_m15 · gold_trend_pulse</div>
+                    <select className="bg-black border border-white/20 text-white text-xs p-2 mt-1 w-full" value={cfg.exit_policy ?? "fixed_tp"} data-testid="exit-policy-select"
+                            onChange={(e) => setCfg({ ...cfg, exit_policy: e.target.value })}>
+                        <option value="fixed_tp">fixed_tp — broker TP closes the full position (default)</option>
+                        <option value="tp1_bank_runner">tp1_bank_runner — bank 50 % at TP1, SL → entry + $1, runner trails to TP2</option>
+                    </select>
+                    {(cfg.exit_policy === "tp1_bank_runner") && (
+                        <div className="grid grid-cols-3 gap-2 mt-2">
+                            <label className="font-mono text-[10px] text-white/60">TP1 close fraction
+                                <input type="number" step="0.05" min="0.1" max="0.9" className="bg-black border border-white/20 text-white text-xs p-1 w-full" data-testid="tp1-close-fraction-input"
+                                       value={cfg.tp1_close_fraction ?? 0.5} onChange={(e) => setCfg({ ...cfg, tp1_close_fraction: parseFloat(e.target.value) })} /></label>
+                            <label className="font-mono text-[10px] text-white/60">SL offset ($ from entry)
+                                <input type="number" step="0.1" min="0" max="20" className="bg-black border border-white/20 text-white text-xs p-1 w-full" data-testid="be-plus-offset-input"
+                                       value={cfg.be_plus_offset_price ?? 1.0} onChange={(e) => setCfg({ ...cfg, be_plus_offset_price: parseFloat(e.target.value) })} /></label>
+                            <label className="font-mono text-[10px] text-white/60">TP2 multiple (× TP1 distance)
+                                <input type="number" step="0.1" min="1.1" max="5" className="bg-black border border-white/20 text-white text-xs p-1 w-full" data-testid="tp2-multiple-input"
+                                       value={cfg.tp2_multiple ?? 2.0} onChange={(e) => setCfg({ ...cfg, tp2_multiple: parseFloat(e.target.value) })} /></label>
+                        </div>
+                    )}
+                    <div className="text-[10px] text-white/40 mt-1">TP1 = the engine&apos;s original TP (never moves). At TP1: close the fraction (floored to the lot step; SL-only when the volume can&apos;t split), SL → entry ± offset (broker min stop respected), broker TP → TP2. Runner trails behind the last M5 swing or 1.0×ATR(M5), profit direction only. Partial fails twice → full close at TP1. Shadow first: compare last week&apos;s trades before enabling on one demo account.</div>
                 </div>
 
                 {/* v1.60.48 (audit item 8) — the exit tiers are ENGINE RULES, not knobs: the old partial_close_* /

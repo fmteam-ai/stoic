@@ -217,6 +217,14 @@ class BotConfigUpdate(BaseModel):
     gold_trend_pulse_news_release_min: int = Field(default=5, ge=1, le=30)
     gold_trend_pulse_news_events: list[str] | None = None   # None → CPI, Core CPI, NFP, FOMC, rate decision, Fed Chair, PCE, GDP, Retail Sales, PPI, ISM
     engine_live_features_enabled: bool = False       # #55 — engines read the LIVE broker price (+ fast slope / momentum override); OFF = shadow compare only
+    # v1.60.60 #71 — Gold Daily Bias gates (shadow first; both default OFF → bias has no trading effect)
+    gold_bias_gtp_direction_enabled: bool = False
+    gold_bias_block_counter_enabled: bool = False
+    # v1.60.60 #72 — exit policy for hf_scalp / hf_scalp_fast / breakout_m15 / gold_trend_pulse (default = today's fixed TP)
+    exit_policy: Literal["fixed_tp", "tp1_bank_runner"] = "fixed_tp"
+    tp1_close_fraction: float = Field(default=0.5, ge=0.1, le=0.9)
+    be_plus_offset_price: float = Field(default=1.0, ge=0.0, le=20.0)
+    tp2_multiple: float = Field(default=2.0, ge=1.1, le=5.0)
     breakeven_trigger_r: float = Field(default=BREAKEVEN_TRIGGER_R_DEFAULT, ge=0.0, le=5.0)
     daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)
     daily_drawdown_enabled: bool = True

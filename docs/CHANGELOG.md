@@ -2,6 +2,11 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.60 — Gold Daily Bias (#71, shadow) + TP1 bank & protected runner (#72) + #74 (every new flag OFF; no guard/sizing change)
+- **#71** `gold_bias.py`: 15-min bias LONG/SHORT/NEUTRAL, score −100…+100, fixed weights, missing inputs = 0 + `unavailable`; Market Intel block + `/market-intel/gold-bias`; note in every gold signal; 2-week shadow log (with/against + outcome); flags `gold_bias_gtp_direction_enabled`, `gold_bias_block_counter_enabled` (OFF); news plan per USD HIGH event + post-news rule; ForexFactory `actual` + `calendar_outcomes` surprise.
+- **#72** BotConfig `exit_policy` (`fixed_tp` default | `tp1_bank_runner`), `tp1_close_fraction` 0.5, `be_plus_offset_price` 1.0, `tp2_multiple` 2.0; `exit_policy_tp1.py` + `trade_manager._tp1_bank_runner_exits` (bank at TP1 floored to lot step / SL-only, SL → entry ± offset with min-stop, broker TP → TP2, M5 swing / ATR trail never loosening, partial fail → retry → full close); report split banked/runner; read-only `scripts/tp1_bank_shadow.py`.
+- Docs: `docs/RELEASE_NOTES_v1.60.60.md`, `docs/PR_v1.60.60.md`.
+
 ## v1.60.59 — LLM provider abstraction + Co-Pilot memory + news-veto visibility + #74 (no trading or risk settings changed)
 - **`llm_client.py`** is the single LLM entry point: `ANTHROPIC_API_KEY` → direct Anthropic (official SDK) else `EMERGENT_LLM_KEY` → Emergent Universal Key (works only for Emergent-hosted apps; other hosts get 403) else fail closed. Models only from `llm_models.model_for()`; per-tier `max_tokens` caps, `LLM_DAILY_CALL_CAP` (2000), per-feature daily counters, key redaction, 403 classified as "Universal Key not allowed from this host".
 - **Admin → Integrations → AI**: `ANTHROPIC_API_KEY` sealed secret + Test button (one tiny call). **Bot Health**: LLM PROVIDER · COST card, "Claude LLM" and "News veto" checks, `GET /api/diagnostic/llm-status` (admin) / `llm-models` (user).

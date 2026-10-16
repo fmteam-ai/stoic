@@ -177,6 +177,74 @@ def scalp_time_stop_due(trade: dict, now=None) -> bool:
     return ((now or datetime.now(timezone.utc)) - dt).total_seconds() >= SCALP_TIME_STOP_MIN * 60
 
 
+async def _tp1_bank_runner_exits(db, trade: dict, cfg: dict, current: float) -> bool:
+    """v1.60.60 #72 — TP1 bank (partial + SL → entry ± offset + broker TP → TP2) then protected runner trail.
+    Returns True when it owns the trade this cycle (the engine's own BE/time-stop branches still run when False)."""
+    import exit_policy_tp1 as X
+    from protection_guard import broker_stop_constraints, find_account
+    from pip_utils import lot_spec
+    trade_id, action, entry = trade["_id"], trade["action"], float(trade["entry_price"])
+    plan = trade.get("tp_plan")
+    if not plan:                                                     # stamp once at first management pass: TP1 = engine TP (immutable)
+        tp1 = trade.get("original_take_profit") or trade.get("take_profit")
+        if not tp1 or not trade.get("stop_loss"):
+            return False
+        plan = X.plan_targets(entry, float(trade["stop_loss"]), float(tp1), action, float(cfg.get("tp2_multiple") or X.DEFAULTS["tp2_multiple"]))
+        await db.trades.update_one(_free_slot_filter(trade_id), {"$set": {"tp_plan": plan, "exit_policy": "tp1_bank_runner"}})
+        trade["tp_plan"] = plan
+    acc, _ = await find_account(db, str(trade.get("account_id") or ""))
+    cons = (broker_stop_constraints(acc, trade.get("symbol")) if acc else None) or {}
+    min_lot, lot_step = lot_spec(acc, trade.get("symbol")) if acc else (0.01, 0.01)
+    bank = trade.get("tp1_bank")
+    if not bank:
+        if not X.tp1_reached(action, current, plan["tp1"], buffer=float(cfg.get("tp1_trigger_buffer_price") or 0.0)):
+            return False
+        pend_err = (trade.get("pending_modification") or {}).get("last_error")
+        attempts = int(trade.get("tp1_bank_attempts") or 0)
+        if attempts >= 2 or (attempts == 1 and pend_err):           # partial failed twice → close the full position at TP1
+            from close_commands import mandatory_close
+            await mandatory_close(db, trade, reason="tp1_bank_failed", actor="trade_manager", account=acc)
+            await db.trades.update_one({"_id": trade_id}, {"$set": {"tp1_bank_failed": True, "scalp_exit_rule": "tp1_bank_failed_full_close"}})
+            return True
+        bp = X.bank_plan(trade, current, lot_step=lot_step, min_lot=min_lot, min_stop_distance_px=cons.get("min_stop_distance_px"),
+                         close_fraction=float(cfg.get("tp1_close_fraction") or X.DEFAULTS["tp1_close_fraction"]),
+                         offset_price=float(cfg.get("be_plus_offset_price") or X.DEFAULTS["be_plus_offset_price"]), tp2=plan["tp2"])
+        pend = ({"type": "MODIFY_SL", "new_sl": bp["new_sl"], "new_tp": bp["new_tp"], "reason": "tp1_bank"} if bp["sl_only"]
+                else {"type": "PARTIAL_CLOSE", "new_volume": bp["keep_volume"], "new_sl": bp["new_sl"], "new_tp": bp["new_tp"], "reason": "tp1_bank"})
+        rec = X.bank_record(bp, current, attempts + 1)
+        stamped = await stamp_pending_modification(db, _free_slot_filter(trade_id), pend,
+                                                   {"tp1_bank": rec, "tp1_bank_attempts": attempts + 1, "tp1_closed": not bp["sl_only"],
+                                                    "be_target_sl": bp["new_sl"], "take_profit_tp2": bp["new_tp"], "scalp_exit_rule": "tp1_bank"})
+        if stamped is None:
+            return True
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {"trade_id": str(trade_id), "action": "TP1_BANK", **{k: v for k, v in rec.items() if k != "pnl"}})
+        logger.info("tp1_bank %s %s #%s %s", trade.get("symbol"), action, trade.get("mt5_ticket"), bp["note"])
+        return True
+    # runner: trail behind last M5 swing / 1.0×ATR(M5), profit direction only
+    try:
+        from pip_utils import base_symbol as _bs
+        doc = await db.intraday_candles.find_one({"user_id": trade["user_id"], "symbol": _bs(trade.get("symbol")), "timeframe": "M5"}, {"bars": 1})
+        bars = ((doc or {}).get("bars") or [])
+        if not bars:                                                 # resample the M1 stream when no M5 feed is stored
+            from bars_util import m5_from_m1
+            d1 = await db.intraday_candles.find_one({"user_id": trade["user_id"], "symbol": _bs(trade.get("symbol")), "timeframe": "M1"}, {"bars": 1})
+            bars = m5_from_m1(((d1 or {}).get("bars") or [])[-150:])
+        bars = list(bars)[-20:-1]                                    # completed bars only
+    except Exception:  # noqa: BLE001
+        bars = []
+    cur_sl = trade.get("be_target_sl") or trade.get("stop_loss")
+    if cur_sl is None or trade.get("pending_modification"):
+        return True
+    new_sl = X.trail_sl(action, float(cur_sl), current, bars, min_stop_distance_px=cons.get("min_stop_distance_px"))
+    if new_sl is None or tightened_sl(trade, new_sl) is None:
+        return True
+    stamped = await stamp_pending_modification(db, _free_slot_filter(trade_id), {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "tp1_runner_trail"},
+                                               {"be_target_sl": new_sl, "scalp_exit_rule": "tp1_runner_trail"})
+    if stamped is not None:
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {"trade_id": str(trade_id), "action": "TP1_RUNNER_TRAIL", "new_sl": new_sl})
+    return True
+
+
 async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_up: float) -> bool:
     """C8 breakeven at +0.5R (stop → entry + costs) and C9 90-min time-stop. Returns True when it acted."""
     sl_pips, *_ = _trade_targets(trade)
@@ -411,6 +479,11 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
 
     # v1.60.57 — gold_trend_pulse: BE at 60 % of TP (stop → entry ± spread+commission), 45-min (TREND) / 20-min (RANGE)
     # time-stop, broker TP does the exit. No tiers, no breakeven_trigger_r, no TP rescale / stretch / trend-ride.
+    # v1.60.60 #72 — per-account exit_policy "tp1_bank_runner" (default fixed_tp → the branches below run as before)
+    from exit_policy_tp1 import applies as _tp1_applies
+    if _tp1_applies(trade, cfg):
+        if await _tp1_bank_runner_exits(db, trade, cfg, current):
+            return
     if (trade.get("scope") or trade.get("engine")) == "gold_trend_pulse":
         await _gold_trend_pulse_exits(db, trade, current, pips_up)
         return
