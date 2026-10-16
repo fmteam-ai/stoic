@@ -183,8 +183,11 @@ class BotConfigUpdate(BaseModel):
     # VTMarkets ran 30 min invisibly). Clamped on save to the plan floor (features.min_signal_cooldown_minutes).
     signal_cooldown_minutes: int = Field(default=5, ge=1, le=1440)
     auto_execute: bool = True
-    # v1.60.48 (audit item 8) — breakeven_* / partial_close_* / trailing_* / soft_stop_* REMOVED: they were saved but
-    # never read by trade_manager (fixed engine tiers: scalp BE +0.5R + 90-min time-stop; legacy TP1 100 / TP2 200).
+    # v1.60.48 (audit item 8) — partial_close_* / trailing_* / soft_stop_* REMOVED: they were saved but never read by
+    # trade_manager (fixed engine tiers: scalp BE +0.5R + 90-min time-stop; legacy TP1 100 / TP2 200).
+    # #43 (#8 widened) — breakeven_trigger_r IS read now: for every non-scalp engine the stop moves to entry once the
+    # trade is +N×R (breakout signals have TP1 = TP, so the TP1 breakeven never fired). 0 = TP1-only (old behaviour).
+    breakeven_trigger_r: float = Field(default=1.0, ge=0.0, le=5.0)
     daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)
     daily_drawdown_enabled: bool = True
     weekly_drawdown_pct: float = Field(default=7.0, gt=0.0, le=40.0)
@@ -584,7 +587,7 @@ class QuoteOut(BaseModel):
 
 # v1.60.48 (audit items 8 + 17) — config fields that no longer exist; stripped from presets / overlays / saves.
 DEAD_CONFIG_FIELDS = frozenset({
-    "breakeven_enabled", "breakeven_trigger_r", "partial_close_enabled", "partial_close_trigger_r",
+    "breakeven_enabled", "partial_close_enabled", "partial_close_trigger_r",
     "partial_close_fraction", "trailing_enabled", "trailing_start_r", "trailing_distance_r",
     "soft_stop_enabled", "soft_stop_loss_fraction", "soft_stop_min_minutes",
 })

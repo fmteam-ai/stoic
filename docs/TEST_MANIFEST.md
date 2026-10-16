@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1659 |
-| integration | real MongoDB service container | CI `backend-integration` | 255 |
+| unit | pure logic, no external I/O | every CI job | 1669 |
+| integration | real MongoDB service container | CI `backend-integration` | 260 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4176 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 6107 tests across 663 files.**
+**Total: 6122 tests across 665 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -484,6 +484,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_r27_account_environment_attestation.py` | integration | 2 |
 | `backend/tests/integration/test_r28_audit.py` | integration | 10 |
 | `backend/tests/integration/test_r29_audit.py` | integration | 8 |
+| `backend/tests/integration/test_v1_60_54_close_watchdog.py` | integration | 5 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 5 |
 | `e2e/tests/chart_provenance.spec.ts` | ui-e2e | 6 |
@@ -676,5 +677,6 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_v1_60_53_data_sources_broker_price.py` | unit | 8 |
 | `backend/tests/unit/test_v1_60_54_anti_tilt_r_multiple_market_intel.py` | unit | 17 |
 | `backend/tests/unit/test_v1_60_54_pip_value_sanity.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_54_var_deleverage_breakeven.py` | unit | 10 |
 | `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 8 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |

@@ -94,6 +94,13 @@ def var_cap_exempt_reason(open_positions: list[dict], equity: float, cfg: dict |
         if cap_pct > 0 and risk_pct <= cap_pct + 1e-9:
             return (f"single position with distance-to-stop risk {risk_pct:.2f}% of equity within the per-trade cap "
                     f"{cap_pct:g}%")
+    # #43 (a) — when EVERY stop is known, the book cannot lose more than Σ stop distances (× gap factor): a book whose
+    # stop-bounded loss is inside the VaR cap is never deleveraged, whatever the parametric figure says.
+    if equity > 0 and all(r is not None for r in risks):
+        from portfolio.var import STOP_GAP_FACTOR
+        bound_pct = sum(risks) * STOP_GAP_FACTOR / equity * 100.0
+        if bound_pct <= VAR_CAP_PCT + 1e-9:
+            return f"stop-bounded book loss {bound_pct:.2f}% of equity (×{STOP_GAP_FACTOR} gap) within the VaR cap {VAR_CAP_PCT:g}%"
     return None
 
 
@@ -111,7 +118,8 @@ async def _sector_exposure(positions: list[dict], equity: float,
         sec = sector_for(sym)
         lot = float(p.get("lot_size") or 0)
         entry = float(p.get("entry_price") or 0)
-        notional = lot * entry * (100 if sym == "XAUUSD" else 1)
+        from instruments import notional_usd
+        notional = notional_usd(sym, lot, entry)      # #43 (a) — GOLD# / XAUUSD+ / forex via the instrument table
         grouped[sec]["notional"] += notional
         grouped[sec]["positions"].append({
             "trade_id": str(p.get("_id") or p.get("id") or ""),
@@ -358,10 +366,14 @@ async def execute_deleveraging_actions(db, *, user_id: str, actions: list[dict])
             skipped += 1
             continue
         # Close open trades (real broker position exists).
+        # #43 (b) — 16 Oct: five var_cap close requests on one ticket were never executed (trades-block path, no
+        # pending_modification, no terminal ack). Deleverage closes now ride the fenced FULL_CLOSE modification
+        # path (intent_id + explicit EA ack, same as scalp / revive), so every outcome is acknowledged and auditable.
         from close_commands import request_close
-        res_open = await request_close(db, {"_id": oid, "user_id": user_id},
-                                       reason=a.get("reason") or "auto_deleverage",
-                                       actor="portfolio_risk_manager", stamp={"close_requested_at": now_iso})
+        reason = a.get("reason") or "auto_deleverage"
+        res_open = await request_close(db, {"_id": oid, "user_id": user_id}, reason=reason,
+                                       actor="portfolio_risk_manager", stamp={"close_requested_at": now_iso},
+                                       pending_modification={"type": "FULL_CLOSE", "reason": reason}, emergency=True)
         if res_open["trades_marked_for_close"]:
             closed += 1
             continue

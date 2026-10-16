@@ -214,6 +214,39 @@ async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_u
 DEFAULT_BE_TRIGGER_PIPS = 100        # move SL to entry at +100 pips
 
 
+async def _breakeven_trigger_r(db, trade: dict, cfg: dict, current: float, pips_up: float) -> bool:
+    """Stop to entry once pips_up ≥ breakeven_trigger_r × sl_pips (0 / missing = disabled). Returns True when it
+    acted or deliberately deferred (clamp) — the tiers run next cycle. Never loosens, never re-arms."""
+    try:
+        trigger_r = float(cfg.get("breakeven_trigger_r") or 0)
+    except (TypeError, ValueError):
+        return False
+    if trigger_r <= 0 or trade.get("breakeven_set") or trade.get("be_target_sl") or trade.get("tp1_closed"):
+        return False
+    sl_pips, *_ = _trade_targets(trade)
+    if sl_pips <= 0 or pips_up < trigger_r * sl_pips:
+        return False
+    entry = round(float(trade.get("entry_price") or 0), 5)
+    be_sl = tightened_sl(trade, entry)
+    if be_sl is None:
+        await record_sl_loosen_refusal(trade, entry, "breakeven_trigger_r")
+        return False
+    if await be_clamped_skip(db, trade, be_sl, current, "breakeven_trigger_r"):
+        return True
+    stamped = await stamp_pending_modification(
+        db, _free_slot_filter(trade["_id"]),
+        {"type": "MODIFY_SL", "new_sl": be_sl, "reason": "breakeven_trigger_r"},
+        {"be_target_sl": be_sl, "be_rule": f"breakeven_trigger_r:{trigger_r:g}",
+         "be_armed_at": datetime.now(timezone.utc).isoformat(), "be_armed_pips": round(pips_up, 1)})
+    if stamped is None:
+        return True
+    await ws_manager.broadcast(trade["user_id"], "trade_management", {
+        "trade_id": str(trade["_id"]), "action": "BE_TRIGGER_R", "new_sl": be_sl, "trigger_r": trigger_r,
+        "from_lot": float(trade.get("lot_size") or 0), "to_lot": float(trade.get("lot_size") or 0),
+        "pips": round(pips_up, 1)})
+    return True
+
+
 def _interval() -> int:
     return int(os.environ.get("TRADE_MANAGER_INTERVAL_SEC", "15"))
 
@@ -320,6 +353,11 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     if is_scalp_engine_trade(trade):
         if await _scalp_engine_exits(db, trade, cfg, current, pips_up):
             return
+
+    # #43 (#8 widened) — configurable breakeven for every NON-scalp engine: stop → entry at +breakeven_trigger_r × R.
+    # Breakout signals carry TP1 = TP, so the TP1 breakeven below never fired for them (600007662145: +2.45R → +0.02R).
+    if not is_scalp_engine_trade(trade) and await _breakeven_trigger_r(db, trade, cfg, current, pips_up):
+        return
 
     # Tier 3 — close remaining at +tp3 pips
     if (not trade.get("tp3_closed")

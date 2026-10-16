@@ -62,3 +62,36 @@ Scope: items #39, #40, #41. No trading-behaviour change except the corrected los
   specs, the 16 Oct incident ($0.01 → $10, 25 lots → 0.25), cent spec override, EURUSD spec + mislabelled
   account, within-×3 kept, paper exemption, raw-lot hard reject placement.
 * Constants: `PIP_VALUE_SANITY_RATIO = 3.0`, `RAW_LOT_ANOMALY_MULT = 10.0` (risk.py). No new env vars.
+
+## #43 — VaR deleverage (replaces #37) + close-command watchdog + breakeven_trigger_r (HIGH)
+**(a) VaR inputs audited.** VaR notional never used pip_usd (so #42 did not inflate it); the real gaps were:
+* `portfolio.sectors.sector_for("GOLD#")` → "other" (cap 100 %!) — now normalised with `base_symbol()` → commodity;
+  `_sector_exposure` uses `instruments.notional_usd` (GOLD# / XAUUSD+ / forex) instead of `lot × price`.
+* `open_risk_usd` falls back to `original_stop_loss` when the live stop is not mirrored yet; one stop-less position
+  no longer unbounds the whole book (`_mixed_bounded_loss_usd`: stop distance for stopped rows, parametric share
+  for the rest).
+* `var_cap_exempt_reason`: a book whose stop-bounded loss (× gap 1.5) is inside the VaR cap is never deleveraged,
+  in addition to the v1.60.52 single-position / breakeven exemptions. Tests: 0.05-lot XAUUSD with a $5 or $25
+  stop on $10k (and on $1k) never breaches; VaR identical for XAUUSD vs GOLD# / microcent label.
+**(b) Deleverage closes are now acknowledged.** `execute_deleveraging_actions` issues the close as a fenced
+`FULL_CLOSE` modification (`intent_id`, `emergency=True` — the path scalp/revive already use and the EA acks),
+instead of the bare trades-block `close_requested` flag that produced "requested → superseded" five times with no
+terminal ack. The FULL_CLOSE ack handler records `terminal_ack` on the `close_commands` row
+(`close_commands.record_terminal_ack`); a terminal failure marks the row `failed` and releases the close.
+New `close_watchdog.sweep` (bot tick): requested command with no terminal ack after `CLOSE_UNACKED_ALERT_SEC`
+(default 60) → ops alert `close_command_unacked` (high, once per command) + pulse.
+**(c) A pending/failed close no longer freezes management.** After `CLOSE_REQUEST_TTL_SEC` (default 300) without
+broker confirmation the request EXPIRES (`close_commands.expire_close`): `close_requested=False`, the FULL_CLOSE
+modification is cleared, ledger row `expired`, trade `close_request_expired{key,at,reason}`, ops alert
+`close_command_expired`, pulse "close request expired — management resumed". A terminal-failure ack expires it
+immediately. The position stays open and visible; nothing is retried blindly.
+**(#8 widened) `breakeven_trigger_r` is a real knob again** (BotConfig, default **1.0 × R**, 0 = TP1-only,
+removed from DEAD_CONFIG_FIELDS): `trade_manager._breakeven_trigger_r` moves the stop to entry at
++N × sl_pips for every NON-scalp engine (breakout signals carry TP1 = TP, so the TP1 break-even never fired —
+600007662145 reached +2.45R and was scratched). Never loosens, honours be_clamped, never re-arms; scalp engines keep
+their fixed +0.5R (+costs) rule. Partial/trailing fields stay removed (v1.60.48). Bot Config UI: "Break-even
+trigger (non-scalp engines)". Presets' existing `breakeven_trigger_r` values (0.4–1.0) are now honoured.
+**Tests** `tests/unit/test_v1_60_54_var_deleverage_breakeven.py` (10), `tests/integration/test_v1_60_54_close_watchdog.py`
+(5, real Mongo, fake-EA acks: fenced FULL_CLOSE issued · silent EA → alert at 61 s, expiry at 301 s, slot free ·
+terminal failure releases immediately · success ack recorded, no false alert).
+**New env (all optional):** `CLOSE_UNACKED_ALERT_SEC=60`, `CLOSE_REQUEST_TTL_SEC=300`. **New config:** `breakeven_trigger_r=1.0`.
