@@ -17,7 +17,32 @@ their parameters are unchanged (`DEFAULT_PARAMS` identical, verified by test).
 | `gold_trend_pulse_news_events` | `null` | event kinds; null = CPI, Core CPI, Nonfarm Payrolls, FOMC, Fed Interest Rate Decision, Fed Chair, PCE, GDP, Retail Sales, PPI, ISM |
 | `engine_live_features_enabled` | `false` | #55 — hf_scalp / hf_scalp_fast / breakout_m15 trade on LIVE-price features; OFF = both outputs recorded (`engine_shadow_compare`) |
 
-No new environment variables.
+No new environment variables. **v1.60.56 added no flags at all** (its table says "—"); v1.60.57's complete list is the
+table above — nothing else is switchable.
+
+### Default behaviour: unchanged on every account
+With the defaults (`gold_trend_pulse_enabled=false`, `engine_live_features_enabled=false`) **nothing in v1.60.56 / v1.60.57
+changes trading on any account**: `ai_signals` never enters the gold_trend_pulse branch (`enabled_for(cfg)` is false, so
+XAUUSD is analysed by the preset engine exactly as before, no `gtp_*` collections are written, no XAUUSD is added to the
+symbol list, the generic cooldown / trade-of-day cap stay in force), the engines read closed-bar features exactly as
+before (#55 only RECORDS the live-feature arm side by side as `engine_shadow_compare`), `DEFAULT_PARAMS` are
+byte-identical, the news-mode / sweep / layering sub-flags live INSIDE the disabled engine and therefore do nothing. The
+only runtime changes that are always on are #56 (cross-account loss cooldown — blocks, never opens) and the v1.60.56 safety follow-ups (#49–#54: close-alert dedup, close-reason
+priority, netting-ack exclusion, more mandatory close reasons, real entry costs in the break-even buffer, optimizer may
+not switch `breakeven_enabled` off, sector-pulse dedup) — none of them opens, sizes or re-targets a position.
+Asserted by `test_release_notes_flag_table_matches_model_defaults_and_engine_is_inert_when_off` (the flag table above is
+parsed and compared with `BotConfigUpdate` defaults) and `test_engine_registered_as_deterministic_scope_and_off_by_default`.
+
+### Running the replays on the VPS (inside the backend image, READ-ONLY)
+```
+docker compose cp XAUUSD_M1.csv backend:/tmp/XAUUSD_M1.csv                      # MT5 export: <DATE> <TIME> <OPEN> <HIGH> <LOW> <CLOSE> <TICKVOL> <VOL> <SPREAD>, broker UTC+3
+docker compose exec backend python scripts/gtp_replay.py --csv /tmp/XAUUSD_M1.csv --tz-offset 3 --days 30 --spread 0.25 --commission <acct> --out /tmp/gtp_30d.md --trades-csv /tmp/gtp_30d.csv
+docker compose exec backend python scripts/gtp_replay.py --csv /tmp/XAUUSD_M1.csv --tz-offset 3 --days 0 --window 2026-10-16T13:15 2026-10-16T14:30 --out /tmp/gtp_16oct.md
+docker compose exec backend python scripts/gtp_news_events.py --months 6 --out /tmp/news_events.json --csv-out /tmp/news_events.csv      # FINNHUB_API_KEY(_FILE) from the staged secret
+docker compose exec backend python scripts/gtp_replay.py --csv /tmp/XAUUSD_M1.csv --tz-offset 3 --days 186 --news-events /tmp/news_events.json --out /tmp/gtp_news_6m.md
+docker compose exec backend python scripts/engine_live_features_replay.py --csv /tmp/XAUUSD_M1.csv --from 2026-10-16T13:00 --to 2026-10-16T14:30
+docker compose cp backend:/tmp/gtp_30d.md . && …                                 # markdown / CSV out only — no DB writes, no orders
+```
 
 ## gold_trend_pulse — how it trades (all distances in PRICE units; 1 retail pip = 0.10)
 * **Daily bias** every 15 min (hysteresis: 2 consecutive confirmations): UP = H4 close > EMA50(H4) rising, H1 close >
@@ -103,6 +128,18 @@ No new environment variables.
 * **Replay**: `scripts/gtp_news_events.py --months 6` exports the Finnhub events; `scripts/gtp_replay.py --csv …
   --days 180 --news-events news_events.json` reports NEWS trades separately (win rate, avg win/loss, worst trade, by
   kind, per-event table) — normal-session stats exclude them.
+
+## #56 — cross-account loss cooldown (always on; uses the existing `loss_cooldown_*` settings)
+16 Oct: RoboForex 600007817961 XAUUSD BUY hit SL at 15:14:55 (−1R); `user_direction_cap` released the slot and OnEquity
+opened the same XAUUSD BUY 43 s later (46732353, 15:15:38) — the loss cooldown was per account (iter-122b).
+`loss_cooldown.loss_cooldown_block` now scans every account of the user: a bot close at a REAL loss (< −0.1R;
+`r_multiple`, else derived from entry / stop / exit; R unknown → any negative P&L) on ANY account pauses that
+symbol+direction (base symbol, so `XAUUSD.crp` ↔ `XAUUSD+`) on ALL accounts for the evaluating account's
+`loss_cooldown_minutes` (default 30). Scratch / break-even closes of OTHER accounts (≥ −0.1R) do not trigger it; the
+own-account rule is unchanged (any negative bot P&L). Manual trades and `stats_excluded` late fills never count.
+Pulse "Cross-account loss cooldown: … paused on ALL accounts for N more min", counter
+`cross_account_loss_cooldown_block`. Switching `loss_cooldown_enabled` off on an account disables both rules for it.
+Tests: `tests/unit/test_v1_60_57_cross_account_loss_cooldown.py` (4).
 
 ## #55 — engines blind to fast gold moves (flag `engine_live_features_enabled`, default OFF)
 1. `compute_intraday_features(bars, live_price, m5_bars)`: last_price / vwap_dist / donchian / range_pos use the LIVE

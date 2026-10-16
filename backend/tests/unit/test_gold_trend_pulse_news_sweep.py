@@ -418,3 +418,60 @@ def test_replay_marks_sweeps_reports_news_separately_and_traces_window():
     assert rep["trace"] and any("NEWS PRE" in r["note"] for r in rep["trace"]) and any("NEWS RELEASE" in r["note"] for r in rep["trace"])
     md = markdown(rep)
     assert "Sweep & reclaim (item 13)" in md and "News mode (item 14)" in md and "Window trace" in md
+
+
+# ------------------------------------------------------------------------------------------- VPS tooling (read-only)
+def test_replay_loads_mt5_export_applies_tz_offset_and_writes_reports_only(tmp_path):
+    from gold_trend_pulse.replay import load_csv, replay, write_trades_csv
+    from gold_trend_pulse.synthetic import synthetic_m1
+    bars = synthetic_m1(days=3, seed=5)
+    p = tmp_path / "XAUUSD_M1.csv"
+    with open(p, "w") as f:                                      # MT5 History export: tab-separated, broker time UTC+3
+        f.write("<DATE>\t<TIME>\t<OPEN>\t<HIGH>\t<LOW>\t<CLOSE>\t<TICKVOL>\t<VOL>\t<SPREAD>\n")
+        for b in bars:
+            d = datetime.fromtimestamp(b["t"] + 3 * 3600, tz=timezone.utc)
+            f.write(f"{d:%Y.%m.%d}\t{d:%H:%M:%S}\t{b['o']:.2f}\t{b['h']:.2f}\t{b['l']:.2f}\t{b['c']:.2f}\t{int(b['v'] or 1)}\t0\t25\n")
+    loaded = load_csv(str(p))
+    assert len(loaded) == len(bars) and loaded[0]["t"] == bars[0]["t"] + 3 * 3600 and loaded[0]["s"] == 25.0
+    rep = replay(loaded, broker_offset_sec=3 * 3600)             # --tz-offset 3 → bars back in UTC
+    assert rep["bars_m1"] == len(bars) and "trade_rows" in rep
+    out = tmp_path / "trades.csv"
+    assert write_trades_csv(rep, str(out)) == len(rep["trade_rows"]) and out.read_text().startswith("entry_at,exit_at,regime,trigger")
+    # comma-separated MT5 variant and ISO variant both parse
+    q = tmp_path / "b.csv"
+    q.write_text("2026-10-16,13:15,4160.10,4161.00,4159.50,4160.80,12,0,30\n2026-10-16T13:16:00+00:00,4160.8,4161.2,4160.5,4161.0,3\n")
+    rows = load_csv(str(q))
+    assert len(rows) == 2 and rows[0]["s"] == 30.0 and rows[1]["t"] - rows[0]["t"] == 60
+    # read-only guarantees: the CSV path never touches the DB / orders; the news exporter is GET-only
+    src = open(os.path.join(BACKEND, "scripts", "gtp_replay.py")).read()
+    assert src.count("from database import get_db") == 1 and src.index("from database import get_db") < src.index("def main()")   # only inside _from_db
+    for word in ("insert_one", "update_one", "request_close", "place_order", "pending_modification"):
+        assert word not in src
+    ne = open(os.path.join(BACKEND, "scripts", "gtp_news_events.py")).read()
+    assert "database" not in ne and "insert_one" not in ne and "--tz-offset" in src
+
+
+def test_release_notes_flag_table_matches_model_defaults_and_engine_is_inert_when_off():
+    """Item 3 of the hand-over: every new per-account flag + default is listed, and the defaults keep every account unchanged."""
+    import re
+    from models import BotConfigUpdate
+    from gold_trend_pulse.engine import enabled_for
+    notes = open(os.path.join(os.path.dirname(BACKEND), "docs", "RELEASE_NOTES_v1.60.57.md")).read()
+    table = re.findall(r"^\| `([a-z_0-9]+)` \| `([^`]+)` \|", notes, re.M)
+    assert {k for k, _ in table} >= {"gold_trend_pulse_enabled", "gold_trend_pulse_mode", "gold_trend_pulse_layering_enabled", "gold_trend_pulse_sweep_runner_enabled",
+                                    "gold_trend_pulse_news_mode_enabled", "gold_trend_pulse_news_pre_action", "gold_trend_pulse_news_release_min",
+                                    "gold_trend_pulse_news_events", "engine_live_features_enabled"}
+    cfg = BotConfigUpdate().model_dump()
+    conv = {"true": True, "false": False, "null": None}
+    for k, v in table:
+        v = v.strip('"')
+        expect = conv.get(v, v)
+        if isinstance(expect, str) and expect.isdigit():
+            expect = int(expect)
+        assert cfg[k] == expect, (k, cfg[k], expect)
+    assert not enabled_for(cfg)                                   # engine off → ai_signals never enters the GTP branch
+    assert cfg["engine_live_features_enabled"] is False           # #55 trades on closed-bar features exactly as before
+    ai = open(os.path.join(BACKEND, "ai_signals.py")).read()
+    assert "if _gtp_on(freeze_cfg) and _base_sym(symbol) == _GTP_SYMBOL:" in ai
+    from strategy_engines import DEFAULT_PARAMS                   # existing engine parameters untouched (asserted in the #55 suite too)
+    assert "hf_scalp" in DEFAULT_PARAMS and "breakout_m15" in DEFAULT_PARAMS

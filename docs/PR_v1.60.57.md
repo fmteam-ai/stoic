@@ -4,6 +4,12 @@ Base: GitHub `main` @ `347f421` (v1.60.55). **Sync note:** this sandbox has no `
 was built on the local tree (v1.60.55 + v1.60.56 follow-ups) — open the PR with *Save to GitHub* onto `main@347f421`
 and resolve as needed. Protected paths untouched. Not tagged. Full notes: `docs/RELEASE_NOTES_v1.60.57.md`.
 
+## Versions and their items
+| version | items | notes |
+|---|---|---|
+| **v1.60.56** | #49 close/Telegram alert dedup + quiet window · #50 mandatory close-reason priority (panic > protection > friday_flat > eod > manual) · #51 `netting_close_acked` legs excluded from re-dispatch / fan-out · #52 more mandatory reasons, discretionary not expired within 120 s of an ack · #53 real entry costs (`entry_costs.py`) in the BE buffer, `breakeven_enabled` out of the optimizer · #54 sector-pulse dedup | `docs/RELEASE_NOTES_v1.60.56.md` — **no new flags**; always-on safety follow-ups, none opens / sizes / re-targets a position |
+| **v1.60.57** | gold_trend_pulse items 1–10 (engine, shadow first) · 11 layering · 12 range mode · 13 sweep & reclaim (+ runner) · 14 news mode · **#55** live-price features / momentum override / stale-breakout fix (`engine_live_features_enabled`, OFF, shadow compare) · **#56** cross-account loss cooldown (always on, blocks only) | `docs/RELEASE_NOTES_v1.60.57.md` — flag table below; **#55 is in v1.60.57, not v1.60.56** |
+
 ## What is new (all OFF by default — no trading effect until a flag is switched ON per account)
 | flag | default | what it switches on |
 |---|---|---|
@@ -31,7 +37,10 @@ python scripts/engine_live_features_replay.py --csv XAUUSD_M1.csv --days 30
 python scripts/gtp_replay.py --csv XAUUSD_M1.csv --days 30 --window 2026-10-16T13:15 2026-10-16T14:30     # item 13: sweeps marked/caught + 16 Oct trace
 FINNHUB_API_KEY=… python scripts/gtp_news_events.py --months 6 && python scripts/gtp_replay.py --csv XAUUSD_M1.csv --days 180 --news-events news_events.json   # item 14
 ```
-Both scripts are read-only and print the markdown tables below. Paste their output into this PR before GO.
+All scripts are read-only (markdown / CSV out, no DB writes, no orders) and run inside the deployed backend image —
+exact VPS commands in the release notes ("Running the replays on the VPS"). `--tz-offset 3` converts the MT5 export
+(broker UTC+3) to UTC; `gtp_news_events.py` pulls the Finnhub history in 31-day chunks with the staged key. Paste the
+outputs into this PR before GO.
 
 ### Mechanics smoke on SYNTHETIC M1 (random-walk generator, `gold_trend_pulse/synthetic.py`) — NOT a performance claim
 gold_trend_pulse, 30 synthetic days, spread 0.25, commission $3.5/lot/side, equity $10,000:
@@ -69,5 +78,6 @@ entries flagged; per-trade expectancy −0.73 R (new) vs −0.88 R (old) on nois
   engine sweep branch + runner ticket, `trade_manager` runner BE (`be_trigger_price`) · 14 news `news_phase,
   news_surprise_bias, fomc_bias, news_confirmation, detect_news_entry, plan_news_exit, news_pre_action, next_news_event`,
   engine PRE/RELEASE/POST + `_news_protect`, `gtp_news_events` report rows, Market Intel plan line, `scripts/gtp_news_events.py`.
-* Tests: `tests/unit/test_gold_trend_pulse.py` (20), `tests/unit/test_gold_trend_pulse_news_sweep.py` (14),
+* #56 `loss_cooldown.py` (`is_real_loss`, `trade_r_multiple`, cross-account scan), `bot_runner` pulse / counter.
+* Tests: `tests/unit/test_gold_trend_pulse.py` (20), `tests/unit/test_gold_trend_pulse_news_sweep.py` (16), `tests/unit/test_v1_60_57_cross_account_loss_cooldown.py` (4),
   `tests/unit/test_v1_60_57_engine_live_features.py` (7).

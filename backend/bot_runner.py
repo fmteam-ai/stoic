@@ -1027,12 +1027,13 @@ async def _process_user_account_locked(db, cfg: dict):
         # re-entries are paused for 30min on THAT account (iter-122b:
         # per-account — each account has its own equity and settings).
         if signal.get("action") in ("BUY", "SELL"):
-            from loss_cooldown import loss_cooldown_block
+            from loss_cooldown import CROSS_ACCOUNT_PREFIX, loss_cooldown_block
             lc = await loss_cooldown_block(db, user_id, sym, signal["action"], cfg)
             if lc:
+                cross = lc.startswith(CROSS_ACCOUNT_PREFIX)        # #56 — a real loss (< −0.1R) on ANY account pauses every account
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="warn", reason=lc)
-                await inc_intel_counter(user_id, "loss_cooldown_block")
+                await inc_intel_counter(user_id, "cross_account_loss_cooldown_block" if cross else "loss_cooldown_block")
                 continue
 
         # v1.60.52 — optional per-account H1 alignment gate for the HF scalp engines (default OFF)
