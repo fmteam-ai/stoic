@@ -123,8 +123,11 @@ async def sweep(db, now: datetime | None = None) -> dict:
             await _pulse(db, trade, f"close not acknowledged by the terminal after {int(age)}s — {row.get('reason')} (trade {tid[-6:]})")
             out["alerted"] += 1
         if mandatory:
-            # #44 — never expire; re-dispatch with backoff until confirmed or the position is gone
-            if ack is None or not ack.get("success"):
+            # #44 — never expire; re-dispatch with backoff until confirmed or the position is gone.
+            # SEC-001 — a terminal "success" ack pauses re-dispatch only for CLOSE_ACK_GRACE_SEC; a position still open
+            # after that (no broker OUT deal) means the ack was wrong or forged → resume re-dispatch.
+            from close_commands import ack_in_grace
+            if not ack_in_grace(ack, now):
                 if await _redispatch(db, trade, row, now):
                     out["redispatched"] += 1
             continue

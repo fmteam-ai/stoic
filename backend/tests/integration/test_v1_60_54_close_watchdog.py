@@ -214,3 +214,49 @@ def test_eod_flatten_takes_over_unacked_close(world, monkeypatch):
     t = _run(db.trades.find_one({"_id": world["tid"]}))
     assert out["queued"] >= 1 and t["close_reason"] == "eod_flatten" and t["pending_modification"]["reason"] == "eod_flatten"
     assert _run(eod.sweep_eod_flatten(db))["queued"] == 0            # backoff: no duplicate on the next tick
+
+
+def test_sec001_terminal_failure_ack_keeps_a_panic_close_pending_and_redispatched(world):
+    """SEC-001 — a (buggy/forged) terminal FAILURE ack on a MANDATORY close must not release it: the request stays
+    pending and the watchdog re-dispatches until the broker OUT deal / position gone."""
+    import close_watchdog as cw
+    from close_commands import record_terminal_ack, request_close
+    db = world["db"]
+    _run(request_close(db, {"_id": world["tid"]}, reason="panic", actor="panic:test",
+                       pending_modification={"type": "FULL_CLOSE", "reason": "panic"}, emergency=True))
+    t = _run(db.trades.find_one({"_id": world["tid"]}))
+    key0 = t["close_idem_key"]
+    ack = _run(record_terminal_ack(db, t, success=False, error="position_not_found", terminal=True))
+    assert ack["kept_mandatory"] is True and ack["success"] is False
+    t1 = _run(db.trades.find_one({"_id": world["tid"]}))
+    assert t1["close_requested"] is True and t1["pending_modification"]["type"] == "FULL_CLOSE"
+    assert t1["close_command"]["state"] == "requested" and "close_request_expired" not in t1
+    assert _run(db.close_commands.find_one({"_id": f"{key0}:{world['tid']}"}))["state"] == "requested"
+    requested = datetime.fromisoformat(t1["close_command"]["requested_at"])
+    out = _run(cw.sweep(db, requested + timedelta(seconds=61)))
+    assert out["redispatched"] == 1 and out["expired"] == 0
+    assert _run(db.trades.find_one({"_id": world["tid"]}))["close_idem_key"] != key0
+
+
+def test_sec001_forged_success_ack_pauses_redispatch_only_for_the_grace_window(world):
+    """SEC-001 — a 'closed' ack with no broker OUT deal: no re-dispatch inside CLOSE_ACK_GRACE_SEC, re-dispatch
+    resumes after it while the position is still open; mandatory_close takeover resumes too."""
+    import close_watchdog as cw
+    from close_commands import ACK_GRACE_SEC, mandatory_close, record_terminal_ack, request_close
+    db = world["db"]
+    _run(request_close(db, {"_id": world["tid"]}, reason="friday_flat", actor="friday_flat",
+                       pending_modification={"type": "FULL_CLOSE", "reason": "friday_flat"}, emergency=True))
+    t = _run(db.trades.find_one({"_id": world["tid"]}))
+    requested = datetime.fromisoformat(t["close_command"]["requested_at"])
+    ack_at = requested + timedelta(seconds=5)
+    _run(record_terminal_ack(db, t, success=True, at=ack_at.isoformat()))
+    t = _run(db.trades.find_one({"_id": world["tid"]}))
+    key0 = t["close_idem_key"]
+    inside = ack_at + timedelta(seconds=ACK_GRACE_SEC - 10)
+    assert _run(cw.sweep(db, inside))["redispatched"] == 0
+    assert _run(mandatory_close(db, t, reason="friday_flat", actor="friday_flat", now=inside)) == "in_flight"
+    after = ack_at + timedelta(seconds=ACK_GRACE_SEC + 10)
+    out = _run(cw.sweep(db, after))
+    assert out["redispatched"] == 1 and out["expired"] == 0
+    t2 = _run(db.trades.find_one({"_id": world["tid"]}))
+    assert t2["close_idem_key"] != key0 and t2["close_requested"] is True and t2["close_redispatch"]["count"] == 1

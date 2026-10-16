@@ -49,7 +49,7 @@ def test_ea_online_is_a_fresh_heartbeat():
 def test_watchdog_source_never_expires_mandatory_and_gates_expiry_on_ea_online():
     src = open(os.path.join(BACKEND, "close_watchdog.py")).read()
     i = src.index("if mandatory:")
-    assert "_redispatch(db, trade, row, now)" in src[i:i + 400] and "continue" in src[i:i + 400]
+    assert "_redispatch(db, trade, row, now)" in src[i:i + 700] and "continue" in src[i:i + 700]
     j = src.index("if age >= CLOSE_REQUEST_TTL_SEC:")
     assert "if not ea_online(acc, now):" in src[j:j + 400] and "kept_offline" in src[j:j + 600]
     assert j > i                                   # expiry branch is only reachable for discretionary reasons
@@ -161,11 +161,40 @@ def test_legacy_live_at_is_fresh_only_for_ea_1_66():
 # ------------------------------------------------------------------------------------------------------ #48
 def test_close_in_flight_requires_a_successful_terminal_ack():
     from close_commands import close_in_flight
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    fresh = now.isoformat()
     base = {"close_requested": True, "close_command": {"state": "requested", "reason": "auto_deleverage_var_cap"}}
     assert close_in_flight(base) is False                                              # unacked → takeover allowed
-    assert close_in_flight({**base, "close_command": {**base["close_command"], "terminal_ack": {"success": False}}}) is False
-    assert close_in_flight({**base, "close_command": {**base["close_command"], "terminal_ack": {"success": True}}}) is True
+    assert close_in_flight({**base, "close_command": {**base["close_command"], "terminal_ack": {"success": False, "at": fresh}}}) is False
+    assert close_in_flight({**base, "close_command": {**base["close_command"], "terminal_ack": {"success": True, "at": fresh}}}) is True
     assert close_in_flight({"close_requested": False}) is False
+
+
+def test_sec001_success_ack_is_trusted_only_within_grace_window():
+    """SEC-001 — a forged/wrong 'closed' ack cannot park a mandatory close forever: after CLOSE_ACK_GRACE_SEC with the
+    position still open the close is NOT in flight (takeover + watchdog re-dispatch resume)."""
+    from close_commands import ack_in_grace, close_in_flight, ACK_GRACE_SEC
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    ok = {"success": True, "at": (now - timedelta(seconds=ACK_GRACE_SEC - 1)).isoformat()}
+    stale = {"success": True, "at": (now - timedelta(seconds=ACK_GRACE_SEC + 1)).isoformat()}
+    assert ack_in_grace(ok, now) is True and ack_in_grace(stale, now) is False
+    assert ack_in_grace({"success": True}, now) is False                                # no timestamp → not trusted
+    assert ack_in_grace(None, now) is False
+    tr = {"close_requested": True, "close_command": {"state": "requested", "reason": "panic", "terminal_ack": stale}}
+    assert close_in_flight(tr, now) is False
+
+
+def test_sec001_terminal_failure_never_releases_a_mandatory_close():
+    """SEC-001 — record_terminal_ack must not expire panic/friday_flat/eod/protection/manual closes on a terminal
+    failure; only discretionary closes are released."""
+    import inspect
+    import close_commands as cc
+    src = inspect.getsource(cc.record_terminal_ack)
+    assert "is_mandatory_close" in src and "not mandatory" in src and "kept_mandatory" in src
+    wd = inspect.getsource(__import__("close_watchdog").sweep)
+    assert "ack_in_grace(ack, now)" in wd
 
 
 def test_mandatory_closers_no_longer_skip_close_requested_trades():

@@ -51,6 +51,14 @@ Protected paths untouched. Unit tests for every item (`tests/unit/test_v1_60_55_
 * panic: supersedes every outstanding close and, on EAs ≥ 1.40, rides the fenced FULL_CLOSE path (explicit acks);
   legacy EAs keep the trades-block flag.
 
+## SEC-001 (security audit of this release) — a terminal message can never cancel a mandatory close
+* `record_terminal_ack`: a terminal FAILURE ack (`position_not_found`, non-retryable) still releases a DISCRETIONARY
+  close, but a MANDATORY one (panic / friday_flat / eod_flatten / protection / manual / NL) is kept pending
+  (`terminal_ack.kept_mandatory`) and the watchdog keeps re-dispatching until the broker OUT deal or the position is gone.
+* A terminal SUCCESS ack is trusted only for `CLOSE_ACK_GRACE_SEC` (120 s): `close_in_flight()` and the watchdog
+  resume re-dispatch when the position is still open after that — a wrong or forged "closed" from a single account's
+  EA cannot leave a panic / weekend-flat position open. Honest terminals are unaffected (the OUT deal lands in seconds).
+
 ## Finnhub — explicit statement of trading effect (requested)
 With `FINNHUB_API_KEY` set, Finnhub becomes the PRIMARY economic-calendar source for `economic_calendar.get_events()`,
 and therefore for `macro_freeze_check` — a REAL entry gate (macro freeze windows, avalanche guard, pre-news protection
@@ -64,5 +72,6 @@ without the key the behaviour is unchanged. The GDELT / central-bank / GVZ-VIX r
 | `SECTOR_CAP_DELEVERAGE_ENABLED` | `false` | sector-cap / combined-corr deleverage closes (off = advisory alert + pulse) |
 | `CLOSE_WATCHDOG_EA_ONLINE_SEC` | `90` | heartbeat age that counts as "EA online" for discretionary close expiry |
 | `CLOSE_REDISPATCH_BASE_SEC` / `CLOSE_REDISPATCH_MAX_SEC` | `60` / `900` | mandatory close re-dispatch backoff |
+| `CLOSE_ACK_GRACE_SEC` | `120` | how long a terminal "success" ack pauses mandatory re-dispatch without a broker OUT deal |
 | Bot Config `breakeven_enabled` | `true` | master switch for the non-scalp break-even rule |
 | Bot Config `breakeven_trigger_r` | `1.0` (shared `BREAKEVEN_TRIGGER_R_DEFAULT`) | break-even trigger in R (0 = TP1-only) |

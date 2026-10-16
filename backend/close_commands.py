@@ -18,6 +18,7 @@ Pending-order cancellation is a different verb (cancel_pending) and never goes
 through position close.
 """
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -203,13 +204,28 @@ async def _acknowledge_close(db, trade, *, broker_deal_id, occurred_at, result, 
     return ack
 
 
-def close_in_flight(trade: dict) -> bool:
-    """#48 — True only when the terminal has ACKED the outstanding close (it is executing it). A bare
-    `close_requested` flag without a successful terminal ack is NOT in flight and must not stop panic /
-    friday_flat / eod_flatten from taking over with their own fenced FULL_CLOSE."""
+ACK_GRACE_SEC = int(os.environ.get("CLOSE_ACK_GRACE_SEC", "120"))
+
+
+def ack_in_grace(ack: dict | None, now: datetime | None = None) -> bool:
+    """SEC-001 — a successful terminal ack is only trusted for CLOSE_ACK_GRACE_SEC: the broker OUT deal must follow.
+    A position still open after the grace window is treated as NOT in flight (ack was wrong or forged)."""
+    ack = ack or {}
+    if not ack.get("success"):
+        return False
+    at = _parse(ack.get("at"))
+    if at is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - at).total_seconds() <= ACK_GRACE_SEC
+
+
+def close_in_flight(trade: dict, now: datetime | None = None) -> bool:
+    """#48 — True only while the terminal has ACKED the outstanding close within the grace window (it is executing
+    it). A bare `close_requested` flag, a failed ack, or a success ack with no OUT deal after CLOSE_ACK_GRACE_SEC is
+    NOT in flight and must not stop panic / friday_flat / eod_flatten from taking over with their own FULL_CLOSE."""
     cmd = trade.get("close_command") or {}
-    ack = cmd.get("terminal_ack") or {}
-    return bool(trade.get("close_requested")) and cmd.get("state") == "requested" and bool(ack.get("success"))
+    return bool(trade.get("close_requested")) and cmd.get("state") == "requested" and ack_in_grace(cmd.get("terminal_ack"), now)
 
 
 async def mandatory_close(db, trade: dict, *, reason: str, actor: str, stamp: dict | None = None,
@@ -220,7 +236,7 @@ async def mandatory_close(db, trade: dict, *, reason: str, actor: str, stamp: di
     not due yet), "issued" (first command or takeover), "reissued" (re-dispatch of our own unconfirmed command)."""
     from close_watchdog import redispatch_due
     now = now or datetime.now(timezone.utc)
-    if close_in_flight(trade):
+    if close_in_flight(trade, now):
         return "in_flight"
     cmd = trade.get("close_command") or {}
     own_pending = bool(trade.get("close_requested")) and cmd.get("state") == "requested" and cmd.get("reason") == reason
@@ -254,14 +270,23 @@ async def record_terminal_ack(db, trade: dict, *, success: bool, error: str | No
     """#43 (b) — the EA acknowledged (or failed) the trade's outstanding close command: stamp `terminal_ack`
     on the immutable row and the trade pointer. A terminal failure (position_not_found, non-retryable) marks the
     row `failed` and EXPIRES the close request so trade management is not frozen behind a close that will never
-    happen. A successful ack leaves the row `requested` — broker confirmation (the OUT deal) completes it."""
+    happen — EXCEPT for MANDATORY reasons (SEC-001): panic / friday_flat / eod_flatten / protection / manual closes
+    are never released by a terminal message; the ack is recorded and the watchdog keeps re-dispatching until the
+    broker OUT deal confirms or the position is gone. A successful ack leaves the row `requested` — broker
+    confirmation (the OUT deal) completes it."""
+    from close_watchdog import is_mandatory_close
     cmd = trade.get("close_command") or {}
     key = cmd.get("key")
     if not key or cmd.get("state") != "requested":
         return None
     at = at or _now()
     ack = {"at": at, "success": bool(success), "error": (str(error)[:200] if error else None), "terminal": bool(terminal)}
-    failed = (not success) and terminal
+    mandatory = is_mandatory_close(cmd.get("reason") or trade.get("close_reason"))
+    failed = (not success) and terminal and not mandatory
+    if (not success) and terminal and mandatory:
+        ack["kept_mandatory"] = True
+        log.warning("terminal failure on MANDATORY close %s (trade %s): %s — kept pending, watchdog will re-dispatch",
+                    cmd.get("reason"), trade.get("_id"), error)
     sets = {"terminal_ack": ack}
     if failed:
         sets.update({"state": "failed", "failed_at": at})

@@ -11,6 +11,7 @@ Full notes: `docs/RELEASE_NOTES_v1.60.55.md`.
 | 46 | One shared break-even default `1.0R` (runtime + UI), `breakeven_enabled` honoured, BE stop placed at entry ± spread+commission (never a small loss), dry-run migration report. No stored config is rewritten. | `breakeven_enabled=true`, `breakeven_trigger_r` missing → 1.0R |
 | 47 | Scalp direction-cap reservation uses `base_symbol()`; `_skip_pulse_at` pruned; legacy `live_at` is only accepted as a fresh broker price on EA ≥ 1.66. | — |
 | 48 | VaR deleverage issues a real fenced FULL_CLOSE (confirmed by test). Friday flat / EOD flatten / panic **never skip** a `close_requested` trade: an unacked request is taken over by their own mandatory FULL_CLOSE, re-issued with backoff until the position is confirmed closed. | — |
+| SEC-001 | Security audit of this release: a terminal ack can no longer cancel a mandatory close. A failure ack keeps panic/friday_flat/eod/protection/manual closes pending (watchdog re-dispatches); a success ack pauses re-dispatch only for 120 s — no broker OUT deal by then → re-dispatch resumes. | `CLOSE_ACK_GRACE_SEC=120` |
 
 ## Finnhub disclosure (when `FINNHUB_API_KEY` is configured)
 * Finnhub is the **primary calendar source** for `macro_freeze_check` — a real trading gate (fallback to the previous sources when unavailable).
