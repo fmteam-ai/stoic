@@ -9,7 +9,6 @@ Plus dynamic Regime Swapping — SL/TP/Kelly mutate based on live regime.
 """
 import os
 import json
-import uuid
 import re
 import logging
 from datetime import datetime, timezone
@@ -35,7 +34,6 @@ from mtf_intraday import fetch_mtf_confluence
 from strategy_engines import (resolve_engine, run_engine, ENGINE_LABELS,
                               MTF_MODE_BY_ENGINE, SCALP_ENGINES, SCALP_RISK_PCT_CAP)
 from pip_utils import pips_to_price, price_to_pips
-from llm_models import PROVIDER, model_for
 
 # --- Execution geometry tunables ---
 ATR_SL_MULTIPLIER = float(os.environ.get("ATR_SL_MULTIPLIER", "1.5"))
@@ -82,6 +80,20 @@ def _parse_ai_json(text: str) -> dict:
     except Exception:
         return {"action": "HOLD", "confidence": 0,
                 "reasoning": "Failed to parse model response.", "key_factors": []}
+
+
+NEWS_VETO_INACTIVE_NOTE = "news veto inactive — LLM unavailable"
+
+
+def news_veto_state(sentiment: dict | None, mtf_mode: bool) -> dict:
+    """{active, mode, note} — the dual-AI news veto is only live when news_understanding returned a score."""
+    s = sentiment or {}
+    available = bool(s.get("available")) and s.get("score") is not None
+    mode = "hard" if mtf_mode else "advisory"
+    if available:
+        return {"active": True, "mode": mode, "note": ""}
+    return {"active": False, "mode": mode, "note": NEWS_VETO_INACTIVE_NOTE,
+            "why": str(s.get("summary") or "no sentiment score")[:160]}
 
 
 def _apply_dual_veto(action: str, confidence: float, sentiment: dict) -> tuple:
@@ -506,17 +518,11 @@ async def analyze_symbol(symbol: str, risk_level: str,
             f"Live break of {mtf_conf.get('swing_level')}",
         ]
         try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
-                system_message=NARRATOR_PROMPT,
-            ).with_model(PROVIDER, model_for("analysis"))
-            from llm_timeout import send_with_timeout
-            narration = await send_with_timeout(chat, UserMessage(text=json.dumps({
+            import llm_client
+            narration = await llm_client.complete("analysis", NARRATOR_PROMPT, json.dumps({
                 "confirmed_setup": {"direction": action, "cascade": mtf_conf},
                 "market_context": json.loads(user_text),
-            }, separators=(",", ":"))), label=f"narration:{symbol}")
+            }, separators=(",", ":")), feature="narration")
             parsed = _parse_ai_json(str(narration))
             if parsed.get("reasoning"):
                 reasoning = f"{reasoning}\n\n{parsed['reasoning']}"
@@ -532,6 +538,10 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # a daily news bias shouldn't silence the whole persona.
     sentiment_note = ""
     _, veto_reason = _apply_dual_veto(action, confidence, sentiment)
+    # v1.60.59 — the veto can only fire when news_understanding (LLM) returned a score: say so when it did not
+    news_veto = news_veto_state(sentiment, mtf_mode)
+    if not news_veto["active"]:
+        key_factors = [*key_factors, news_veto["note"]]
     if veto_reason and not mtf_mode:
         sentiment_note = veto_reason
         veto_reason = ""
@@ -660,6 +670,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "mtf_confluence_applied": engine_note if mtf_mode else None,
         "indicators": indicators,
         "sentiment": sentiment,
+        "news_veto": news_veto,
         "session": session,
         "session_bias": session_bias,
         "regime": regime,

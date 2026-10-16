@@ -11,7 +11,6 @@ Returns a structured pass/fail report covering:
 Plus POST /diagnostic/auto-fix to run safe remediations in one click.
 """
 from datetime import datetime, timezone, timedelta
-import os
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -334,17 +333,33 @@ async def _check_ea_config(db, user_id: str) -> dict:
         checks.append(_mk("Bot ON toggle", "pass",
                           f"{active_count}/{len(cfgs)} config(s) active"))
 
-    # API keys
-    has_claude = bool(os.environ.get("EMERGENT_LLM_KEY"))
-    if has_claude:
-        from llm_models import describe as _llm_describe
-        tiers = _llm_describe()["tiers"]
-        summary = " · ".join(f"{t}={v['model']}{'*' if v['overridden'] else ''}" for t, v in tiers.items())
-        checks.append(_mk("Claude LLM", "pass", f"Configured (emergent backend) · {summary}"))
-    else:
+    # LLM provider (v1.60.59 — direct Anthropic vs Emergent Universal Key; the latter is refused off-platform)
+    import llm_client
+    st = await llm_client.status_with_db(db)
+    if st["provider"] == llm_client.PROVIDER_NONE:
         checks.append(_mk("Claude LLM", "fail",
-                          "Missing EMERGENT_LLM_KEY — AI signals disabled.",
-                          fix_label="Add EMERGENT_LLM_KEY in backend/.env"))
+                          "No LLM credential — AI narration, news veto, Co-Pilot and agents are off (trading engines unaffected).",
+                          fix_label="Add ANTHROPIC_API_KEY under Admin → Integrations → AI"))
+    else:
+        tiers = st["models"]
+        summary = " · ".join(f"{t}={m}" for t, m in tiers.items() if t in ("fast", "analysis", "deep"))
+        label = "direct Anthropic" if st["provider"] == llm_client.PROVIDER_DIRECT else "Emergent Universal Key"
+        err = st.get("last_error_kind")
+        if err == llm_client.KIND_BLOCKED:
+            checks.append(_mk("Claude LLM", "fail", f"{label}: Universal Key not allowed from this host (Emergent proxy 403). "
+                                                   f"News veto inactive, Co-Pilot/agents off. {st.get('last_error_at')}",
+                              fix_label="Add ANTHROPIC_API_KEY under Admin → Integrations → AI"))
+        elif err and (st.get("last_error_at") or "") > (st.get("last_ok_at") or ""):
+            checks.append(_mk("Claude LLM", "warn", f"{label} · last error ({err}): {st.get('last_error')} · {summary}"))
+        else:
+            checks.append(_mk("Claude LLM", "pass", f"{label} · {st['today_calls']}/{st['daily_call_cap']} calls today · {summary}"))
+    # news veto depends on the LLM sentiment score
+    from news_understanding import _status as ns
+    if ns.get("last_llm_error") or (st["provider"] == llm_client.PROVIDER_NONE) or st.get("last_error_kind") == llm_client.KIND_BLOCKED:
+        checks.append(_mk("News veto", "warn", "news veto inactive — LLM unavailable (sentiment empty; MTF hard veto cannot fire)",
+                          fix_label="Fix the Claude LLM check above"))
+    else:
+        checks.append(_mk("News veto", "pass", f"sentiment scored {ns.get('last_scored_at') or 'not yet'}"))
 
     # Per-user Telegram (notifications collection)
     from notification_settings import get_settings
@@ -552,3 +567,20 @@ async def ai_latency_view(hours: int = 24, user=Depends(get_current_user)):
     require_admin(user)
     from llm_timeout import latency_summary
     return await latency_summary(get_db(), hours=max(1, min(int(hours or 24), 168)))
+
+
+@router.get("/llm-status")
+async def llm_status_view(user=Depends(get_current_user)):
+    """v1.60.59 — active LLM provider (direct Anthropic vs Emergent Universal Key), last error, per-feature daily call
+    counters and the news-veto state. Admin only. Never includes a key."""
+    from auth import require_admin
+    require_admin(user)
+    import llm_client
+    from news_understanding import _status as ns
+    out = await llm_client.status_with_db(get_db())
+    blocked = out.get("last_error_kind") == llm_client.KIND_BLOCKED
+    out["news_veto"] = {"active": out["provider"] != llm_client.PROVIDER_NONE and not blocked and not ns.get("last_llm_error"),
+                        "note": "news veto inactive — LLM unavailable" if (out["provider"] == llm_client.PROVIDER_NONE or blocked
+                                                                           or ns.get("last_llm_error")) else "",
+                        "last_scored_at": ns.get("last_scored_at"), "last_llm_error": llm_client.redact(ns.get("last_llm_error") or "") or None}
+    return out

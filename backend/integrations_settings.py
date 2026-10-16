@@ -28,7 +28,9 @@ REGISTRY = {
     "RESEND_API_KEY": ("email", True, "Resend API key (re_…)"),
     "SENDER_EMAIL": ("email", False, "From address on a verified Resend domain"),
     "SENDER_NAME": ("email", False, "Display name on outgoing e-mail"),
-    "EMERGENT_LLM_KEY": ("ai", True, "Emergent Universal Key (Co-Pilot, Risk Commander, AI agents)"),
+    "ANTHROPIC_API_KEY": ("ai", True, "Anthropic API key (sk-ant-…) — Claude called DIRECTLY; takes precedence over the Universal Key "
+                                      "(the Universal Key is refused with 403 from hosts outside Emergent)"),
+    "EMERGENT_LLM_KEY": ("ai", True, "Emergent Universal Key — fallback when no Anthropic key is set (works only for apps hosted on Emergent)"),
     "SECURITY_AGENT_TELEGRAM_BOT_TOKEN": ("security_telegram", True, "BotFather token of the security-alerts bot (123456789:AA…)"),
     "SECURITY_AGENT_TELEGRAM_CHAT_ID": ("security_telegram", False, "Chat id the bot posts to (your private chat, or -100… for a group)"),
     "VPS_REFERRAL_URL": ("vps", False, "Recommended VPS link shown to users (ForexVPS partner/referral URL)"),
@@ -55,6 +57,7 @@ VALIDATORS = {
     "SECURITY_AGENT_TELEGRAM_CHAT_ID": (r"^-?\d{5,20}$", "expected a numeric chat id (groups start with -100)"),
     "VPS_REFERRAL_URL": (r"^https://[A-Za-z0-9.-]+(/[^\s]*)?$", "expected an https:// URL"),
     "FRED_API_KEY": (r"^[a-f0-9]{32}$", "expected a 32-character lowercase hex FRED API key"),
+    "ANTHROPIC_API_KEY": (r"^sk-ant-[A-Za-z0-9_-]{20,}$", "expected an Anthropic key starting with sk-ant-"),
 }
 _VAULT_LOADED: dict[str, str] = {}   # key → value this process last took from the vault (refresh_keys bookkeeping)
 _AAD = b"stoic-secrets-vault-v1"
@@ -398,9 +401,19 @@ async def test_provider(db, provider: str, actor: dict) -> dict:
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "detail": f"Cloudflare unreachable: {type(e).__name__}"}
     if provider == "ai":
-        if not os.environ.get("EMERGENT_LLM_KEY"):
-            return {"ok": False, "detail": "EMERGENT_LLM_KEY not configured"}
-        return {"ok": True, "detail": "key present — ask the Co-Pilot a question to exercise it"}
+        import llm_client
+        active = llm_client.active_provider()
+        if active == llm_client.PROVIDER_NONE:
+            return {"ok": False, "detail": "no LLM credential — set ANTHROPIC_API_KEY (direct) or EMERGENT_LLM_KEY (Emergent-hosted only)",
+                    "provider": active}
+        try:
+            out = await llm_client.complete("fast", "Reply with the single word OK.", "Say OK", feature="integrations_test",
+                                            max_tokens=8, seconds=20)
+        except Exception as e:  # noqa: BLE001 — never surface the key
+            kind, msg = llm_client.classify_error(e, active)
+            return {"ok": False, "detail": f"{active}: {llm_client.redact(msg)[:300]}", "provider": active, "error_kind": kind}
+        return {"ok": True, "detail": f"{active} answered “{llm_client.redact(out)[:40]}” via {llm_client.model_for('fast')}",
+                "provider": active}
     if provider == "vps":
         o = vps_offer()
         return {"ok": True, "detail": f"users are sent to {o['url']}"}

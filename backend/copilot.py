@@ -5,13 +5,11 @@ account balances, current regime/sentiment, panic state, active triggers — and
 hands it to Claude Sonnet 4.5 as JSON context. Multi-turn history persisted
 in `db.copilot_sessions` keyed by (user_id, session_id).
 """
-import os
 import uuid
 import json
 from datetime import datetime, timezone
 
 from database import get_db
-from llm_models import PROVIDER, model_for
 
 
 SYSTEM_PROMPT = """You are the user's personal Trading Co-Pilot for an AI trading
@@ -143,6 +141,17 @@ async def get_or_create_session(user_id: str, session_id: str | None) -> dict:
     return doc
 
 
+COPILOT_HISTORY_TURNS = 6          # user+assistant messages replayed with every request (≥ 6 per review)
+COPILOT_HISTORY_MAX_CHARS = 2000   # per message, keeps the request bounded
+
+
+def copilot_history(session: dict, turns: int = COPILOT_HISTORY_TURNS) -> list[dict]:
+    """Last `turns` messages of the stored session as [{role, content}] — the LLM has no server-side memory."""
+    msgs = [m for m in (session or {}).get("messages") or [] if isinstance(m, dict)
+            and m.get("role") in ("user", "assistant") and str(m.get("content") or "").strip()]
+    return [{"role": m["role"], "content": str(m["content"])[:COPILOT_HISTORY_MAX_CHARS]} for m in msgs[-turns:]]
+
+
 async def chat(user_id: str, message: str, session_id: str | None = None) -> dict:
     """Run a single Co-Pilot turn. Returns {session_id, answer, snapshot_used}."""
     db = get_db()
@@ -156,18 +165,12 @@ async def chat(user_id: str, message: str, session_id: str | None = None) -> dic
         + json.dumps(snapshot, default=str, indent=2)
     )
 
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat_client = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=session["session_id"],
-        system_message=grounded_system,
-    ).with_model(PROVIDER, model_for("analysis"))
-
-    # Replay last 6 turns of history (3 user + 3 assistant) for continuity.
-    # NOTE: emergentintegrations LlmChat persists by session_id across processes,
-    # so we just send the new user message. Older history is kept in our DB.
-    response = await chat_client.send_message(UserMessage(text=message))
-    answer = str(response).strip()
+    import llm_client
+    # Multi-turn memory: the direct Anthropic API is stateless, so the last COPILOT_HISTORY_TURNS turns from
+    # db.copilot_sessions are sent with every request (the Emergent path gets the same history as initial messages).
+    history = copilot_history(session)
+    answer = str(await llm_client.complete("analysis", grounded_system, message, feature="copilot",
+                                           history=history, seconds=45)).strip()
 
     # Append to our DB history (we keep our own copy for the UI)
     await db.copilot_sessions.update_one(

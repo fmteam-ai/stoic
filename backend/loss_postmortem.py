@@ -21,15 +21,11 @@ Stored in:
   • `guardrail_adjustments`    — audit trail of auto-tightens
   • `users.postmortem_settings = {auto_tighten_enabled: bool}` — opt-in
 """
-import os
 import json
 import logging
-import uuid
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 
-from database import get_db
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger("loss-postmortem")
 
@@ -220,14 +216,8 @@ async def _claude_narrative(trade: dict, signal: dict, diff: dict) -> dict:
     }, default=str)
 
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"postmortem-{trade.get('symbol','?')}-{uuid.uuid4().hex[:8]}",
-            system_message=_POSTMORTEM_SYSTEM,
-        ).with_model(PROVIDER, model_for("analysis"))
-        from llm_timeout import send_with_timeout
-        response = await send_with_timeout(chat, UserMessage(text=user_text), label="postmortem", seconds=30)
+        import llm_client
+        response = await llm_client.complete("analysis", _POSTMORTEM_SYSTEM, user_text, feature="postmortem", seconds=30)
         # Strip code fences / prefix garbage just in case
         raw = str(response).strip()
         if raw.startswith("```"):

@@ -24,14 +24,11 @@ Strict JSON output:
     ]
   }
 """
-import os
 import json
 import re
-import uuid
 import logging
 
-from emergentintegrations.llm.chat import LlmChat, UserMessage
-from llm_models import PROVIDER, model_for
+from llm_models import PROVIDER, model_for  # noqa: F401 — tier names stay the single source (llm_client resolves them)
 
 logger = logging.getLogger("research.hypothesis-generator")
 
@@ -143,12 +140,6 @@ async def generate(
         return {"hypotheses": [],
                 "notes": ["No symbols configured — nothing to propose."]}
 
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"self-improve-{uuid.uuid4().hex[:8]}",
-        system_message=SYSTEM_PROMPT,
-    ).with_model(PROVIDER, model_for("deep"))
-
     user_msg = (
         "WEAKNESS REPORT (last 30d):\n"
         f"{json.dumps(weaknesses, indent=2, default=str)}\n\n"
@@ -156,7 +147,8 @@ async def generate(
         f"USER'S TRADED SYMBOLS: {user_symbols}\n\n"
         f"Generate up to {max_hypotheses} focused improvement hypotheses per the system schema."
     )
-    response = await chat.send_message(UserMessage(text=user_msg))
+    import llm_client
+    response = await llm_client.complete("deep", SYSTEM_PROMPT, user_msg, feature="research_hypotheses", seconds=60)
     try:
         parsed = _parse_json(str(response))
     except Exception as e:  # noqa: BLE001
