@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-10-16T18:43:16.174944+00:00",
-  "git_commit": "e8b0dca57712d4cd1ad48addef15eab9a6c8d886",
-  "source_sha": "e8b0dca57712d4cd1ad48addef15eab9a6c8d886",
+  "captured_at": "2026-10-16T19:08:57.735739+00:00",
+  "git_commit": "c7a946be934f2591526f056bc691de6865261776",
+  "source_sha": "c7a946be934f2591526f056bc691de6865261776",
   "images": {
     "backend": null,
     "frontend": null
@@ -209,7 +209,7 @@
       "zipp==4.1.0"
     ],
     "packages_sha256": "b1a573ad045e0508d446ce7e1e2d1687cbccbb16419c1c74e14ac6542e8f8d50",
-    "requirements_txt_sha256": "561efaefddc4f60545441bf5a1e88dbc6c1e39371dc1936d4bf93a350acc3c6f"
+    "requirements_txt_sha256": "ca945bd0d131c6ff637ad3e05a2c68ae169a52d19dae76ed34fe9bb8c9396acc"
   },
   "node": {
     "version": "v20.20.2",

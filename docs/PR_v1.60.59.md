@@ -25,7 +25,7 @@ journal cards were silently off.
 `llm_client.py` (new), `llm_models.py` (doc), `copilot.py`, `ai_signals.py`, `news_understanding.py`, `fed_tone.py`,
 `self_evaluation.py`, `loss_postmortem.py`, `loss_advisor.py`, `ai_optimizer.py`, `bot_doctor.py`, `nl_commander.py`,
 `strategy_code_generator.py`, `research_agent/hypothesis_generator.py`, `routes/{insights,journal,copilot,diagnostic}_routes.py`,
-`integrations_settings.py`, `requirements.txt` (+anthropic), `frontend/src/components/LlmProviderCard.jsx`,
+`integrations_settings.py`, `requirements.txt` (+anthropic==1.15.0 and its 5 transitive pins: docstring-parser, httpx2, httpcore2, truststore, opentelemetry-api — CI container-build/security-scan fixed: an earlier push had accidentally frozen the sandbox env incl. torch+cpu/accelerate), `frontend/src/components/LlmProviderCard.jsx`,
 `frontend/src/pages/BotHealth.jsx`, tests (`test_v1_60_59_llm_client.py` 10; 3 legacy tests re-pointed to the helper), docs.
 
 ## Validation
