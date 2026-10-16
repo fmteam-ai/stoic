@@ -9,10 +9,9 @@ Two surfaces:
 import uuid
 from bson import ObjectId
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
 from auth import get_current_user
-import nl_execution as nx
 from database import get_db
 from step_up import audit_event
 from ws_manager import manager as ws_manager
