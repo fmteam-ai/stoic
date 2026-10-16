@@ -259,6 +259,7 @@ export function MarketIntelCard({ compact = false }) {
                                 <span className="text-white/60">{a.account || a.account_id.slice(-6)} · </span>
                                 <span className={`font-mono font-bold ${a.bias === "UP" ? "text-[#10F2C5]" : a.bias === "DOWN" ? "text-[#FF5E5B]" : "text-white/50"}`}>{a.bias}</span>
                                 <span className="text-white/50"> · regime {a.regime} · {a.mode}</span>
+                                {a.news && <div className="text-[10px] text-[#F5C542]" data-testid={`intel-gtp-news-${a.account_id}`}>{a.news.phase ? `[${a.news.phase}] ` : ""}{a.news.plan}{a.news.forecast ? ` · fcst ${a.news.forecast}` : ""}{a.news.actual ? ` · actual ${a.news.actual}` : ""} · PRE: {a.news.pre_action}</div>}
                                 <ul className="text-[10px] text-white/50 ml-3">{(a.reasons || []).map((r, i) => <li key={i}>{r.ok ? "✓" : "✗"} {r.text}</li>)}</ul>
                             </div>))}
                     </Section>}

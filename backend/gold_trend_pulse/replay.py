@@ -1,9 +1,12 @@
 """gold_trend_pulse · replay / backtest on XAUUSD M1 bars with a costs model (spread + commission).
 Sources: --csv (MT5 History export: date,time,open,high,low,close[,tickvol]) or the DB (EA M1 feed, else M1 built
-from the scalp tick store). Bias is recomputed every 15 min from M15-resampled bars exactly as the engine does."""
+from the scalp tick store). Bias is recomputed every 15 min from M15-resampled bars exactly as the engine does.
+Items 13/14: every sweep-and-reclaim is MARKED (both directions) and compared with the ones the rule traded; news
+events ({title, when_ts, actual, forecast}) drive PRE / RELEASE / POST exactly as the engine and are reported separately."""
 from __future__ import annotations
 
 import csv
+import json
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
@@ -30,11 +33,31 @@ def load_csv(path: str) -> list:
     return bars
 
 
+def load_news_events(path: str) -> list:
+    """JSON list [{title, when (ISO) | when_ts, actual, forecast, country?}] → engine event shape."""
+    with open(path) as f:
+        rows = json.load(f)
+    out = []
+    for r in rows:
+        ts = r.get("when_ts")
+        if ts is None and r.get("when"):
+            ts = datetime.fromisoformat(str(r["when"]).replace("Z", "+00:00")).timestamp()
+        if ts is None:
+            continue
+        out.append({"title": r.get("title") or r.get("event") or "", "country": r.get("country") or "USD", "impact": r.get("impact") or "high",
+                    "when_ts": float(ts), "actual": r.get("actual"), "forecast": r.get("forecast") or r.get("estimate")})
+    return sorted(out, key=lambda e: e["when_ts"])
+
+
 def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float = 0.0, equity: float = 10_000.0,
-           pip_usd_per_lot: float = 10.0, broker_offset_sec: int = 0, layering: bool = False) -> dict:
+           pip_usd_per_lot: float = 10.0, broker_offset_sec: int = 0, layering: bool = False, runner: bool = True,
+           news_events: list | None = None, news_pre_action: str = "protect", news_release_min: int = R.NEWS_RELEASE_MIN_DEFAULT,
+           trace_window: tuple | None = None) -> dict:
     """Walk M1 bars (UTC after offset) and emulate the engine: bias every 15 min with hysteresis, regime every M5
-    (TREND / RANGE / NO_TRADE), TREND entries on M5 closes (single or layered basket), RANGE entries on M1 closes,
-    cooldowns, daily stop, sessions, spike filter, TP/SL clamps, BE, time-stops, breakout hand-over."""
+    (TREND / RANGE / NO_TRADE), TREND entries on M5 closes (sweep & reclaim first, then pullback / micro-breakout,
+    or a layered basket), RANGE entries on M1 closes, news PRE/RELEASE/POST, cooldowns, daily stop, sessions, spike
+    filter, TP/SL clamps, BE, time-stops, breakout hand-over. `trace_window=(start_ts, end_ts)` records every M5-close
+    evaluation inside the window (e.g. 16 Oct 13:15–14:30)."""
     if broker_offset_sec:
         m1 = [{**b, "t": int(b["t"]) - broker_offset_sec} for b in m1]
     m1 = sorted(m1, key=lambda b: b["t"])
@@ -43,7 +66,7 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
     comm_price = 2 * commission_usd_per_lot_side / pip_usd_per_lot * PIP_PRICE
     tracker = R.BiasTracker()
     trades: list = []
-    positions: list = []                      # open legs / trades (several only when layering)
+    positions: list = []                      # open legs / trades (several only when layering or sweep runner)
     basket: dict | None = None
     baskets: list = []
     i15 = 0
@@ -52,6 +75,9 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
     regime_minutes = defaultdict(lambda: defaultdict(int))
     day_key = None
     day_rows: list = []
+    sweeps_marked: dict = {}
+    news_state: dict = {}
+    trace: list = []
 
     def _close_all(bar, now, reason, only=None):
         nonlocal positions
@@ -64,6 +90,10 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
             if pos.get("basket"):
                 pos["basket"]["closed"].append(lab)
         positions = keep
+
+    def _trace(now, note, **kw):
+        if trace_window and trace_window[0] <= now.timestamp() <= trace_window[1]:
+            trace.append({"time": now.strftime("%H:%M"), "bias": tracker.bias, "regime": regime_name, "note": note, **kw})
 
     for bar in m1:
         t = int(bar["t"])
@@ -89,7 +119,7 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
             i15 += 1
         hist15 = m15[max(0, i15 - 800):i15]
         if m5_close:
-            m5 = [b for b in m5_all if b["t"] + 300 <= t + 60][-60:]
+            m5 = [b for b in m5_all if b["t"] + 300 <= t + 60][-80:]
             if tracker.due(now) and len(hist15) >= 200:
                 d0 = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
                 today = [b for b in hist15 if b["t"] >= d0]
@@ -109,11 +139,61 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
                 if inval:
                     _close_all(bar, now, "basket_invalidated")
                     baskets.append({"legs": basket["closed"]}); basket = None
+            for b_dir in ("UP", "DOWN"):                       # item 13 — mark EVERY sweep & reclaim, bias or not
+                s = R.detect_sweep_reclaim(m5, b_dir)
+                if s and s["sweep_t"] not in sweeps_marked:
+                    sweeps_marked[s["sweep_t"]] = {"time": now.isoformat(), "direction": s["direction"], "swept_level": s["swept_level"],
+                                                   "entry": s["entry"], "bias": tracker.bias, "with_bias": tracker.bias == b_dir, "traded": False}
         else:
             m5 = None
-        if regime_name == "NO_TRADE":
-            skips["no_trade"] += 1 if m5_close else 0; continue
+        # --- news mode (item 14)
+        ph = R.news_phase(news_events, now, None, news_release_min) if news_events else None
+        news_bias = None
+        if ph:
+            ns = news_state.setdefault(ph["key"], {"kind": ph["kind"], "title": ph["title"], "t": ph["t"], "protected": False, "bias": None, "surprise": None,
+                                                   "first_move": None, "confirmed": None, "trades": 0, "skipped": [], "pre_actions": []})
+            if ph["phase"] == "PRE":
+                if not ns["protected"]:
+                    for pos in positions:
+                        act = R.news_pre_action(pos["direction"], pos["entry"], pos["sl_dist"], bar["c"], news_pre_action)
+                        ns["pre_actions"].append(act["action"])
+                        if act["action"] == "breakeven":
+                            pos["sl_live"] = R.breakeven_level(pos["direction"], pos["entry"], pos["spread_at_entry"], pos["commission_price"])
+                        elif act["action"] == "tighten":
+                            pos["sl_live"] = act["new_sl"]
+                    if any(a == "close" for a in ns["pre_actions"]):
+                        _close_all(bar, now, "news_pre_close")
+                    ns["protected"] = True
+                if m5_close:
+                    _trace(now, f"NEWS PRE {ph['kind']}")
+                continue
+            if ph["phase"] == "RELEASE":
+                if m5_close:
+                    _trace(now, f"NEWS RELEASE {ph['kind']}")
+                continue
+            if not m5_close or not m5:
+                continue                                       # POST: act on M5 closes only
+            m5_post = [b for b in m5 if b["t"] >= ph["t"]]
+            nb = R.fomc_bias(m5_post) if ph["kind"] in R.NEWS_RATE_EVENTS else R.news_surprise_bias(ph["event"], ph["kind"])
+            ns["bias"], ns["surprise"] = nb.get("bias"), nb.get("surprise")
+            if nb["bias"] not in (None, "NONE"):
+                conf = R.news_confirmation(nb["bias"], R.pre_release_range(m5, ph["t"]), m5_post, ph["t"])
+                ns["first_move"], ns["confirmed"] = conf.get("first_move"), conf["confirmed"]
+                if conf["confirmed"]:
+                    news_bias = nb["bias"]
+                elif conf["confirmed"] is False and "not confirmed" not in ns["skipped"]:
+                    ns["skipped"].append("not confirmed")
+                if not news_bias:
+                    _trace(now, f"NEWS POST {ph['kind']} bias {nb['bias']}: {conf['reason']}")
+                    continue                                   # waiting / disagreed → no trade in this window
+            if nb["bias"] is None:
+                continue                                       # waiting for actual / first candle
+        if regime_name == "NO_TRADE" and not news_bias:
+            skips["no_trade"] += 1 if m5_close else 0
+            _trace(now, "NO_TRADE") if m5_close else None
+            continue
         if positions and not (layering and regime_name == "TREND" and basket):
+            _trace(now, "position open") if m5_close else None
             continue
         ok, _ = R.session_ok(now)
         if not ok:
@@ -131,6 +211,34 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
             if until and now < until:
                 continue
         d0 = int(now.replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
+        # ---------------- NEWS POST: pullback or sweep in the confirmed news bias, max 2 per event
+        if news_bias:
+            if not m5_close or not m5:
+                continue
+            ns = news_state[ph["key"]]
+            if ns["trades"] >= R.NEWS_MAX_TRADES_PER_EVENT:
+                continue
+            m5_post = [b for b in m5 if b["t"] >= ph["t"]]
+            before = [b for b in m5 if b["t"] < ph["t"]]
+            cand = R.detect_news_entry(m5, m5_post, news_bias, before[-1]["c"] if before else bar["c"]) or R.detect_sweep_reclaim(m5, news_bias)
+            if not cand:
+                _trace(now, f"NEWS POST {ph['kind']} bias {news_bias}: no entry")
+                continue
+            atr_post = R.atr(m5_post, 14) if len(m5_post) >= 3 else R.atr(m5, 14)
+            plan = R.plan_news_exit(cand["direction"], cand["entry"], cand["swing"], atr_post)
+            if not plan["ok"]:
+                ns["skipped"].append(plan["skip"]); skips["news_sl_too_wide"] += 1; continue
+            if not R.spread_ok(spread, plan["tp"])[0]:
+                ns["skipped"].append("spread"); skips["spread"] += 1; continue
+            sz = R.size_lots(equity, plan["sl"], pip_usd_per_lot, PIP_PRICE)
+            if not sz["ok"]:
+                ns["skipped"].append(sz["reason"]); skips["sizing"] += 1; continue
+            trig = "news_sweep" if cand["trigger"] == "sweep" else cand["trigger"]
+            pos = _pos({"direction": cand["direction"], "entry": cand["entry"]}, plan, spread, comm_price, sz["lots"], now, "NEWS", trig, news_bias, plan["time_stop_min"])
+            pos["event"] = ph["key"]
+            positions.append(pos); ns["trades"] += 1
+            _trace(now, f"NEWS {cand['direction']} {trig}", entry=cand["entry"])
+            continue
         # ---------------- RANGE: M1 edge rejection
         if regime_name == "RANGE":
             cand = R.detect_range_entry(bar, rng)
@@ -185,26 +293,54 @@ def replay(m1: list, *, spread: float = 0.25, commission_usd_per_lot_side: float
             pos["basket"] = basket
             positions.append(pos)
             continue
-        cand = R.detect_entry(m5, tracker.bias, vwap)
+        cand = R.detect_sweep_reclaim(m5, tracker.bias) or R.detect_entry(m5, tracker.bias, vwap)
         if not cand:
+            _trace(now, "no setup", price=bar["c"])
             continue
         if cand.get("blocked"):
-            skips["spike"] += 1; continue
-        plan = R.plan_exit(cand["direction"], cand["entry"], cand["swing"], cand["atr"])
+            skips["spike"] += 1; _trace(now, cand["blocked"]); continue
+        if cand["trigger"] == "sweep":
+            plan = R.plan_sweep_exit(cand["direction"], cand["entry"], cand["sweep_low"], cand["pre_drop_high"], cand["atr"], runner=runner)
+        else:
+            plan = R.plan_exit(cand["direction"], cand["entry"], cand["swing"], cand["atr"])
         if not plan["ok"]:
-            skips["sl_too_wide"] += 1; continue
+            skips["sl_too_wide"] += 1; _trace(now, plan["skip"], trigger=cand["trigger"]); continue
         if not R.spread_ok(spread, plan["tp"])[0]:
             skips["spread"] += 1; continue
         sz = R.size_lots(equity, plan["sl"], pip_usd_per_lot, PIP_PRICE)
         if not sz["ok"]:
             skips["sizing"] += 1; continue
-        positions.append(_pos(cand, plan, spread, comm_price, sz["lots"], now, "TREND", cand["trigger"], tracker.bias, R.TIME_STOP_MIN))
+        lots, runner_lots = sz["lots"], None
+        if cand["trigger"] == "sweep":
+            sweeps_marked.get(cand["sweep_t"], {}).update({"traded": True})
+            if plan.get("runner"):
+                lots, runner_lots = R.split_runner_lots(sz["lots"])
+        positions.append(_pos(cand, plan, spread, comm_price, lots, now, "TREND", cand["trigger"], tracker.bias, R.TIME_STOP_MIN))
+        _trace(now, f"{cand['direction']} {cand['trigger']}", entry=cand["entry"], sl=plan["stop_loss"], tp=plan["take_profit"])
+        if runner_lots:
+            rp = plan["runner"]
+            rplan = {"tp": rp["tp"], "sl": plan["sl"], "take_profit": rp["take_profit"], "stop_loss": plan["stop_loss"]}
+            rpos = _pos(cand, rplan, spread, comm_price, runner_lots, now, "TREND", "sweep_runner", tracker.bias, rp["time_stop_min"])
+            rpos["be_trigger_price"] = rp["be_trigger_price"]
+            positions.append(rpos)
     if basket:
         baskets.append({"legs": basket["closed"]})
-    rep = summarize(trades, skips, m1)
-    rep["by_mode"] = {k: R.outcome_stats([x for x in trades if x["regime"] == k]) for k in ("TREND", "RANGE")}
+    normal = [x for x in trades if x["regime"] != "NEWS"]
+    rep = summarize(normal, skips, m1)
+    rep["by_mode"] = {k: R.outcome_stats([x for x in trades if x["regime"] == k]) for k in ("TREND", "RANGE", "NEWS")}
     rep["regime_minutes_per_day"] = {d: dict(v) for d, v in sorted(regime_minutes.items())}
     rep["baskets"] = R.basket_stats([b for b in baskets if b["legs"]], equity) if layering else None
+    sw = [x for x in normal if x["trigger"] in ("sweep", "sweep_runner")]
+    rep["sweeps"] = {"marked": len(sweeps_marked), "with_bias": sum(1 for s in sweeps_marked.values() if s["with_bias"]),
+                     "caught": sum(1 for s in sweeps_marked.values() if s["traded"]), "stats": R.outcome_stats([x for x in sw if x["trigger"] == "sweep"]),
+                     "runner_stats": R.outcome_stats([x for x in sw if x["trigger"] == "sweep_runner"]),
+                     "list": [sweeps_marked[k] for k in sorted(sweeps_marked)]}
+    news_tr = [x for x in trades if x["regime"] == "NEWS"]
+    rep["news"] = {"events": [{**v, "pnl_usd": round(sum(x["pnl_usd"] for x in news_tr if x.get("event") == k), 2)} for k, v in sorted(news_state.items(), key=lambda kv: kv[1]["t"])],
+                   "stats": R.outcome_stats(news_tr), "worst_trade_usd": min([x["pnl_usd"] for x in news_tr], default=None),
+                   "by_kind": {k: R.outcome_stats([x for x in news_tr if news_state.get(x.get("event"), {}).get("kind") == k])
+                               for k in sorted({v["kind"] for v in news_state.values()})}} if news_events else None
+    rep["trace"] = trace if trace_window else None
     return rep
 
 
@@ -236,13 +372,16 @@ def R_label_step(pos: dict, bar: dict, now: datetime, force: str | None = None) 
     elif now - opened >= timedelta(minutes=int(pos.get("time_stop_min") or R.TIME_STOP_MIN)):
         exit_px, reason = bar["c"], "time_stop"
     if exit_px is None:
-        if R.breakeven_due(pos["direction"], entry, pos["tp_dist"], bar["h"] if sgn > 0 else bar["l"]) and sl != be:
+        be_px = pos.get("be_trigger_price")
+        reached = ((bar["h"] >= be_px) if sgn > 0 else (bar["l"] <= be_px)) if be_px else \
+            R.breakeven_due(pos["direction"], entry, pos["tp_dist"], bar["h"] if sgn > 0 else bar["l"])
+        if reached and sl != be:
             pos["sl_live"] = be
         return None
     net = (exit_px - entry) * sgn - pos["spread_at_entry"] - pos["commission_price"]
     return {"r": round(net / pos["sl_dist"], 3), "pnl_usd": round(net / PIP_PRICE * 10.0 * pos["lots"], 2), "exit_reason": reason,
             "exit_at": now.isoformat(), "entry_at": pos["created_at"], "trigger": pos["trigger"], "bias": pos["bias"], "regime": pos.get("regime", "TREND"),
-            "hour": opened.hour, "mfe": round(pos["mfe"], 2), "mae": round(pos["mae"], 2), "lots": pos["lots"]}
+            "hour": opened.hour, "mfe": round(pos["mfe"], 2), "mae": round(pos["mae"], 2), "lots": pos["lots"], "event": pos.get("event")}
 
 
 def _session(hour: int) -> str:
@@ -264,10 +403,14 @@ def summarize(trades: list, skips: dict, m1: list) -> dict:
     return out
 
 
+def _stat_row(label: str, v: dict) -> str:
+    return f"| {label} | {v['n']} | {v['win_rate']} | {v['profit_factor']} | {v['expectancy_r']:+.3f} | {v['avg_win_usd']} / {v['avg_loss_usd']} |"
+
+
 def markdown(rep: dict, title: str = "gold_trend_pulse replay") -> str:
     o = rep["overall"]
     rows = [f"### {title}", "",
-            f"M1 bars: {rep['bars_m1']} · trading days: {rep['trading_days']} · trades: {rep['trades']} ({rep['trades_per_day']}/day)", "",
+            f"M1 bars: {rep['bars_m1']} · trading days: {rep['trading_days']} · trades (normal sessions): {rep['trades']} ({rep['trades_per_day']}/day)", "",
             "| metric | value |", "|---|---|",
             f"| win rate | {o['win_rate']} |", f"| profit factor | {o['profit_factor']} |", f"| expectancy after costs | {o['expectancy_r']:+.3f} R |",
             f"| max drawdown | {o['max_dd_r']} R |", f"| avg win / loss $ | {o['avg_win_usd']} / {o['avg_loss_usd']} |",
@@ -275,6 +418,20 @@ def markdown(rep: dict, title: str = "gold_trend_pulse replay") -> str:
     if rep.get("by_mode"):
         rows += ["| mode | n | win rate | PF | expectancy R | max DD R |", "|---|---|---|---|---|---|"]
         rows += [f"| {k} | {v['n']} | {v['win_rate']} | {v['profit_factor']} | {v['expectancy_r']:+.3f} | {v['max_dd_r']} |" for k, v in rep["by_mode"].items()]
+        rows.append("")
+    if rep.get("sweeps"):
+        s = rep["sweeps"]
+        rows += [f"**Sweep & reclaim (item 13)** — marked {s['marked']} (with bias {s['with_bias']}) · caught by the rule {s['caught']}", "",
+                 "| leg | n | win rate | PF | expectancy R | avg win / loss $ |", "|---|---|---|---|---|---|",
+                 _stat_row("scalp", s["stats"]), _stat_row("runner", s["runner_stats"]), ""]
+    if rep.get("news"):
+        n = rep["news"]
+        rows += [f"**News mode (item 14)** — separate from normal sessions · worst trade ${n['worst_trade_usd']}", "",
+                 "| kind | n | win rate | PF | expectancy R | avg win / loss $ |", "|---|---|---|---|---|---|",
+                 _stat_row("ALL", n["stats"])] + [_stat_row(k, v) for k, v in n["by_kind"].items()] + [""]
+        rows += ["| event | time UTC | surprise | bias | first move | confirmed | trades | skipped | P&L $ |", "|---|---|---|---|---|---|---|---|---|"]
+        rows += [f"| {e['title']} | {datetime.fromtimestamp(e['t'], tz=timezone.utc):%Y-%m-%d %H:%M} | {e['surprise']} | {e['bias']} | {e['first_move']} | {e['confirmed']} | {e['trades']} | {'; '.join(e['skipped'][:3])} | {e['pnl_usd']} |"
+                 for e in n["events"]]
         rows.append("")
     if rep.get("regime_minutes_per_day"):
         rows += ["| day | TREND min | RANGE min | NO_TRADE min |", "|---|---|---|---|"]
@@ -287,5 +444,9 @@ def markdown(rep: dict, title: str = "gold_trend_pulse replay") -> str:
     for key, label in (("by_trigger", "trigger"), ("by_session", "session"), ("by_hour", "hour UTC"), ("by_exit", "exit")):
         rows += [f"| {label} | n | win rate | PF | expectancy R |", "|---|---|---|---|---|"]
         rows += [f"| {k} | {v['n']} | {v['win_rate']} | {v['profit_factor']} | {v['expectancy_r']:+.3f} |" for k, v in rep[key].items()]
+        rows.append("")
+    if rep.get("trace") is not None:
+        rows += ["**Window trace (every M5 close)**", "", "| time | bias | regime | note |", "|---|---|---|---|"]
+        rows += [f"| {r['time']} | {r['bias']} | {r['regime']} | {r['note']}{' @ ' + str(r['entry']) if r.get('entry') else ''} |" for r in rep["trace"]]
         rows.append("")
     return "\n".join(rows)

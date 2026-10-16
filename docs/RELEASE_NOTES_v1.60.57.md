@@ -10,6 +10,11 @@ their parameters are unchanged (`DEFAULT_PARAMS` identical, verified by test).
 | `gold_trend_pulse_enabled` | `false` | enables the XAUUSD-only engine; XAUUSD is evaluated even if not in the preset symbol list |
 | `gold_trend_pulse_mode` | `"shadow"` | `shadow` \| `demo_live`; demo_live runs SHADOW until the engine's OWN live gate passes (card says why) |
 | `gold_trend_pulse_layering_enabled` | `false` | item 11 — up to 3 staggered legs per pullback, one shared stop, basket risk ≤ 0.75 % |
+| `gold_trend_pulse_sweep_runner_enabled` | `true` | item 13 — ½-size runner leg to the pre-drop high after a sweep & reclaim (inside the OFF engine) |
+| `gold_trend_pulse_news_mode_enabled` | `true` | item 14 — PRE protect / RELEASE block / POST surprise-bias trades (inside the OFF engine) |
+| `gold_trend_pulse_news_pre_action` | `"protect"` | `protect` (BE if ≥ +0.5R, else keep SL) \| `close` \| `tighten` (SL → −0.5R) |
+| `gold_trend_pulse_news_release_min` | `5` | RELEASE window T → T+N min (1–30) with no entries |
+| `gold_trend_pulse_news_events` | `null` | event kinds; null = CPI, Core CPI, Nonfarm Payrolls, FOMC, Fed Interest Rate Decision, Fed Chair, PCE, GDP, Retail Sales, PPI, ISM |
 | `engine_live_features_enabled` | `false` | #55 — hf_scalp / hf_scalp_fast / breakout_m15 trade on LIVE-price features; OFF = both outputs recorded (`engine_shadow_compare`) |
 
 No new environment variables.
@@ -57,6 +62,48 @@ No new environment variables.
 * **Replay**: `scripts/gtp_replay.py --csv <MT5 M1 export> [--layering]` → trades/day, win rate, PF, expectancy after
   costs, max DD, by session/hour/trigger/exit, TREND vs RANGE, regime minutes per day, basket stats.
 
+## Item 13 — sweep & reclaim entry (bias direction only)
+* **Setup** (UP bias; DOWN mirrored): a fast drop ≥ 1.5×ATR14(M5) within ≤ 6 M5 bars that trades BELOW the lowest low
+  of the 2 h (24 M5 bars) before the drop; in the same or the next 3 bars an M5 bar CLOSES back above that swept level
+  with a body ≥ 50 % of its range → BUY at the close. Tried BEFORE the pullback / micro-breakout on every M5 close.
+  Never the opposite trade; breakout_m15 never sells a BREAK_DOWN whose live price is back inside the channel (#55-2).
+* **Exits**: SL = sweep low − max(0.30, 0.25×ATR14); scalp TP = clamp(0.7×ATR14, 2.00, 4.50); optional ½-size runner to
+  the pre-drop high (only when it lies beyond the scalp TP) whose stop goes to breakeven+costs once the scalp TP is
+  hit (`be_trigger_price`; 90-min time-stop). Both legs carry broker-side SL and TP (two tickets, same `setup_id` =
+  `basket_id` → ONE slot for `user_direction_cap`; the runner ticket is emitted on the next pass only if the scalp leg
+  opened within 5 min). Total risk stays 0.25 % (lots split; no runner when a leg would fall under 0.01). The SL of a
+  sweep is structurally wider than the scalp TP, so the 1.3×TP rule is applied against the setup's target (runner
+  target when present) with a floor of 3.5×ATR14 — reclaims that already ran too far are skipped.
+* All filters / limits / guards unchanged; no entry within ±15 min of USD high-impact news (and the news-mode PRE /
+  RELEASE phases block it too).
+* **Replay** marks EVERY sweep & reclaim (both directions, `sweeps.marked`), how many had the bias and how many the
+  rule traded (`caught`), scalp / runner win rate, avg win/loss; `--window 2026-10-16T13:15 2026-10-16T14:30` prints a
+  per-M5-close trace for the 16 Oct question (expected: BUY near 4160–4165 — needs the real M1 export).
+
+## Item 14 — news mode (high-impact USD events)
+* **Source**: Finnhub economic calendar (actual / forecast / previous) through `economic_calendar.get_events()` — legacy
+  feeds as fallback. Event kinds configurable (`gold_trend_pulse_news_events`).
+* **PRE** (T−15 → T): no new entries. Open GTP positions: ≥ +0.5R → stop to breakeven+costs; else per policy
+  (`protect` keeps the stop, `close` closes, `tighten` moves it to −0.5R). Live rows via the fenced MODIFY_SL /
+  FULL_CLOSE paths (`gtp_news_pre_*`, close_watchdog applies); shadow rows adjusted in place; every action logged on
+  the event row (`gtp_news_events.pre_actions`).
+* **RELEASE** (T → T+`release_min`): no entries; the spread filter must pass before any later entry.
+* **POST** (T+release → T+90): surprise = actual − forecast (raw units; per-event thresholds CPI/Core CPI/PCE/PPI 0.1 pp,
+  NFP 25k, GDP 0.3, Retail Sales 0.2, ISM 1.0): beats → USD strong → XAU DOWN, misses → UP, below threshold → NONE
+  (normal daily bias applies). FOMC / rate decision / Fed Chair: direction of the first 15-min candle. Confirmation:
+  the first M5 close outside the 30-min pre-release range within 15 min must agree — otherwise NO news trade for that
+  event. Entry: first pullback to EMA20(M5) or the 38–50 % retrace of the initial move in the bias direction, or a
+  sweep & reclaim (item 13). TP = clamp(0.7×ATR14 post-release, 3.00, 8.00); SL beyond the pullback / sweep extreme
+  (+0.30), max 1.3×TP; 0.25 % risk; 60-min time-stop; broker-side SL/TP; max 2 news trades per event per account;
+  daily limits unchanged. The news trade ignores the engine's own ±15-min blackout for THAT event only — the main
+  pipeline's macro freeze / avalanche still gate a demo_live order.
+* **Reporting**: per event (`gtp_news_events`): surprise, bias, first-move direction, confirmed, trades taken /
+  skipped and why, PRE actions; Scalp card news block; Market Intel shows the next event and its plan ("CPI 12:30 UTC —
+  protect at 12:15, news trades from 12:35"); Strategy Report `gold_trend_pulse.news_events` + `NEWS` regime stats.
+* **Replay**: `scripts/gtp_news_events.py --months 6` exports the Finnhub events; `scripts/gtp_replay.py --csv …
+  --days 180 --news-events news_events.json` reports NEWS trades separately (win rate, avg win/loss, worst trade, by
+  kind, per-event table) — normal-session stats exclude them.
+
 ## #55 — engines blind to fast gold moves (flag `engine_live_features_enabled`, default OFF)
 1. `compute_intraday_features(bars, live_price, m5_bars)`: last_price / vwap_dist / donchian / range_pos use the LIVE
    broker price; EMAs and ATR stay on closed bars. New fields: `closed_last_price`, `feature_price_gap`,
@@ -77,5 +124,10 @@ No new environment variables.
 `tests/unit/test_gold_trend_pulse.py` (20: bias UP/DOWN/NONE + hysteresis, both triggers, spike filter, TP/SL clamps
 incl. skip, BE sign BUY/SELL with costs, time-stop, labeling, every filter/limit, sizing via pip value, live gate,
 layering levels / shared stop / basket risk cap / direction-cap basket slot, range detection / entries / exits /
-breakout, replay both modes + baskets, pipeline hooks, trade_manager exits, guard coverage) and
+breakout, replay both modes + baskets, pipeline hooks, trade_manager exits, guard coverage),
+`tests/unit/test_gold_trend_pulse_news_sweep.py` (14: sweep detection UP/DOWN mirror + never the opposite trade, exit
+geometry / runner / lot split, runner BE in labeling, breakout_m15 reclaimed-level refusal, event matching / phases /
+configurable list, surprise mapping + thresholds + FOMC candle, confirmation agree/disagree/pending, news entry +
+clamps + time-stop + 2-per-event, PRE policies, engine PRE protect / RELEASE block / POST trade / cap / not-confirmed,
+scalp+runner legs as one basket, defaults / routes / card fields, replay sweeps + news + window trace) and
 `tests/unit/test_v1_60_57_engine_live_features.py` (7).

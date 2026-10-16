@@ -211,6 +211,11 @@ class BotConfigUpdate(BaseModel):
     gold_trend_pulse_enabled: bool = False
     gold_trend_pulse_mode: str = "shadow"           # shadow | demo_live (demo_live runs shadow until the gate passes)
     gold_trend_pulse_layering_enabled: bool = False  # item 11 — up to 3 staggered legs per pullback, one shared stop, ≤0.75 % basket risk
+    gold_trend_pulse_sweep_runner_enabled: bool = True   # item 13 — ½-size runner leg to the pre-drop high after a sweep & reclaim
+    gold_trend_pulse_news_mode_enabled: bool = True      # item 14 — PRE protect / RELEASE block / POST surprise-bias trades (engine itself is OFF)
+    gold_trend_pulse_news_pre_action: str = "protect"    # protect (BE if ≥ +0.5R, else keep) | close | tighten (SL to −0.5R)
+    gold_trend_pulse_news_release_min: int = Field(default=5, ge=1, le=30)
+    gold_trend_pulse_news_events: list[str] | None = None   # None → CPI, Core CPI, NFP, FOMC, rate decision, Fed Chair, PCE, GDP, Retail Sales, PPI, ISM
     engine_live_features_enabled: bool = False       # #55 — engines read the LIVE broker price (+ fast slope / momentum override); OFF = shadow compare only
     breakeven_trigger_r: float = Field(default=BREAKEVEN_TRIGGER_R_DEFAULT, ge=0.0, le=5.0)
     daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)

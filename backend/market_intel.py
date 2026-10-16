@@ -297,9 +297,13 @@ async def _safe(coro, fallback):
 
 
 async def gold_trend_pulse_section(db, user_id: str) -> dict:
-    """v1.60.57 — daily bias + the 4 reasons, regime and mode per account that has gold_trend_pulse enabled."""
+    """v1.60.57 — daily bias + the 4 reasons, regime and mode per account that has gold_trend_pulse enabled; item 14 —
+    the next configured USD event and its plan ("CPI 12:30 UTC — protect at 12:15, news trades from 12:35")."""
     rows = []
-    async for cfg in db.bot_configs.find({"user_id": user_id, "gold_trend_pulse_enabled": True}, {"account_id": 1, "gold_trend_pulse_mode": 1}):
+    events = None
+    async for cfg in db.bot_configs.find({"user_id": user_id, "gold_trend_pulse_enabled": True},
+                                         {"account_id": 1, "gold_trend_pulse_mode": 1, "gold_trend_pulse_news_mode_enabled": 1,
+                                          "gold_trend_pulse_news_events": 1, "gold_trend_pulse_news_release_min": 1, "gold_trend_pulse_news_pre_action": 1}):
         st = await db.gtp_state.find_one({"_id": str(cfg.get("account_id"))}) or {}
         acc = None
         try:
@@ -308,9 +312,22 @@ async def gold_trend_pulse_section(db, user_id: str) -> dict:
         except Exception:  # noqa: BLE001
             pass
         bias = st.get("bias") or {}
+        news = None
+        try:
+            from gold_trend_pulse import rules as R
+            from gold_trend_pulse.engine import news_settings, usd_high_impact_events
+            ns = news_settings(cfg)
+            if ns["enabled"]:
+                events = await usd_high_impact_events(cfg) if events is None else events
+                news = R.next_news_event(events, datetime.now(timezone.utc), ns["events"], ns["release_min"])
+                if news:
+                    news["pre_action"] = ns["pre_action"]
+        except Exception as e:  # noqa: BLE001
+            log.debug("gtp news plan failed: %s", e)
         rows.append({"account_id": str(cfg.get("account_id")), "account": (acc or {}).get("label"), "bias": bias.get("bias") or "NONE",
                      "reasons": bias.get("reasons") or [], "regime": st.get("regime") or "NO_TRADE", "range": st.get("range"),
-                     "mode": cfg.get("gold_trend_pulse_mode") or "shadow", "last_note": st.get("last_note"), "last_eval": st.get("last_eval")})
+                     "mode": cfg.get("gold_trend_pulse_mode") or "shadow", "last_note": st.get("last_note"), "last_eval": st.get("last_eval"),
+                     "news": news})
     return {"available": bool(rows), "accounts": rows, "note": None if rows else "gold_trend_pulse is not enabled on any account"}
 
 

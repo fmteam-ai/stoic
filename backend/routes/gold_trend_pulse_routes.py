@@ -28,6 +28,11 @@ class GtpConfig(BaseModel):
     enabled: bool = False
     mode: str = "shadow"
     layering_enabled: bool = False
+    sweep_runner_enabled: bool = True
+    news_mode_enabled: bool = True
+    news_pre_action: str = "protect"
+    news_release_min: int = 5
+    news_events: list[str] | None = None
     confirm_live: bool = False
 
 
@@ -37,6 +42,8 @@ async def gtp_config(req: GtpConfig, user=Depends(get_current_user)):
         raise HTTPException(status_code=422, detail="mode must be shadow or demo_live")
     if req.mode == "demo_live" and not req.confirm_live:
         raise HTTPException(status_code=422, detail="demo_live requires confirm_live=true — orders WILL be sent once the live gate passes")
+    if req.news_pre_action not in ("protect", "close", "tighten") or not (1 <= req.news_release_min <= 30):
+        raise HTTPException(status_code=422, detail="news_pre_action must be protect|close|tighten; news_release_min 1–30")
     db = get_db()
     acc = await db.accounts.find_one({"_id": parse_object_id(req.account_id, "Account"), "user_id": user["id"]}, {"_id": 1})
     if not acc:
@@ -44,6 +51,11 @@ async def gtp_config(req: GtpConfig, user=Depends(get_current_user)):
     res = await db.bot_configs.update_one({"user_id": user["id"], "account_id": req.account_id},
                                           {"$set": {"gold_trend_pulse_enabled": req.enabled, "gold_trend_pulse_mode": req.mode,
                                                     "gold_trend_pulse_layering_enabled": req.layering_enabled,
+                                                    "gold_trend_pulse_sweep_runner_enabled": req.sweep_runner_enabled,
+                                                    "gold_trend_pulse_news_mode_enabled": req.news_mode_enabled,
+                                                    "gold_trend_pulse_news_pre_action": req.news_pre_action,
+                                                    "gold_trend_pulse_news_release_min": req.news_release_min,
+                                                    "gold_trend_pulse_news_events": req.news_events,
                                                     "updated_at": datetime.now(timezone.utc).isoformat()}})
     if not res.matched_count:
         raise HTTPException(status_code=404, detail="Bot config for this account not found — save Bot Config first")

@@ -130,6 +130,10 @@ async def card(db, user_id: str, account_id: str, now: datetime | None = None) -
         out[key] = R.outcome_stats(rows)
         out[key]["decisions"] = await db.gtp_decisions.count_documents({"account_id": account_id, "created_at": {"$gte": since.isoformat()}})
     out["recent"] = await db.gtp_decisions.find({"account_id": account_id}, {"_id": 0}).sort("created_at", -1).to_list(length=20)
+    ns = news_settings(cfg)
+    out["sweep_runner_enabled"] = runner_on(cfg)
+    out["news"] = {**ns, "next": R.next_news_event(await usd_high_impact_events(cfg), now, ns["events"], ns["release_min"]),
+                   "recent": await db.gtp_news_events.find({"account_id": account_id}, {"_id": 0}).sort("t", -1).to_list(length=10)}
     return out
 
 
@@ -137,6 +141,86 @@ async def card(db, user_id: str, account_id: str, now: datetime | None = None) -
 
 def layering_on(cfg: dict | None) -> bool:
     return bool((cfg or {}).get("gold_trend_pulse_layering_enabled"))
+
+
+def runner_on(cfg: dict | None) -> bool:
+    return (cfg or {}).get("gold_trend_pulse_sweep_runner_enabled", True) is not False
+
+
+def news_settings(cfg: dict | None) -> dict:
+    """item 14 — news mode is part of the engine (ON inside an engine that is OFF by default); event list / PRE action /
+    release window are per account."""
+    cfg = cfg or {}
+    ev = cfg.get("gold_trend_pulse_news_events")
+    pa = cfg.get("gold_trend_pulse_news_pre_action")
+    try:
+        rel = int(cfg.get("gold_trend_pulse_news_release_min") or R.NEWS_RELEASE_MIN_DEFAULT)
+    except (TypeError, ValueError):
+        rel = R.NEWS_RELEASE_MIN_DEFAULT
+    return {"enabled": cfg.get("gold_trend_pulse_news_mode_enabled", True) is not False,
+            "pre_action": pa if pa in R.NEWS_PRE_ACTIONS else "protect", "release_min": max(1, min(30, rel)),
+            "events": [str(x) for x in ev] if isinstance(ev, (list, tuple)) and ev else list(R.NEWS_EVENTS_DEFAULT)}
+
+
+async def _news_event(db, row: dict, *, inc_trades: int = 0, actions: list | None = None, skip: str | None = None, decision_id: str | None = None) -> None:
+    """Per-event report row (gtp_news_events): surprise, bias, first move, trades taken / skipped and why, PRE actions."""
+    upd: dict = {"$set": {k: v for k, v in row.items() if v is not None}, "$setOnInsert": {"created_at": datetime.now(timezone.utc).isoformat(), "trades": 0}}
+    if inc_trades:
+        upd["$inc"] = {"trades": inc_trades}
+        upd["$setOnInsert"].pop("trades")
+    push = {}
+    if actions:
+        push["pre_actions"] = {"$each": actions}
+    if skip:
+        push["skipped"] = {"$each": [skip]}
+    if decision_id:
+        push["decision_ids"] = {"$each": [decision_id]}
+    if push:
+        upd["$push"] = push
+    await db.gtp_news_events.update_one({"account_id": row["account_id"], "key": row["key"]}, upd, upsert=True)
+
+
+async def _news_protect(db, live: list, shadow: list, price: float, policy: str, now: datetime, key: str) -> list:
+    """PRE (T−15 → T): open GTP positions ≥ +0.5R → stop to breakeven+costs; else per policy (protect = keep stop,
+    close, tighten to −0.5R). Live rows via the fenced MODIFY_SL / FULL_CLOSE paths; shadow rows adjusted in place."""
+    from close_commands import request_close
+    acts = []
+    for t in live:
+        if t.get("gtp_news_protected") == key:
+            continue
+        entry = float(t["entry_price"])
+        sl_dist = abs(entry - float(t.get("stop_loss") or 0)) if t.get("stop_loss") else float((t.get("gold_trend_pulse") or {}).get("sl_dist") or 0)
+        act = R.news_pre_action(t["action"], entry, sl_dist, price, policy)
+        if act["action"] == "close":
+            await request_close(db, {"_id": t["_id"]}, reason="gtp_news_pre_close", actor="gold_trend_pulse",
+                                pending_modification={"type": "FULL_CLOSE", "reason": "gtp_news_pre_close", "requested_at": now.isoformat()})
+        elif act["action"] in ("breakeven", "tighten"):
+            from trade_manager import _free_slot_filter, scalp_breakeven_sl, stamp_pending_modification, tightened_sl
+            new_sl = scalp_breakeven_sl(t) if act["action"] == "breakeven" else act["new_sl"]
+            if tightened_sl(t, new_sl) is not None:
+                await stamp_pending_modification(db, _free_slot_filter(t["_id"]), {"type": "MODIFY_SL", "new_sl": new_sl, "reason": f"gtp_news_pre_{act['action']}"},
+                                                 {"scalp_exit_rule": f"gtp_news_pre_{act['action']}"})
+                act["new_sl"] = new_sl
+            else:
+                act["action"] = "keep (stop already tighter)"
+        await db.trades.update_one({"_id": t["_id"]}, {"$set": {"gtp_news_protected": key}})
+        acts.append({"trade_id": str(t["_id"]), "at": now.isoformat(), **act})
+    for d in shadow:
+        if d.get("news_protected") == key:
+            continue
+        act = R.news_pre_action(d["direction"], float(d["entry"]), float(d["sl_dist"] or 0), price, policy)
+        upd = {"news_protected": key, "news_pre_action": act}
+        if act["action"] == "close":
+            lab = label_with_bars(d, [{"t": int(now.timestamp()) // 60 * 60, "o": price, "h": price, "l": price, "c": price}], now, force_exit="news_pre_close")
+            if lab:
+                upd["outcome"] = lab
+        elif act["action"] == "breakeven":
+            upd["stop_loss"] = R.breakeven_level(d["direction"], float(d["entry"]), float(d.get("spread_at_entry") or 0), float(d.get("commission_price") or 0))
+        elif act["action"] == "tighten":
+            upd["stop_loss"] = act["new_sl"]
+        await db.gtp_decisions.update_one({"_id": d["_id"]}, {"$set": upd})
+        acts.append({"decision_id": d.get("decision_id"), "at": now.isoformat(), **act})
+    return acts
 
 
 def _spread_price(account: dict, spread_price: float | None) -> float:
@@ -193,7 +277,9 @@ def _signal_from(decision: dict) -> dict:
             "sl_pips": round(decision["sl_dist"] / PIP_PRICE, 1), "tp_pips": round(decision["tp_dist"] / PIP_PRICE, 1), "trigger": decision.get("trigger") or decision["regime"],
             "decision_id": decision["decision_id"], "planned_risk_usd": decision.get("planned_risk_usd"), "planned_risk_pct": decision.get("planned_risk_pct"),
             "spread_at_entry": decision["spread_at_entry"], "bias": decision["bias"], "reason": decision.get("reason") or "", "regime": decision["regime"],
-            "basket_id": decision.get("basket_id"), "leg": decision.get("leg"), "time_stop_min": decision.get("time_stop_min")}
+            "basket_id": decision.get("basket_id"), "leg": decision.get("leg"), "time_stop_min": decision.get("time_stop_min"),
+            "setup_id": decision.get("setup_id"), "runner": bool(decision.get("runner")), "be_trigger_price": decision.get("be_trigger_price"),
+            "sweep": decision.get("sweep"), "news": decision.get("news"), "sl_dist": decision.get("sl_dist")}
 
 
 async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *, spread_price: float | None = None) -> dict:
@@ -254,7 +340,56 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
                 not any(d.get("basket_id") == basket["id"] for d in shadow):
             upd["basket"] = None       # every leg closed on its own → basket done
             basket = None
-    if reg["regime"] == "NO_TRADE":
+    # --- sweep runner leg (item 13): the second ticket of a setup whose scalp leg was opened on the previous pass
+    if mode == "demo_live":
+        pend = await db.gtp_decisions.find_one({"account_id": account_id, "verdict": "live_pending"})
+        if pend:
+            age = now - datetime.fromisoformat(pend["created_at"])
+            if age <= timedelta(minutes=5) and any((t.get("gold_trend_pulse") or {}).get("setup_id") == pend.get("setup_id") for t in live):
+                await db.gtp_decisions.update_one({"_id": pend["_id"]}, {"$set": {"verdict": "live"}})
+                pend["verdict"] = "live"
+                res["decision"], res["signal"] = pend, _signal_from(pend)
+                return await _done(f"SWEEP runner leg {pend['direction']} → {pend['take_profit']} (½ size, BE at the scalp TP)")
+            if age > timedelta(minutes=5):
+                await db.gtp_decisions.update_one({"_id": pend["_id"]}, {"$set": {"verdict": "skipped", "skip_reason": "scalp leg not opened within 5 min — runner dropped"}})
+    # --- news mode (item 14): PRE protects / blocks, RELEASE blocks, POST trades the confirmed surprise bias
+    events = await usd_high_impact_events(cfg)
+    ns = news_settings(cfg)
+    ph = R.news_phase(events, now, ns["events"], ns["release_min"]) if ns["enabled"] else None
+    news_bias, news_pre_close, news_key, m5_post = None, None, None, []
+    if ph:
+        news_key = ph["key"]
+        t_rel = datetime.fromtimestamp(ph["t"], tz=timezone.utc)
+        ev_row = {"account_id": account_id, "user_id": user_id, "key": news_key, "kind": ph["kind"], "title": ph["title"], "t": ph["t"],
+                  "time_utc": t_rel.isoformat(), "phase": ph["phase"], "actual": ph["event"].get("actual") or None, "forecast": ph["event"].get("forecast") or None}
+        if ph["phase"] == "PRE":
+            acts = await _news_protect(db, live, shadow, price, ns["pre_action"], now, news_key)
+            await _news_event(db, ev_row, actions=acts or None)
+            return await _done(f"NEWS PRE {ph['kind']} {t_rel:%H:%M} UTC — no new entries" + (f"; {len(acts)} position(s) protected ({ns['pre_action']})" if acts else ""))
+        if ph["phase"] == "RELEASE":
+            await _news_event(db, ev_row)
+            return await _done(f"NEWS RELEASE {ph['kind']} — no entries until {t_rel + timedelta(minutes=ns['release_min']):%H:%M} UTC")
+        m5_post = [b for b in data["m5"] if int(b["t"]) >= ph["t"]]
+        nbias = R.fomc_bias(m5_post) if ph["kind"] in R.NEWS_RATE_EVENTS else R.news_surprise_bias(ph["event"], ph["kind"])
+        ev_row.update({"surprise": nbias.get("surprise"), "surprise_pct": nbias.get("surprise_pct"), "news_bias": nbias.get("bias"), "bias_reason": nbias.get("reason")})
+        if nbias["bias"] is None:
+            await _news_event(db, ev_row)
+            return await _done(f"NEWS POST {ph['kind']}: {nbias['reason']}")
+        if nbias["bias"] == "NONE":
+            await _news_event(db, ev_row)                     # fall back to the normal daily-bias path
+        else:
+            pre = R.pre_release_range(data["m5"], ph["t"])
+            conf = R.news_confirmation(nbias["bias"], pre, m5_post, ph["t"])
+            ev_row.update({"first_move": conf.get("first_move"), "confirmed": conf["confirmed"], "confirm_reason": conf["reason"]})
+            await _news_event(db, ev_row)
+            if conf["confirmed"] is None:
+                return await _done(f"NEWS POST {ph['kind']} bias {nbias['bias']}: {conf['reason']}")
+            if conf["confirmed"] is False:
+                return await _done(f"NEWS POST {ph['kind']} bias {nbias['bias']} NOT confirmed — {conf['reason']} — no news trade")
+            news_bias = nbias["bias"]
+            before = [b for b in data["m5"] if int(b["t"]) < ph["t"]]
+            news_pre_close = before[-1]["c"] if before else price
+    if reg["regime"] == "NO_TRADE" and not news_bias:
         return await _done("regime NO_TRADE (bias NONE, no confirmed range) — no new trades")
     ok, why = R.session_ok(now)
     if not ok:
@@ -277,8 +412,8 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         until = R.cooldown_until("loss" if float(last.get("r") or 0) <= 0 else "win", datetime.fromisoformat(str(last["closed_at"])))
         if until and now < until:
             return await _done(f"cooldown until {until:%H:%M:%S} UTC")
-    nb = R.news_blackout(await usd_high_impact_events(cfg), now)
-    if nb:
+    nb = R.news_blackout(events, now)
+    if nb and not news_bias:                     # the POST phase of the configured event is the news trade itself
         return await _done(nb)
     spread = _spread_price(account, spread_price)
     pip_usd = float(pip_value_usd_per_lot(SYMBOL, account.get("account_type"), price=price) or 0)
@@ -304,6 +439,38 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         decision.update({"verdict": "skipped", "skip_reason": why})
         await db.gtp_decisions.insert_one(dict(decision))
         return await _done(why)
+
+    # ================================================================ NEWS (item 14) — POST phase, confirmed surprise bias
+    if news_bias:
+        if not m5_closed:
+            return await _done(f"NEWS POST {ph['kind']} bias {news_bias}: waiting for the next M5 close")
+        upd["last_m5_t"] = last_t
+        ev_doc = await db.gtp_news_events.find_one({"account_id": account_id, "key": news_key}) or {}
+        taken = int(ev_doc.get("trades") or 0)
+        if taken >= R.NEWS_MAX_TRADES_PER_EVENT:
+            return await _done(f"NEWS POST {ph['kind']}: {taken}/{R.NEWS_MAX_TRADES_PER_EVENT} news trades taken for this event")
+        cand = R.detect_news_entry(data["m5"], m5_post, news_bias, news_pre_close) or R.detect_sweep_reclaim(data["m5"], news_bias)
+        if not cand:
+            return await _done(f"NEWS POST {ph['kind']} bias {news_bias}: no pullback / sweep-and-reclaim on the last M5 close")
+        atr_post = R.atr(m5_post, 14) if len(m5_post) >= 3 else R.atr(data["m5"], 14)
+        cand["atr"] = atr_post
+        if cand["trigger"] == "sweep":
+            cand["trigger"] = "news_sweep"
+        plan = R.plan_news_exit(cand["direction"], cand["entry"], cand["swing"], atr_post)
+        decision = _decision(now, user_id, account_id, mode, "NEWS", tracker, cand, plan, spread, data["source"], bias=news_bias,
+                             news={"key": news_key, "kind": ph["kind"], "title": ph["title"], "bias": news_bias, "surprise": ev_row.get("surprise"), "n": taken + 1})
+        if not plan["ok"]:
+            await _news_event(db, {"account_id": account_id, "key": news_key}, skip=plan["skip"])
+            return await _skip(decision, plan["skip"])
+        ok, why = R.spread_ok(spread, plan["tp"])
+        if not ok:
+            await _news_event(db, {"account_id": account_id, "key": news_key}, skip=why)
+            return await _skip(decision, why)
+        sizing = R.size_lots(equity, plan["sl"], pip_usd, PIP_PRICE, max_lot=max_lot)
+        d = await _record(decision, plan, sizing)
+        await _news_event(db, {"account_id": account_id, "key": news_key}, inc_trades=1 if d["verdict"] in ("shadow", "live") else 0,
+                          skip=None if d["verdict"] in ("shadow", "live") else d.get("skip_reason"), decision_id=d["decision_id"])
+        return await _done(f"NEWS {d['verdict']} {cand['direction']} ({cand['trigger']}) TP {plan['tp']:.2f} SL {plan['sl']:.2f} · {ph['kind']} {taken + 1}/{R.NEWS_MAX_TRADES_PER_EVENT}")
 
     # ================================================================ RANGE (item 12) — acts on the last COMPLETED M1 bar
     if reg["regime"] == "RANGE":
@@ -378,11 +545,42 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         upd["basket"] = basket
         res["basket"] = basket
         return await _done(f"LAYERING {d['verdict']} {leg} {direction} @ {entry} shared stop {basket['shared_stop']} ({sizing.get('reason') or 'sized'})")
-    cand = R.detect_entry(data["m5"], tracker.bias, vwap)
+    cand = R.detect_sweep_reclaim(data["m5"], tracker.bias) or R.detect_entry(data["m5"], tracker.bias, vwap)
     if cand is None:
-        return await _done("no pullback / micro-breakout on the last M5 close")
+        return await _done("no sweep-and-reclaim / pullback / micro-breakout on the last M5 close")
     if cand.get("blocked"):
         return await _done(cand["blocked"])
+    if cand["trigger"] == "sweep":                      # item 13 — scalp leg (+ optional ½-size runner to the pre-drop high)
+        plan = R.plan_sweep_exit(cand["direction"], cand["entry"], cand["sweep_low"], cand["pre_drop_high"], cand["atr"], runner=runner_on(cfg))
+        setup_id = uuid.uuid4().hex[:12]
+        sweep = {k: cand[k] for k in ("sweep_low", "swept_level", "pre_drop_high", "drop", "sweep_t")}
+        decision = _decision(now, user_id, account_id, mode, "TREND", tracker, cand, plan, spread, data["source"], sweep=sweep, setup_id=setup_id,
+                             basket_id=setup_id if plan.get("runner") else None)
+        if not plan["ok"]:
+            return await _skip(decision, plan["skip"])
+        ok, why = R.spread_ok(spread, plan["tp"])
+        if not ok:
+            return await _skip(decision, why)
+        sizing = R.size_lots(equity, plan["sl"], pip_usd, PIP_PRICE, max_lot=max_lot)
+        runner_lots = None
+        if sizing["ok"] and plan.get("runner"):
+            scalp_lots, runner_lots = R.split_runner_lots(sizing["lots"])
+            if runner_lots:
+                per_lot = sizing["risk_usd"] / sizing["lots"]
+                sizing = {**sizing, "lots": scalp_lots, "risk_usd": round(per_lot * scalp_lots, 2), "risk_pct": round(per_lot * scalp_lots / equity * 100, 3) if equity else None}
+        d = await _record(decision, plan, sizing)
+        if runner_lots and sizing["ok"]:
+            rp = plan["runner"]
+            rplan = {"ok": True, "tp": rp["tp"], "sl": plan["sl"], "take_profit": rp["take_profit"], "stop_loss": plan["stop_loss"], "time_stop_min": rp["time_stop_min"]}
+            rcand = {**cand, "trigger": "sweep_runner", "reason": "runner leg to the pre-drop high — stop to breakeven+costs once the scalp TP is hit"}
+            rdec = _decision(now, user_id, account_id, mode, "TREND", tracker, rcand, rplan, spread, data["source"], sweep=sweep, setup_id=setup_id,
+                             basket_id=setup_id, runner=True, be_trigger_price=rp["be_trigger_price"])
+            rdec.update({"lots": runner_lots, "planned_risk_usd": round(per_lot * runner_lots, 2), "planned_risk_pct": round(per_lot * runner_lots / equity * 100, 3) if equity else None,
+                         "risk_usd": round(per_lot * runner_lots, 2), "risk_pct": round(per_lot * runner_lots / equity * 100, 3) if equity else None,
+                         "sizing_ok": True, "commission_price": comm, "verdict": "live_pending" if mode == "demo_live" else "shadow", "skip_reason": None})
+            await db.gtp_decisions.insert_one(dict(rdec))
+            res["runner"] = rdec
+        return await _done(f"SWEEP {d['verdict']} {cand['direction']} TP {plan['tp']:.2f} SL {plan['sl']:.2f}" + (f" + runner → {plan['runner']['take_profit']}" if runner_lots else ""))
     plan = R.plan_exit(cand["direction"], cand["entry"], cand["swing"], cand["atr"])
     decision = _decision(now, user_id, account_id, mode, "TREND", tracker, cand, plan, spread, data["source"], rsi7=cand["rsi"], ema20=cand["ema20"], vwap=vwap)
     if not plan["ok"]:
@@ -429,7 +627,10 @@ def label_with_bars(decision: dict, bars: list, now: datetime, force_exit: str |
         if exit_px is not None:
             exit_at = t + timedelta(minutes=1)
             break
-        if R.breakeven_due(direction, entry, float(d["tp_dist"]), b["h"] if sgn > 0 else b["l"]) and sl != be:
+        be_px = d.get("be_trigger_price")                 # runner leg: BE once the scalp TP is hit; else 60 % of TP
+        reached = ((b["h"] >= float(be_px)) if sgn > 0 else (b["l"] <= float(be_px))) if be_px else \
+            R.breakeven_due(direction, entry, float(d["tp_dist"]), b["h"] if sgn > 0 else b["l"])
+        if reached and sl != be:
             sl = be
     if exit_px is None:
         if now - opened > timedelta(minutes=ts_min + 10) and bars:
@@ -475,7 +676,8 @@ def pipeline_signal(sig: dict, base: dict) -> dict:
             "entry_style": "trend", "reasoning": f"GOLD TREND PULSE: bias {sig['bias']}, trigger {sig['trigger']} — {sig['reason']}",
             "key_factors": [f"daily bias {sig['bias']}", f"trigger {sig['trigger']}", f"TP {sig['tp_pips']} pips / SL {sig['sl_pips']} pips"],
             "gold_trend_pulse": {k: sig.get(k) for k in ("trigger", "decision_id", "planned_risk_usd", "planned_risk_pct", "spread_at_entry", "bias",
-                                                         "regime", "basket_id", "leg", "time_stop_min")},
+                                                         "regime", "basket_id", "leg", "time_stop_min", "setup_id", "runner", "be_trigger_price",
+                                                         "sweep", "news", "sl_dist")},
             "rr_ratio": round(sig["tp_pips"] / sig["sl_pips"], 2) if sig["sl_pips"] else None,
             "engine_geometry": {"stop_loss": sig["stop_loss"], "take_profit": sig["take_profit"], "tp1": sig["take_profit"], "tp2": sig["take_profit"], "tp3": sig["take_profit"]},
             "veto_applied": False, "tradeable": True, "cheap_hold": False, "created_at": datetime.now(timezone.utc)}

@@ -220,7 +220,10 @@ async def _gold_trend_pulse_exits(db, trade: dict, current: float, pips_up: floa
     _, tp1_pips, *_ = _trade_targets(trade)
     from pip_utils import pips_to_price
     tp_dist = pips_to_price(trade["symbol"], tp1_pips)
-    if tp_dist > 0 and R.breakeven_due(action, entry, tp_dist, current) and not trade.get("breakeven_set") and not trade.get("be_target_sl"):
+    be_px = meta.get("be_trigger_price")          # item 13 runner leg: BE once the scalp TP is hit; else 60 % of TP
+    be_due = ((current >= float(be_px)) if action == "BUY" else (current <= float(be_px))) if be_px else \
+        (tp_dist > 0 and R.breakeven_due(action, entry, tp_dist, current))
+    if be_due and not trade.get("breakeven_set") and not trade.get("be_target_sl"):
         new_sl = scalp_breakeven_sl(trade)          # entry ± (spread_at_entry + commission) in price units, sign by direction
         if tightened_sl(trade, new_sl) is None:
             await record_sl_loosen_refusal(trade, new_sl, "gtp_breakeven_60pct")

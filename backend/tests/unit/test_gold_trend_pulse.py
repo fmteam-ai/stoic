@@ -256,7 +256,7 @@ def test_replay_runs_both_modes_and_reports_baskets():
     from gold_trend_pulse.synthetic import synthetic_m1
     bars = synthetic_m1(days=8, seed=3)
     rep = replay(bars, spread=0.25, commission_usd_per_lot_side=3.5)
-    assert set(rep["by_mode"]) == {"TREND", "RANGE"} and rep["regime_minutes_per_day"] and rep["baskets"] is None
+    assert set(rep["by_mode"]) == {"TREND", "RANGE", "NEWS"} and rep["regime_minutes_per_day"] and rep["baskets"] is None
     for t in rep.get("overall", {}) and []:
         pass
     assert "| mode |" in markdown(rep)

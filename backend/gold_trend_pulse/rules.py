@@ -450,3 +450,13 @@ def range_breakout(m5_last: dict, rng: dict) -> str | None:
 
 def wrong_side(direction: str, breakout: str) -> bool:
     return (direction == "SELL") if breakout == "UP" else (direction == "BUY")
+
+
+# ------------------------------------------------------------------------------------------- 13 / 14 (separate module)
+from gold_trend_pulse.rules_news_sweep import (  # noqa: E402,F401
+    NEWS_EVENTS_DEFAULT, NEWS_MAX_TRADES_PER_EVENT, NEWS_POST_MIN, NEWS_PRE_ACTIONS, NEWS_PRE_MIN, NEWS_RATE_EVENTS,
+    NEWS_RELEASE_MIN_DEFAULT, NEWS_SURPRISE_THRESHOLDS, NEWS_TIME_STOP_MIN, NEWS_TP_MAX, NEWS_TP_MIN, RUNNER_TIME_STOP_MIN,
+    SWEEP_DROP_ATR, detect_news_entry, detect_sweep_reclaim, fomc_bias, news_confirmation, news_event_kind, news_phase,
+    news_plan_text, news_pre_action, news_surprise_bias, next_news_event, plan_news_exit, plan_sweep_exit, pre_release_range,
+    split_runner_lots,
+)

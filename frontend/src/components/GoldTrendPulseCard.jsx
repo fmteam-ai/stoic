@@ -19,6 +19,34 @@ function Stats({ s, label }) {
     );
 }
 
+export function NewsPlan({ news, runner }) {
+    if (!news) return null;
+    const n = news.next;
+    const ev = news.recent || [];
+    return (
+        <div className="mt-3 text-[11px] font-mono border-t border-white/5 pt-2" data-testid="gtp-news">
+            <div className="flex flex-wrap gap-4">
+                <span><span className="text-white/50">news mode </span><span className={news.enabled ? "text-[#10F2C5]" : "text-white/50"}>{news.enabled ? `ON · pre: ${news.pre_action} · release ${news.release_min} min` : "OFF"}</span></span>
+                <span><span className="text-white/50">sweep runner </span><span className={runner ? "text-[#10F2C5]" : "text-white/50"}>{runner ? "ON (½ size → pre-drop high)" : "OFF"}</span></span>
+            </div>
+            <div className="text-[#F5C542] mt-1" data-testid="gtp-news-next">
+                {n ? `${n.phase ? `[${n.phase}] ` : ""}${n.plan}${n.forecast ? ` · fcst ${n.forecast}` : ""}${n.actual ? ` · actual ${n.actual}` : ""}` : "no configured USD event in the next window"}
+            </div>
+            {ev.length > 0 && (
+                <table className="w-full text-[10px] text-white/70 mt-2" data-testid="gtp-news-events">
+                    <thead><tr className="text-white/40 text-left"><th>event</th><th>UTC</th><th>surprise</th><th>bias</th><th>1st move</th><th>confirmed</th><th>trades</th><th>skipped / PRE</th></tr></thead>
+                    <tbody>{ev.slice(0, 6).map((e) => (
+                        <tr key={e.key} className="border-t border-white/5">
+                            <td>{e.title}</td><td>{String(e.time_utc || "").slice(5, 16)}</td><td>{e.surprise ?? "—"}</td><td>{e.news_bias || "—"}</td><td>{e.first_move || "—"}</td>
+                            <td>{e.confirmed === true ? "yes" : e.confirmed === false ? "no" : "—"}</td><td>{e.trades ?? 0}</td>
+                            <td>{[...(e.skipped || []).slice(0, 2), ...(e.pre_actions || []).map((a) => `PRE ${a.action}`).slice(0, 2)].join("; ")}</td>
+                        </tr>))}</tbody>
+                </table>
+            )}
+        </div>
+    );
+}
+
 export function GoldTrendPulseCard({ accountId }) {
     const [d, setD] = useState(null);
     const [err, setErr] = useState(null);
@@ -63,6 +91,7 @@ export function GoldTrendPulseCard({ accountId }) {
                         <span className={gate.eligible ? "text-[#10F2C5]" : "text-[#F5C542]"}>{gate.eligible ? "PASSED" : `${gate.progress ?? 0}/${gate.needed ?? 100} labeled shadow trades`}</span>
                         {!gate.eligible && (gate.reasons || []).length > 0 && <span className="text-white/40"> — {gate.reasons.join(" · ")}</span>}
                     </div>
+                    <NewsPlan news={d.news} runner={d.sweep_runner_enabled} />
                     {(d.recent || []).length > 0 && (
                         <div className="mt-3 overflow-x-auto">
                             <table className="w-full text-[10px] font-mono text-white/70" data-testid="gtp-recent">

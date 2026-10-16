@@ -37,9 +37,13 @@ def main() -> int:
     ap.add_argument("--csv"); ap.add_argument("--user"); ap.add_argument("--days", type=int, default=30)
     ap.add_argument("--spread", type=float, default=0.25); ap.add_argument("--commission", type=float, default=0.0)
     ap.add_argument("--equity", type=float, default=10_000.0); ap.add_argument("--offset-sec", type=int, default=0)
-    ap.add_argument("--layering", action="store_true")
+    ap.add_argument("--layering", action="store_true"); ap.add_argument("--no-runner", action="store_true")
+    ap.add_argument("--news-events", help="JSON [{title, when|when_ts, actual, forecast}] — item 14 replay (Finnhub export)")
+    ap.add_argument("--news-pre-action", default="protect", choices=["protect", "close", "tighten"])
+    ap.add_argument("--window", nargs=2, metavar=("START", "END"), help="ISO UTC, e.g. 2026-10-16T13:15 2026-10-16T14:30 — per-M5-close trace")
     a = ap.parse_args()
-    from gold_trend_pulse.replay import load_csv, markdown, replay
+    from datetime import datetime, timezone
+    from gold_trend_pulse.replay import load_csv, load_news_events, markdown, replay
     if a.csv:
         bars = load_csv(a.csv)
     elif a.user:
@@ -51,7 +55,12 @@ def main() -> int:
     if a.days:
         cutoff = bars[-1]["t"] - a.days * 86400
         bars = [b for b in bars if b["t"] >= cutoff]
-    rep = replay(bars, spread=a.spread, commission_usd_per_lot_side=a.commission, equity=a.equity, broker_offset_sec=a.offset_sec, layering=a.layering)
+    win = None
+    if a.window:
+        win = tuple(datetime.fromisoformat(x).replace(tzinfo=timezone.utc).timestamp() for x in a.window)
+    rep = replay(bars, spread=a.spread, commission_usd_per_lot_side=a.commission, equity=a.equity, broker_offset_sec=a.offset_sec, layering=a.layering,
+                 runner=not a.no_runner, news_events=load_news_events(a.news_events) if a.news_events else None,
+                 news_pre_action=a.news_pre_action, trace_window=win)
     print(markdown(rep, f"gold_trend_pulse replay — spread {a.spread}, commission ${a.commission}/lot/side, equity ${a.equity:,.0f}"))
     return 0
 
