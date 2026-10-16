@@ -411,6 +411,11 @@ async def get_events() -> list:
         await _refresh_source("financecalendar", _fetch_financecalendar)
         now = time.time()
         any_ok = any(_sources[n]["last_error"] is None and _sources[n]["events"] is not None for n in SOURCE_ORDER)
+        # #41 — a fresh process whose every fetch fails (ForexFactory 429 after a reload) must not serve an EMPTY
+        # calendar for 10 min while another process has a good copy: reuse the shared cache even past its TTL.
+        if not any_ok and not any(_sources[n]["events"] for n in SOURCE_ORDER) and await _load_shared_cache(ignore_ttl=True):
+            _cache["expires_at"] = now + 600
+            return _cache["events"]
         _cache["events"] = _assemble(now)
         _cache["expires_at"] = now + (_ttl_sec(now) if any_ok else 600)
         if any_ok:
@@ -426,7 +431,7 @@ async def get_events() -> list:
 SHARED_CACHE_ID = "economic_calendar_cache"
 
 
-async def _load_shared_cache() -> bool:
+async def _load_shared_cache(ignore_ttl: bool = False) -> bool:
     """v1.60.43 — the per-process 1 h cache made every API/worker process refetch after a restart at once
     (ForexFactory 429 on 15 Oct). The last successful fetch is kept in platform_state and reused by every process
     while it is younger than 1 h; the per-source state is restored so feed_status() stays truthful."""
@@ -439,7 +444,7 @@ async def _load_shared_cache() -> bool:
         return False
     now = time.time()
     fetched = float(doc.get("fetched_at") or 0)
-    if not fetched or now - fetched > _ttl_sec(now):
+    if not fetched or (not ignore_ttl and now - fetched > _ttl_sec(now)):
         return False
     for name in SOURCE_ORDER:
         src = (doc["sources"] or {}).get(name) or {}

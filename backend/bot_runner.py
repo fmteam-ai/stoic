@@ -36,6 +36,7 @@ from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
 from account_reservations import trade_counter_filter
+from anti_tilt import evaluate as anti_tilt_evaluate
 from streak_losses import is_streak_loss
 from market import StaleQuoteError
 from models import BotConfigUpdate as _BotConfigUpdate
@@ -584,9 +585,7 @@ async def _process_user_account_locked(db, cfg: dict):
     min_conf_override = int(cfg.get("min_confidence_override") or 0)
     spread_filter_enabled = bool(cfg.get("spread_filter_enabled", CFG_DEFAULTS["spread_filter_enabled"]))
     max_spread_pips = cfg.get("max_spread_pips") or {}
-    anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
     anti_tilt_n = int(cfg.get("anti_tilt_consecutive_losses", 3))
-    anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4))
     # main92 P3 — configs without a value fall back to 1 auto trade / symbol /
     # day (the API default); the pulse says so, so operators can review it.
     # main93 — an explicit EMPTY value ("" / None) is "not set", never "unlimited":
@@ -605,30 +604,13 @@ async def _process_user_account_locked(db, cfg: dict):
     cooldown_scope = f"{user_id}:{cfg_account_id or 'default'}"
 
     # === Anti-tilt: freeze auto-execute if last N closed trades all lost ===
-    anti_tilt_active = False
-    if anti_tilt_enabled and anti_tilt_n > 0:
-        # iter-122 · origin=auto: judge the bot by its OWN trades — a $-0.16
-        # manual close must not freeze auto-execution.
-        recent_q = {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True}}
-        if cfg_account_id:
-            recent_q["account_id"] = cfg_account_id
-        recent = await db.trades.find(recent_q).sort(
-            "closed_at", -1
-        ).limit(anti_tilt_n).to_list(length=anti_tilt_n)
-        # A trade counts as a LOSS only when it gave back > 0.1R of its planned risk.
-        # Reconciler ghost-closes (pnl 0.0 / None), breakeven scratches (−0.04 after a
-        # BE move) and true breakevens must NOT trip the freeze — users were frozen on
-        # days with zero actual losing trades (iter-45 bug, v1.60.48 scratches).
-        if len(recent) == anti_tilt_n and all(is_streak_loss(r) for r in recent):
-            last_close = recent[0].get("closed_at")
-            try:
-                lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
-                if datetime.now(timezone.utc) - lc < timedelta(hours=anti_tilt_hours):
-                    anti_tilt_active = True
-                    logger.warning("Anti-tilt active user=%s acct=%s — last %d trades lost",
-                                   user_id, cfg_account_id or "default", anti_tilt_n)
-            except Exception:
-                pass
+    # #39 — ONE shared evaluation (anti_tilt.evaluate) for the runner AND Bot Health / status / pulse:
+    # origin=auto, not stats_excluded, loss = streak_losses.is_streak_loss (scratches/ghost closes never count).
+    tilt = await anti_tilt_evaluate(db, user_id, cfg)
+    anti_tilt_active = tilt["active"]
+    if anti_tilt_active:
+        logger.warning("Anti-tilt active user=%s acct=%s — last %d trades lost",
+                       user_id, cfg_account_id or "default", anti_tilt_n)
 
     # Count current open + pending BOT trades to respect max_concurrent
     # (per-account when scoped). origin=auto only — manual trades must NEVER
@@ -640,10 +622,7 @@ async def _process_user_account_locked(db, cfg: dict):
     inflight = await db.trades.count_documents(inflight_q)
 
     if anti_tilt_active:
-        await _record_pulse(db, cfg,
-            action="BLOCKED", level="warn",
-            reason=f"Anti-tilt freeze — last {anti_tilt_n} trades lost. Resumes in <{anti_tilt_hours}h.",
-        )
+        await _record_pulse(db, cfg, action="BLOCKED", level="warn", reason=tilt["reason"])
         return
 
     for sym in symbols:

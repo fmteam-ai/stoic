@@ -4,6 +4,7 @@ import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AgentReportCard from "@/components/AgentReportCard";
 import { EvidenceBoard } from "@/components/EvidenceBoard";
+import { MarketIntelCard } from "@/components/MarketIntelCard";
 import {
     Brain, Search, ShieldCheck, Send, Activity, RefreshCw,
     CheckCircle2, XCircle, AlertTriangle, Clock, Cpu,
@@ -106,6 +107,7 @@ export default function Agents() {
             <div className="p-4 md:p-8 space-y-6 max-w-6xl">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono" data-testid="agents-error">{err}</div>}
 
+                <MarketIntelCard />
                 <StrategyGeneratorCta />
                 <AgentReportCard />
                 <EvidenceBoard />

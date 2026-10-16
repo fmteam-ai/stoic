@@ -101,7 +101,8 @@ def _parse_rss(xml_text: str, source: str) -> list:
             iso = parsedate_to_datetime(pub).astimezone(timezone.utc).isoformat()
         except (ValueError, TypeError):
             pass
-        out.append({"title": title, "source": source, "publishedAt": iso})
+        out.append({"title": title, "source": source, "publishedAt": iso,
+                    "url": (item.findtext("link") or "").strip() or None})
     return out
 
 
@@ -152,7 +153,7 @@ async def fetch_market_news(base: str, limit: int = MAX_HEADLINES) -> list:
         seen.add(title.lower())
         out.append({"title": title,
                     "source": (a.get("source") or {}).get("name") or "",
-                    "publishedAt": a.get("publishedAt") or ""})
+                    "publishedAt": a.get("publishedAt") or "", "url": a.get("url")})
     for a in rss:
         if a["title"].lower() not in seen:
             seen.add(a["title"].lower())
@@ -172,7 +173,7 @@ async def fetch_market_news(base: str, limit: int = MAX_HEADLINES) -> list:
                     continue
                 seen.add(it["title"].lower())
                 out.append({"title": it["title"], "source": it["source"], "publishedAt": it.get("published_at") or "",
-                            "currencies": it.get("currencies") or []})
+                            "currencies": it.get("currencies") or [], "url": it.get("url")})
                 finnhub_items += 1
     except Exception as e:  # noqa: BLE001 — advisory feed never breaks the wire
         logger.debug("finnhub news skipped: %s", e)
@@ -305,6 +306,11 @@ async def get_news_understanding(base: str) -> dict | None:
         await _persist_status(base, None)
         return None
     snap["fetched_at"] = datetime.now(timezone.utc).isoformat()
+    # #41 — keep the scored items (not only the top-3 drivers) so the Market Intelligence card can list them
+    snap["items"] = [{"title": it["title"][:160], "source": it.get("source", ""), "publishedAt": it.get("publishedAt"),
+                      "url": it.get("url"), "score": it.get("score"), "why": it.get("why", ""),
+                      "currencies": it.get("currencies") or []}
+                     for it in sorted(items, key=lambda x: abs(x.get("score") or 0), reverse=True)[:12]]
     _status["last_scored_at"] = snap["fetched_at"]
     _cache[base] = (now + CACHE_TTL, snap)
     await _persist_status(base, snap)

@@ -205,32 +205,13 @@ async def _check_risk_state(db, user_id: str) -> dict:
     now = datetime.now(timezone.utc)
     cfgs = await db.bot_configs.find({"user_id": user_id}).to_list(length=20)
 
-    # Anti-tilt freeze
+    # Anti-tilt freeze — #39: shared evaluation (anti_tilt.evaluate), identical to the runner's gate
+    from anti_tilt import evaluate as anti_tilt_evaluate
     frozen_scopes = []
     for tc in cfgs:
-        if not tc.get("anti_tilt_enabled", True):
-            continue
-        atn = int(tc.get("anti_tilt_consecutive_losses", 3) or 0)
-        ath = int(tc.get("anti_tilt_freeze_hours", 4) or 0)
-        if atn <= 0 or ath <= 0:
-            continue
-        q = {"user_id": user_id, "status": "closed", "stats_excluded": {"$ne": True}}
-        if tc.get("account_id"):
-            q["account_id"] = tc["account_id"]
-        recent = await db.trades.find(q).sort("closed_at", -1).limit(atn).to_list(length=atn)
-        if len(recent) == atn and all(float(r.get("pnl") or 0) < 0 for r in recent):  # iter-45: strict losses only
-            last_close = recent[0].get("closed_at")
-            try:
-                lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
-                unfreeze = lc + timedelta(hours=ath)
-                rem = (unfreeze - now).total_seconds()
-                if rem > 0:
-                    mins = int(rem // 60)
-                    hrs, mm = divmod(mins, 60)
-                    eta = f"{hrs}h {mm}m" if hrs else f"{mm}m"
-                    frozen_scopes.append(f"{tc.get('account_id') or 'default'} (resumes in {eta})")
-            except Exception:
-                pass
+        tilt = await anti_tilt_evaluate(db, user_id, tc, now)
+        if tilt["active"]:
+            frozen_scopes.append(f"{tc.get('account_id') or 'default'} (resumes in {tilt['eta']})")
     if frozen_scopes:
         checks.append(_mk("Anti-tilt freeze", "fail",
                           "Bot frozen on: " + ", ".join(frozen_scopes),

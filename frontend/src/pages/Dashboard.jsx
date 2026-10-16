@@ -12,6 +12,7 @@ import { EaVersionStrip } from "@/components/EaVersionStrip";
 import { BotHealthScore } from "@/components/BotHealthScore";
 import DataFreshnessStrip from "@/components/DataFreshnessStrip";
 import { MacroClimate } from "@/components/MacroClimate";
+import { MarketIntelCard } from "@/components/MarketIntelCard";
 import { DiagnosticModal } from "@/components/DiagnosticModal";
 import BotPulsePanel from "@/components/BotPulsePanel";
 import SilentBotBanner from "@/components/SilentBotBanner";
@@ -575,6 +576,8 @@ export default function Dashboard() {
                 <BotHealthScore refreshSignal={lastEvent?.ts} />
 
                 <MacroClimate />
+
+                <MarketIntelCard compact />
 
                 {isAdmin && (
                     <div className="flex items-center justify-between px-1">

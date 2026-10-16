@@ -8,28 +8,33 @@ When the planned risk cannot be reconstructed, any negative pnl still counts (co
 SCRATCH_R = 0.1
 BREAKEVEN_EXIT_RULES = {"breakeven_0_5r"}
 STREAK_FIELDS = {"pnl": 1, "closed_at": 1, "entry_price": 1, "stop_loss": 1, "original_stop_loss": 1, "lot_size": 1,
-                 "original_lot_size": 1, "symbol": 1, "scalp_exit_rule": 1, "breakeven_set": 1, "be_target_sl": 1}
+                 "original_lot_size": 1, "symbol": 1, "scalp_exit_rule": 1, "breakeven_set": 1, "be_target_sl": 1,
+                 "account_id": 1, "origin": 1, "action": 1}
 
 
-def _planned_r(trade: dict):
+def _planned_r(trade: dict, account: dict | None = None):
     """R against the ORIGINAL stop (v1.60.50 — after a BE move `stop_loss` sits at entry → risk ≈ 0 → every
-    scratch looked like a huge loss)."""
-    from analytics import _r_multiple
-    osl = trade.get("original_stop_loss")
-    row = {**trade, "stop_loss": osl} if osl else trade
-    if trade.get("original_lot_size"):               # v1.60.52 — the field trades actually store (filled volume)
-        row = {**row, "lot_size": trade["original_lot_size"]}
-    return _r_multiple(row)
+    scratch looked like a huge loss). #40 — contract size from the account's broker spec / instrument table."""
+    from analytics import trade_r_multiple
+    return trade_r_multiple(trade, account)
 
 
-def is_streak_loss(trade: dict) -> bool:
+def classify_loss(trade: dict, account: dict | None = None) -> dict:
+    """{counts: bool, r: float|None, why: str} — the ONE rule, with its explanation for Bot Health (#39)."""
     pnl = float(trade.get("pnl") or 0)
     if pnl >= 0:
-        return False
+        return {"counts": False, "r": None, "why": "pnl ≥ 0 — not a loss"}
     # a scratch is a stop the EA CONFIRMED moved to break-even (`breakeven_set`), not merely a requested BE rule
     if trade.get("scalp_exit_rule") in BREAKEVEN_EXIT_RULES and trade.get("breakeven_set"):
-        return False
-    r = _planned_r(trade)
+        return {"counts": False, "r": None, "why": "breakeven scratch (EA confirmed BE stop) — not a loss"}
+    r = _planned_r(trade, account)
     if r is None:
-        return True
-    return r < -SCRATCH_R
+        return {"counts": True, "r": None, "why": "planned risk unknown (no SL / contract size) — counts, conservative"}
+    r = round(r, 3)
+    if r < -SCRATCH_R:
+        return {"counts": True, "r": r, "why": f"{r:+.2f}R — gave back more than {SCRATCH_R}R of planned risk"}
+    return {"counts": False, "r": r, "why": f"{r:+.2f}R — scratch (within {SCRATCH_R}R of planned risk), not a loss"}
+
+
+def is_streak_loss(trade: dict, account: dict | None = None) -> bool:
+    return classify_loss(trade, account)["counts"]

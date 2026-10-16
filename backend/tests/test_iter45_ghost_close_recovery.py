@@ -24,15 +24,16 @@ class TestInferCloseReason:
         assert _infer_close_reason({}, None) == "broker_reconciled_estimated"
 
 
-def test_anti_tilt_uses_strict_negative():
-    """All 4 gating/status sites must count a loss ONLY when pnl < 0 —
-    zero-P&L ghost closes froze accounts with no real losing trades."""
+def test_anti_tilt_uses_one_shared_helper():
+    """#39 — every gating/status site calls anti_tilt.evaluate (origin=auto + is_streak_loss); the old
+    all(pnl<0)-over-any-trade banner rule is gone. Zero-P&L ghost closes never count (pnl >= 0 → not a loss)."""
     backend = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for rel, expect in (("bot_runner.py", 1), ("routes/bot_routes.py", 2),
-                        ("routes/diagnostic_routes.py", 1)):
+    for rel in ("bot_runner.py", "routes/bot_routes.py", "routes/diagnostic_routes.py"):
         src = open(os.path.join(backend, rel)).read()
-        assert 'or 0) <= 0 for r in' not in src, f"{rel} still counts pnl==0 as a loss"
-        assert src.count('or 0) < 0 for r in') >= expect, rel
+        assert "anti_tilt_evaluate(" in src, rel
+        assert "or 0) < 0 for r in" not in src and "or 0) <= 0 for r in" not in src, f"{rel} still has the old rule"
+    from streak_losses import classify_loss
+    assert classify_loss({"pnl": 0.0})["counts"] is False
 
 
 def test_reconciler_estimates_from_live_snapshot():
