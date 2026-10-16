@@ -59,7 +59,7 @@ ALLOWED_FIELDS = {
     "partial_close_enabled":        ("bool",  None, None),
     "partial_close_trigger_r":      ("float", 0.1,  5.0),
     "partial_close_fraction":       ("float", 0.1,  0.9),
-    "breakeven_enabled":            ("bool",  None, None),
+    # #53 — breakeven_enabled is deliberately NOT optimizer-tunable: only the user switches break-even off (Bot Config)
     "breakeven_trigger_r":          ("float", 0.1,  5.0),
     "sl_cooldown_enabled":          ("bool",  None, None),
     "sl_cooldown_minutes":          ("int",   5,    240),
@@ -489,6 +489,8 @@ async def apply_recommendation(user_id: str, report: dict, rec: dict) -> dict:
 
     if rec["type"] == "config_change":
         field = rec["field"]
+        if field not in ALLOWED_FIELDS:
+            raise ValueError(f"{field} is not optimizer-tunable")   # #53 — e.g. breakeven_enabled stays with the user
         value = _clamp(field, rec["to"])  # re-clamp — defense in depth
         if value is None:
             raise ValueError("recommendation value is no longer valid")

@@ -229,27 +229,39 @@ def close_in_flight(trade: dict, now: datetime | None = None) -> bool:
 
 
 async def mandatory_close(db, trade: dict, *, reason: str, actor: str, stamp: dict | None = None,
-                          now: datetime | None = None, full_close: bool = True) -> str:
+                          now: datetime | None = None, full_close: bool = True, account: dict | None = None) -> str:
     """#48 — issue a MANDATORY close (friday_flat / eod_flatten / protection) that takes over any unacked request
     and re-issues itself with backoff until the position is confirmed closed.
-    Returns: "in_flight" (terminal already executing a close — leave it), "backoff" (our own request is pending,
-    not due yet), "issued" (first command or takeover), "reissued" (re-dispatch of our own unconfirmed command)."""
-    from close_watchdog import redispatch_due
+    #50 — ANY pending mandatory reason counts as "own" (friday_flat and eod_flatten overlap on Fridays and must not
+    re-issue each other's command every tick); the STRONGEST reason is kept (panic > protection > friday_flat > eod > manual).
+    Returns: "in_flight" (terminal already executing a close — leave it), "backoff" (a mandatory request is pending,
+    not due yet), "quiet" (EA EOD quiet window — deferred), "issued" (first command or takeover), "reissued"."""
+    from close_watchdog import ea_quiet, is_mandatory_close, redispatch_due, strongest_reason
     now = now or datetime.now(timezone.utc)
+    if trade.get("netting_close_acked"):
+        return "in_flight"           # #51 — acked volume-limited netting leg: the OUT deal closes it, never re-issue
     if close_in_flight(trade, now):
         return "in_flight"
     cmd = trade.get("close_command") or {}
-    own_pending = bool(trade.get("close_requested")) and cmd.get("state") == "requested" and cmd.get("reason") == reason
+    pending = bool(trade.get("close_requested")) and cmd.get("state") == "requested"
+    own_pending = pending and is_mandatory_close(cmd.get("reason"))
+    if own_pending:
+        reason = strongest_reason(cmd.get("reason"), reason)
     rd = trade.get("close_redispatch") or {}
     count = int(rd.get("count") or 0)
     if own_pending:
         last = _parse(rd.get("last_at")) or _parse(cmd.get("requested_at")) or now
         if not redispatch_due(count, (now - last).total_seconds()):
             return "backoff"
+        if ea_quiet(account, now):
+            return "quiet"           # #49 — the EA drops FULL_CLOSE in its quiet window; re-issue when it reopens
     pm = {"type": "FULL_CLOSE", "reason": reason, "requested_at": now.isoformat()} if full_close else None
     st = dict(stamp or {})
+    if "close_reason_pending" in st:
+        st["close_reason_pending"] = reason
     if own_pending:
-        st["close_redispatch"] = {"count": count + 1, "last_at": now.isoformat(), "of": cmd.get("key")}
+        first_at = rd.get("first_at") or cmd.get("requested_at") or now.isoformat()
+        st["close_redispatch"] = {"count": count + 1, "last_at": now.isoformat(), "first_at": first_at, "of": cmd.get("key")}
     res = await request_close(db, {"_id": trade["_id"]}, reason=reason, actor=actor, stamp=st,
                               pending_modification=pm, emergency=True)
     if not res.get("trades_marked_for_close"):

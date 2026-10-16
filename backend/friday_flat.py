@@ -125,14 +125,16 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
             eff = "tighten"  # EA <v1.40 ignores FULL_CLOSE — degrade gracefully
         if eff == "close":
             from close_commands import mandatory_close
-            outcome = await mandatory_close(db, tr, reason="friday_flat", actor="friday_flat",
+            first_touch = not tr.get("friday_flat_at")
+            outcome = await mandatory_close(db, tr, reason="friday_flat", actor="friday_flat", account=acc,
                                             stamp={"close_reason_pending": "friday_flat", "friday_flat_action": "close",
-                                                   **({"friday_flat_at": now_iso} if not tr.get("friday_flat_at") else {})})
-            if outcome in ("in_flight", "backoff", "gone"):
+                                                   **({"friday_flat_at": now_iso} if first_touch else {})})
+            if outcome in ("in_flight", "backoff", "quiet", "gone"):
                 continue
             stats["closed"] += 1
             stats["reissued"] = stats.get("reissued", 0) + (1 if outcome == "reissued" else 0)
-            actions.append((tr, "close", None))
+            if first_touch:
+                actions.append((tr, "close", None))     # #49 — Telegram once per trade, never per re-issue
             logger.warning("Friday Flat close %s user=%s sym=%s trade=%s", outcome, user_id, tr.get("symbol"), tr["_id"])
             continue
         else:

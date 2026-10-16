@@ -62,34 +62,36 @@ async def sweep_eod_flatten(db, now: datetime | None = None) -> dict:
     queued = 0
     accounts_hit = 0
     async for acc in db.accounts.find(
-            {}, {"broker_utc_offset_sec": 1, "user_id": 1, "name": 1}):
+            {}, {"broker_utc_offset_sec": 1, "user_id": 1, "name": 1, "ea_quiet_window": 1}):
         offset = int(acc.get("broker_utc_offset_sec") or 0)
         if not in_flatten_window(offset, now):
             continue
         account_id = str(acc["_id"])
         acct_queued = 0
+        acct_new = 0
         async for tr in db.trades.find(
                 {"account_id": account_id, "status": "open",
                  "origin": "auto"}):
             # #48 — take over any UNACKED close (e.g. a silent var_cap request) and re-issue our own with backoff
             # until the position is confirmed gone; only a terminal-acked close in flight is left alone.
-            outcome = await mandatory_close(db, tr, reason="eod_flatten", actor="eod_flatten", now=now,
+            outcome = await mandatory_close(db, tr, reason="eod_flatten", actor="eod_flatten", now=now, account=acc,
                                             stamp={"eod_flatten_queued_at": now_iso})
             if outcome not in ("issued", "reissued"):
                 continue
             acct_queued += 1
+            acct_new += 1 if outcome == "issued" else 0
         if acct_queued:
             accounts_hit += 1
             queued += acct_queued
             logger.info("EOD flatten: queued %d close(s) on account %s "
                         "before broker rollover", acct_queued, account_id)
-            if acc.get("user_id"):
+            if acc.get("user_id") and acct_new:      # #49 — notify once per trade, not per re-issue
                 try:
                     await db.notifications.insert_one({
                         "user_id": acc["user_id"], "type": "eod_flatten",
                         "title": "End-of-day flatten",
                         "message": (
-                            f"{acct_queued} intraday bot position(s) on "
+                            f"{acct_new} intraday bot position(s) on "
                             f"{acc.get('name') or 'your account'} queued to "
                             f"close before the daily rollover — nothing is "
                             f"held overnight."),

@@ -13,6 +13,7 @@ from database import get_db
 from models import BridgeHeartbeat, BridgeTradeReport, BridgeExternalDeal
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips, base_symbol
+from entry_costs import commission_update, spread_at_entry
 from intelligence_counters import increment as inc_intel_counter
 from trade_reconciler import reconcile_account
 from silent_failures import record_swallow
@@ -2501,6 +2502,9 @@ async def report_trade(payload: BridgeTradeReport):
         update["intended_entry_price"] = intended
         if requested > 0:
             update["requested_price"] = requested
+        _sp = spread_at_entry(acc, symbol)           # #53 — real spread at fill for the break-even cost buffer
+        if _sp is not None and not trade.get("spread_at_entry_pips"):
+            update["spread_at_entry_pips"] = _sp
         update["slippage_pips"] = round(slip_pips, 2)
         # v1.60.36 — ALSO measure against the SIGNAL price (adverse-only, direction-aware) and keep the signed gap:
         # 14 Oct fills were 5–6 pips worse than the signal while slippage_pips (vs requested) read 0.
@@ -2918,6 +2922,16 @@ async def _absorb_duplicate_ticket_row(db, account_id: str, ticket, position_leg
 
 
 @router.post("/external-deal")
+async def _stamp_entry_costs(db, trade: dict, acc: dict, payload) -> None:
+    """#53 — the IN deal of a STOIC trade carries the entry commission: store it (once) for the BE cost buffer."""
+    if payload.deal_entry != "in" or trade.get("origin") not in ("auto", None) or trade.get("commission_entry") is not None:
+        return
+    upd = commission_update(payload.symbol, payload.lots, payload.commission,
+                            account_type=acc.get("account_type"), price=payload.price)
+    if upd:
+        await db.trades.update_one({"_id": trade["_id"], "commission_entry": {"$exists": False}}, {"$set": upd})
+
+
 async def external_deal(payload: BridgeExternalDeal):
     """Report any broker-side deal — bot-initiated AND manual.
 
@@ -3123,7 +3137,9 @@ async def external_deal(payload: BridgeExternalDeal):
                         logger.warning("N5 leg upgrade for trade %s skipped — ticket %s leg %s already keyed",
                                        str(existing["_id"]), payload.mt5_ticket, payload.deal_id)
                     await _mark_deal_reconciled(db, payload.deal_id, account_id, note="leg_upgraded_to_deal_id")
+                    await _stamp_entry_costs(db, existing, acc, payload)
                     return {"ok": True, "noop": "ticket_already_tracked", "leg_upgraded": True}
+                await _stamp_entry_costs(db, existing, acc, payload)
                 return {"ok": True, "noop": "ticket_already_tracked"}
 
         # iter-93: race-condition fix. When STOIC fires an order, execution.py
@@ -3144,7 +3160,9 @@ async def external_deal(payload: BridgeExternalDeal):
             if sibling and await adopt_sibling(
                     db, sibling, ticket=payload.mt5_ticket, price=payload.price, via="external_deal",
                     position_leg=netting_leg(netting_acc, payload.deal_id),
-                    extra={"broker_deal_id": payload.deal_id}):
+                    extra={"broker_deal_id": payload.deal_id,
+                           **commission_update(payload.symbol, payload.lots, payload.commission,
+                                               account_type=acc.get("account_type"), price=payload.price)}):
                 await _mark_deal_reconciled(db, payload.deal_id, account_id, note="adopted_sibling")
                 await handle_late_fill(db, sibling, acc, "external_deal")
                 await notify_adopted_open(db, user_id, sibling["_id"], "external_deal")
