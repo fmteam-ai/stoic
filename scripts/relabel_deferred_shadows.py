@@ -41,24 +41,24 @@ async def main(dry_run: bool, rescore_all: bool) -> int:
     print(f"{'ALL' if rescore_all else f'below label v{LABEL_VERSION}'}: {total} shadow(s) across {len(users)} user(s)")
     if dry_run:
         return 0
-    rescored = tagged = 0
+    rescored = tagged = kept = 0
     for uid in users:
-        seen = 0
-        while True:
-            out = await rescore_legacy_shadows(db, uid, limit=500, rescore_all=rescore_all)
+        after = None
+        while True:                                   # v1.60.50 — _id cursor: every row visited exactly once
+            out = await rescore_legacy_shadows(db, uid, limit=500, rescore_all=rescore_all, after_id=after)
             rescored += out["rescored"]
             tagged += out["tagged_m15"]
-            seen += out["rescored"] + out["tagged_m15"]
-            # --all re-scores an already-current label too, so stop once every row of this user was visited once
-            if out["rescored"] + out["tagged_m15"] == 0 or (rescore_all and seen >= await db.trade_decisions.count_documents({**base_q, "user_id": uid})):
+            kept += out.get("kept", 0)
+            after = out.get("next_after_id")
+            if not out.get("visited") or after is None:
                 break
         print(f"  user {uid}: done")
     flipped = await db.trade_decisions.count_documents(
         {"status": "deferred", "shadow.rescored_from": {"$exists": True},
          "$expr": {"$ne": ["$shadow.outcome", "$shadow.rescored_from.outcome"]}})
     invalid = await db.trade_decisions.count_documents({"status": "deferred", "shadow.invalid": True})
-    print(f"rescored on M1: {rescored} (verdict changed: {flipped}) · no M1 tape → marked invalid: {tagged} "
-          f"(total invalid now: {invalid})")
+    print(f"re-scored: {rescored} (verdict changed vs original: {flipped}) · kept valid v2 (tape expired): {kept} · "
+          f"no bars at all → marked invalid: {tagged} (total invalid now: {invalid})")
     return 0
 
 

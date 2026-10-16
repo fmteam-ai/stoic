@@ -265,7 +265,7 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
         return  # still pending, EA hasn't filled yet
 
     try:
-        quote = await get_quote(symbol)
+        quote = await get_quote(symbol, allow_stale=False)   # v1.60.50 — never manage a live tier on a stale price
         current = float(quote.get("price") or 0)
     except Exception as e:
         logger.warning("price fetch failed for %s: %s", symbol, e)

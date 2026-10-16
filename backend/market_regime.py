@@ -165,7 +165,8 @@ def regime_probabilities(bars, trend: str, trend_conf: float, vol: dict,
 
 async def detect(db, user_id: str, force: bool = False, cfg: dict | None = None) -> dict:
     """Unified snapshot, cached 5 min per user."""
-    cached = _CACHE.get(user_id)
+    _ck = (user_id, (cfg or {}).get("account_id"))     # v1.60.50 — per-account freeze currencies → per-account cache
+    cached = _CACHE.get(_ck)
     if cached and not force and time.time() - cached[0] < CACHE_TTL_SEC:
         return cached[1]
     if cfg is None:                                     # v1.60.48 — freeze currencies from the user's default config
@@ -230,7 +231,7 @@ async def detect(db, user_id: str, force: bool = False, cfg: dict | None = None)
         "primary_symbol": primary_sym,
         "at": datetime.now(timezone.utc).isoformat(),
     }
-    _CACHE[user_id] = (time.time(), snapshot)
+    _CACHE[_ck] = (time.time(), snapshot)
     return snapshot
 
 

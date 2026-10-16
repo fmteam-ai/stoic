@@ -220,7 +220,9 @@ class BotConfigUpdate(BaseModel):
     # Weekends stay blocked; the 2.5× median spread guard still applies outside the window.
     gold_off_hours_enabled: bool = True
     gold_off_hours_start_utc: str = "21:00"
-    gold_off_hours_end_utc: str = "07:00"   # v1.60.48 (audit item 17) — absorbs the old asia_session_skip_xau (<07:00)
+    gold_off_hours_end_utc: str = "06:00"
+    # v1.60.50 — Asia gold skip (XAUUSD paused 00:00–07:00 UTC) is its own window; missing/True = on, only False = off
+    asia_session_skip_xau: bool = True
     # v1.60.39 C8–C10 — macro freeze windows (per account). Gold HIGH-impact freeze is explicit by currency
     # (was every country: 15 Oct UK GDP froze gold); USD medium-impact prints get a short ±5 min freeze; ≥2 USD
     # HIGH-impact prints within 5 min ("macro avalanche", e.g. PPI + Retail Sales) extend the after-window to 20 min.
@@ -576,5 +578,5 @@ class QuoteOut(BaseModel):
 DEAD_CONFIG_FIELDS = frozenset({
     "breakeven_enabled", "breakeven_trigger_r", "partial_close_enabled", "partial_close_trigger_r",
     "partial_close_fraction", "trailing_enabled", "trailing_start_r", "trailing_distance_r",
-    "soft_stop_enabled", "soft_stop_loss_fraction", "soft_stop_min_minutes", "asia_session_skip_xau",
+    "soft_stop_enabled", "soft_stop_loss_fraction", "soft_stop_min_minutes",
 })

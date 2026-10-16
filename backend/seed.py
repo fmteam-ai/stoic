@@ -531,6 +531,11 @@ async def ensure_indexes():
         except Exception:
             pass
     try:
+        from user_direction_cap import ensure_indexes as _udc_idx   # v1.60.50 — unique slot + TTL
+        await _udc_idx(db)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("seed").warning("user_direction_reservations indexes: %s", e)
+    try:
         # auto-purge 7 days — matches the old timeseries expireAfterSeconds
         await db.price_ticks.create_index("ts", expireAfterSeconds=60 * 60 * 24 * 7)
         await db.price_ticks.create_index([("symbol", 1), ("ts", -1)])

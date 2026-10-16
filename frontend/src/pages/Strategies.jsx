@@ -132,6 +132,8 @@ export default function Strategies() {
     const [applyTarget, setApplyTarget] = useState("");
     const [applyTargets, setApplyTargets] = useState(null);
     const [deployPreview, setDeployPreview] = useState(null);
+    // v1.60.50 — a preview is only valid for the target + strategy it was taken for
+    useEffect(() => { setDeployPreview(null); }, [applyTarget, compiled]);
 
     // Refresh candidate-bots list whenever the compiled strategy's symbols change.
     useEffect(() => {
@@ -163,8 +165,9 @@ export default function Strategies() {
         if (!compiled) return;
         try {
             const multi = applyTarget === "matching" || applyTarget === "all";
+            if (!deployPreview || deployPreview.target_mode == null) { toast.error("Preview the deploy first"); return; }
             const { data } = await api.post("/nl/strategy/apply", {
-                compiled, target: applyTarget || "default", confirm_multi: multi,
+                compiled, target: applyTarget || "default", confirm_multi: multi && Boolean(deployPreview),
             });
             const n = data.applied_count ?? 1;
             const names = (data.applied_to || [])

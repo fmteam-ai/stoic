@@ -7,18 +7,29 @@ When the planned risk cannot be reconstructed, any negative pnl still counts (co
 
 SCRATCH_R = 0.1
 BREAKEVEN_EXIT_RULES = {"breakeven_0_5r"}
-STREAK_FIELDS = {"pnl": 1, "closed_at": 1, "entry_price": 1, "stop_loss": 1, "lot_size": 1, "symbol": 1,
-                 "scalp_exit_rule": 1, "breakeven_set": 1, "be_target_sl": 1}
+STREAK_FIELDS = {"pnl": 1, "closed_at": 1, "entry_price": 1, "stop_loss": 1, "original_stop_loss": 1, "lot_size": 1,
+                 "original_lot": 1, "symbol": 1, "scalp_exit_rule": 1, "breakeven_set": 1, "be_target_sl": 1}
+
+
+def _planned_r(trade: dict):
+    """R against the ORIGINAL stop (v1.60.50 — after a BE move `stop_loss` sits at entry → risk ≈ 0 → every
+    scratch looked like a huge loss)."""
+    from analytics import _r_multiple
+    osl = trade.get("original_stop_loss")
+    row = {**trade, "stop_loss": osl} if osl else trade
+    if trade.get("original_lot"):
+        row = {**row, "lot_size": trade["original_lot"]}
+    return _r_multiple(row)
 
 
 def is_streak_loss(trade: dict) -> bool:
     pnl = float(trade.get("pnl") or 0)
     if pnl >= 0:
         return False
-    if trade.get("scalp_exit_rule") in BREAKEVEN_EXIT_RULES:
+    # a scratch is a stop the EA CONFIRMED moved to break-even (`breakeven_set`), not merely a requested BE rule
+    if trade.get("scalp_exit_rule") in BREAKEVEN_EXIT_RULES and trade.get("breakeven_set"):
         return False
-    from analytics import _r_multiple
-    r = _r_multiple(trade)
+    r = _planned_r(trade)
     if r is None:
         return True
     return r < -SCRATCH_R

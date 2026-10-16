@@ -745,7 +745,7 @@ GUARD_FLAG_FIELDS = ("daily_drawdown_enabled", "weekly_drawdown_enabled", "month
                      "risk_engine_enabled", "spread_filter_enabled", "friday_flat_enabled",
                      "slippage_veto_enabled", "anti_tilt_enabled", "sl_cooldown_enabled",
                      "loss_cooldown_enabled", "payoff_guard_enabled", "pre_news_protect_enabled",
-                     "adaptive_sizing_enabled", "regime_gating_enabled")
+                     "adaptive_sizing_enabled", "regime_gating_enabled", "asia_session_skip_xau")
 GUARD_MODE_FIELDS = ("uncertainty_gate_mode", "calendar_intel_mode")   # enforce → anything else
 
 
@@ -1912,6 +1912,24 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "label": f"EA heartbeat stale on {len(stale_accounts)} account(s)",
                        "fix": f"Check {', '.join(stale_accounts)} in MT5 — the EA may have detached.",
                        "details": stale_accounts})
+
+    # v1.60.51 — DXY cache staleness (amber): macro/dxy keeps serving the old document when the download fails;
+    # entry_context stops using it after DXY_MAX_AGE_HOURS, so entries are stamped "DXY unknown" until it refreshes.
+    try:
+        from entry_context import DXY_MAX_AGE_HOURS, dxy_cache_age_hours
+        _dxy_doc = await db.dxy_cache.find_one({"_id": "latest"}, {"fetched_at": 1, "as_of_date": 1})
+        _dxy_age = dxy_cache_age_hours(_dxy_doc, now)
+        if _dxy_age is None or _dxy_age > DXY_MAX_AGE_HOURS:
+            score -= 5
+            issues.append({"severity": "warning", "code": "dxy_cache_stale",
+                           "label": ("DXY cache missing — entries stamped DXY unknown" if _dxy_age is None else
+                                     f"DXY cache {int(_dxy_age)} h old (> {DXY_MAX_AGE_HOURS} h) — entries stamped DXY unknown"),
+                           "fix": "The Stooq/FRED dollar-index download is failing; check outbound HTTPS from the "
+                                  "backend and the macro worker log (\"DXY fetch failed\").",
+                           "details": {"fetched_at": (_dxy_doc or {}).get("fetched_at"),
+                                       "as_of_date": (_dxy_doc or {}).get("as_of_date")}})
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("dxy staleness check skipped: %s", _e)
 
     if dormant_account_ids:
         score -= 5

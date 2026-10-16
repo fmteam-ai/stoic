@@ -379,20 +379,34 @@ async def _fx_history(base: str, quote: str) -> list:
 QUOTE_ATTEMPTS = 2
 QUOTE_ATTEMPT_TIMEOUT_SEC = 6.0
 QUOTE_RETRY_DELAY_SEC = 0.5
-_LAST_GOOD: dict = {}
+STALE_MAX_AGE_SEC = {"forex": 60, "commodity": 60, "index": 120, "crypto": 60}   # v1.60.50 — stale fallback age limit
+STALE_RECHECK_SEC = 10                                                          # don't re-wait 12 s on every call
+_LAST_GOOD: dict = {}            # symbol -> (fetched_epoch, result)
+
+
+class StaleQuoteError(RuntimeError):
+    """Raised instead of serving a stale quote when `allow_stale=False` (trading paths)."""
+
+
+def quote_is_stale(q: dict | None) -> bool:
+    return bool((q or {}).get("stale"))
 
 
 # ---------- Public API ----------
-async def get_quote(symbol: str) -> dict:
+async def get_quote(symbol: str, *, allow_stale: bool = True) -> dict:
     sym = _key(symbol)
     cache_key = f"quote:{sym}"
     cached = _cache_get(cache_key)
     if cached:
+        if cached.get("stale") and not allow_stale:
+            raise StaleQuoteError(f"stale quote for {sym} refused by trading path")
         return {**cached, "cached": True}
 
     async with _lock_for(cache_key):
         cached = _cache_get(cache_key)
         if cached:
+            if cached.get("stale") and not allow_stale:
+                raise StaleQuoteError(f"stale quote for {sym} refused by trading path")
             return {**cached, "cached": True}
 
         meta = SYMBOL_MAP.get(sym)
@@ -421,7 +435,7 @@ async def get_quote(symbol: str) -> dict:
                 q = await asyncio.wait_for(_fetch(), timeout=QUOTE_ATTEMPT_TIMEOUT_SEC)
                 result = {"symbol": sym, **q}
                 _cache_set(cache_key, result, ttl_seconds_for_quote(meta["asset"]))
-                _LAST_GOOD[sym] = result
+                _LAST_GOOD[sym] = (time.time(), result)
                 # Persist into Mongo time-series collection for fast windowed queries
                 try:
                     from database import get_db
@@ -440,11 +454,16 @@ async def get_quote(symbol: str) -> dict:
                 last_err = e
                 if attempt + 1 < QUOTE_ATTEMPTS:
                     await asyncio.sleep(QUOTE_RETRY_DELAY_SEC * (attempt + 1))
-        stale = _LAST_GOOD.get(sym)
-        if stale:
-            log.warning("Quote fetch failed for %s after %d attempts (%s) — serving last good quote",
-                           sym, QUOTE_ATTEMPTS, last_err)
-            return {**stale, "cached": True, "stale": True}
+        last = _LAST_GOOD.get(sym)
+        age = (time.time() - last[0]) if last else None
+        if last and age <= STALE_MAX_AGE_SEC.get(meta["asset"], 60):
+            stale_q = {**last[1], "cached": True, "stale": True, "stale_age_sec": round(age, 1)}
+            _cache_set(cache_key, stale_q, STALE_RECHECK_SEC)     # brief: callers don't each wait ~12 s
+            log.warning("Quote fetch failed for %s after %d attempts (%s) — serving %.0fs-old quote (stale)",
+                        sym, QUOTE_ATTEMPTS, last_err, age)
+            if not allow_stale:
+                raise StaleQuoteError(f"stale quote for {sym} ({age:.0f}s old) refused by trading path")
+            return stale_q
         raise RuntimeError(f"Quote fetch failed for {sym}: {last_err}")
 
 

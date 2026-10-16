@@ -60,6 +60,16 @@ class _Cursor:
         self.rows = rows
 
     def sort(self, *a):
+        # honour single-key sorts ("field", dir) / [("field", dir)] when every row has the key
+        spec = a[0] if len(a) == 1 and isinstance(a[0], list) else (a if len(a) == 2 else None)
+        if spec:
+            pairs = spec if isinstance(spec, list) else [tuple(spec)]
+            for key, direction in reversed(pairs):
+                if all(key in r for r in self.rows):
+                    try:
+                        self.rows = sorted(self.rows, key=lambda r: r[key], reverse=direction == -1)
+                    except TypeError:
+                        pass
         return self
 
     def limit(self, n):
@@ -67,7 +77,7 @@ class _Cursor:
         return self
 
     async def to_list(self, length=None):
-        return self.rows
+        return self.rows if length is None else self.rows[:length]
 
     def __aiter__(self):
         self._it = iter(self.rows)

@@ -141,7 +141,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
                          user_id: str | None = None,
                          freeze_cfg: dict | None = None) -> dict:
     profile = get_profile(risk_level)
-    quote = await get_quote(symbol)
+    quote = await get_quote(symbol, allow_stale=False)    # v1.60.50 — a stale quote skips this cycle (as before)
     history = await get_history(symbol)
     # Fix plan A10 — the user's broker tick (EA forming-bar close, ≤3 min old)
     # beats the public quote: gold history is futures vs spot, FX quotes are

@@ -8,7 +8,7 @@ Plus a polling sweeper that reads `db.conditional_triggers` on each bot_runner
 tick and fires `then` actions when the condition is met.
 """
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 
 from auth import get_current_user
@@ -127,10 +127,12 @@ async def nl_strategy_targets(symbols: str = "", user=Depends(get_current_user))
 
 STYLE_PRESET = {"trend_following": "trend_rider", "mean_reversion": "mean_reversion", "scalping": "scalper",
                 "swing": "balanced"}
+VALID_RISK_LEVELS = {"low", "medium", "high", "extreme"}
+VALID_SESSIONS = {"london", "ny", "tokyo", "any"}
 
 
 @router.post("/strategy/apply")
-async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
+async def nl_strategy_apply(payload: dict, request: Request = None, user=Depends(get_current_user)):
     """Persist a compiled strategy into the user's bot_config(s).
 
     Body: {compiled: dict, target: str (default 'matching')}
@@ -159,6 +161,15 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
         "active_preset": STYLE_PRESET.get(compiled.get("strategy_style") or "", "adaptive"),
         "source": "nl_strategy_builder",
     }
+    # v1.60.50 (PR #100 item 7) — validate enums like BotConfigUpdate does; reject instead of writing junk
+    if update_fields["risk_level"] not in VALID_RISK_LEVELS:
+        raise HTTPException(status_code=422, detail=f"risk_level must be one of {sorted(VALID_RISK_LEVELS)}")
+    if update_fields["session_preference"] not in VALID_SESSIONS:
+        raise HTTPException(status_code=422, detail=f"session_preference must be one of {sorted(VALID_SESSIONS)}")
+    if update_fields["strategy_style"] not in STYLE_PRESET:
+        raise HTTPException(status_code=422, detail=f"strategy_style must be one of {sorted(STYLE_PRESET)}")
+    if "auto_execute" in compiled and compiled["auto_execute"] is not None and not isinstance(compiled["auto_execute"], bool):
+        raise HTTPException(status_code=422, detail="auto_execute must be a boolean")
     if compiled.get("max_concurrent_trades") is not None:
         update_fields["max_concurrent_trades"] = max(1, min(10, int(compiled["max_concurrent_trades"])))
     if compiled.get("max_trades_per_day") is not None:
@@ -183,6 +194,17 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
                          if k != "source" and c.get(k) != v}} for c in configs]
     if payload.get("preview"):
         return {"ok": True, "preview": True, "target_mode": resolved_mode, "diff": diff, "update_fields": update_fields}
+    # v1.60.50 (PR #100 item 7) — same rule as PUT /bot/config: a risk raise on a live-capable config needs step-up
+    from routes.bot_routes import _is_risk_raise, _live_context
+    from step_up import require_step_up, audit_event
+    for c in configs:
+        if _is_risk_raise(update_fields, c) and await _live_context(db, user["id"], c.get("account_id")):
+            await require_step_up(db, user, request, "risk_raise")
+            await audit_event(db, user["id"], "risk_raise",
+                              {"account_id": c.get("account_id"), "via": "nl_strategy_apply",
+                               "fields": sorted(k for k, v in update_fields.items() if c.get(k) != v)},
+                              request, step_up=True)
+            break
     from change_governance import snapshot_config
     undo = []
     for c in configs:

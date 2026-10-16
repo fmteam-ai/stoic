@@ -113,7 +113,7 @@ def test_rescore_fixes_v1_label_and_keeps_old_one_in_rescored_from():
     assert sh["rescored_from"] == {"timeframe": "M1", "outcome": "sl_first", "r": -1.0, "label_version": 1, "direction": None}
     assert sh["utc_band"] == "London (06:00–13:00 UTC)"
     # second default pass: nothing left below the current version
-    assert _run(ds.rescore_legacy_shadows(db, "u1")) == {"rescored": 0, "tagged_m15": 0}
+    assert _run(ds.rescore_legacy_shadows(db, "u1"))["visited"] == 0
     # --all re-scores it again (idempotent verdict)
     assert _run(ds.rescore_legacy_shadows(db, "u1", rescore_all=True))["rescored"] == 1
     assert db.trade_decisions.rows[0]["shadow"]["outcome"] == "tp_first"

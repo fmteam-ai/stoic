@@ -116,8 +116,8 @@ def deferred_rows(deferred: list) -> list:
         if sh.get("invalid") or int(sh.get("label_version") or 1) < LABEL_VERSION:
             b["invalid"] += 1
             continue
-        if sh.get("timeframe") != "M1":
-            b["awaiting_m1"] += 1
+        if sh.get("timeframe") != "M1" or sh.get("coarse"):
+            b["awaiting_m1"] += 1            # M15 verdicts (incl. v1.60.50 direction-corrected re-scores) never enter the rate
             continue
         b["labelled"] += 1
         b["tp"] += sh["outcome"] == "tp_first"

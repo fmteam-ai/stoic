@@ -124,7 +124,9 @@ def test_entry_context_dxy_falls_back_to_cache_for_scalp(monkeypatch):
     import entry_context as ec
     db = FakeDb()
     monkeypatch.setattr("database.get_db", lambda: db)
-    _run(db.dxy_cache.insert_one({"_id": "latest", "current_price": 103.42, "regime": "bullish"}))
+    from datetime import datetime, timezone
+    _run(db.dxy_cache.insert_one({"_id": "latest", "current_price": 103.42, "regime": "bullish",
+                                  "fetched_at": datetime.now(timezone.utc).isoformat()}))   # v1.60.51: must be < 48 h old
     ctx = _run(ec.build_entry_context({"symbol": "XAUUSD", "action": "SELL", "strategy_engine": "scalp_fast"}))
     assert ctx["dxy"] == 103.42 and ctx["dxy_regime"] == "bullish"
     # a signal that already carries its own DXY snapshot wins
