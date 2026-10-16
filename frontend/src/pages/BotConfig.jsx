@@ -300,6 +300,15 @@ export default function BotConfig() {
                 let_winners_run: cfg.let_winners_run ?? false,
                 breakeven_enabled: cfg.breakeven_enabled ?? true,
                 breakeven_trigger_r: cfg.breakeven_trigger_r ?? BREAKEVEN_TRIGGER_R_DEFAULT,
+                gold_trend_pulse_enabled: cfg.gold_trend_pulse_enabled ?? false,
+                gold_trend_pulse_mode: cfg.gold_trend_pulse_mode ?? "shadow",
+                gold_trend_pulse_layering_enabled: cfg.gold_trend_pulse_layering_enabled ?? false,
+                gold_trend_pulse_sweep_runner_enabled: cfg.gold_trend_pulse_sweep_runner_enabled ?? true,
+                gold_trend_pulse_news_mode_enabled: cfg.gold_trend_pulse_news_mode_enabled ?? true,
+                gold_trend_pulse_news_pre_action: cfg.gold_trend_pulse_news_pre_action ?? "protect",
+                gold_trend_pulse_news_release_min: cfg.gold_trend_pulse_news_release_min ?? 5,
+                gold_trend_pulse_news_events: cfg.gold_trend_pulse_news_events ?? null,
+                engine_live_features_enabled: cfg.engine_live_features_enabled ?? false,
             };
             // v1.60.48 — send only what changed since load/last save (PATCH), never the whole form
             const payload = changedFields(fullPayload, baselineRef.current);
@@ -1208,6 +1217,56 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                             BREAK-EVEN RULE {(cfg.breakeven_enabled ?? true) ? "ON" : "OFF"}
                         </label>
                     </div>
+                </div>
+
+                <div className="rounded-lg border border-[#F5C542]/30 p-4 mt-4" data-testid="gold-trend-pulse-config">
+                    <div className="font-mono text-xs text-[#F5C542] mb-1">GOLD TREND PULSE (XAUUSD) — shadow first</div>
+                    <div className="text-[11px] text-white/60 mb-2">Trend-following M5 pullback scalper on gold only (20–45 pips, 0.25 % risk, 45-min time-stop, auto RANGE mode). OFF by default. demo_live sends orders only after its own live gate (≥ 100 labeled shadow trades, positive expectancy after costs, PF &gt; 1.2, max DD &lt; 5R) — until then it runs SHADOW and the Scalp card says why.</div>
+                    <div className="flex flex-wrap gap-4 items-center font-mono text-[10px] text-white/80">
+                        <label className="flex items-center gap-2 cursor-pointer" data-testid="gtp-enabled-toggle">
+                            <input type="checkbox" checked={cfg.gold_trend_pulse_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_enabled: e.target.checked })} />
+                            GOLD TREND PULSE {(cfg.gold_trend_pulse_enabled ?? false) ? "ON" : "OFF"}
+                        </label>
+                        <label className="flex items-center gap-2" data-testid="gtp-mode-select">MODE
+                            <select className="bg-black/40 border border-white/10 rounded px-2 py-1" value={cfg.gold_trend_pulse_mode ?? "shadow"} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_mode: e.target.value })}>
+                                <option value="shadow">shadow</option><option value="demo_live">demo_live (after gate)</option>
+                            </select>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer" data-testid="gtp-layering-toggle">
+                            <input type="checkbox" checked={cfg.gold_trend_pulse_layering_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_layering_enabled: e.target.checked })} />
+                            LAYERED PULLBACK ENTRIES (3 legs, 1 shared stop, ≤ 0.75 %) {(cfg.gold_trend_pulse_layering_enabled ?? false) ? "ON" : "OFF"}
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer" data-testid="gtp-sweep-runner-toggle">
+                            <input type="checkbox" checked={cfg.gold_trend_pulse_sweep_runner_enabled ?? true} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_sweep_runner_enabled: e.target.checked })} />
+                            SWEEP &amp; RECLAIM RUNNER LEG (½ size → pre-drop high, BE at scalp TP) {(cfg.gold_trend_pulse_sweep_runner_enabled ?? true) ? "ON" : "OFF"}
+                        </label>
+                    </div>
+                    <div className="flex flex-wrap gap-4 items-center font-mono text-[10px] text-white/80 mt-3" data-testid="gtp-news-config">
+                        <label className="flex items-center gap-2 cursor-pointer" data-testid="gtp-news-toggle">
+                            <input type="checkbox" checked={cfg.gold_trend_pulse_news_mode_enabled ?? true} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_news_mode_enabled: e.target.checked })} />
+                            NEWS MODE (CPI / NFP / FOMC …) {(cfg.gold_trend_pulse_news_mode_enabled ?? true) ? "ON" : "OFF"}
+                        </label>
+                        <label className="flex items-center gap-2" data-testid="gtp-news-pre-action">PRE (T−15)
+                            <select className="bg-black/40 border border-white/10 rounded px-2 py-1" value={cfg.gold_trend_pulse_news_pre_action ?? "protect"} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_news_pre_action: e.target.value })}>
+                                <option value="protect">protect (BE if ≥ +0.5R, else keep)</option><option value="close">close (BE if ≥ +0.5R, else close)</option><option value="tighten">tighten (BE if ≥ +0.5R, else SL → −0.5R)</option>
+                            </select>
+                        </label>
+                        <label className="flex items-center gap-2" data-testid="gtp-news-release-min">RELEASE window (min)
+                            <input type="number" min={1} max={30} className="bg-black/40 border border-white/10 rounded px-2 py-1 w-16" value={cfg.gold_trend_pulse_news_release_min ?? 5}
+                                onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_news_release_min: Math.max(1, Math.min(30, parseInt(e.target.value || "5", 10))) })} />
+                        </label>
+                        <label className="flex items-center gap-2 flex-1 min-w-[260px]" data-testid="gtp-news-events">EVENTS
+                            <input type="text" className="bg-black/40 border border-white/10 rounded px-2 py-1 flex-1" placeholder="default: CPI, Core CPI, Nonfarm Payrolls, FOMC, Fed Interest Rate Decision, Fed Chair, PCE, GDP, Retail Sales, PPI, ISM"
+                                value={(cfg.gold_trend_pulse_news_events || []).join(", ")}
+                                onChange={(e) => { const v = e.target.value.split(",").map((x) => x.trim()).filter(Boolean); setCfg({ ...cfg, gold_trend_pulse_news_events: v.length ? v : null }); }} />
+                        </label>
+                    </div>
+                    <div className="text-[10px] text-white/40 mt-1">News mode: T−15 → T no entries + open gold positions protected per the PRE policy; T → T+release no entries; T+release → T+90 trades the confirmed surprise bias only (first pullback or sweep &amp; reclaim, TP 30–80 pips, SL ≤ 1.3×TP, 60-min time-stop, max 2 per event, 0.25 % risk). FOMC / Fed Chair: direction from the first 15-min candle.</div>
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-3" data-testid="engine-live-features-toggle">
+                        <input type="checkbox" checked={cfg.engine_live_features_enabled ?? false} onChange={(e) => setCfg({ ...cfg, engine_live_features_enabled: e.target.checked })} />
+                        ENGINE LIVE FEATURES (#55) {(cfg.engine_live_features_enabled ?? false) ? "ON" : "OFF — shadow compare only"}
+                    </label>
+                    <div className="text-[10px] text-white/40 mt-1">hf_scalp / hf_scalp_fast / breakout_m15 read the LIVE broker price for price features, add a 1 h slope and a momentum-continuation entry, and never sell a breakdown whose live price is back inside the channel. OFF = both engine outputs are recorded side by side (engine_shadow_compare) for a week before switching.</div>
                 </div>
 
                 {/* v1.60.48 (audit item 8) — the exit tiers are ENGINE RULES, not knobs: the old partial_close_* /

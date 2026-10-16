@@ -625,8 +625,13 @@ async def _process_user_account_locked(db, cfg: dict):
         await _record_pulse(db, cfg, action="BLOCKED", level="warn", reason=tilt["reason"])
         return
 
+    from gold_trend_pulse.engine import enabled_for as _gtp_enabled, SYMBOL as _GTP_SYMBOL
+    _gtp_on = _gtp_enabled(cfg)
+    if _gtp_on and not any(base_symbol(x) == _GTP_SYMBOL for x in symbols):
+        symbols = list(symbols) + [_GTP_SYMBOL]            # gold_trend_pulse — evaluated even if XAUUSD is not in the preset list
     for sym in symbols:
-        if _on_cooldown(cooldown_scope, sym):
+        _gtp_sym = _gtp_on and base_symbol(sym) == _GTP_SYMBOL   # engine-level cooldown (3/15 min) and 15/day cap apply instead
+        if _on_cooldown(cooldown_scope, sym) and not _gtp_sym:
             await _record_pulse(db, cfg, symbol=sym,
                 action="SKIP", level="info",
                 reason=f"Signal cooldown active for {sym} ({_cooldown_minutes(cfg)}min between signals).",
@@ -654,7 +659,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "session_preference_block")
                 continue
 
-        if trade_of_day_cap > 0:
+        if trade_of_day_cap > 0 and not _gtp_sym:
             day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             tod_q = {
                 "user_id": user_id,
@@ -1022,12 +1027,13 @@ async def _process_user_account_locked(db, cfg: dict):
         # re-entries are paused for 30min on THAT account (iter-122b:
         # per-account — each account has its own equity and settings).
         if signal.get("action") in ("BUY", "SELL"):
-            from loss_cooldown import loss_cooldown_block
+            from loss_cooldown import CROSS_ACCOUNT_PREFIX, loss_cooldown_block
             lc = await loss_cooldown_block(db, user_id, sym, signal["action"], cfg)
             if lc:
+                cross = lc.startswith(CROSS_ACCOUNT_PREFIX)        # #56 — a real loss (< −0.1R) on ANY account pauses every account
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="warn", reason=lc)
-                await inc_intel_counter(user_id, "loss_cooldown_block")
+                await inc_intel_counter(user_id, "cross_account_loss_cooldown_block" if cross else "loss_cooldown_block")
                 continue
 
         # v1.60.52 — optional per-account H1 alignment gate for the HF scalp engines (default OFF)
@@ -2624,7 +2630,8 @@ async def _process_user_account_locked(db, cfg: dict):
             from user_direction_cap import reserve_user_direction
             _udc_res, _occupied = await reserve_user_direction(
                 db, user_id=user_id, base_symbol=base_symbol(sym), action=signal["action"], cap=user_dir_cap,
-                account_id=cfg_account_id, symbol_match_q=symbol_match(sym))
+                account_id=cfg_account_id, symbol_match_q=symbol_match(sym),
+                basket_id=(signal.get("gold_trend_pulse") or {}).get("basket_id"))   # item 11 — a basket is ONE position
             if _udc_res is None:
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="warn",

@@ -25,12 +25,22 @@ def live_same_direction_filter(user_id: str, symbol_match_q, action: str) -> dic
             "mode": {"$ne": "paper"}, "shadow": {"$ne": True}}
 
 
+BASKET_SLOT_PREFIX = "basket:"
+
+
 async def reserve_user_direction(db, *, user_id: str, base_symbol: str, action: str, cap: int,
-                                 account_id: str | None, symbol_match_q) -> tuple[str | None, int]:
+                                 account_id: str | None, symbol_match_q, basket_id: str | None = None) -> tuple[str | None, int]:
     """Try to take one of `cap` slots. Returns (reservation_id, occupied) — id None when the cap is reached.
-    occupied = live open/pending trades + unexpired reservations held by OTHER in-flight entries."""
+    occupied = live open/pending trades + unexpired reservations held by OTHER in-flight entries.
+    v1.60.57 (gold_trend_pulse item 11) — a layered BASKET counts as ONE position: a further leg of a basket that already
+    holds a live leg in the SAME account re-uses that slot (sentinel id, nothing inserted); legs never stack across accounts."""
     now = datetime.now(timezone.utc)
     await db[COLL].delete_many({"expires_at": {"$lt": now}})       # belt and braces when the TTL monitor lags
+    if basket_id and account_id:
+        held_leg = await db.trades.count_documents({**live_same_direction_filter(user_id, symbol_match_q, action),
+                                                    "account_id": account_id, "gold_trend_pulse.basket_id": basket_id})
+        if held_leg:
+            return f"{BASKET_SLOT_PREFIX}{basket_id}", held_leg
     live = await db.trades.count_documents(live_same_direction_filter(user_id, symbol_match_q, action))
     held = await db[COLL].count_documents({"user_id": user_id, "symbol": base_symbol, "action": action})
     occupied = live + held
@@ -67,5 +77,5 @@ async def user_direction_cap_for(db, user_id: str, account_id: str | None) -> in
 
 
 async def release_user_direction(db, reservation_id: str | None) -> None:
-    if reservation_id:
+    if reservation_id and not str(reservation_id).startswith(BASKET_SLOT_PREFIX):
         await db[COLL].delete_one({"_id": ObjectId(reservation_id)})

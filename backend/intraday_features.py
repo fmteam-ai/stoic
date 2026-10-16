@@ -34,26 +34,43 @@ def _atr(bars: list, period: int = 14) -> float:
     return sum(trs[-period:]) / period
 
 
-def compute_intraday_features(bars: list) -> dict | None:
-    """Pure computation on M15 bars (dicts with t/o/h/l/c/v)."""
+STALE_FEATURE_ATR_FRAC = 0.5      # #55(5) — live price further than this × ATR15 from the closed-bar last → stale-feature entry
+FAST_SLOPE_MIN_PCT = 0.05         # #55(4) — EMA20 slope over 1 h that confirms a trend on its own
+
+
+def compute_intraday_features(bars: list, live_price: float | None = None, m5_bars: list | None = None,
+                              as_of: float | None = None) -> dict | None:
+    """Pure computation on M15 bars (dicts with t/o/h/l/c/v).
+    #55 (v1.60.57, `engine_live_features_enabled`): with `live_price` the price-dependent features (last_price,
+    vwap_dist, donchian, range_pos) use the LIVE broker price while EMAs/ATR stay on CLOSED bars; a 1 h EMA20 slope
+    and the last 3 M5 closes are added so a fast move can confirm a trend the 2 h slope still calls FLAT."""
     if not bars or len(bars) < MIN_BARS:
         return None
     closes = [float(b["c"]) for b in bars]
-    last = closes[-1]
-
+    closed_last = closes[-1]
+    last = float(live_price) if live_price else closed_last
     ema20 = _ema(closes[-40:], 20)
     ema50 = _ema(closes, 50) if len(closes) >= 50 else _ema(closes, 20)
     atr15 = _atr(bars[-30:], 14)
-
-    # Trend state from EMA stack + slope of EMA20 over last 8 bars (2h)
     ema20_prev = _ema(closes[-48:-8], 20) if len(closes) >= 48 else ema20
     slope_pct = (ema20 - ema20_prev) / ema20_prev * 100 if ema20_prev else 0.0
+    ema20_1h = _ema(closes[-44:-4], 20) if len(closes) >= 44 else ema20
+    slope_1h_pct = (ema20 - ema20_1h) / ema20_1h * 100 if ema20_1h else 0.0
+    m5c = [float(b["c"]) for b in (m5_bars or [])][-3:]
+    m5_rising = len(m5c) == 3 and m5c[0] < m5c[1] < m5c[2]
+    m5_falling = len(m5c) == 3 and m5c[0] > m5c[1] > m5c[2]
     if last > ema20 > ema50 and slope_pct > 0.05:
-        trend = "UP"
+        trend_slow = "UP"
     elif last < ema20 < ema50 and slope_pct < -0.05:
-        trend = "DOWN"
+        trend_slow = "DOWN"
     else:
-        trend = "FLAT"
+        trend_slow = "FLAT"
+    trend = trend_slow
+    if live_price and trend_slow == "FLAT":
+        if last > ema20 and slope_1h_pct >= FAST_SLOPE_MIN_PCT:
+            trend = "UP"
+        elif last < ema20 and slope_1h_pct <= -FAST_SLOPE_MIN_PCT:
+            trend = "DOWN"
 
     # 3-hour momentum (12 bars)
     mom_3h_pct = (last - closes[-13]) / closes[-13] * 100 if len(closes) >= 13 else 0.0
@@ -83,7 +100,7 @@ def compute_intraday_features(bars: list) -> dict | None:
                 recent_break = "DOWN"
 
     # Session VWAP — today's UTC bars, volume-weighted typical price
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = (datetime.fromtimestamp(as_of, tz=timezone.utc) if as_of else datetime.now(timezone.utc)).strftime("%Y-%m-%d")   # as_of: replay
     pv = vol = 0.0
     for b in bars:
         if datetime.fromtimestamp(b["t"], tz=timezone.utc).strftime("%Y-%m-%d") != today:
@@ -138,10 +155,21 @@ def compute_intraday_features(bars: list) -> dict | None:
                else (ranges[mid - 1] + ranges[mid]) / 2)
         typical_day_range_pct = round(med, 2)
 
+    gap = last - closed_last
     return {
         "timeframe": "M15",
         "last_price": round(last, 2),
+        "closed_last_price": round(closed_last, 2),
+        "live_price_used": bool(live_price),
+        "feature_price_gap": round(gap, 2),
+        "stale_feature": bool(atr15 > 0 and abs(gap) > STALE_FEATURE_ATR_FRAC * atr15),
         "trend": trend,
+        "trend_slow": trend_slow,
+        "ema20_slope_pct_1h": round(slope_1h_pct, 3),
+        "m5_closes_rising": m5_rising,
+        "m5_closes_falling": m5_falling,
+        "donchian_hi20": round(hi20, 2),
+        "donchian_lo20": round(lo20, 2),
         "ema20": round(ema20, 2),
         "ema50": round(ema50, 2),
         "ema20_slope_pct_2h": round(slope_pct, 3),
@@ -242,13 +270,22 @@ async def preflight_price(symbol: str, user_id: str | None, signal: dict | None 
 
 
 
-async def fetch_intraday_pack(symbol: str, user_id: str | None = None, timeframe: str = "M15") -> dict | None:
-    """Latest fresh M15 features for the symbol from the USER's EA candle stream."""
+async def fetch_intraday_pack(symbol: str, user_id: str | None = None, timeframe: str = "M15",
+                              live_price: float | None = None) -> dict | None:
+    """Latest fresh M15 features for the symbol from the USER's EA candle stream (#55: optional live broker price +
+    M1-derived M5 closes)."""
     try:
         doc = await load_user_candles(symbol, user_id, timeframe, last_n=120)
         if not doc:
             return None
-        return compute_intraday_features(doc.get("bars") or [])
+        m5 = None
+        if live_price:
+            m1doc = await load_user_candles(symbol, user_id, "M1", last_n=20, max_age_min=10)
+            m1 = (m1doc or {}).get("bars") or []
+            if m1:
+                from gold_trend_pulse.rules import m5_from_m1
+                m5 = m5_from_m1(m1)
+        return compute_intraday_features(doc.get("bars") or [], live_price=live_price, m5_bars=m5)
     except Exception as e:  # noqa: BLE001
         logger.debug("intraday pack failed for %s: %s", symbol, e)
         return None

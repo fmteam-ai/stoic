@@ -202,4 +202,19 @@ async def strategy_report(db, user_id: str, days: int = 30) -> dict:
     report = build_report(decisions_from(trades, signals), days, deferred)
     from risk_regime import bucket_evaluation
     report["risk_off_buckets"] = bucket_evaluation(trades)      # v1.60.53 (B6) — shadow evaluation, advisory
+    try:
+        from gold_trend_pulse import rules as _R
+        sh = await db.gtp_decisions.find({"user_id": user_id, "verdict": "shadow", "outcome.result": {"$exists": True}, "created_at": {"$gte": since}},
+                                         {"outcome": 1, "regime": 1, "trigger": 1}).to_list(length=5000)
+        live_rows = [t for t in trades if (t.get("scope") or t.get("engine")) == "gold_trend_pulse"]
+        report["gold_trend_pulse"] = {
+            "shadow": _R.outcome_stats([x["outcome"] for x in sh]),
+            "shadow_by_regime": {k: _R.outcome_stats([x["outcome"] for x in sh if (x.get("regime") or "TREND") == k]) for k in ("TREND", "RANGE", "NEWS")},
+            "shadow_by_trigger": {k: _R.outcome_stats([x["outcome"] for x in sh if x.get("trigger") == k]) for k in sorted({x.get("trigger") or "?" for x in sh})},
+            "news_events": await db.gtp_news_events.find({"user_id": user_id, "t": {"$gte": datetime.fromisoformat(since).timestamp() if isinstance(since, str) else 0}},
+                                                         {"_id": 0}).sort("t", -1).to_list(length=50),
+            "live": _R.outcome_stats([{"r": t.get("r_multiple"), "pnl_usd": t.get("pnl")} for t in live_rows]),
+            "skipped": await db.gtp_decisions.count_documents({"user_id": user_id, "verdict": "skipped", "created_at": {"$gte": since}})}
+    except Exception as e:  # noqa: BLE001
+        report["gold_trend_pulse"] = {"error": str(e)[:120]}
     return report

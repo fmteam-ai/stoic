@@ -253,6 +253,16 @@ export function MarketIntelCard({ compact = false }) {
                 <>
                     <Section title="NEXT EVENTS" testid="intel-next-events"><NextEvents d={d.next_events} /></Section>
                     <Section title="RISK REGIME (ADVISORY)" testid="intel-risk-regime"><Regime r={d.risk_regime} /></Section>
+                    {d.gold_trend_pulse?.available && <Section title="GOLD TREND PULSE · DAILY BIAS" testid="intel-gold-trend-pulse">
+                        {(d.gold_trend_pulse.accounts || []).map((a) => (
+                            <div key={a.account_id} className="text-xs mb-2" data-testid={`intel-gtp-${a.account_id}`}>
+                                <span className="text-white/60">{a.account || a.account_id.slice(-6)} · </span>
+                                <span className={`font-mono font-bold ${a.bias === "UP" ? "text-[#10F2C5]" : a.bias === "DOWN" ? "text-[#FF5E5B]" : "text-white/50"}`}>{a.bias}</span>
+                                <span className="text-white/50"> · regime {a.regime} · {a.mode}</span>
+                                {a.news && <div className="text-[10px] text-[#F5C542]" data-testid={`intel-gtp-news-${a.account_id}`}>{a.news.phase ? `[${a.news.phase}] ` : ""}{a.news.plan}{a.news.forecast ? ` · fcst ${a.news.forecast}` : ""}{a.news.actual ? ` · actual ${a.news.actual}` : ""} · PRE: {a.news.pre_action}</div>}
+                                <ul className="text-[10px] text-white/50 ml-3">{(a.reasons || []).map((r, i) => <li key={i}>{r.ok ? "✓" : "✗"} {r.text}</li>)}</ul>
+                            </div>))}
+                    </Section>}
                     {!compact && <Section title="TOP HEADLINES" testid="intel-headlines" right={`last ${d.headlines?.window_hours || 4} h`}><Headlines d={d.headlines} /></Section>}
                     {compact && <Section title="NEWS BIAS" testid="intel-headlines"><div className="flex flex-wrap gap-4">{Object.entries(d.headlines?.bias || {}).map(([k, b]) => <Gauge key={k} label={k} net={b.net} count={b.headlines} />)}</div></Section>}
                     {!compact && <Section title="CENTRAL BANKS" testid="intel-central-banks"><CentralBanks d={d.central_banks} /></Section>}

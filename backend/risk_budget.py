@@ -19,7 +19,7 @@ logger = logging.getLogger("risk-budget")
 
 DEFAULT_ALLOCATIONS = {"trend": 0.35, "scalp": 0.20, "breakout": 0.15,
                        "mean_reversion": 0.20, "experimental": 0.10}
-SCOPE_TO_CLASS = {"hf_scalp": "scalp", "hf_scalp_fast": "scalp",
+SCOPE_TO_CLASS = {"hf_scalp": "scalp", "hf_scalp_fast": "scalp", "gold_trend_pulse": "scalp",
                   "scalp_fast": "scalp"}
 DEFAULT_POOL_PCT = 3.0        # total % of equity riskable per day
 FALLBACK_TRADE_RISK_PCT = 0.5  # legacy trades without a stored risk_pct

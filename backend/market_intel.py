@@ -296,6 +296,41 @@ async def _safe(coro, fallback):
         return fallback
 
 
+async def gold_trend_pulse_section(db, user_id: str) -> dict:
+    """v1.60.57 — daily bias + the 4 reasons, regime and mode per account that has gold_trend_pulse enabled; item 14 —
+    the next configured USD event and its plan ("CPI 12:30 UTC — protect at 12:15, news trades from 12:35")."""
+    rows = []
+    events = None
+    async for cfg in db.bot_configs.find({"user_id": user_id, "gold_trend_pulse_enabled": True},
+                                         {"account_id": 1, "gold_trend_pulse_mode": 1, "gold_trend_pulse_news_mode_enabled": 1,
+                                          "gold_trend_pulse_news_events": 1, "gold_trend_pulse_news_release_min": 1, "gold_trend_pulse_news_pre_action": 1}):
+        st = await db.gtp_state.find_one({"_id": str(cfg.get("account_id"))}) or {}
+        acc = None
+        try:
+            from bson import ObjectId
+            acc = await db.accounts.find_one({"_id": ObjectId(str(cfg.get("account_id")))}, {"label": 1})
+        except Exception:  # noqa: BLE001
+            pass
+        bias = st.get("bias") or {}
+        news = None
+        try:
+            from gold_trend_pulse import rules as R
+            from gold_trend_pulse.engine import news_settings, usd_high_impact_events
+            ns = news_settings(cfg)
+            if ns["enabled"]:
+                events = await usd_high_impact_events(cfg) if events is None else events
+                news = R.next_news_event(events, datetime.now(timezone.utc), ns["events"], ns["release_min"])
+                if news:
+                    news["pre_action"] = ns["pre_action"]
+        except Exception as e:  # noqa: BLE001
+            log.debug("gtp news plan failed: %s", e)
+        rows.append({"account_id": str(cfg.get("account_id")), "account": (acc or {}).get("label"), "bias": bias.get("bias") or "NONE",
+                     "reasons": bias.get("reasons") or [], "regime": st.get("regime") or "NO_TRADE", "range": st.get("range"),
+                     "mode": cfg.get("gold_trend_pulse_mode") or "shadow", "last_note": st.get("last_note"), "last_eval": st.get("last_eval"),
+                     "news": news})
+    return {"available": bool(rows), "accounts": rows, "note": None if rows else "gold_trend_pulse is not enabled on any account"}
+
+
 async def build(db, user_id: str) -> dict:
     from economic_calendar import feed_status, get_events, macro_freeze_check
     from news_status import load_source_status, newsapi_configured
@@ -350,6 +385,7 @@ async def build(db, user_id: str) -> dict:
         "macro": macro_gauges(dxy, tips, series, now),
         "geo_risk": geo_risk(advisories, latest_adv),
         "risk_regime": risk_regime(latest_adv, flag_on),
+        "gold_trend_pulse": await _safe(gold_trend_pulse_section(db, user_id), _unavailable("gold_trend_pulse state not available")),
         "usage": usage,
         "source_health": source_health(persisted, finnhub_configured(), newsapi_configured(), releases[0].get("seen_at") if releases else None,
                                        cb_1h, latest_adv, adv_1h, ((fred or {}).get("payload") or {}).get("fetched_at"), dxy, now),

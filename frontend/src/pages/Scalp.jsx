@@ -5,6 +5,7 @@ import { ScalpExecutions } from "@/components/ScalpExecutions";
 import { ScalpReview } from "@/components/ScalpReview";
 import { ExitRuleScoreboard, ShadowExpectancyReport } from "@/components/ScalpReports";
 import { DriftGauge } from "@/components/DriftGauge";
+import { GoldTrendPulseCard } from "@/components/GoldTrendPulseCard";
 import { RefreshCw, ShieldAlert, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -314,6 +315,7 @@ export default function Scalp() {
             <ShadowExpectancyReport />
             <ExitRuleScoreboard days={30} />
 
+            <GoldTrendPulseCard accountId={sel?.account_id || accountId} />
             {/* Runners */}
             <div className="grid gap-4 mb-6">
                 {runners.length === 0 && (

@@ -29,7 +29,7 @@ SCALP_RISK_PCT_CAP = 0.25   # user-selected: 0.25% risk per HF scalp trade
 # Engines whose entries are deterministic rule-hits on live M15 data —
 # ensemble/forecast-model gates (built for the old daily LLM signal) are
 # advisory-only for these scopes.
-DETERMINISTIC_INTRADAY_SCOPES = {"hf_scalp", "hf_scalp_fast", "range_fade", "breakout_m15"}
+DETERMINISTIC_INTRADAY_SCOPES = {"hf_scalp", "hf_scalp_fast", "range_fade", "breakout_m15", "gold_trend_pulse"}
 
 # iter-138 · Tunable engine parameters. Defaults are EXACTLY the values that
 # were previously hard-coded — passing params=None never changes behavior.
@@ -61,6 +61,7 @@ ENGINE_LABELS = {
     "breakout_m15": "BREAKOUT · Donchian-20 M15",
     "range_fade": "MEAN REVERSION · Range Fade",
     "regime_adaptive": "ADAPTIVE · Regime Dispatch",
+    "gold_trend_pulse": "GOLD TREND PULSE · XAUUSD M5 pullback scalper",
 }
 
 def engine_for_signal(signal: dict) -> str | None:
@@ -153,6 +154,21 @@ def hf_scalp_signal(feats: dict, fast: bool = False,
                 return f"price at {pos}% of a {day_rng}% up-day — no fading strength"
         return None
 
+    # #55(3) — FLAT-but-strong-momentum continuation (live features only): above VWAP by ≥ 0.5×ATR15 with 3 h momentum,
+    # the last 3 M5 closes rising and no LH_LL structure → treat as UP for entries (mirror for DOWN).
+    override = None
+    if feats.get("live_price_used") and trend == "FLAT" and feats.get("session_vwap"):
+        atr = float(feats.get("atr15") or 0)
+        vgap = last - float(feats["session_vwap"])
+        struct = feats.get("swing_structure")
+        if vgap >= 0.5 * atr and mom >= mom_min and feats.get("m5_closes_rising") and struct != "LH_LL":
+            trend, override = "UP", f"momentum override: +{vgap:.2f} above VWAP (≥0.5×ATR15), 3h mom +{mom}%, M5 closes rising"
+        elif vgap <= -0.5 * atr and mom <= -mom_min and feats.get("m5_closes_falling") and struct != "HH_HL":
+            trend, override = "DOWN", f"momentum override: {vgap:.2f} below VWAP (≥0.5×ATR15), 3h mom {mom}%, M5 closes falling"
+    if override:
+        if ema20 > 0 and abs(last - ema20) / ema20 * 100 <= 0.15:
+            return ("BUY" if trend == "UP" else "SELL"), f"{override} — pullback to EMA20"
+        return ("BUY" if trend == "UP" else "SELL"), f"{override} — micro-breakout continuation"
     if trend == "UP":
         if pos is not None and float(pos) > 95 and dch == "INSIDE":
             return None, f"uptrend but price at {pos}% of session range without a breakout — no chase"
@@ -283,6 +299,15 @@ def breakout_signal(feats: dict, params: dict | None = None) -> tuple:
     day_rng = float(feats.get("day_range_pct") or 0)
     if day_rng < float(p["min_day_rng"]):
         return None, f"day range {day_rng}% too quiet for a breakout play"
+    # #55(2) — with live features the LIVE price must still be beyond the broken level by ≥ 0.2×ATR15: a BREAK_DOWN whose
+    # live price is back inside the channel is never sold (mirror for BUY).
+    if feats.get("live_price_used"):
+        last, atr = float(feats.get("last_price") or 0), float(feats.get("atr15") or 0)
+        hi20, lo20 = feats.get("donchian_hi20"), feats.get("donchian_lo20")
+        if dch == "BREAK_UP" and hi20 is not None and last < float(hi20) + 0.2 * atr:
+            return None, f"BREAK_UP but live price {last} not ≥0.2×ATR15 beyond {hi20} — no chase of a fading break"
+        if dch == "BREAK_DOWN" and lo20 is not None and last > float(lo20) - 0.2 * atr:
+            return None, f"BREAK_DOWN but live price {last} back inside / not ≥0.2×ATR15 below {lo20} — no stale sell"
     if dch == "BREAK_UP":
         if mom < 0:
             return None, f"Donchian BREAK_UP but 3h momentum negative ({mom}%) — likely fake-out"
