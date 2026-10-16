@@ -203,6 +203,52 @@ async def _acknowledge_close(db, trade, *, broker_deal_id, occurred_at, result, 
     return ack
 
 
+async def record_terminal_ack(db, trade: dict, *, success: bool, error: str | None = None,
+                              terminal: bool = False, at: str | None = None) -> dict | None:
+    """#43 (b) — the EA acknowledged (or failed) the trade's outstanding close command: stamp `terminal_ack`
+    on the immutable row and the trade pointer. A terminal failure (position_not_found, non-retryable) marks the
+    row `failed` and EXPIRES the close request so trade management is not frozen behind a close that will never
+    happen. A successful ack leaves the row `requested` — broker confirmation (the OUT deal) completes it."""
+    cmd = trade.get("close_command") or {}
+    key = cmd.get("key")
+    if not key or cmd.get("state") != "requested":
+        return None
+    at = at or _now()
+    ack = {"at": at, "success": bool(success), "error": (str(error)[:200] if error else None), "terminal": bool(terminal)}
+    failed = (not success) and terminal
+    sets = {"terminal_ack": ack}
+    if failed:
+        sets.update({"state": "failed", "failed_at": at})
+    res = await db.close_commands.update_one(
+        {"_id": f"{key}:{trade['_id']}", "state": "requested"}, {"$set": sets})
+    if res.matched_count == 0:
+        return None
+    await db.trades.update_one({"_id": trade["_id"], "close_command.key": key},
+                               {"$set": {"close_command.terminal_ack": ack,
+                                         **({"close_command.state": "failed"} if failed else {})}})
+    if failed:
+        await expire_close(db, trade, key, reason=f"terminal failure: {error or 'unknown'}", state="failed")
+    return ack
+
+
+async def expire_close(db, trade: dict, key: str, *, reason: str, state: str = "expired") -> bool:
+    """#43 (c) — release a close request that the terminal never completed: close_requested → False, the
+    FULL_CLOSE modification that belongs to this command is cleared, the ledger row is `expired` / `failed` and
+    the trade records why. Trade management resumes on the next cycle. Returns True when the trade was released."""
+    now = _now()
+    pm = trade.get("pending_modification") or {}
+    owns_pm = pm.get("type") == "FULL_CLOSE" and (pm.get("close_command_key") in (None, key))
+    upd = {"$set": {"close_requested": False, "close_command.state": state,
+                    "close_request_expired": {"key": key, "at": now, "reason": reason, "state": state},
+                    **({"pending_modification": None} if owns_pm else {})},
+           "$push": {"close_request_expiry_history": {"$each": [{"key": key, "at": now, "reason": reason}], "$slice": -20}}}
+    res = await db.trades.update_one({"_id": trade["_id"], "status": "open", "close_requested": True,
+                                      "close_command.key": key}, upd)
+    await db.close_commands.update_one({"_id": f"{key}:{trade['_id']}", "state": {"$in": ["requested", "failed"]}},
+                                       {"$set": {"state": state, "expired_at": now, "expiry_reason": reason}})
+    return bool(res.modified_count)
+
+
 async def cancel_pending(db, query: dict, *, reason: str, actor: str, session=None, stamp: dict | None = None) -> int:
     """Pending ORDERS are cancelled, never position-closed. prod v1.60.28 — the cancel also terminalises the
     trade's execution intent and releases its risk reservation; an intent left 'submitted' forever put execution

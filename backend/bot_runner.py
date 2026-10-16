@@ -2839,6 +2839,14 @@ async def loop():
                     )
             except Exception as e:
                 logger.exception("Auto-deleverage sweep failed: %s", e)
+            # #43 (b)+(c) — close commands without a terminal ack: alert at 60 s, expire at 5 min (management resumes)
+            try:
+                from close_watchdog import sweep as sweep_close_watchdog
+                cw = await sweep_close_watchdog(db)
+                if cw.get("alerted") or cw.get("expired"):
+                    logger.warning("Close watchdog · alerted=%d expired=%d", cw["alerted"], cw["expired"])
+            except Exception as e:
+                logger.exception("Close watchdog sweep failed: %s", e)
             # Self-Improving Research Agent — once-per-24h per user. The
             # per-user cooldown is enforced inside `run_for_user` so cheap to
             # call on every tick; >99% of calls return immediately.

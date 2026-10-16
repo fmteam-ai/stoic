@@ -223,6 +223,12 @@ async def calculate_var(
     # cannot exceed the sum of stop distances (× STOP_GAP_FACTOR for slippage/gaps). Unbounded parametric VaR on
     # a single 0.05-lot XAUUSD position on $10k read ~6-7 % and tripped the 5 % cap although the stop risked <1 %.
     stop_bound = _stop_bounded_loss_usd(positions, rows)
+    if stop_bound is None:
+        # #43 (a) — MIXED bound: positions WITH a stop contribute their stop distance (× gap factor), only the
+        # positions without one keep their parametric share. One stop-less row used to unbound the whole book.
+        stop_bound = _mixed_bounded_loss_usd(positions, rows, var_95_usd)
+        if stop_bound is not None:
+            notes.append("VaR mixed bound: stop distance for stopped positions, parametric share for the rest")
     if stop_bound is not None and stop_bound < var_95_usd:
         notes.append(f"VaR bounded by protective stops: ${stop_bound:,.2f} (parametric ${var_95_usd:,.2f}; "
                      f"gap factor ×{STOP_GAP_FACTOR})")
@@ -261,7 +267,8 @@ def open_risk_usd(position: dict, notional: float | None = None) -> float | None
     if entry <= 0 or lot <= 0:
         return None
     try:
-        sl = float(position.get("stop_loss") or 0)
+        # #43 (a) — a row whose live stop is not (yet) mirrored still has the stop it was opened with
+        sl = float(position.get("stop_loss") or position.get("original_stop_loss") or 0)
     except (TypeError, ValueError):
         return None
     if sl <= 0:
@@ -290,3 +297,23 @@ def _stop_bounded_loss_usd(positions: list[dict], rows: list[dict]) -> float | N
             return None
         total += risk
     return total * STOP_GAP_FACTOR
+
+
+def _mixed_bounded_loss_usd(positions: list[dict], rows: list[dict], parametric_var_usd: float) -> float | None:
+    """#43 (a) — Σ stop-bounded loss (× gap factor) over positions with a usable stop + the parametric VaR share
+    (by notional weight) of the positions without one. None when no position has a stop (pure parametric)."""
+    priced = [p for p in positions if float(p.get("lot_size") or 0) > 0 and float(p.get("entry_price") or 0) > 0
+              and base_symbol(p.get("symbol"))]
+    if len(priced) != len(rows) or not priced:
+        return None
+    total, unstopped_weight, any_stop = 0.0, 0.0, False
+    for p, r in zip(priced, rows):
+        risk = open_risk_usd(p, r["notional"])
+        if risk is None:
+            unstopped_weight += float(r.get("weight") or 0)
+        else:
+            any_stop = True
+            total += risk * STOP_GAP_FACTOR
+    if not any_stop:
+        return None
+    return total + parametric_var_usd * unstopped_weight

@@ -2071,6 +2071,17 @@ async def modification_ack(payload: BridgeModificationAck):
     # v1.60.52 — a FAILED close-leg ack must not clear a pending MODIFY_SL that belongs to another intent: the
     # position is still open and its stop move is still owed. Only a successful close consumes that slot.
     update = {"pending_modification": None} if ack_clears_pending(trade, payload.intent_id, bool(payload.success), _close_leg) else {}
+    # #43 (b) — a FULL_CLOSE ack for the trade's outstanding close command is recorded on the command ledger
+    # (terminal_ack); a TERMINAL failure marks it failed and releases the close request (management resumes).
+    if payload.type == "FULL_CLOSE" and (trade.get("close_command") or {}).get("state") == "requested" and (
+            _close_path or payload.intent_id == _pm.get("intent_id")
+            or _pm.get("close_command_key") == (trade.get("close_command") or {}).get("key")):
+        try:
+            from close_commands import record_terminal_ack
+            await record_terminal_ack(db, trade, success=bool(payload.success), error=payload.error,
+                                      terminal=bool(payload.terminal) and not payload.success)
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "close_terminal_ack", _sw)
     push_ops: dict = {}
     # Round 11 item 9 — protection-ack policy lives in a dependency-free
     # function (protection_guard.apply_protection_ack) so it is unit-testable

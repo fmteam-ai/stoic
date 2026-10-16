@@ -295,6 +295,7 @@ export default function BotConfig() {
                 paper_shadow_mode: cfg.paper_shadow_mode,
                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
                 let_winners_run: cfg.let_winners_run ?? false,
+                breakeven_trigger_r: cfg.breakeven_trigger_r ?? 1.0,
             };
             // v1.60.48 — send only what changed since load/last save (PATCH), never the whole form
             const payload = changedFields(fullPayload, baselineRef.current);
@@ -1189,12 +1190,24 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                 </div>
             </div>
             <div className="p-5 space-y-4">
-                {/* v1.60.48 (audit item 8) — the exit tiers are ENGINE RULES, not knobs: the old breakeven_* /
-                    partial_close_* / soft_stop_* / trailing_* fields were saved but never read by trade_manager. */}
+                {/* #43 (#8 widened) — breakeven_trigger_r is a REAL knob again: read by trade_manager for every non-scalp engine */}
+                <div data-testid="breakeven-trigger-r">
+                    <div className="flex items-center gap-2 mb-1">
+                        <TrendingUp className="w-3.5 h-3.5 text-[#FFD700]" />
+                        <span className="font-mono text-[10px] text-white tracking-widest">BREAK-EVEN TRIGGER (NON-SCALP ENGINES)</span>
+                    </div>
+                    <div className="text-[11px] text-white/60 mb-2">Stop moves to entry once the trade is this many R in profit — independent of TP1 (breakout signals have TP1 = TP, so the TP1 break-even never fired). Scalp engines keep their fixed +0.5R rule. 0 = TP1-only.</div>
+                    <div className="grid grid-cols-2 gap-3">
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="breakeven_trigger_r" label="BREAK-EVEN AT" suffix="× R" step={0.1} min={0} max={5} fallback={1.0} />
+                    </div>
+                </div>
+
+                {/* v1.60.48 (audit item 8) — the exit tiers are ENGINE RULES, not knobs: the old partial_close_* /
+                    soft_stop_* / trailing_* fields were saved but never read by trade_manager. */}
                 <div data-testid="engine-exit-rules" className="rounded-md border border-[#FFD700]/30 bg-[#FFD700]/5 p-4 space-y-2">
                     <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">ENGINE EXIT RULES · READ-ONLY</div>
                     <div className="text-xs text-white/80"><span className="text-[#10F2C5] font-mono">SCALP (hf_scalp / hf_scalp_fast)</span> — single TP · stop to entry (+ round-trip costs) at <b>+0.5R</b> · a trade that has not reached +0.5R within <b>90 min</b> is closed · once break-even is armed the trade is risk-free and is left to run to its TP (no second time-stop).</div>
-                    <div className="text-xs text-white/80"><span className="text-[#FFD700] font-mono">LEGACY TIERS</span> — TP1 <b>100 pips</b> / TP2 <b>200 pips</b> · 50% banked at TP1 and SL moved to entry (or Let Winners Run below) · a break-even the broker would clamp below entry is skipped and retried (be_clamped).</div>
+                    <div className="text-xs text-white/80"><span className="text-[#FFD700] font-mono">LEGACY TIERS</span> — stop to entry at <b>Break-even trigger × R</b> (above) · TP1 <b>100 pips</b> / TP2 <b>200 pips</b> · 50% banked at TP1 and SL moved to entry (or Let Winners Run below) · a break-even the broker would clamp below entry is skipped and retried (be_clamped).</div>
                     <div className="text-[10px] text-white/40">Trailing stops are not part of either engine; the exit ladder is approved by Monte Carlo at entry and may only be re-scaled ×0.65–×1.2 by the adaptive exit engine.</div>
                 </div>
 

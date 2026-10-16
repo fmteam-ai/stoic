@@ -39,7 +39,9 @@ _SYMBOL_SECTOR = {
 
 
 def sector_for(symbol: str) -> str:
-    sym = (symbol or "").upper().strip()
+    # #43 (a) — GOLD# / XAUUSD+ / XAUUSD.crp are gold, not "other" (whose cap is 100 % — a single 0.05-lot position)
+    from pip_utils import base_symbol
+    sym = base_symbol((symbol or "").upper().strip()) or (symbol or "").upper().strip()
     if sym in _SYMBOL_SECTOR:
         return _SYMBOL_SECTOR[sym]
     # Heuristic fallback — anything ending in USD with letters before is fx_minor
