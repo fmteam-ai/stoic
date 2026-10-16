@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useLlmModel } from "@/hooks/useLlmModel";
 import { VpsOfferButton } from "@/components/VpsOffer";
+import { EnginesSection, GoldTrendPulseSection, GuardrailsSection, AiProviderSection } from "@/pages/guide/LatestSections";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
     Layers, Rocket, Settings as SettingsIcon, Zap, Clock, TrendingUp, AlertTriangle,
     Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign, Server, Bitcoin,
-    Stethoscope, Activity, Wand2, BrainCircuit,
+    Stethoscope, Activity, Wand2, BrainCircuit, Crosshair, Gauge, ShieldAlert, KeyRound,
 } from "lucide-react";
 
 // ─── Table-of-contents ──────────────────────────────────────────────────────
@@ -27,15 +28,19 @@ const SECTIONS = [
     { id: "optimizer",    title: "13. AI Strategy Optimizer (NEW)",    icon: BrainCircuit },
     { id: "doctor",       title: "14. Bot Doctor — self-diagnosis",    icon: Stethoscope },
     { id: "auto-broker",  title: "15. Auto Broker Detection (NEW)",    icon: Wand2 },
-    { id: "daily",        title: "16. Daily 5-min routine",            icon: Clock },
-    { id: "advanced",     title: "17. Advanced — tuning & auditing",   icon: SettingsIcon },
-    { id: "presets",      title: "18. Strategy Presets",               icon: Bookmark },
-    { id: "crypto",       title: "19. Crypto · Binance Spot",          icon: Bitcoin },
-    { id: "vps",          title: "20. VPS & Infrastructure",           icon: Server },
-    { id: "governance",   title: "21. Safety Modes & Governance",      icon: Activity },
-    { id: "going-live",   title: "22. Going live (paper → real)",      icon: TrendingUp },
-    { id: "affiliate",    title: "23. Earn 20% recurring (affiliate)", icon: DollarSign },
-    { id: "faq",          title: "24. Quick links",                    icon: Zap },
+    { id: "engines",      title: "16. Scalp Fast Path & engines (NEW)", icon: Crosshair },
+    { id: "gtp",          title: "17. Gold Trend Pulse (NEW)",         icon: Gauge },
+    { id: "guardrails",   title: "18. Guardrails on every mode (NEW)", icon: ShieldAlert },
+    { id: "ai-provider",  title: "19. AI layer — provider & keys (NEW)", icon: KeyRound },
+    { id: "daily",        title: "20. Daily 5-min routine",            icon: Clock },
+    { id: "advanced",     title: "21. Advanced — tuning & auditing",   icon: SettingsIcon },
+    { id: "presets",      title: "22. Strategy Presets",               icon: Bookmark },
+    { id: "crypto",       title: "23. Crypto · Binance Spot",          icon: Bitcoin },
+    { id: "vps",          title: "24. VPS & Infrastructure",           icon: Server },
+    { id: "governance",   title: "25. Safety Modes & Governance",      icon: Activity },
+    { id: "going-live",   title: "26. Going live (paper → real)",      icon: TrendingUp },
+    { id: "affiliate",    title: "27. Earn 20% recurring (affiliate)", icon: DollarSign },
+    { id: "faq",          title: "28. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -107,6 +112,10 @@ export default function Guide() {
                     <OptimizerSection />
                     <BotDoctorSection />
                     <AutoBrokerSection />
+                    <EnginesSection H2={H2} P={P} Callout={Callout} />
+                    <GoldTrendPulseSection H2={H2} P={P} Callout={Callout} />
+                    <GuardrailsSection H2={H2} P={P} Callout={Callout} />
+                    <AiProviderSection H2={H2} P={P} Callout={Callout} />
                     <DailyFlow />
                     <Advanced />
                     <PresetsSection />
@@ -868,7 +877,7 @@ function DailyFlow() {
     ];
     return (
         <section>
-            <H2 id="daily" icon={Clock}>16. Daily 5-min routine</H2>
+            <H2 id="daily" icon={Clock}>20. Daily 5-min routine</H2>
             <P>Autopilot doesn&apos;t mean &quot;set and forget forever&quot;. About <strong className="text-white">5 minutes a day</strong> keeps you in the loop:</P>
             <ol className="space-y-1.5 mt-3 list-decimal list-inside marker:text-[#52525B] marker:font-mono">
                 {checks.map(([t, sub]) => (
@@ -889,7 +898,7 @@ function DailyFlow() {
 function Advanced() {
     return (
         <section>
-            <H2 id="advanced" icon={SettingsIcon}>17. Advanced — tuning & auditing</H2>
+            <H2 id="advanced" icon={SettingsIcon}>21. Advanced — tuning & auditing</H2>
             <div className="space-y-4 mt-3">
                 <div>
                     <div className="font-display font-bold text-base mb-1.5">🔍 Auditing a specific signal</div>
@@ -921,7 +930,7 @@ function Advanced() {
 function GoingLive() {
     return (
         <section>
-            <H2 id="going-live" icon={TrendingUp}>22. Going live (paper → real)</H2>
+            <H2 id="going-live" icon={TrendingUp}>26. Going live (paper → real)</H2>
             <ol className="list-decimal list-inside space-y-2 marker:text-[#52525B] marker:font-mono">
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Paper for 2+ weeks.</strong> Let the learned-meta classifier collect at least 30 closed trades per session before going live. The model needs data to filter your losers.</li>
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Subscribe.</strong> Live execution requires an active paid plan — see the <Link to="/subscription" className="text-[#00FF41] hover:underline">Subscription</Link> page.</li>
@@ -946,7 +955,7 @@ function GoingLive() {
 function VpsSection() {
     return (
         <section>
-            <H2 id="vps" icon={Server}>20. VPS & Infrastructure — 24/7 uptime, fully managed</H2>
+            <H2 id="vps" icon={Server}>24. VPS & Infrastructure — 24/7 uptime, fully managed</H2>
             <P>
                 Autopilot only works while your <strong className="text-white">MT5 terminal is running and online</strong>.
                 If your PC sleeps, closes its lid, reboots, or loses internet — the bot loses contact with your broker,
@@ -1062,7 +1071,7 @@ function PresetsSection() {
     ];
     return (
         <section>
-            <H2 id="presets" icon={Bookmark}>18. Strategy Presets</H2>
+            <H2 id="presets" icon={Bookmark}>22. Strategy Presets</H2>
             <P>
                 Presets are <strong className="text-white">one-click personality profiles</strong> for the bot. They overlay
                 behaviour knobs (confidence floor, trade cap, trailing stop, cooldowns, news protector) onto your config — but
@@ -1105,7 +1114,7 @@ function PresetsSection() {
 function AffiliateSection() {
     return (
         <section>
-            <H2 id="affiliate" icon={DollarSign}>23. Earn 20% recurring (affiliate program)</H2>
+            <H2 id="affiliate" icon={DollarSign}>27. Earn 20% recurring (affiliate program)</H2>
             <P>
                 Refer one trader — get paid every month they stay subscribed. STOIC pays{" "}
                 <strong className="text-[#FFD700]">20% recurring commission</strong> on the base subscription fee for the
@@ -1197,7 +1206,7 @@ function QuickLinks() {
     ];
     return (
         <section>
-            <H2 id="faq" icon={Zap}>24. Quick links</H2>
+            <H2 id="faq" icon={Zap}>28. Quick links</H2>
             <P>Jump straight to any feature page:</P>
             <div className="flex flex-wrap gap-2 mt-3">
                 {links.map(l => (
@@ -1342,7 +1351,7 @@ function ShadowSection() {
 function CryptoSection() {
     return (
         <section>
-            <H2 id="crypto" icon={Bitcoin}>19. Crypto · Binance Spot</H2>
+            <H2 id="crypto" icon={Bitcoin}>23. Crypto · Binance Spot</H2>
             <P>
                 STOIC trades BTC/USDT on Binance Spot via the CCXT REST API — server-side,
                 no EA needed. Runs the same Safety Guardian veto cascade, the same Explainable AI
@@ -1394,7 +1403,7 @@ function GovernanceSection() {
     ];
     return (
         <section>
-            <H2 id="governance" icon={Activity}>21. Safety Modes & Governance</H2>
+            <H2 id="governance" icon={Activity}>25. Safety Modes & Governance</H2>
             <P>
                 STOIC treats going live as a <strong className="text-white">governed promotion</strong>, not a toggle.
                 Every bot walks a mode ladder where promotions are slow, evidence-based, and MFA-confirmed — while
