@@ -8,6 +8,24 @@ TradeStatus = Literal["pending", "open", "closed", "cancelled", "failed"]
 
 
 # ---------- Auth ----------
+
+# #46 — the ONE break-even default shared by trade_manager, the Bot Config API and the UI (BotConfig.jsx mirrors it)
+BREAKEVEN_TRIGGER_R_DEFAULT = 1.0
+
+
+def effective_breakeven_trigger_r(cfg: dict | None) -> float:
+    """0.0 = disabled. breakeven_enabled=False disables; a missing value means the shared default (never 0)."""
+    cfg = cfg or {}
+    if cfg.get("breakeven_enabled") is False:
+        return 0.0
+    v = cfg.get("breakeven_trigger_r")
+    if v is None:
+        return BREAKEVEN_TRIGGER_R_DEFAULT
+    try:
+        return max(0.0, float(v))
+    except (TypeError, ValueError):
+        return BREAKEVEN_TRIGGER_R_DEFAULT
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
@@ -187,7 +205,9 @@ class BotConfigUpdate(BaseModel):
     # trade_manager (fixed engine tiers: scalp BE +0.5R + 90-min time-stop; legacy TP1 100 / TP2 200).
     # #43 (#8 widened) — breakeven_trigger_r IS read now: for every non-scalp engine the stop moves to entry once the
     # trade is +N×R (breakout signals have TP1 = TP, so the TP1 breakeven never fired). 0 = TP1-only (old behaviour).
-    breakeven_trigger_r: float = Field(default=1.0, ge=0.0, le=5.0)
+    # #46 — ONE shared default (BREAKEVEN_TRIGGER_R_DEFAULT) for runtime AND UI; breakeven_enabled is honoured.
+    breakeven_enabled: bool = True
+    breakeven_trigger_r: float = Field(default=BREAKEVEN_TRIGGER_R_DEFAULT, ge=0.0, le=5.0)
     daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)
     daily_drawdown_enabled: bool = True
     weekly_drawdown_pct: float = Field(default=7.0, gt=0.0, le=40.0)
@@ -587,7 +607,7 @@ class QuoteOut(BaseModel):
 
 # v1.60.48 (audit items 8 + 17) — config fields that no longer exist; stripped from presets / overlays / saves.
 DEAD_CONFIG_FIELDS = frozenset({
-    "breakeven_enabled", "partial_close_enabled", "partial_close_trigger_r",
+    "partial_close_enabled", "partial_close_trigger_r",
     "partial_close_fraction", "trailing_enabled", "trailing_start_r", "trailing_distance_r",
     "soft_stop_enabled", "soft_stop_loss_fraction", "soft_stop_min_minutes",
 })

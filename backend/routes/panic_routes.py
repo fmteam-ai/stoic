@@ -7,11 +7,11 @@ Two surfaces:
                                    calling user. Any authenticated user can use it.
 """
 import uuid
+from bson import ObjectId
 from datetime import datetime, timedelta, timezone
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Request
 
 from auth import get_current_user
-import nl_execution as nx
 from database import get_db
 from step_up import audit_event
 from ws_manager import manager as ws_manager
@@ -76,12 +76,36 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
     )
     # Request close on all open trades through the unified close protocol (r20 P2-01)
     from close_commands import request_close
+    from friday_flat import _ea_supports_full_close
     nl = stamp.get("nl_effect") or {}
-    closed = await request_close(db, query, reason="panic", actor=f"panic:{broadcast_user_id or 'admin'}",
-                                 ctx={"idempotency_key": nl.get("key"), "fence": nl.get("fence"),
-                                      "execution_id": nl.get("execution_id"), "decision_id": nl.get("decision_id"),
-                                      "authority_version": nl.get("authority_version")},
-                                 session=session, stamp=stamp, emergency=True)   # r26 P2-02: the brake never refuses
+    ctx = {"idempotency_key": nl.get("key"), "fence": nl.get("fence"), "execution_id": nl.get("execution_id"),
+           "decision_id": nl.get("decision_id"), "authority_version": nl.get("authority_version")}
+    # #48 — panic supersedes EVERY outstanding close (acked or not) and, on EAs that execute FULL_CLOSE (≥1.40),
+    # rides the fenced modification path so each close is explicitly acknowledged; legacy EAs keep the trades-block flag.
+    open_rows = await db.trades.find({**query, "status": "open"}, {"_id": 1, "account_id": 1}, session=session).to_list(length=1000)
+    acc_ids = {r.get("account_id") for r in open_rows if r.get("account_id")}
+    legacy_accounts = set()
+    for aid in acc_ids:
+        try:
+            acc = await db.accounts.find_one({"_id": ObjectId(str(aid))}, {"ea_version": 1}, session=session)
+        except Exception:  # noqa: BLE001
+            acc = None
+        if not _ea_supports_full_close(acc or {}):
+            legacy_accounts.add(aid)
+    fenced_ids = [r["_id"] for r in open_rows if r.get("account_id") not in legacy_accounts]
+    legacy_ids = [r["_id"] for r in open_rows if r.get("account_id") in legacy_accounts]
+    closed = {"trades_marked_for_close": 0, "trade_ids": [], "command_id": None}
+    if fenced_ids:
+        res = await request_close(db, {"_id": {"$in": fenced_ids}}, reason="panic", actor=f"panic:{broadcast_user_id or 'admin'}",
+                                  ctx=ctx, session=session, stamp=stamp, emergency=True,
+                                  pending_modification={"type": "FULL_CLOSE", "reason": "panic"})
+        closed = {"trades_marked_for_close": res["trades_marked_for_close"], "trade_ids": res["trade_ids"], "command_id": res["command_id"]}
+    if legacy_ids:
+        res = await request_close(db, {"_id": {"$in": legacy_ids}}, reason="panic", actor=f"panic:{broadcast_user_id or 'admin'}",
+                                  ctx={**ctx, "idempotency_key": None}, session=session, stamp=stamp, emergency=True)   # r26 P2-02: the brake never refuses
+        closed["trades_marked_for_close"] += res["trades_marked_for_close"]
+        closed["trade_ids"] = list(closed["trade_ids"]) + list(res["trade_ids"])
+        closed["command_id"] = closed["command_id"] or res["command_id"]
     payload = {
         "bots_disabled": bot_result.modified_count,
         "scalp_runners_disabled": scalp_result.modified_count,

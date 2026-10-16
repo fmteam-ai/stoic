@@ -1,0 +1,37 @@
+{
+  "summary": "v1.60.55 read-only full-stack smoke on the preview URL as admin@trading.bot. Password read at runtime from backend/.env and not written to any file. Backend: 12/12 live pytest checks passed. They cover /api/health 200; login 200 with httpOnly cookies; /auth/me; 401 without a session on me, bot/config, market-intel and portfolio/snapshot; CORS not '*'; bot/config and all 3 bot/configs carry breakeven_enabled (bool, true) and breakeven_trigger_r; market-intel 200 with shadow labelling and no env secrets in the body; portfolio/snapshot exposes advisory_actions and advisory_triggers, with no sector-cap entry in the executable actions (flag off). The admin password hash is $2b$ bcrypt. Frontend: route interception aborted every non-GET request outside /api/auth (none happened, so nothing was saved and nothing was sent to the EA). Login and dashboard work, and the Market Intel card renders on the Dashboard and on Agents. On Bot Config the Break-even toggle and the trigger (R) input render. The admin's saved value is 0.4, which is a persisted user value, not a defect. Clearing the input and blurring falls back to 1 (the 1.0 default). The toggle switches between ON and OFF. Original values were restored and not saved. Trades and Bot Health render with no page errors. Backend logs over the test window: no tracebacks from close_watchdog, friday_flat, eod_flatten, risk_manager or trade_manager.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/ops/release-readiness", "issue": "Returns 503 (by design when the release gate fails in a non-production env). The Bot Health page logs 2 console errors for it."},
+      {"endpoint": "/api/data-freshness, /api/state/readiness, /api/authority", "issue": "About 7s latency during page load. 58 requests took over 3s in the roughly 2-minute test window."},
+      {"endpoint": "email_sender (Resend)", "issue": "Security alert email fails: Resend sandbox can only send to the owner's address. Needs a verified domain. Not related to v1.60.55."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "BotConfig break-even input", "issue": "Out-of-range values (e.g. 9 when max is 5) are accepted with no inline validation message (only HTML validity=false). Save was not attempted. The server Field(le=5) should reject it, but the UI gives no hint.", "selector": "[data-testid='input-breakeven_trigger_r']", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Global header (all pages when scrolled)", "issues": ["The fixed top-right status/PANIC toolbar (2/3 ACC chip, BOT TODAY, PANIC) floats over page content and the Dashboard ticker. On Trades it covers table columns."]},
+      {"screen": "Trades table", "issues": ["Row action column (REVIVE/AUDIT/EXPLAIN/TRACE) is clipped at the right edge at 1920px"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_v1_60_55_smoke_live.py", "/app/test_reports/pytest/v1_60_55_smoke.xml"],
+  "action_items": [
+    "Optional: show inline validation for breakeven_trigger_r outside 0-5",
+    "Optional: fix the overlap of the fixed header toolbar with content",
+    "Optional: investigate the ~7s latency of data-freshness, state/readiness and authority"
+  ],
+  "critical_code_review_comments": [
+    "PPNumInput only clamps via HTML min/max; setCfg stores out-of-range floats, so the error only shows up at save time as a server 422."
+  ],
+  "updated_files": ["/app/backend/tests/test_v1_60_55_smoke_live.py"],
+  "success_rate": {"backend": "100%", "frontend": "100% (core flows); minor design issues"},
+  "test_credentials": "admin@trading.bot. Password read at runtime from TEST_ADMIN_PASSWORD in backend/.env. Never persisted.",
+  "seed_data_creation": "None",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run the smoke with: cd /app/backend && python -m pytest tests/test_v1_60_55_smoke_live.py --noconftest -v. The --noconftest flag is needed because the conftest DB_NAME guard blocks it otherwise. The test is GET-only plus 1 login. The browser automation tool shares this container, so scripts can read /app/backend/.env at runtime. Use page.route to abort non-GET requests outside /api/auth as a safety net. Bot Config route is /bot. Use SPA pushState navigation. The admin's saved breakeven_trigger_r is 0.4 on the default and one per-account config, and 1.0 on the other two. Not tested, on purpose (safety / rate limits): brute-force lockout, seed_admin, the save path, and any close/panic/flatten/EA endpoints."
+}

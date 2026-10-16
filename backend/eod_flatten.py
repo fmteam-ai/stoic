@@ -15,7 +15,7 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 
-from close_commands import request_close
+from close_commands import mandatory_close
 from eod_quiet import QUIET_START_MIN
 
 logger = logging.getLogger(__name__)
@@ -71,12 +71,12 @@ async def sweep_eod_flatten(db, now: datetime | None = None) -> dict:
         async for tr in db.trades.find(
                 {"account_id": account_id, "status": "open",
                  "origin": "auto"}):
-            if tr.get("pending_modification"):
-                continue                    # close/modify already in flight
-            await request_close(db, {"_id": tr["_id"]}, reason="eod_flatten", actor="eod_flatten",
-                                stamp={"eod_flatten_queued_at": now_iso,
-                                       "pending_modification": {"type": "FULL_CLOSE", "reason": "eod_flatten",
-                                                                "requested_at": now_iso}})
+            # #48 — take over any UNACKED close (e.g. a silent var_cap request) and re-issue our own with backoff
+            # until the position is confirmed gone; only a terminal-acked close in flight is left alone.
+            outcome = await mandatory_close(db, tr, reason="eod_flatten", actor="eod_flatten", now=now,
+                                            stamp={"eod_flatten_queued_at": now_iso})
+            if outcome not in ("issued", "reissued"):
+                continue
             acct_queued += 1
         if acct_queued:
             accounts_hit += 1

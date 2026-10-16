@@ -98,6 +98,9 @@ async def sweep(db) -> dict:
             logger.exception("snapshot build failed for %s: %s", acc_id_str, e)
             continue
 
+        # #45 — advisory sector-cap / combined-corr breaches: alert + pulse, never a close (flag default OFF)
+        if snap.get("advisory_actions"):
+            await _advise_sector_caps(db, acc, snap)
         if not snap.get("needs_deleveraging"):
             continue
 
@@ -148,3 +151,26 @@ async def sweep(db) -> dict:
         )
 
     return summary
+
+
+async def _advise_sector_caps(db, acc: dict, snap: dict) -> None:
+    """#45 — ADVISORY: what sector-cap / combined-corr deleverage would have closed. Ops alert (medium, once per
+    account+trigger per hour via dedup) + bot pulse. No trading effect while SECTOR_CAP_DELEVERAGE_ENABLED is off."""
+    try:
+        from alerting import raise_alert
+        from bot_runner import _record_pulse
+        trig = " · ".join(snap.get("advisory_triggers") or [])
+        would = ", ".join(f"{a.get('symbol')} {a.get('lot_size')} lot ({a.get('reason')})" for a in snap["advisory_actions"])
+        msg = (f"{acc.get('label') or acc.get('name') or acc['_id']}: {trig} breached — ADVISORY, would close {would}. "
+               f"No action taken (SECTOR_CAP_DELEVERAGE_ENABLED=false).")
+        await raise_alert(db, "sector_cap_advisory", "medium", msg,
+                          dedup_key=f"sector_cap_advisory:{acc['_id']}:{trig}",
+                          meta={"account_id": str(acc["_id"]), "user_id": acc.get("user_id"), "triggers": snap.get("advisory_triggers"),
+                                "would_close": snap["advisory_actions"], "shadow": True})
+        cfg = await db.bot_configs.find_one({"user_id": acc.get("user_id"), "account_id": str(acc["_id"])}) \
+            or await db.bot_configs.find_one({"user_id": acc.get("user_id")})
+        if cfg:
+            await _record_pulse(db, cfg, action="ALERT", level="info",
+                                reason=f"sector cap advisory — {trig} breached, would close {would} (no action, flag off)")
+    except Exception as e:  # noqa: BLE001 — advisory must never break the sweep
+        logger.debug("sector cap advisory failed: %s", e)

@@ -141,8 +141,9 @@ def test_breakeven_trigger_r_moves_stop_to_entry_for_breakout(monkeypatch):
     assert _run(tm._breakeven_trigger_r(None, _breakout(), cfg, 4004.0, 40.0)) is False and not calls
     assert _run(tm._breakeven_trigger_r(None, _breakout(), cfg, 4005.0, 50.0)) is True
     filt, mod, extra = calls[0]
-    assert mod == {"type": "MODIFY_SL", "new_sl": 4000.0, "reason": "breakeven_trigger_r"}
-    assert extra["be_target_sl"] == 4000.0 and extra["be_rule"] == "breakeven_trigger_r:1"
+    # #46 — stop sits on the profitable side of entry by the round-trip cost (default XAU cost 2.5 pips = $0.25)
+    assert mod["type"] == "MODIFY_SL" and mod["reason"] == "breakeven_trigger_r" and 4000.0 < mod["new_sl"] <= 4000.5
+    assert extra["be_target_sl"] == mod["new_sl"] and extra["be_rule"] == "breakeven_trigger_r:1" and extra["be_cost_pips"] > 0
     assert filt["close_requested"] == {"$ne": True}            # never behind a close in flight
     assert ws.sent[0][1]["action"] == "BE_TRIGGER_R"
 
@@ -151,7 +152,7 @@ def test_breakeven_trigger_r_disabled_armed_or_loosening_does_nothing(monkeypatc
     import trade_manager as tm
     calls, _ = _patch(monkeypatch)
     assert _run(tm._breakeven_trigger_r(None, _breakout(), {"breakeven_trigger_r": 0}, 4010.0, 100.0)) is False
-    assert _run(tm._breakeven_trigger_r(None, _breakout(), {}, 4010.0, 100.0)) is False
+    assert _run(tm._breakeven_trigger_r(None, _breakout(), {"breakeven_enabled": False}, 4010.0, 100.0)) is False   # #46
     assert _run(tm._breakeven_trigger_r(None, _breakout(be_target_sl=4000.0), {"breakeven_trigger_r": 1.0}, 4010.0, 100.0)) is False
     assert _run(tm._breakeven_trigger_r(None, _breakout(breakeven_set=True), {"breakeven_trigger_r": 1.0}, 4010.0, 100.0)) is False
     assert _run(tm._breakeven_trigger_r(None, _breakout(stop_loss=4001.0), {"breakeven_trigger_r": 1.0}, 4010.0, 100.0)) is False
@@ -161,8 +162,15 @@ def test_breakeven_trigger_r_disabled_armed_or_loosening_does_nothing(monkeypatc
 def test_breakeven_trigger_r_is_a_real_config_field_again():
     from models import BotConfigUpdate as BotConfig, DEAD_CONFIG_FIELDS
     assert "breakeven_trigger_r" not in DEAD_CONFIG_FIELDS
-    assert BotConfig.model_fields["breakeven_trigger_r"].default == 1.0
+    from models import BREAKEVEN_TRIGGER_R_DEFAULT, effective_breakeven_trigger_r
+    assert BotConfig.model_fields["breakeven_trigger_r"].default == BREAKEVEN_TRIGGER_R_DEFAULT == 1.0
+    # #46 — one shared default for runtime and UI; missing value → default (never silently 0); breakeven_enabled honoured
+    assert effective_breakeven_trigger_r({}) == 1.0 and effective_breakeven_trigger_r({"breakeven_trigger_r": 0.4}) == 0.4
+    assert effective_breakeven_trigger_r({"breakeven_trigger_r": 0}) == 0.0
+    assert effective_breakeven_trigger_r({"breakeven_enabled": False, "breakeven_trigger_r": 1.0}) == 0.0
+    assert "breakeven_enabled" not in DEAD_CONFIG_FIELDS
     src = open(os.path.join(BACKEND, "trade_manager.py")).read()
     assert "if not is_scalp_engine_trade(trade) and await _breakeven_trigger_r(" in src   # scalp keeps its +0.5R rule
     ui = open(os.path.join(os.path.dirname(BACKEND), "frontend", "src", "pages", "BotConfig.jsx")).read()
-    assert 'field="breakeven_trigger_r"' in ui and "breakeven_trigger_r: cfg.breakeven_trigger_r ?? 1.0" in ui
+    assert 'field="breakeven_trigger_r"' in ui and "cfg.breakeven_trigger_r ?? BREAKEVEN_TRIGGER_R_DEFAULT" in ui
+    assert "const BREAKEVEN_TRIGGER_R_DEFAULT = 1.0;" in ui and "breakeven-enabled-toggle" in ui

@@ -72,6 +72,13 @@ HIGH_CORR_THRESHOLD = _f("PORTFOLIO_HIGH_CORR_THRESHOLD", 0.70)
 VAR_CAP_PCT = _f("PORTFOLIO_VAR_CAP_PCT", 5.0)
 
 
+def sector_cap_deleverage_enabled() -> bool:
+    """#45 — v1.60.54 switched sector notional to the instrument table (100,000 units/lot forex, ×100 for every gold
+    alias), which makes the fx/commodity caps and the correlated bucket reachable for the first time. Until George
+    enables it, sector-cap / combined-corr deleverage is ADVISORY only (alert + pulse, no close)."""
+    return (os.environ.get("SECTOR_CAP_DELEVERAGE_ENABLED") or "false").strip().lower() in ("1", "true", "yes", "on")
+
+
 def _open_risk(position: dict) -> float | None:
     from portfolio.var import open_risk_usd
     return open_risk_usd(position)
@@ -218,37 +225,51 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
             })
             cum += n
 
+    # #45 — sector-cap / combined-corr culls honour the SAME exemptions as var_cap (zero-risk BE positions, a
+    # stop-bounded book inside the VaR cap) and are advisory unless SECTOR_CAP_DELEVERAGE_ENABLED.
+    advisory_actions: list[dict] = []
+    advisory_triggers: list[str] = []
+    cap_exempt = var_cap_exempt_reason(open_positions, equity, cfg)
+    cap_actions = actions if sector_cap_deleverage_enabled() else advisory_actions
+    cap_triggers = triggers if sector_cap_deleverage_enabled() else advisory_triggers
+    _by_id = {str(p.get("_id") or p.get("id") or ""): p for p in open_positions}
+
+    def _cap_candidates(rows: list[dict]) -> list[dict]:
+        return [r for r in rows if _open_risk(_by_id.get(r["trade_id"], {})) != 0.0]
+
     for sec, data in sectors.items():
-        if data["over_cap"]:
-            triggers.append(f"sector_cap_{sec}")
+        if data["over_cap"] and not cap_exempt and _cap_candidates(data["positions"]):
+            cap_triggers.append(f"sector_cap_{sec}")
             # iter-48 fix — prefer closing the WORST LOSER in the over-cap
             # sector rather than the largest position. Previous "largest"
             # rule kept culling underwater pyramids, locking in losses while
             # the bot opened more same-direction trades into the trap.
             # Fallback to largest by notional when live P&L is unavailable.
-            if data["positions"]:
-                has_pnl = any(p.get("live_pnl") for p in data["positions"])
-                if has_pnl:
-                    worst = min(data["positions"], key=lambda x: x.get("live_pnl") or 0)
-                else:
-                    worst = max(data["positions"], key=lambda x: x["notional"])
-                actions.append({
-                    "kind": "close_trade", "trade_id": worst["trade_id"],
-                    "symbol": worst["symbol"], "lot_size": worst["lot"],
-                    "reason": f"auto_deleverage_sector_cap_{sec}",
-                })
+            cands = _cap_candidates(data["positions"])
+            has_pnl = any(p.get("live_pnl") for p in cands)
+            if has_pnl:
+                worst = min(cands, key=lambda x: x.get("live_pnl") or 0)
+            else:
+                worst = max(cands, key=lambda x: x["notional"])
+            cap_actions.append({
+                "kind": "close_trade", "trade_id": worst["trade_id"],
+                "symbol": worst["symbol"], "lot_size": worst["lot"],
+                "reason": f"auto_deleverage_sector_cap_{sec}",
+            })
+        elif data["over_cap"]:
+            var.setdefault("notes", []).append(f"sector_cap_{sec} cull skipped: {cap_exempt or 'no position with open risk'}")
 
-    if bucket_breach:
-        triggers.append("combined_corr_bucket")
+    if bucket_breach and not cap_exempt:
+        cap_triggers.append("combined_corr_bucket")
         # 25% reduction of bucket exposure — close one (largest) trade from
         # whichever bucket sector contributes most.
         worst_sec = max(
             (s for s in COMBINED_RISK_BUCKET if s in sectors),
             key=lambda s: sectors[s]["notional"], default=None,
         )
-        if worst_sec and sectors[worst_sec]["positions"]:
-            worst = max(sectors[worst_sec]["positions"], key=lambda x: x["notional"])
-            actions.append({
+        if worst_sec and _cap_candidates(sectors[worst_sec]["positions"]):
+            worst = max(_cap_candidates(sectors[worst_sec]["positions"]), key=lambda x: x["notional"])
+            cap_actions.append({
                 "kind": "close_trade", "trade_id": worst["trade_id"],
                 "symbol": worst["symbol"], "lot_size": worst["lot"],
                 "reason": "auto_deleverage_combined_corr",
@@ -308,6 +329,10 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
         "drawdown": dd,
         "sectors": sectors,
         "var": var,
+        # #45 — what the sector / correlation caps WOULD close (alert + pulse only while the flag is off)
+        "advisory_actions": advisory_actions,
+        "advisory_triggers": advisory_triggers,
+        "sector_cap_deleverage_enabled": sector_cap_deleverage_enabled(),
         # Phase D — currency-leg exposure + deterministic stress scenarios
         # (gap-multiplied worst single-leg shock) from portfolio_risk
         "currency_exposure": _pr.currency_exposure(open_positions),
