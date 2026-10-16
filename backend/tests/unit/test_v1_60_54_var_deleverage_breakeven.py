@@ -123,8 +123,11 @@ def _patch(monkeypatch, stamped=None):
 
     async def _noclamp(db, trade, new_sl, current, source):
         return None
+    async def _no_db(*a, **k):      # CI unit lane has no MONGO_URL — nothing here may touch get_db()
+        raise AssertionError("unexpected DB write")
     monkeypatch.setattr(tm, "stamp_pending_modification", _stamp)
     monkeypatch.setattr(tm, "be_clamped_skip", _noclamp)
+    monkeypatch.setattr(tm, "record_sl_loosen_refusal", _no_db)
     ws = _WS()
     monkeypatch.setattr(tm, "ws_manager", ws)
     return calls, ws

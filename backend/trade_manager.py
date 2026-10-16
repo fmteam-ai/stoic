@@ -229,8 +229,7 @@ async def _breakeven_trigger_r(db, trade: dict, cfg: dict, current: float, pips_
     entry = round(float(trade.get("entry_price") or 0), 5)
     be_sl = tightened_sl(trade, entry)
     if be_sl is None:
-        await record_sl_loosen_refusal(trade, entry, "breakeven_trigger_r")
-        return False
+        return False          # stop already at/beyond entry — nothing to tighten (not a refusal worth recording)
     if await be_clamped_skip(db, trade, be_sl, current, "breakeven_trigger_r"):
         return True
     stamped = await stamp_pending_modification(
