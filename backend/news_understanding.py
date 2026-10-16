@@ -14,7 +14,6 @@ import time
 from datetime import datetime, timezone
 
 import httpx
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger(__name__)
 
@@ -261,17 +260,11 @@ async def _score_headlines(base: str, heads: list) -> list:
         f"0 = irrelevant/no impact. Half-points allowed.\n"
         f'Respond ONLY with a JSON array: [{{"i": <index>, "score": <float>, '
         f'"why": "<max 10 words>"}}, ...] — one entry per headline.\n\n{numbered}')
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"news-ai-{base}-{int(time.time())}",
-        system_message=("You are a senior macro strategist at a bullion desk. "
-                        "You read central-bank statements, FOMC minutes, CPI and "
-                        "NFP prints for their asset-specific price impact. "
-                        "Respond only with JSON."),
-    ).with_model(PROVIDER, model_for("fast"))
-    from llm_timeout import send_with_timeout
-    raw = await send_with_timeout(chat, UserMessage(text=prompt), label=f"news:{base}")
+    import llm_client
+    raw = await llm_client.complete("fast", ("You are a senior macro strategist at a bullion desk. "
+                                             "You read central-bank statements, FOMC minutes, CPI and "
+                                             "NFP prints for their asset-specific price impact. "
+                                             "Respond only with JSON."), prompt, feature="news")   # news tagging stays on "fast"
     out = []
     for row in _parse_array(str(raw)):
         try:

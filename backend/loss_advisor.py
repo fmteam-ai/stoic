@@ -17,10 +17,8 @@ Collections:
   • `loss_reviews` — one doc per review run (auto or manual)
   • `auto_guards`  — evidence-gated live guards (apply / revert audit trail)
 """
-import os
 import json
 import logging
-import uuid
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -29,7 +27,6 @@ from bson import ObjectId
 from pip_utils import base_symbol
 from regime_adapter import velocity_veto
 from ws_manager import manager as ws_manager
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger("loss-advisor")
 
@@ -282,14 +279,8 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
 # -------------------------------------------------------------------- LLM
 async def _claude_measures(payload: dict) -> dict:
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"loss-review-{uuid.uuid4().hex[:8]}",
-            system_message=_ADVISOR_SYSTEM,
-        ).with_model(PROVIDER, model_for("analysis"))
-        from llm_timeout import send_with_timeout
-        raw = str(await send_with_timeout(chat, UserMessage(text=json.dumps(payload, default=str)), label="loss_advisor", seconds=30)).strip()
+        import llm_client
+        raw = str(await llm_client.complete("analysis", _ADVISOR_SYSTEM, json.dumps(payload, default=str), feature="loss_advisor", seconds=30)).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw.lower().startswith("json"):

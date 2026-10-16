@@ -15,6 +15,7 @@ import { ForecastHealthCard } from "../components/ForecastHealthCard";
 import { CalibrationHealthCard } from "../components/CalibrationHealthCard";
 import { ReadinessCard } from "../components/ReadinessCard";
 import { AiLatencyCard } from "../components/AiLatencyCard";
+import { LlmProviderCard } from "../components/LlmProviderCard";
 import { ReleaseIdentityCard } from "../components/ReleaseIdentityCard";
 import { ReleaseGateCard } from "../components/ReleaseGateCard";
 import { EaChannelCard } from "../components/EaChannelCard";
@@ -646,6 +647,7 @@ export default function BotHealth() {
                 <SoakReportCard />
                 <CapitalStageCard />
                 <SubsystemHealthCard />
+                <LlmProviderCard />
                 <AiLatencyCard />
                 {user?.role === "admin" && <ReleaseIdentityCard />}
                 {user?.role === "admin" && <ReleaseGateCard />}

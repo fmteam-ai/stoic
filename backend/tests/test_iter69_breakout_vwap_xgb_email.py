@@ -183,6 +183,7 @@ async def test_generate_ai_reflection_returns_none_without_key(monkeypatch):
     """No EMERGENT_LLM_KEY → helper short-circuits to None."""
     from routes.insights_routes import _generate_ai_reflection
     monkeypatch.delenv("EMERGENT_LLM_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     out = await _generate_ai_reflection({"stats": {"trades": 0}})
     assert out is None
 

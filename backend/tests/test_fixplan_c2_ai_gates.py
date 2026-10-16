@@ -49,7 +49,8 @@ def test_a2_send_with_timeout_raises_and_all_loop_calls_use_it(monkeypatch):
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     for mod in ("ai_signals", "news_understanding", "fed_tone", "ai_optimizer", "loss_postmortem", "loss_advisor", "self_evaluation", "bot_doctor"):
         src = open(os.path.join(root, f"{mod}.py")).read()
-        assert "await chat.send_message(" not in src and "send_with_timeout(" in src, mod
+        # v1.60.59 — every call goes through llm_client.complete(), which runs under the same hard timeout
+        assert "await chat.send_message(" not in src and "llm_client.complete(" in src, mod
 
 
 def test_a2_news_sentiment_reports_unavailable_when_no_source(monkeypatch):

@@ -21,7 +21,6 @@ Scheduled sweep: `scheduled_sweep()` is called hourly from server.py and
 re-analyzes each ACTIVE bot scope at most once per 24h, only when there are
 enough fresh closed trades to say something meaningful.
 """
-import os
 import json
 import logging
 import uuid
@@ -226,14 +225,9 @@ async def _call_llm(window_hours: int, payload: dict) -> tuple[dict | None, str 
     text = json.dumps(payload, default=str)
     for provider, model in optimizer_candidates():
         try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=f"optimizer-{uuid.uuid4().hex[:10]}",
-                system_message=system,
-            ).with_model(provider, model)
-            from llm_timeout import send_with_timeout
-            response = await send_with_timeout(chat, UserMessage(text=text), label=f"optimizer:{model}", seconds=30)
+            import llm_client
+            response = await llm_client.complete("ai_optimizer", system, text, feature="optimizer", seconds=30,
+                                                 model=model, provider=provider)
             return _parse_llm_json(response), model
         except Exception as e:  # noqa: BLE001
             logger.warning("optimizer LLM %s failed: %s", model, e)

@@ -30,14 +30,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 
 from database import get_db
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger("bot_doctor")
 
@@ -255,14 +252,8 @@ async def _ask_llm(telemetry: dict) -> dict:
         + json.dumps(telemetry, default=str)
     )
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"bot-doctor-{uuid.uuid4().hex[:8]}",
-            system_message=_DOCTOR_SYSTEM,
-        ).with_model(PROVIDER, model_for("analysis"))
-        from llm_timeout import send_with_timeout
-        resp = await send_with_timeout(chat, UserMessage(text=user_text), label="bot_doctor", seconds=30)
+        import llm_client
+        resp = await llm_client.complete("analysis", _DOCTOR_SYSTEM, user_text, feature="bot_doctor", seconds=30)
         raw = str(resp).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")

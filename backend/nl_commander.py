@@ -12,11 +12,8 @@ Two LLM-powered surfaces over the bot:
 Backed by Claude Sonnet 4.5 via the Emergent LLM Key. Strict JSON only; any
 ambiguity returns a clarification request instead of inventing parameters.
 """
-import os
 import json
-import uuid
 import re
-from llm_models import PROVIDER, model_for
 
 
 # --- Strategy Builder -------------------------------------------------------
@@ -92,27 +89,15 @@ def _parse_json(text: str) -> dict:
 
 async def build_strategy(prompt: str) -> dict:
     """Convert NL strategy description → structured bot config."""
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"strategy-{uuid.uuid4().hex[:8]}",
-        system_message=STRATEGY_BUILDER_SYSTEM,
-    ).with_model(PROVIDER, model_for("analysis"))
-
-    response = await chat.send_message(UserMessage(text=prompt))
+    import llm_client
+    response = await llm_client.complete("analysis", STRATEGY_BUILDER_SYSTEM, prompt, feature="nl_strategy", seconds=30)
     parsed = _parse_json(str(response))
     return parsed
 
 
 async def interpret_command(prompt: str) -> dict:
     """Convert NL command → structured action list."""
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"command-{uuid.uuid4().hex[:8]}",
-        system_message=COMMAND_INTERPRETER_SYSTEM,
-    ).with_model(PROVIDER, model_for("analysis"))
-
-    response = await chat.send_message(UserMessage(text=prompt))
+    import llm_client
+    response = await llm_client.complete("analysis", COMMAND_INTERPRETER_SYSTEM, prompt, feature="nl_command", seconds=30)
     parsed = _parse_json(str(response))
     return parsed

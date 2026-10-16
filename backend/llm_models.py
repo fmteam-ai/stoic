@@ -1,9 +1,9 @@
 """Single source of truth for LLM model selection (roadmap step 7).
 
-Every AI call site asks for a TIER, never a model string:
+Every AI call site asks for a TIER, never a model string, through the one helper (v1.60.59):
 
-    from llm_models import model_for, PROVIDER
-    chat = LlmChat(...).with_model(PROVIDER, model_for("analysis"))
+    import llm_client
+    text = await llm_client.complete("analysis", system, user_text, feature="copilot")
 
 Tiers
 -----
@@ -25,7 +25,9 @@ import os
 
 PROVIDER = "anthropic"
 
-# Identifiers confirmed against the Emergent Universal Key model list (2026-10-02).
+# Identifiers confirmed against the Emergent Universal Key model list (2026-10-02) AND the direct Anthropic API
+# (platform.claude.com/docs/en/models/overview, 2026-10-16: claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5 current;
+# claude-haiku-4-5-20251001 legacy but available).
 DEFAULTS: dict[str, str] = {
     "fast": "claude-haiku-4-5-20251001",
     "analysis": "claude-sonnet-5-5",
