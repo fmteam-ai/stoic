@@ -114,6 +114,10 @@ def test_claim_pairing_and_bridge_surface_are_throttled_per_ip(monkeypatch):
     import routes.bridge_routes as br
     from routes.setup_routes import ClaimPairingRequest, claim_pairing_token
     ip = f"203.0.113.{uuid.uuid4().int % 250 + 1}"
+    # CI runs the full lane and the critical_controls lane against the SAME Mongo within one 10-min window:
+    # a 1/250 IP collision left the fixed-window counter already exhausted (21× 429). Start from a clean bucket.
+    from database import get_db
+    _run(get_db().rate_limits.delete_many({"_id": {"$regex": f"^claim_pairing:{ip}:"}}))
     codes = []
     for _ in range(21):
         with pytest.raises(HTTPException) as e:
