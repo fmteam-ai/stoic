@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useLlmModel } from "@/hooks/useLlmModel";
 import { Link } from "react-router-dom";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
@@ -37,7 +38,7 @@ const FAQS = [
 
     // AI Signals ─────────────────────────────────────────────────────────────
     { cat: "signals", q: "How are signals generated?",
-      a: "Two engines run in parallel — Claude Sonnet 4.5 (semantic reasoning over market context, news, macro data) and a locally-trained Logistic Regression (probability-of-win classifier). Their outputs feed a 10-layer veto cascade that kills any signal that doesn't survive every gate." },
+      a: "Two engines run in parallel — {{LLM}} (semantic reasoning over market context, news, macro data) and a locally-trained Logistic Regression (probability-of-win classifier). Their outputs feed a 10-layer veto cascade that kills any signal that doesn't survive every gate." },
     { cat: "signals", q: "What are the 10 vetoes?",
       a: "In order: 1) Sentiment, 2) Macro Event Blackout, 3) Regime, 4) Entropy, 5) Meta-Labeler, 6) Multi-Timeframe Trend, 7) Learned Meta-Classifier, 8) A+ Confluence, 9) Min R:R, 10) DXY Gate (XAU only). A single block = HOLD." },
     { cat: "signals", q: "Why are most signals HOLD?",
@@ -270,6 +271,7 @@ function CatChip({ id, label, count, active, icon: Icon, onClick }) {
 }
 
 function FAQSection({ cat, items, openIds, toggle }) {
+    const llm = useLlmModel("analysis");
     const Icon = cat.icon;
     return (
         <section className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid={`faq-section-${cat.id}`}>
@@ -292,7 +294,7 @@ function FAQSection({ cat, items, openIds, toggle }) {
                             </button>
                             {open && (
                                 <div className="px-5 pb-4 pl-12 text-sm text-[#A1A1AA] leading-relaxed">
-                                    {f.a}
+                                    {f.a.replace("{{LLM}}", llm.label)}
                                 </div>
                             )}
                         </div>

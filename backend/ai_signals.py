@@ -2,7 +2,7 @@
 
 Three-tier verification (per 2026 best practice):
   Engine 1 (Quant)      : indicators + regime + entropy
-  Engine 2 (Semantic)   : Claude Sonnet 4.5 + news sentiment
+  Engine 2 (Semantic)   : Claude (`analysis` tier, llm_models.model_for) + news sentiment
   Engine 3 (Meta-Label) : binary classifier P(true_signal | engines)
 
 Plus dynamic Regime Swapping — SL/TP/Kelly mutate based on live regime.

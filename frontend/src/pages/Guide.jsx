@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { useLlmModel } from "@/hooks/useLlmModel";
 import { VpsOfferButton } from "@/components/VpsOffer";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
@@ -171,6 +172,7 @@ function Step({ n, title, children, testid }) {
 }
 
 function Intro() {
+    const llm = useLlmModel("analysis");
     return (
         <section>
             <H2 id="intro" icon={BookOpen}>1. What is STOIC?</H2>
@@ -184,7 +186,7 @@ function Intro() {
             <P>
                 Unlike typical retail bots that fire on a single indicator, STOIC runs every candidate trade
                 through a <strong className="text-white">10-layer veto cascade</strong> driven by a dual-AI engine
-                (Claude Sonnet 4.5 + a locally-trained Logistic Regression). The result is{" "}
+                ({llm.label} + a locally-trained Logistic Regression). The result is{" "}
                 <em>low frequency, high conviction</em> — STOIC trades less than 10% of the candidate signals it sees.
             </P>
             <Callout kind="good">
@@ -249,6 +251,7 @@ function Edge() {
 }
 
 function Engine() {
+    const llm = useLlmModel("analysis");
     return (
         <section>
             <H2 id="engine" icon={Brain}>3. The Dual-AI engine</H2>
@@ -256,7 +259,7 @@ function Engine() {
             <div className="grid md:grid-cols-2 gap-3 mt-4">
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4">
                     <div className="font-display font-bold text-base mb-2 flex items-center gap-2">
-                        <span className="text-[#00FF41]">🤖</span> Engine A — Claude Sonnet 4.5
+                        <span className="text-[#00FF41]">🤖</span> Engine A — {llm.label}
                     </div>
                     <div className="text-xs text-[#A1A1AA] leading-relaxed">
                         Reads a structured payload (price action, indicators, news sentiment, COT positioning, TIPS regime, DXY regime, Kalman state) and returns: action (BUY/SELL/HOLD), confidence 0–100, key drivers, full plain-English reasoning, and entry/SL/TP levels.
@@ -280,6 +283,7 @@ function Engine() {
 }
 
 function Agents() {
+    const llm = useLlmModel("analysis");
     const roster = [
         {
             icon: Search, color: "#00FF41",
@@ -301,7 +305,7 @@ function Agents() {
             blurb: "The brain.",
             does: "Fuses Research's macro picture with live technicals into a candidate signal (BUY / SELL / HOLD + confidence + entry / SL / TP).",
             data: [
-                "Claude Sonnet 4.5 — narrative reasoning",
+                `${llm.label} — narrative reasoning`,
                 "Session-specific Logistic Regression — local hit-rate memory",
                 "12 technical indicators (Kalman, ATR, RSI, MACD, Bollinger, MTF…)",
                 "Kelly-criterion sizing + regime-adaptive risk modifier",
@@ -548,9 +552,10 @@ function SetupSteps() {
 }
 
 function Autopilot() {
+    const llm = useLlmModel("analysis");
     const lifecycle = [
         { icon: Repeat,  t: "Tick (every 60s)",     d: "STOIC pulls the latest XAU/BTC price, news, COT, TIPS and DXY data. The clock on Dashboard counts down to the next tick." },
-        { icon: Brain,   t: "Dual-AI vote",         d: "Claude Sonnet 4.5 and the session-specific Logistic Regression each output an opinion. Disagreement → HOLD." },
+        { icon: Brain,   t: "Dual-AI vote",         d: `${llm.label} and the session-specific Logistic Regression each output an opinion. Disagreement → HOLD.` },
         { icon: Layers,  t: "10-layer veto cascade",d: "Sentiment, macro blackout, regime, entropy, meta-labeler, MTF, learned-meta, A+ confluence, R:R, DXY gate." },
         { icon: Target,  t: "Position sizing",      d: "Kelly-fraction × confidence × regime mod ÷ SL distance. Bounded by your max-risk-per-trade." },
         { icon: Power,   t: "Order to EA",          d: "STOIC posts the entry/SL/TP to your bridge. The EA picks it up within 5s, calls MT5 OrderSend(), reports the fill back." },
@@ -777,13 +782,14 @@ function OptimizerSection() {
 }
 
 function BotDoctorSection() {
+    const llm = useLlmModel("analysis");
     return (
         <section id="doctor">
             <H2 id="doctor" icon={Stethoscope}>14. Bot Doctor — self-diagnosis</H2>
             <P>
                 STOIC analyses its own last hour of telemetry every 5 minutes (failed trades, blocked
                 accounts, regime context, vetos, signal patterns, win rate) and produces a structured
-                health diagnosis powered by <strong>Claude Sonnet 4.5</strong>. The result lives at the top
+                health diagnosis powered by <strong>{llm.label}</strong>. The result lives at the top
                 of your Dashboard as the <strong>Bot Doctor</strong> tile.
             </P>
             <div className="space-y-3 mt-4">

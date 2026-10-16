@@ -216,7 +216,7 @@ def _parse_llm_json(raw: str) -> dict:
 
 
 async def _call_llm(window_hours: int, payload: dict) -> tuple[dict | None, str | None]:
-    """Try Fable 5 first, fall back to Opus 4.8. Returns (analysis, model_used)."""
+    """Try the `ai_optimizer` tier first, fall back to `ai_optimizer_fallback` (llm_models). Returns (analysis, model_used)."""
     system = _SYSTEM_PROMPT.format(
         window=window_hours,
         allowed_fields=", ".join(ALLOWED_FIELDS.keys()),

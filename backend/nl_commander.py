@@ -9,7 +9,7 @@ Two LLM-powered surfaces over the bot:
                                    a list of structured actions executed on the
                                    running bot thread.
 
-Backed by Claude Sonnet 4.5 via the Emergent LLM Key. Strict JSON only; any
+Backed by Claude (`analysis` tier, llm_models.model_for) via llm_client. Strict JSON only; any
 ambiguity returns a clarification request instead of inventing parameters.
 """
 import json

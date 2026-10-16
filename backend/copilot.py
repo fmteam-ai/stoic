@@ -2,7 +2,7 @@
 
 Every request snapshots the user's: bot config, last N signals, last N trades,
 account balances, current regime/sentiment, panic state, active triggers — and
-hands it to Claude Sonnet 4.5 as JSON context. Multi-turn history persisted
+hands it to Claude (the `analysis` tier from llm_models, via llm_client) as JSON context. Multi-turn history persisted
 in `db.copilot_sessions` keyed by (user_id, session_id).
 """
 import uuid
