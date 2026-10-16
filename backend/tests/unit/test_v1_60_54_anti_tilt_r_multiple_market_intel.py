@@ -274,3 +274,11 @@ def test_market_intel_ui_wired_and_display_only():
     assert "<MarketIntelCard />" in open(os.path.join(FRONTEND, "pages", "Agents.jsx")).read()
     assert "<MarketIntelCard compact />" in open(os.path.join(FRONTEND, "pages", "Dashboard.jsx")).read()
     assert "api.post" not in card and "api.put" not in card   # read-only
+
+
+def test_market_intel_only_http_links_are_emitted():
+    from market_intel import _safe_url, central_banks
+    assert _safe_url("javascript:alert(1)") is None and _safe_url("data:text/html,x") is None
+    assert _safe_url("https://fed/1") == "https://fed/1"
+    out = central_banks([{"bank": "Fed", "ccy": "USD", "title": "x", "link": "javascript:alert(1)", "seen_at": NOW.isoformat()}], NOW)
+    assert out["banks"][0]["link"] is None

@@ -40,6 +40,12 @@ def _age_min(v, now: datetime) -> float | None:
     return round((now - d).total_seconds() / 60.0, 1) if d else None
 
 
+def _safe_url(u) -> str | None:
+    """Audit #38 P3 — third-party feed links are rendered as hrefs: only http(s) schemes leave the server."""
+    u = str(u or "").strip()
+    return u if u.lower().startswith(("http://", "https://")) else None
+
+
 def _unavailable(note: str) -> dict:
     return {"available": False, "note": note}
 
@@ -102,7 +108,7 @@ def top_headlines(news_docs: dict, now: datetime) -> dict:
                 continue
             key = (it.get("title") or "").strip().lower()
             row = merged.setdefault(key, {"time": pub.isoformat(), "source": it.get("source"), "title": it.get("title"),
-                                          "url": it.get("url"), "instruments": [], "direction": {}, "relevance": 0.0,
+                                          "url": _safe_url(it.get("url")), "instruments": [], "direction": {}, "relevance": 0.0,
                                           "urgency": "high" if now - pub <= timedelta(hours=1) else "normal",
                                           "why": it.get("why")})
             if base not in row["instruments"]:
@@ -136,7 +142,7 @@ def central_banks(releases: list, now: datetime) -> dict:
         except (TypeError, ValueError):
             pass
         latest[r["bank"]] = {"bank": r.get("bank"), "currency": r.get("ccy"), "time": ts.isoformat() if ts else None,
-                             "title": r.get("title"), "link": r.get("link"), "kind": r.get("kind"),
+                             "title": r.get("title"), "link": _safe_url(r.get("link")), "kind": r.get("kind"),
                              "recent": bool(ts and now - ts <= timedelta(minutes=CB_RECENT_MIN))}
     return {"available": True, "banks": sorted(latest.values(), key=lambda b: b["time"] or "", reverse=True)}
 
