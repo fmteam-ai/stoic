@@ -143,8 +143,9 @@ def test_var_is_bounded_by_protective_stops_so_one_small_gold_order_does_not_tri
     # a position WITHOUT a stop (or a stop on the wrong side) keeps the unbounded parametric figure
     out = _run(pv.calculate_var([{**pos[0], "stop_loss": None}], equity=10_000.0))
     assert out["stop_bounded_loss_usd"] is None and out["var_95_usd"] == 658.0
+    # v1.60.52 (#37) — a stop on the PROFIT side (breakeven+) is zero open risk, not "unbounded": VaR bounded at 0
     out = _run(pv.calculate_var([{**pos[0], "stop_loss": 4020.0}], equity=10_000.0))
-    assert out["stop_bounded_loss_usd"] is None and out["var_95_usd"] == 658.0
+    assert out["stop_bounded_loss_usd"] == 0.0 and out["var_95_usd"] == 0.0
     # a wide stop never INCREASES VaR: bound applies only when it is tighter
     out = _run(pv.calculate_var([{**pos[0], "stop_loss": 3000.0}], equity=10_000.0))
     assert out["var_95_usd"] == 658.0 and out["stop_bounded_loss_usd"] == 7500.0

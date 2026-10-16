@@ -50,6 +50,22 @@ async def reserve_user_direction(db, *, user_id: str, base_symbol: str, action: 
     return None, occupied
 
 
+async def user_direction_cap_for(db, user_id: str, account_id: str | None) -> int:
+    """v1.60.52 (#38) — the cap the scalp fast path must honour: the account's bot_config, else the user's default
+    config, else the model default (1). 0 = off."""
+    from models import BotConfigUpdate
+    default = int(BotConfigUpdate().user_direction_cap)
+    cfg = None
+    if account_id:
+        cfg = await db.bot_configs.find_one({"user_id": user_id, "account_id": account_id}, {"user_direction_cap": 1})
+    if cfg is None:
+        cfg = await db.bot_configs.find_one({"user_id": user_id, "account_id": None}, {"user_direction_cap": 1})
+    try:
+        return int((cfg or {}).get("user_direction_cap", default) or 0)
+    except (TypeError, ValueError):
+        return default
+
+
 async def release_user_direction(db, reservation_id: str | None) -> None:
     if reservation_id:
         await db[COLL].delete_one({"_id": ObjectId(reservation_id)})

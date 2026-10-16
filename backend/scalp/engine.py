@@ -1716,6 +1716,30 @@ class ScalpRunner:
         # N97-2 — scalp reserves through the ACCOUNT-WIDE service (same caps and
         # per-account lease as the main bot), never around it.
         import account_reservations as _ar
+        # v1.60.52 (#38) — per-user same-direction cap across ALL accounts AND engines: a scalp XAUUSD BUY must not
+        # stack on a main-bot XAUUSD BUY (or vice versa). Same atomic reservation as bot_runner; released once the
+        # trade row exists (it then counts itself) or on any refusal / failure.
+        from user_direction_cap import reserve_user_direction, release_user_direction, user_direction_cap_for
+        from pip_utils import symbol_match
+        from intelligence_counters import increment as inc_intel_counter
+        _udc_res = None
+        _udc_cap = await user_direction_cap_for(db, self.user_id, self.account_id)
+        if _udc_cap > 0:
+            _udc_res, _udc_occ = await reserve_user_direction(
+                db, user_id=self.user_id, base_symbol=self.symbol, action=decision["direction"], cap=_udc_cap,
+                account_id=self.account_id, symbol_match_q=symbol_match(self.symbol))
+            if _udc_res is None:
+                await release_broker_submission_slot(db, slot)
+                self.state.record_reject()
+                _bg(lambda s={"status": "refused_caps", "refusal": "user_direction_cap",
+                              "violations": [f"user_direction_cap: {_udc_occ} {decision['direction']} {self.symbol} "
+                                             f"already open/in flight across your accounts (cap {_udc_cap})"]}:
+                    db.scalp_decisions.update_one({"decision_id": decision["decision_id"]}, {"$set": s}),
+                    "decision_update")
+                _bg(lambda: inc_intel_counter(self.user_id, "user_direction_cap_block"), "intel_counter")
+                logger.info("scalp submit refused by user_direction_cap decision=%s occupied=%s cap=%s",
+                            decision["decision_id"], _udc_occ, _udc_cap)
+                return
         try:
             _got = await _ar.reserve_entry(
                 db, account_id=self.account_id, user_id=self.user_id, source="scalp",
@@ -1726,10 +1750,12 @@ class ScalpRunner:
                                         max_concurrent=None, origin="scalp"))
         except Exception:
             # review item 8 — the DB refused: fail closed, free the slot.
+            await release_user_direction(db, _udc_res)
             await release_broker_submission_slot(db, slot)
             self.state.record_reject()
             raise
         if not _got["ok"]:
+            await release_user_direction(db, _udc_res)
             await release_broker_submission_slot(db, slot)
             self.state.record_reject()
             _bg(lambda s={"status": "refused_caps", "refusal": _got.get("blocked"),
@@ -1788,6 +1814,7 @@ class ScalpRunner:
             raise
         finally:
             _active_submissions = max(0, _active_submissions - 1)
+            await release_user_direction(db, _udc_res)      # v1.60.52 — the trade row (or the failure) now speaks
         # round 15 items 2/9 — persist the COMMITMENT context: the final
         # pre-submit snapshot the order was actually sized against, plus
         # latency decomposition stamps (EA poll latency lives on the trade

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import numpy as np
 import pytest
+from bson import ObjectId
 
 BACKEND = Path(__file__).resolve().parents[3]
 
@@ -311,19 +312,23 @@ def _stub_db():
                  "scalp_financial_events", "accounts",
                  "scalp_submission_slots", "risk_reservations",
                  "account_reservation_locks", "bot_configs",          # N97-2 — account-wide reservation
+                 "user_direction_reservations",                       # v1.60.52 #38 — per-user direction cap
                  "outbox", "trade_events"):
         c = getattr(db, coll)
-        c.insert_one = AsyncMock()
+        c.insert_one = AsyncMock(return_value=MagicMock(inserted_id=ObjectId()))
         c.update_one = AsyncMock(return_value=MagicMock(matched_count=1,
                                                         modified_count=1))
         c.update_many = AsyncMock()
         c.find_one = AsyncMock(return_value=None)
         c.count_documents = AsyncMock(return_value=0)
         c.delete_many = AsyncMock()
+        c.delete_one = AsyncMock()
         c.create_index = AsyncMock()
         # audit r3 · command fence stamps via find_one_and_update
         c.find_one_and_update = AsyncMock(return_value={
             "pending_modification": {"intent_id": "i1", "seq": 1}})
+
+    db.__getitem__.side_effect = lambda k: getattr(db, k)           # db["coll"] == db.coll (user_direction_cap)
 
     # Phase A — outbox immediate-publish path iterates find().sort().limit()
     def _empty_cursor(*_a, **_k):

@@ -96,9 +96,14 @@ function Metric({ label, value, testid }) {
     );
 }
 
+// v1.60.52 (#38) — the approved scalp universe (mirrors backend scalp/instruments.APPROVED); XAUUSD runs shadow
+// until the live gate passes. The buttons used to hard-code EURUSD.
+const SCALP_SYMBOLS = ["EURUSD", "XAUUSD"];
+
 export default function Scalp() {
     const [accounts, setAccounts] = useState([]);
     const [accountId, setAccountId] = useState("");
+    const [symbol, setSymbol] = useState(SCALP_SYMBOLS[0]);
     const [runners, setRunners] = useState([]);
     const [metrics, setMetrics] = useState(null);
     const [decisions, setDecisions] = useState([]);
@@ -111,19 +116,19 @@ export default function Scalp() {
 
     const loadSession = useCallback(async () => {
         try {
-            const { data } = await api.get("/scalp/session-window?symbol=EURUSD");
+            const { data } = await api.get(`/scalp/session-window?symbol=${symbol}`);
             setSess(data);
             setSessDraft({ start: data.start_utc, end: data.end_utc });
         } catch { /* silent */ }
-    }, []);
+    }, [symbol]);
     useEffect(() => { loadSession(); }, [loadSession]);
 
     const saveSession = async (reset = false) => {
         setSessSaving(true);
         try {
             await api.post("/scalp/session-window", reset
-                ? { symbol: "EURUSD", reset: true }
-                : { symbol: "EURUSD", start_utc: Number(sessDraft.start), end_utc: Number(sessDraft.end) });
+                ? { symbol, reset: true }
+                : { symbol, start_utc: Number(sessDraft.start), end_utc: Number(sessDraft.end) });
             toast.success(reset
                 ? "Session window reset to instrument default"
                 : `Session window saved — ${String(sessDraft.start).padStart(2, "0")}:00–${String(sessDraft.end).padStart(2, "0")}:00 UTC`);
@@ -147,7 +152,7 @@ export default function Scalp() {
             setRunners(rs);
             const cur = (sel && rs.find((r) => r.account_id === sel.account_id && r.symbol === sel.symbol)) || rs[0] || null;
             if (cur && (!sel || cur.account_id !== sel.account_id || cur.symbol !== sel.symbol)) setSel({ account_id: cur.account_id, symbol: cur.symbol });
-            const sym = cur?.symbol || "EURUSD";
+            const sym = cur?.symbol || symbol;
             const accQ = cur ? `&account_id=${encodeURIComponent(cur.account_id)}` : "";
             const [mt, dc] = await Promise.all([
                 api.get(`/scalp/metrics?symbol=${sym}${accQ}`),
@@ -160,7 +165,7 @@ export default function Scalp() {
         } finally {
             setLoading(false);
         }
-    }, [sel]);
+    }, [sel, symbol]);
 
     useEffect(() => {
         api.get("/accounts").then((r) => {
@@ -180,20 +185,23 @@ export default function Scalp() {
         return ac ? (ac.label || ac.account_number) : (id || "").slice(-6);
     };
 
-    const setConfig = async (enabled, mode) => {
-        if (!accountId) return toast.error("Select an account first");
+    // v1.60.52 (#38) — acts on an explicit (account, symbol): the config card uses the selectors, a runner card
+    // passes its OWN account + symbol so a toggle never lands on a different runner.
+    const setConfig = async (enabled, mode, accId = accountId, sym = symbol) => {
+        if (!accId) return toast.error("Select an account first");
+        if (!SCALP_SYMBOLS.includes(sym)) return toast.error(`${sym} is not in the approved scalp universe`);
         if (mode === "demo_live"
-            && !window.confirm("DEMO LIVE mode sends REAL orders to the broker on this account. Continue?"))
+            && !window.confirm(`DEMO LIVE mode sends REAL ${sym} orders to the broker on ${acctName(accId)}. Continue?`))
             return;
         setSaving(true);
         try {
             await api.post("/scalp/config", {
-                account_id: accountId, symbol: "EURUSD",
+                account_id: accId, symbol: sym,
                 enabled, mode, confirm_live: mode === "demo_live",
             });
             toast.success(enabled
-                ? `Scalp ${mode.toUpperCase()} enabled on ${acctName(accountId)}`
-                : `Scalp disabled on ${acctName(accountId)}`);
+                ? `Scalp ${sym} ${mode.toUpperCase()} enabled on ${acctName(accId)}`
+                : `Scalp ${sym} disabled on ${acctName(accId)}`);
             load();
         } catch (e) {
             toast.error(formatApiError(e));
@@ -225,7 +233,7 @@ export default function Scalp() {
         <AppLayout>
             <PageHeader
                 title="Scalp Fast Path"
-                subtitle="EURUSD micro-pullback continuation · tick-driven · shadow-first"
+                subtitle="EURUSD / XAUUSD micro-pullback continuation · tick-driven · shadow-first"
                 action={
                     <button onClick={load} data-testid="scalp-refresh-btn"
                             className="p-2 border border-[#1F1F1F] text-[#A1A1AA] hover:text-white">
@@ -245,6 +253,11 @@ export default function Scalp() {
                             <option key={ac.id} value={ac.id}>{ac.label || ac.account_number}</option>
                         ))}
                     </select>
+                    <select value={symbol} onChange={(e) => setSymbol(e.target.value)}
+                            data-testid="scalp-symbol-select"
+                            className="bg-[#0A0A0A] border border-[#1F1F1F] text-[#E4E4E7] text-sm px-3 py-2 font-mono">
+                        {SCALP_SYMBOLS.map((s) => <option key={s} value={s}>{s}</option>)}
+                    </select>
                     <button disabled={saving} onClick={() => setConfig(true, "shadow")}
                             data-testid="scalp-enable-shadow-btn"
                             className="px-4 py-2 text-sm border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10">
@@ -262,7 +275,7 @@ export default function Scalp() {
                     </button>
                 </div>
                 <p className="text-xs text-[#52525B] mt-3">
-                    Requires EA v1.48+ attached with <span className="font-mono text-[#A1A1AA]">TickStreamEnabled=true, TickStreamSymbol=EURUSD</span>.
+                    Requires EA v1.48+ attached with <span className="font-mono text-[#A1A1AA]">TickStreamEnabled=true, TickStreamSymbol={symbol}</span>.
                     Shadow mode runs the full pipeline and logs decisions without sending orders.
                 </p>
                 {sess && (
@@ -345,11 +358,27 @@ export default function Scalp() {
                                     </span>
                                 );
                             })()}
+                            {/* v1.60.52 (#38) — per-runner enable/disable using the card's OWN account + symbol */}
+                            {!r.account_missing && (r.enabled ? (
+                                <button disabled={saving}
+                                        onClick={() => setConfig(false, "shadow", r.account_id, r.symbol)}
+                                        data-testid={`scalp-runner-disable-btn-${r.symbol}`}
+                                        className="ml-auto px-2 py-0.5 text-xs border border-[#1F1F1F] text-[#A1A1AA] hover:text-white">
+                                    DISABLE
+                                </button>
+                            ) : (
+                                <button disabled={saving}
+                                        onClick={() => setConfig(true, "shadow", r.account_id, r.symbol)}
+                                        data-testid={`scalp-runner-enable-btn-${r.symbol}`}
+                                        className="ml-auto px-2 py-0.5 text-xs border border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10">
+                                    ENABLE SHADOW
+                                </button>
+                            ))}
                             <button disabled={saving}
                                     onClick={() => removeRunner(r.account_id, r.symbol, !!r.account_missing)}
                                     data-testid="scalp-runner-remove-btn"
                                     title="Remove this runner from the page"
-                                    className="ml-auto flex items-center gap-1 px-2 py-0.5 text-xs border border-[#1F1F1F] text-[#52525B] hover:text-[#FF3B30] hover:border-[#FF3B30]/40">
+                                    className={`${r.account_missing ? "ml-auto " : ""}flex items-center gap-1 px-2 py-0.5 text-xs border border-[#1F1F1F] text-[#52525B] hover:text-[#FF3B30] hover:border-[#FF3B30]/40`}>
                                 <X size={12} /> REMOVE
                             </button>
                         </div>
