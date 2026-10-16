@@ -82,7 +82,8 @@ async def _disable_all_bots_and_close_trades(query: dict, broadcast_user_id: str
            "decision_id": nl.get("decision_id"), "authority_version": nl.get("authority_version")}
     # #48 — panic supersedes EVERY outstanding close (acked or not) and, on EAs that execute FULL_CLOSE (≥1.40),
     # rides the fenced modification path so each close is explicitly acknowledged; legacy EAs keep the trades-block flag.
-    open_rows = await db.trades.find({**query, "status": "open"}, {"_id": 1, "account_id": 1}, session=session).to_list(length=1000)
+    open_rows = await db.trades.find({**query, "status": "open", "netting_close_acked": {"$ne": True}},   # #51 — acked netting legs close via the OUT deal
+                                     {"_id": 1, "account_id": 1}, session=session).to_list(length=1000)
     acc_ids = {r.get("account_id") for r in open_rows if r.get("account_id")}
     legacy_accounts = set()
     for aid in acc_ids:

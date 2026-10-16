@@ -260,3 +260,78 @@ def test_sec001_forged_success_ack_pauses_redispatch_only_for_the_grace_window(w
     assert out["redispatched"] == 1 and out["expired"] == 0
     t2 = _run(db.trades.find_one({"_id": world["tid"]}))
     assert t2["close_idem_key"] != key0 and t2["close_requested"] is True and t2["close_redispatch"]["count"] == 1
+
+
+def test_v1_60_56_redispatch_reuses_one_alert_then_escalates_and_pauses_in_quiet_window(world):
+    """#49 — an EA offline for hours: ONE high alert per trade+reason (occurrences grow), a critical rung at 15 min and
+    at 1 h, no alert/re-send while the broker clock is inside the EA's EOD quiet window."""
+    import close_watchdog as cw
+    from close_commands import request_close
+    db = world["db"]
+    _run(request_close(db, {"_id": world["tid"]}, reason="friday_flat", actor="friday_flat",
+                       pending_modification={"type": "FULL_CLOSE", "reason": "friday_flat"}, emergency=True))
+    t0 = _run(db.trades.find_one({"_id": world["tid"]}))
+    requested = datetime.fromisoformat(t0["close_command"]["requested_at"])
+    # broker clock pinned so that requested + 2 h reads 23:50 broker time (quiet) and every earlier probe does not
+    quiet_probe = requested + timedelta(hours=2)
+    want = quiet_probe.replace(hour=23, minute=50, second=0, microsecond=0)
+    offset = int((want - quiet_probe.replace(second=0, microsecond=0)).total_seconds())
+    _run(db.accounts.update_one({"_id": world["acc_id"]}, {"$set": {"broker_utc_offset_sec": offset}}))
+    tid = str(world["tid"])
+    q = {"meta.trade_id": tid, "kind": "close_command_unacked"}
+    out = _run(cw.sweep(db, requested + timedelta(seconds=61)))
+    assert out["alerted"] == 1 and out["redispatched"] == 1
+    # 200 s: second re-dispatch → the SAME alert row (dedup per trade+reason), no new HIGH alert
+    out = _run(cw.sweep(db, requested + timedelta(seconds=200)))
+    assert out["redispatched"] == 1 and out["alerted"] == 0
+    rows = _run(db.ops_alerts.find(q).to_list(length=20))
+    assert len(rows) == 1 and rows[0]["severity"] == "warning" and rows[0]["occurrences"] >= 1   # "high" → warning tier; critical rungs below
+    # 16 min: critical 15m rung, exactly once even on the next sweep
+    out = _run(cw.sweep(db, requested + timedelta(seconds=16 * 60)))
+    assert out["escalated"] == 1
+    _run(cw.sweep(db, requested + timedelta(seconds=17 * 60)))
+    rows = _run(db.ops_alerts.find(q).to_list(length=20))
+    assert sorted(r.get("meta", {}).get("escalation") or "" for r in rows) == ["", "15m"]
+    assert _run(db.trades.find_one({"_id": world["tid"]}))["close_unacked_escalations"] == ["15m"]
+    # 61 min: 1h rung
+    assert _run(cw.sweep(db, requested + timedelta(seconds=61 * 60)))["escalated"] == 1
+    assert len(_run(db.ops_alerts.find(q).to_list(length=20))) == 3
+    # 23:50 broker time: quiet window → nothing re-sent, nothing alerted, counted as quiet
+    out = _run(cw.sweep(db, quiet_probe))
+    assert out["quiet"] == 1 and out["redispatched"] == 0 and out["alerted"] == 0 and out["escalated"] == 0
+    assert len(_run(db.ops_alerts.find(q).to_list(length=20))) == 3
+    # 00:10 broker time: window over → re-dispatch resumes, still never expired
+    out = _run(cw.sweep(db, quiet_probe + timedelta(minutes=20)))
+    assert out["redispatched"] == 1 and out["expired"] == 0
+
+
+def test_v1_60_56_friday_flat_and_eod_do_not_fight(world, monkeypatch):
+    """#50 — Friday ~20:15 UTC both windows are open: eod_flatten must not re-issue friday_flat's 10 s old command and
+    vice-versa; the trade keeps ONE pending mandatory command with the stronger reason."""
+    import eod_flatten as eod
+    import friday_flat as ff
+    db = world["db"]
+    _run(db.accounts.update_one({"_id": world["acc_id"]}, {"$set": {"broker_utc_offset_sec": 3 * 3600}}))
+    monkeypatch.setattr(ff, "in_friday_flat_window", lambda cfg, now=None: {"in_window": True, "close_at": "x"})
+    monkeypatch.setattr(eod, "in_flatten_window", lambda offset, now: True)
+    monkeypatch.setattr(eod, "_enabled", lambda: True, raising=False)
+
+    async def _no_notify(*a, **k):
+        return None
+    monkeypatch.setattr("notifier.notify_friday_flat", _no_notify, raising=False)
+    cfg = {"user_id": world["uid"], "account_id": str(world["acc_id"]), "friday_flat_mode": "close"}
+    assert _run(ff.sweep_user(db, world["uid"], cfg))["closed"] == 1
+    t = _run(db.trades.find_one({"_id": world["tid"]}))
+    key = t["close_idem_key"]
+    for _ in range(3):
+        assert _run(eod.sweep_eod_flatten(db))["queued"] == 0          # backoff holds across callers
+        assert _run(ff.sweep_user(db, world["uid"], cfg))["closed"] == 0
+    t2 = _run(db.trades.find_one({"_id": world["tid"]}))
+    assert t2["close_idem_key"] == key and t2["close_reason"] == "friday_flat"
+    assert _run(db.close_commands.count_documents({"trade_id": str(world["tid"]), "state": "requested"})) == 1
+    # re-issue due (2 min later) from eod_flatten keeps the STRONGER friday_flat reason
+    _run(db.trades.update_one({"_id": world["tid"]}, {"$set": {"close_command.requested_at": (datetime.now(timezone.utc) - timedelta(seconds=120)).isoformat()}}))
+    assert _run(eod.sweep_eod_flatten(db))["queued"] == 1
+    t3 = _run(db.trades.find_one({"_id": world["tid"]}))
+    assert t3["close_idem_key"] != key and t3["close_reason"] == "friday_flat" and t3["pending_modification"]["reason"] == "friday_flat"
+    assert t3["close_redispatch"]["count"] == 1 and t3["close_redispatch"]["first_at"]

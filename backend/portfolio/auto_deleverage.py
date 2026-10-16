@@ -163,10 +163,12 @@ async def _advise_sector_caps(db, acc: dict, snap: dict) -> None:
         would = ", ".join(f"{a.get('symbol')} {a.get('lot_size')} lot ({a.get('reason')})" for a in snap["advisory_actions"])
         msg = (f"{acc.get('label') or acc.get('name') or acc['_id']}: {trig} breached — ADVISORY, would close {would}. "
                f"No action taken (SECTOR_CAP_DELEVERAGE_ENABLED=false).")
-        await raise_alert(db, "sector_cap_advisory", "medium", msg,
-                          dedup_key=f"sector_cap_advisory:{acc['_id']}:{trig}",
-                          meta={"account_id": str(acc["_id"]), "user_id": acc.get("user_id"), "triggers": snap.get("advisory_triggers"),
-                                "would_close": snap["advisory_actions"], "shadow": True})
+        new_alert = await raise_alert(db, "sector_cap_advisory", "medium", msg,
+                                      dedup_key=f"sector_cap_advisory:{acc['_id']}:{trig}",
+                                      meta={"account_id": str(acc["_id"]), "user_id": acc.get("user_id"), "triggers": snap.get("advisory_triggers"),
+                                            "would_close": snap["advisory_actions"], "shadow": True})
+        if new_alert is None:
+            return      # #54 — the breach is already on an open alert: no pulse every sweep
         cfg = await db.bot_configs.find_one({"user_id": acc.get("user_id"), "account_id": str(acc["_id"])}) \
             or await db.bot_configs.find_one({"user_id": acc.get("user_id")})
         if cfg:

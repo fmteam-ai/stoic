@@ -237,7 +237,7 @@ STRICTER_MAX = ("min_confidence_override", "signal_cooldown_minutes", "sl_cooldo
                 "loss_cooldown_minutes", "anti_tilt_freeze_hours", "pre_news_protect_minutes", "min_final_rr")
 STRICTER_OR = ("anti_tilt_enabled", "sl_cooldown_enabled", "loss_cooldown_enabled", "pre_news_protect_enabled",
                "asia_session_skip_xau", "spread_filter_enabled", "daily_drawdown_enabled", "weekly_drawdown_enabled",
-               "friday_flat_enabled", "payoff_guard_enabled")
+               "friday_flat_enabled", "payoff_guard_enabled", "breakeven_enabled")   # #53 — a preset never switches BE off
 
 
 def _stricter(field: str, user_v, preset_v):

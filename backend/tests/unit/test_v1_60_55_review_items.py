@@ -24,9 +24,10 @@ def _run(coro):
 def test_mandatory_vs_discretionary_close_reasons():
     from close_watchdog import is_mandatory_close
     for r in ("panic", "friday_flat", "eod_flatten", "pre_news_protect", "emergency_unprotected", "emergency_specs_stale",
-              "manual", "manual_telegram", "nl_command", "excess_over_cap", "panic:admin"):
+              "manual", "manual_telegram", "nl_command", "excess_over_cap", "panic:admin",
+              "auto_deleverage_hard_drawdown"):            # #52 — hard-drawdown deleverage is mandatory since v1.60.56
         assert is_mandatory_close(r), r
-    for r in ("auto_deleverage_var_cap", "auto_deleverage_sector_cap_commodity", "auto_deleverage_hard_drawdown",
+    for r in ("auto_deleverage_var_cap", "auto_deleverage_sector_cap_commodity",
               "time_stop", "take_profit", "scalp_time_stop", "queued_timeout", None, ""):
         assert not is_mandatory_close(r), r
 
