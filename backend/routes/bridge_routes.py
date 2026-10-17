@@ -451,6 +451,11 @@ async def heartbeat(payload: BridgeHeartbeat):
                 record_spread(str(acc["_id"]), clean)
             except Exception as _sw:  # noqa: BLE001
                 record_swallow("bridge", "heartbeat", _sw)
+            try:                                              # v1.60.63 #85 — hour-of-day spread history (14 d, TTL)
+                from trade_costs import record_spread_samples
+                await record_spread_samples(db, str(acc["_id"]), clean)
+            except Exception as _sw:  # noqa: BLE001
+                record_swallow("bridge", "heartbeat_spread_history", _sw)
     # EA v1.48+ — persist precise broker stop constraints per BASE symbol
     # (round 13 item 5); protection_guard consumes these when computing
     # emergency stops.
@@ -3466,6 +3471,11 @@ async def external_deal(payload: BridgeExternalDeal):
             update["close_command"] = close_ack
         await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
         tid = str(existing["_id"])
+        try:                                                  # v1.60.63 #85 — cost ledger: exit slippage + cost_summary
+            from trade_costs import stamp_exit_costs
+            await stamp_exit_costs(db, {**existing, **update, "_id": existing["_id"]}, acc, payload.price)
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "exit_costs_85", _sw)
         # Scalp fast-path AUTHORITATIVE financial reconciliation (round 5
         # item 1 / round 6 durable state): SIGNED profit/commission/swap +
         # exact exit price, idempotent per deal_id, marks the broker deal

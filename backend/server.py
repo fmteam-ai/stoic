@@ -1004,6 +1004,8 @@ async def on_startup():
         await _tomb_idx(get_db())                                   # C3
         from prediction_track import ensure_indexes as _pred_idx
         await _pred_idx(get_db())                                   # Spec A
+        from trade_costs import ensure_indexes as _costs_idx
+        await _costs_idx(get_db())                                  # v1.60.63 #85 — spread_history TTL
         import device_attestation as _da
         await _da.ensure_indexes(get_db())   # r26 P1-02 nonce TTL + uniqueness
         from close_commands import ensure_indexes as _close_idx   # r25 P2-01: unique (trade_id, close_seq)

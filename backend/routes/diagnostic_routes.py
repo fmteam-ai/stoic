@@ -627,3 +627,16 @@ async def llm_models_view(user=Depends(get_current_user)):
     import llm_client
     return {"models": {t: model_for(t) for t in TIERS}, "models_pretty": pretty_models(),
             "provider": llm_client.active_provider()}
+
+
+@router.get("/trade-costs")
+async def trade_costs_view(days: int = 7, user=Depends(get_current_user)):
+    """v1.60.63 #85 — per-broker trading-cost ledger (spread by session, entry/exit slippage, cost in R and % of TP,
+    worst 5 trades) + the spread-gate shadow scoreboard. Own data only."""
+    from trade_costs import gate_mode, report
+    db = get_db()
+    out = await report(db, user["id"], days)
+    cfg = await db.bot_configs.find_one({"user_id": user["id"]}, {"spread_gate_mode": 1, "spread_gate_mult": 1, "max_cost_pct_of_tp": 1, "max_spread_pips": 1})
+    out["gate"].update(mode=gate_mode(cfg), mult=(cfg or {}).get("spread_gate_mult") or 1.5,
+                       max_cost_pct_of_tp=(cfg or {}).get("max_cost_pct_of_tp") or 12.0, static_caps=(cfg or {}).get("max_spread_pips") or {})
+    return out

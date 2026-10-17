@@ -191,10 +191,14 @@ class FakeCollection:
             if v not in arr:
                 arr.append(v)
         for k, v in (upd.get("$push") or {}).items():
-            arr = r.setdefault(k, [])
+            parts = k.split(".")
+            cur = r
+            for part in parts[:-1]:
+                cur = cur.setdefault(part, {})
+            arr = cur.setdefault(parts[-1], [])
             arr.extend(v["$each"] if isinstance(v, dict) and "$each" in v else [v])
             if isinstance(v, dict) and "$slice" in v:
-                r[k] = arr[v["$slice"]:]
+                cur[parts[-1]] = arr[v["$slice"]:]
 
     async def update_one(self, q, upd, upsert=False, session=None):
         for r in self.rows:
@@ -203,6 +207,7 @@ class FakeCollection:
                 return _Res(matched_count=1, modified_count=1, upserted_id=None)
         if upsert:
             d = {k: v for k, v in q.items() if not k.startswith("$") and not isinstance(v, dict)}
+            d.update(upd.get("$setOnInsert") or {})
             self._apply(d, upd)
             d.setdefault("_id", ObjectId())
             if any(r.get("_id") == d["_id"] for r in self.rows):
