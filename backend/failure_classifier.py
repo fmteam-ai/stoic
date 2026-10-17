@@ -34,6 +34,20 @@ ROUTE_FIX = {
 }
 
 
+def _backfill_was_a_gap(trade: dict) -> bool:
+    """v1.60.36 — `backfilled_at` is stamped on EVERY routine broker-confirmed close (close_reason
+    "broker_confirmed"), so it alone must not make an ordinary SL/TP exit an operational failure (14 Oct: 5/5 losses).
+    Only a REAL gap counts: P&L was unknown/estimated before the deal landed, a ghost/reconcile repair, or an adopted
+    unknown position. Rows stamped before this fix fall back to the close_reason / repair markers."""
+    gap = trade.get("backfill_gap")
+    if gap is not None:
+        return bool(gap)
+    if trade.get("auto_repaired_from_ghost") or trade.get("adopted_at") or trade.get("pnl_was_unknown"):
+        return True
+    reason = str(trade.get("close_reason") or "").lower()
+    return any(k in reason for k in ("ghost", "reconcil", "external_close", "adopt"))
+
+
 def _slip_threshold(symbol: str) -> float:
     s = base_symbol(symbol or "")
     if s.startswith(("XAU", "GOLD")):
@@ -65,8 +79,8 @@ def classify_failure(trade: dict, sig: dict | None = None,
     op_ev = []
     if trade.get("pnl_estimated") or trade.get("pnl_unknown"):
         op_ev.append("P&L was estimated/unknown — broker reconciliation gap")
-    if trade.get("backfilled_at"):
-        op_ev.append("trade required deep-sync backfill")
+    if trade.get("backfilled_at") and _backfill_was_a_gap(trade):
+        op_ev.append("trade required deep-sync backfill (real reconciliation gap)")
     reason = str(trade.get("close_reason") or "").lower()
     if "ghost" in reason or "reconcil" in reason:
         op_ev.append(f"lifecycle close_reason: {reason}")

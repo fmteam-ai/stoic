@@ -26,6 +26,10 @@ Covers:
 ALWAYS restores observe mode at module teardown.
 """
 from __future__ import annotations
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 
 import os
 import sys
@@ -48,7 +52,7 @@ STEP_UP_BYPASS = os.environ.get("STEP_UP_BYPASS_TOKEN") or ""
 def _read_env_token(key: str) -> str:
     """Fallback: read /app/backend/.env for the token."""
     try:
-        with open("/app/backend/.env", "r") as f:
+        with open(_ENV_BE, "r") as f:
             for line in f:
                 if line.startswith(f"{key}="):
                     return line.split("=", 1)[1].strip()

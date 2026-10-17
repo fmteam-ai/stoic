@@ -15,7 +15,7 @@ def _read(*rel):
 
 def test_u4_terminal_chosen_by_login_prompt_only_when_ambiguous():
     ps = _read("backend", "static", "STOIC-Installer.ps1")
-    assert '$InstallerVersion = "1.10"' in ps and "[string]$Login = \"\"" in ps and "[switch]$Repair" in ps
+    assert '$InstallerVersion = "1.11"' in ps and "[string]$Login = \"\"" in ps and "[switch]$Repair" in ps
     assert "Resolve-StoicTerminal -TerminalPath $TerminalPath -TerminalId $TerminalId -ExpectedLogin $Login" in ps
     body = ps.split("function Resolve-StoicTerminal")[1].split("\nfunction ")[0]
     assert '$byLogin = @($found | Where-Object { (Get-StoicTerminalLogin $_.FullName) -eq "$ExpectedLogin" })' in body

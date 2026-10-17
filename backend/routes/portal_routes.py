@@ -225,23 +225,40 @@ async def _compute_status(now: float, timings: dict | None = None):
     try:
         from canonical_decision import authority_version, decide_account
         from inventory_projection import projection
+        import rules_policy as _rp
         v_before = await authority_version(db)
         proj = await projection(db)
-        exp_declared = all(proj["counts"].get(k) is not None
-                           for k in ("expected_accounts", "expected_enabled", "expected_bots"))
-        exact = (exp_declared and not proj["violations"] and not proj["structural_defects"]
+        # prod v1.60.28 — the expectation is DECLARED either by the retired fixed-count inventory
+        # (expected_accounts/enabled/bots) or by an ACTIVE, unexpired signed rules policy (Phase 3 — the only mode
+        # in production), otherwise INFRA stayed INVENTORY_NOT_ATTESTED forever under a rules policy.
+        rules = await _rp.active(db)
+        fixed_declared = all(proj["counts"].get(k) is not None
+                             for k in ("expected_accounts", "expected_enabled", "expected_bots"))
+        rules_declared = bool(rules) and not rules.get("expired") and bool(rules.get("policy_version"))
+        exp_declared = fixed_declared or rules_declared
+        # prod v1.60.24 — only PLATFORM-wide violations / structural defects break the attestation; a defect scoped to
+        # one account (e.g. a bot still active on an account switched OFF) closes that account, never INFRA.
+        exact = (exp_declared and not proj["platform_violations"] and not proj["structural_defects"]
                  and proj["approved_hash"] is not None and proj["approved_hash"] == proj["inventory_hash"])
         all_ready = False
         if exact:
             enabled_ids = [r["account_id"] for r in proj["accounts"] if r.get("enabled")]
-            states = []
-            for aid in enabled_ids:
+
+            async def _state(aid):
                 acc = await db.accounts.find_one({"_id": ObjectId(aid)})
-                states.append((await decide_account(db, acc)).get("state") if acc else "MISSING")
+                return (await decide_account(db, acc)).get("state") if acc else "MISSING"
+            # bounded: decisions run 16-wide and stop at the first non-READY account (public endpoint, 20 s budget)
+            states = []
+            for i in range(0, len(enabled_ids), 16):
+                chunk = await asyncio.gather(*(_state(aid) for aid in enabled_ids[i:i + 16]))
+                states.extend(chunk)
+                if any(st != "READY" for st in chunk):
+                    break
             all_ready = bool(states) and all(st == "READY" for st in states)
         v_after = await authority_version(db)
         aggregate.update(attested=bool(exact and all_ready and v_before == v_after),
-                         basis="signed_exact_inventory" if exact else "platform_availability_only",
+                         basis=("signed_rules_policy" if exact and rules_declared and not fixed_declared
+                                else "signed_exact_inventory" if exact else "platform_availability_only"),
                          input_version=v_after if v_before == v_after else None,
                          inventory_hash=(proj["approved_hash"] or "")[:12] or None, as_of=proj["as_of"])
     except Exception:  # noqa: BLE001 — fail closed: no attestation

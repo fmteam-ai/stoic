@@ -27,11 +27,11 @@ class ResearchAgent:
 
     name = "research"
 
-    async def gather(self, symbol: str) -> dict:
+    async def gather(self, symbol: str, cfg: dict | None = None) -> dict:
         sym = symbol.upper()
         sentiment = await score_sentiment(symbol)
-        macro_freeze = await macro_freeze_check(symbol)
-        upcoming = await upcoming_for(symbol, hours=24)
+        macro_freeze = await macro_freeze_check(symbol, cfg)      # v1.60.48 — per-account freeze currencies
+        upcoming = await upcoming_for(symbol, hours=24, cfg=cfg)
 
         cot = tips = dxy = None
         if sym == "XAUUSD":

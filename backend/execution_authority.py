@@ -313,14 +313,23 @@ async def submit_intent(*, user_id, account: dict, signal: dict, engine,
         # rounds back up to the minimum: below one step the order is refused.
         _reduced = floor_to_lot_step(_orig * float(gate["reduce_factor"]), _step)
         if _reduced < _min:
-            await _finalize_pre_dispatch(
-                db, iid, "cancelled",
-                f"trading authority {gate.get('level')} reduction ×{gate['reduce_factor']} "
-                f"leaves {_reduced} lots < broker minimum {_min} — below minimum, not opened")
-            logger.warning("TRADING AUTHORITY REDUCE → below minimum lot (%.4f < %s) user=%s sym=%s — skipped",
-                           _reduced, _min, user_id, signal.get("symbol"))
-            return {"blocked": "below_minimum_lot", "intent_id": iid,
-                    "authority_level": gate.get("level"), "reasons": gate.get("reasons")}
+            # prod v1.60.28 — floor to the broker minimum when the minimum still fits the approved risk budget
+            from risk import min_lot_fits_budget
+            if min_lot_fits_budget(signal.get("_sizing") or {}, _min):
+                logger.info("TRADING AUTHORITY REDUCE ×%s → %.4f < minimum %s — floored to the broker minimum "
+                            "(within the risk budget) user=%s sym=%s", gate["reduce_factor"], _reduced, _min,
+                            user_id, signal.get("symbol"))
+                _reduced = _min
+                signal["_authority_floored_to_min"] = True
+            else:
+                await _finalize_pre_dispatch(
+                    db, iid, "cancelled",
+                    f"trading authority {gate.get('level')} reduction ×{gate['reduce_factor']} "
+                    f"leaves {_reduced} lots < broker minimum {_min} — below minimum, not opened")
+                logger.warning("TRADING AUTHORITY REDUCE → below minimum lot (%.4f < %s) user=%s sym=%s — skipped",
+                               _reduced, _min, user_id, signal.get("symbol"))
+                return {"blocked": "below_minimum_lot", "intent_id": iid,
+                        "authority_level": gate.get("level"), "reasons": gate.get("reasons")}
         signal["lot_size"] = _reduced
         signal["_authority_reduced"] = True
         logger.warning("TRADING AUTHORITY REDUCED — lot %s → %s user=%s "

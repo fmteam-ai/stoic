@@ -15,7 +15,16 @@ import { ForecastHealthCard } from "../components/ForecastHealthCard";
 import { CalibrationHealthCard } from "../components/CalibrationHealthCard";
 import { ReadinessCard } from "../components/ReadinessCard";
 import { AiLatencyCard } from "../components/AiLatencyCard";
+import { LlmProviderCard } from "../components/LlmProviderCard";
+import { TradingCostsCard } from "../components/TradingCostsCard";
 import { ReleaseIdentityCard } from "../components/ReleaseIdentityCard";
+import { ReleaseGateCard } from "../components/ReleaseGateCard";
+import { EaChannelCard } from "../components/EaChannelCard";
+import { SafetyLoopsCard } from "../components/SafetyLoopsCard";
+import { NewsSourcesCard } from "../components/NewsSourcesCard";
+import { RiskRegimeCard } from "../components/RiskRegimeCard";
+import { EaFleetCards } from "../components/EaFleetCards";
+import { ConfigDriftCard } from "../components/ConfigDriftCard";
 import { ChaosDrillsCard } from "../components/ChaosDrillsCard";
 import { StressTestCard } from "../components/StressTestCard";
 import { SoakReportCard } from "../components/DemoReadinessPanels";
@@ -639,8 +648,17 @@ export default function BotHealth() {
                 <SoakReportCard />
                 <CapitalStageCard />
                 <SubsystemHealthCard />
+                <LlmProviderCard />
+                <TradingCostsCard />
                 <AiLatencyCard />
                 {user?.role === "admin" && <ReleaseIdentityCard />}
+                {user?.role === "admin" && <ReleaseGateCard />}
+                {user?.role === "admin" && <EaChannelCard />}
+                {user?.role === "admin" && <SafetyLoopsCard />}
+                {user?.role === "admin" && <NewsSourcesCard />}
+                {user?.role === "admin" && <RiskRegimeCard />}
+                {user?.role === "admin" && <EaFleetCards />}
+                {user?.role === "admin" && <ConfigDriftCard />}
                 <RealtimeRiskCard />
                 <OperatorConsole onAction={load} />
                 <ModeGuardianCard />

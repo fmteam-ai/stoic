@@ -30,14 +30,36 @@ from friday_flat import sweep_all as sweep_friday_flat, in_friday_flat_window
 from subscription_service import is_active as subscription_active
 from auto_tune import get_auto_threshold
 from intelligence_counters import increment as inc_intel_counter
-from risk import get_profile, compute_lot_for_account
-from pip_utils import floor_to_lot_step, symbol_match, lot_spec
+from risk import get_profile, compute_lot_for_account, RAW_LOT_ANOMALY_MULT, raw_lot_anomaly
+from pip_utils import floor_to_lot_step, symbol_match, lot_spec, base_symbol
 from portfolio.auto_deleverage import sweep as sweep_auto_deleverage
 from portfolio.correlation_kelly import compute_correlation_aware_scale
 from research_agent.self_improver import daily_sweep as sweep_research_agent
 from account_reservations import trade_counter_filter
+from anti_tilt import evaluate as anti_tilt_evaluate
+from streak_losses import is_streak_loss
+from market import StaleQuoteError
+from models import BotConfigUpdate as _BotConfigUpdate
 
 logger = logging.getLogger("bot-runner")
+CFG_DEFAULTS = _BotConfigUpdate().model_dump()   # v1.60.48 — runtime defaults = model defaults (audit item 15)
+ASIA_GOLD_SKIP_END_HOUR = 7
+
+
+def asia_gold_skip_active(now: datetime | None = None) -> bool:
+    now = now or datetime.now(timezone.utc)
+    return now.weekday() < 5 and now.hour < ASIA_GOLD_SKIP_END_HOUR
+
+
+async def _udc_release(db, reservation_id):
+    try:
+        from user_direction_cap import release_user_direction
+        await release_user_direction(db, reservation_id)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("direction reservation release failed: %s", e)
+
+
+USER_DIRECTION_CAP_DEFAULT = 1    # v1.60.48 — open automated positions per (symbol, direction) across ALL accounts of a user
 _CURRENT_SIGNAL: contextvars.ContextVar = contextvars.ContextVar("current_signal")
 
 # Internal cooldown tracker { (user_id, symbol): datetime_next_eligible }
@@ -91,6 +113,23 @@ async def _skip_below_min(db, cfg, sym, lot: float, min_lot: float, stage: str) 
                    sym, stage, lot, min_lot)
     await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info",
                         reason=f"Below minimum lot after {stage} trim ({lot:.4f} < {min_lot}) — not opened")
+
+
+async def _floor_or_skip(db, cfg, sym, lot: float, min_lot: float, stage: str, sized: dict,
+                         floored: list | None = None) -> float | None:
+    """prod v1.60.28 — a trim that lands under the broker minimum is floored to the minimum when the minimum still
+    fits the per-trade risk budget the sizer approved (OnEquity: base = 0.01 already, every trim → 0 → every signal
+    lost). Skipped only when even the minimum overshoots the budget. Returns the lot to use, or None (skipped)."""
+    from risk import min_lot_fits_budget
+    if min_lot_fits_budget(sized, min_lot):
+        logger.info("Trim floored sym=%s: %s trim → %.4f < minimum %s — using broker minimum "
+                    "(risk $%.2f within the $%.2f budget)", sym, stage, lot, min_lot,
+                    float(sized.get("min_lot_risk_usd") or 0), float(sized.get("risk_amount_usd") or 0))
+        if floored is not None:
+            floored.append(stage)
+        return float(min_lot)
+    await _skip_below_min(db, cfg, sym, lot, min_lot, f"{stage} (minimum lot exceeds the risk budget)")
+    return None
 
 async def _on_sl_cooldown(db, user_id: str, symbol: str, lookback_min: int,
                           account_id: str | None = None) -> dict | None:
@@ -195,6 +234,22 @@ async def _record_pulse(
                 db, user_id=str(cfg.get("user_id") or ""), symbol=symbol or "",
                 status="rejected", stage=infer_stage(reason), reason=reason,
                 cfg=cfg, signal=_sig)
+        # v1.60.29 item 3 — DEFERRED (execution optimizer: off-hours gold / spread) and engine HOLDs were invisible:
+        # 62 deferred signals in one night showed nowhere. They are now ledger rows too (status deferred | held).
+        elif action == "HOLD":
+            from trade_decisions import record_decision
+            _sig = signal or _CURRENT_SIGNAL.get(None)
+            if _sig is not None and _sig.get("symbol") and symbol and _sig.get("symbol") != symbol:
+                _sig = None
+            if _sig is not None and _sig.get("execution_deferred"):
+                await record_decision(
+                    db, user_id=str(cfg.get("user_id") or ""), symbol=symbol or "", status="deferred",
+                    stage="execution_optimizer",
+                    reason=str(_sig.get("execution_defer_reason") or reason), cfg=cfg, signal=_sig)
+            elif not is_routine:
+                await record_decision(
+                    db, user_id=str(cfg.get("user_id") or ""), symbol=symbol or "", status="held",
+                    stage="engine", reason=reason, cfg=cfg, signal=_sig)
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to persist pulse cfg=%s: %s", cfg.get("_id"), e)
 
@@ -476,7 +531,7 @@ async def _process_user_account_locked(db, cfg: dict):
         )
         return
 
-    risk_level = cfg.get("risk_level", "medium")
+    risk_level = cfg.get("risk_level", CFG_DEFAULTS["risk_level"])            # v1.60.48 — single default source
     auto_exec = (bool(cfg.get("auto_execute", True))
                  and bool(cfg.get("_tier_auto_execute", True)))
     # Paper-shadow mode (iter-39): when the cfg is in shadow mode but not
@@ -496,14 +551,14 @@ async def _process_user_account_locked(db, cfg: dict):
     auto_preset_active = bool(cfg.get("auto_preset_enabled"))
     if auto_preset_active:
         from adaptive_mode import pick_preset_for_regime
-        from strategy_presets import PRESETS as _PRESETS
+        from strategy_presets import PRESETS as _PRESETS, safe_overlay
         pick = pick_preset_for_regime(
             cfg.get("_last_execution_mode"),
             cfg.get("_last_regime"),
         )
         preset_cfg = (_PRESETS.get(pick["preset_key"]) or {}).get("config", {})
         if preset_cfg:
-            cfg = {**cfg, **preset_cfg,
+            cfg = {**cfg, **safe_overlay(cfg, preset_cfg),     # v1.60.48 — never loosens the user's caps/cooldowns
                    "active_preset": f"{pick['preset_key']}_auto",
                    "_auto_preset_source": pick["preset_key"]}
             logger.info("Auto-preset overlay user=%s acct=%s → %s (%s)",
@@ -524,15 +579,13 @@ async def _process_user_account_locked(db, cfg: dict):
         except Exception as e:  # noqa: BLE001
             logger.exception("meta strategy failed user=%s: %s", user_id, e)
 
-    max_concurrent = int(cfg.get("max_concurrent_trades", 3))
+    max_concurrent = int(cfg.get("max_concurrent_trades", CFG_DEFAULTS["max_concurrent_trades"]))
     max_lot_cap = float(cfg.get("max_lot_size") or 0.0)
     auto_tune_enabled = bool(cfg.get("auto_tune_enabled", True))
     min_conf_override = int(cfg.get("min_confidence_override") or 0)
-    spread_filter_enabled = bool(cfg.get("spread_filter_enabled", False))
+    spread_filter_enabled = bool(cfg.get("spread_filter_enabled", CFG_DEFAULTS["spread_filter_enabled"]))
     max_spread_pips = cfg.get("max_spread_pips") or {}
-    anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
     anti_tilt_n = int(cfg.get("anti_tilt_consecutive_losses", 3))
-    anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4))
     # main92 P3 — configs without a value fall back to 1 auto trade / symbol /
     # day (the API default); the pulse says so, so operators can review it.
     # main93 — an explicit EMPTY value ("" / None) is "not set", never "unlimited":
@@ -543,7 +596,6 @@ async def _process_user_account_locked(db, cfg: dict):
         trade_of_day_cap = 1 if trade_of_day_cap_default else int(_tod_raw)
     except (TypeError, ValueError):
         trade_of_day_cap, trade_of_day_cap_default = 1, True
-    asia_skip_xau = bool(cfg.get("asia_session_skip_xau", True))
     sl_cooldown_enabled = bool(cfg.get("sl_cooldown_enabled", True))
     sl_cooldown_min = int(cfg.get("sl_cooldown_minutes", _sl_cooldown_minutes_default()) or 0)
 
@@ -552,30 +604,13 @@ async def _process_user_account_locked(db, cfg: dict):
     cooldown_scope = f"{user_id}:{cfg_account_id or 'default'}"
 
     # === Anti-tilt: freeze auto-execute if last N closed trades all lost ===
-    anti_tilt_active = False
-    if anti_tilt_enabled and anti_tilt_n > 0:
-        # iter-122 · origin=auto: judge the bot by its OWN trades — a $-0.16
-        # manual close must not freeze auto-execution.
-        recent_q = {"user_id": user_id, "status": "closed", "origin": "auto", "stats_excluded": {"$ne": True}}
-        if cfg_account_id:
-            recent_q["account_id"] = cfg_account_id
-        recent = await db.trades.find(recent_q).sort(
-            "closed_at", -1
-        ).limit(anti_tilt_n).to_list(length=anti_tilt_n)
-        # A trade counts as a LOSS only when pnl is strictly negative.
-        # Reconciler ghost-closes (exit never reported → pnl 0.0 / None) and
-        # true breakevens must NOT trip the freeze — users were frozen on
-        # days with zero actual losing trades (iter-45 bug).
-        if len(recent) == anti_tilt_n and all(float(r.get("pnl") or 0) < 0 for r in recent):
-            last_close = recent[0].get("closed_at")
-            try:
-                lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
-                if datetime.now(timezone.utc) - lc < timedelta(hours=anti_tilt_hours):
-                    anti_tilt_active = True
-                    logger.warning("Anti-tilt active user=%s acct=%s — last %d trades lost",
-                                   user_id, cfg_account_id or "default", anti_tilt_n)
-            except Exception:
-                pass
+    # #39 — ONE shared evaluation (anti_tilt.evaluate) for the runner AND Bot Health / status / pulse:
+    # origin=auto, not stats_excluded, loss = streak_losses.is_streak_loss (scratches/ghost closes never count).
+    tilt = await anti_tilt_evaluate(db, user_id, cfg)
+    anti_tilt_active = tilt["active"]
+    if anti_tilt_active:
+        logger.warning("Anti-tilt active user=%s acct=%s — last %d trades lost",
+                       user_id, cfg_account_id or "default", anti_tilt_n)
 
     # Count current open + pending BOT trades to respect max_concurrent
     # (per-account when scoped). origin=auto only — manual trades must NEVER
@@ -587,14 +622,16 @@ async def _process_user_account_locked(db, cfg: dict):
     inflight = await db.trades.count_documents(inflight_q)
 
     if anti_tilt_active:
-        await _record_pulse(db, cfg,
-            action="BLOCKED", level="warn",
-            reason=f"Anti-tilt freeze — last {anti_tilt_n} trades lost. Resumes in <{anti_tilt_hours}h.",
-        )
+        await _record_pulse(db, cfg, action="BLOCKED", level="warn", reason=tilt["reason"])
         return
 
+    from gold_trend_pulse.engine import enabled_for as _gtp_enabled, SYMBOL as _GTP_SYMBOL
+    _gtp_on = _gtp_enabled(cfg)
+    if _gtp_on and not any(base_symbol(x) == _GTP_SYMBOL for x in symbols):
+        symbols = list(symbols) + [_GTP_SYMBOL]            # gold_trend_pulse — evaluated even if XAUUSD is not in the preset list
     for sym in symbols:
-        if _on_cooldown(cooldown_scope, sym):
+        _gtp_sym = _gtp_on and base_symbol(sym) == _GTP_SYMBOL   # engine-level cooldown (3/15 min) and 15/day cap apply instead
+        if _on_cooldown(cooldown_scope, sym) and not _gtp_sym:
             await _record_pulse(db, cfg, symbol=sym,
                 action="SKIP", level="info",
                 reason=f"Signal cooldown active for {sym} ({_cooldown_minutes(cfg)}min between signals).",
@@ -603,17 +640,26 @@ async def _process_user_account_locked(db, cfg: dict):
             continue
 
         # Capital-preservation guards (skip BEFORE expensive AI analysis)
-        if asia_skip_xau and sym.upper() == "XAUUSD":
-            now_h = datetime.now(timezone.utc).hour
-            if now_h < 7:
-                logger.info("Asia-session skip user=%s sym=%s hour=%d", user_id, sym, now_h)
-                await _record_pulse(db, cfg, symbol=sym,
-                    action="SKIP", level="info",
-                    reason="Asia-session skip — XAUUSD pauses until 07:00 UTC (low liquidity).",
-                )
+        # v1.60.50 (PR #100 review, item 1) — the Asia gold skip is a SECOND window (00:00–07:00 UTC), independent of
+        # the user's off-hours window. Missing or True → active; only an explicit False disables it (as before v1.60.48).
+        if cfg.get("asia_session_skip_xau", True) is not False and sym.upper() == "XAUUSD" and asia_gold_skip_active():
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info",
+                reason="Asia gold skip: XAUUSD entries are paused 00:00–07:00 UTC (Bot Config → Asia gold skip).")
+            await inc_intel_counter(user_id, "asia_gold_skip_block")
+            continue
+        # v1.60.48 (Strategy Generator b) — session_preference from a deployed NL strategy is enforced here
+        _sess_pref = str(cfg.get("session_preference") or "any").lower()
+        if _sess_pref in ("london", "ny", "tokyo"):
+            from microstructure import current_session as _cur_sess
+            _active = _cur_sess().get("active_sessions") or []
+            if _sess_pref not in _active:
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info",
+                    reason=f"Session preference: strategy trades the {_sess_pref.upper()} session only "
+                           f"(now: {', '.join(_active) or 'off-hours'}).")
+                await inc_intel_counter(user_id, "session_preference_block")
                 continue
 
-        if trade_of_day_cap > 0:
+        if trade_of_day_cap > 0 and not _gtp_sym:
             day_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
             tod_q = {
                 "user_id": user_id,
@@ -897,7 +943,7 @@ async def _process_user_account_locked(db, cfg: dict):
                 signal["auto_tune"] = tune
                 eff = float(tune.get("effective_threshold") or 0)
                 if 0 < min_conf_override < 100:
-                    eff = min(eff, float(min_conf_override))
+                    eff = max(eff, float(min_conf_override))   # v1.60.48 — the user's floor can only RAISE the bar
                 if (signal.get("confidence") or 0) < eff:
                     auto_tune_block_reason = (
                         f"Auto-tune raised threshold to {eff:.0f}% "
@@ -981,13 +1027,37 @@ async def _process_user_account_locked(db, cfg: dict):
         # re-entries are paused for 30min on THAT account (iter-122b:
         # per-account — each account has its own equity and settings).
         if signal.get("action") in ("BUY", "SELL"):
-            from loss_cooldown import loss_cooldown_block
+            from loss_cooldown import CROSS_ACCOUNT_PREFIX, loss_cooldown_block
             lc = await loss_cooldown_block(db, user_id, sym, signal["action"], cfg)
             if lc:
+                cross = lc.startswith(CROSS_ACCOUNT_PREFIX)        # #56 — a real loss (< −0.1R) on ANY account pauses every account
                 await _record_pulse(db, cfg, symbol=sym,
                     action="SKIP", level="warn", reason=lc)
-                await inc_intel_counter(user_id, "loss_cooldown_block")
+                await inc_intel_counter(user_id, "cross_account_loss_cooldown_block" if cross else "loss_cooldown_block")
                 continue
+
+        # v1.60.60 #71 — optional: block scalp / fast-scalp / breakout entries AGAINST a strong Gold Daily Bias (flag default OFF)
+        if signal.get("action") in ("BUY", "SELL") and cfg.get("gold_bias_block_counter_enabled") and "XAU" in str(sym).upper():
+            from gold_bias import counter_bias_block, latest as _bias_latest
+            from strategy_engines import engine_for_signal as _efs
+            _blk = counter_bias_block(await _bias_latest(db), signal["action"], _efs(signal), cfg)
+            if _blk:
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=_blk)
+                await inc_intel_counter(user_id, "gold_bias_counter_block")
+                continue
+
+        # v1.60.52 — optional per-account H1 alignment gate for the HF scalp engines (default OFF)
+        if signal.get("action") in ("BUY", "SELL") and cfg.get("require_h1_alignment"):
+            from mtf_check import h1_alignment
+            from strategy_engines import SCALP_ENGINES as _h1_scopes
+            if signal.get("scope") in _h1_scopes:
+                h1 = h1_alignment(signal)
+                signal["h1_align_gate"] = h1
+                if h1["checked"] and h1["aligned"] is False:
+                    await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn",
+                        reason=f"H1 against trade — skipped ({signal['action']} vs dominant {h1['dominant']}).")
+                    await inc_intel_counter(user_id, "h1_align_block")
+                    continue
 
         # iter-60 · Structure / Range / Fed-tone gates (Market Structure,
         # Quant and Macro agents). All fail-open: missing data → no veto.
@@ -1013,24 +1083,34 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "structure_gate_veto")
                 continue
 
-            # Chart-pattern gate (zones / classic patterns with measured odds).
-            # OBSERVE by default: the would-veto reason rides on the signal so
-            # the gate proves itself in shadow before pattern_gate_enabled.
+            # Spec B — chart-pattern layer. OBSERVE-ONLY by default: the signal records what the gate would do and a
+            # failure only marks "data unavailable" (fail open). P2-01 (main131): when the operator set
+            # pattern_gate_enabled=true the layer is a real gate — an exception or a not-ready snapshot SKIPS the
+            # trade (fail closed) and raises ONE visible ops alert (dedup per account+symbol). Decision: chart_patterns.gate_decision.
+            _enforced = bool(cfg.get("pattern_gate_enabled", False))
             if signal.get("scope") not in (_fade_exempt | {"range_fade"}):
+                from chart_patterns import pattern_snapshot, gate_decision
+                _psnap, _perr = {}, None
                 try:
-                    from chart_patterns import pattern_snapshot, pattern_gate
-                    psnap = pattern_snapshot((cdoc or {}).get("bars") or [])
-                    pg = pattern_gate(signal["action"], psnap)
-                    signal["chart_patterns"] = {
-                        "ready": psnap.get("ready"),
-                        "patterns": psnap.get("patterns", []), "candles": psnap.get("candles", []),
-                        "would_veto": pg, "enforced": bool(cfg.get("pattern_gate_enabled", False))}
-                except Exception as e:  # noqa: BLE001 — fail-open like the other gates
-                    logger.debug("pattern gate failed: %s", e)
-                    pg = None
-                if pg and cfg.get("pattern_gate_enabled", False):
-                    await _record_pulse(db, cfg, symbol=sym,
-                        action="SKIP", level="warn", reason=pg)
+                    _psnap = pattern_snapshot((cdoc or {}).get("bars") or [])
+                except Exception as _pe:  # noqa: BLE001
+                    logger.debug("chart pattern layer failed for %s: %s", sym, _pe)
+                    _perr = type(_pe).__name__
+                gd = gate_decision(signal["action"], _psnap, _enforced, error=_perr)
+                signal["chart_patterns"] = {"ready": bool(_psnap.get("ready")), "patterns": _psnap.get("patterns") or [],
+                                            "candles": _psnap.get("candles") or [], "would_veto": gd["would_veto"], "enforced": _enforced,
+                                            "data_unavailable": gd["data_unavailable"], "reason": gd["detail"]}
+                if gd["skip"]:
+                    await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=gd["reason"])
+                    await inc_intel_counter(user_id, "pattern_gate_fail_closed" if gd["alert"] else "pattern_gate_veto")
+                    if gd["alert"]:
+                        try:
+                            from alerting import raise_alert
+                            await raise_alert(db, "pattern_gate_fail_closed", "high", f"{sym}: {gd['reason']}",
+                                              dedup_key=f"pattern_gate_fail_closed:{cfg.get('account_id')}:{sym}",
+                                              meta={"account_id": cfg.get("account_id"), "symbol": sym, "user_id": user_id})
+                        except Exception as _ae:  # noqa: BLE001 — alerting must never change the (already fail-closed) decision
+                            logger.warning("pattern gate alert failed: %s", _ae)
                     continue
 
             # iter-129 · Session-trend / exhaustion gates + trend-ride mode
@@ -1040,6 +1120,7 @@ async def _process_user_account_locked(db, cfg: dict):
                                       trend_ride_check)
             from intraday_features import compute_intraday_features
             _feats = compute_intraday_features((cdoc or {}).get("bars") or [])
+            ride = None
             if _feats:
                 signal["session_feats"] = {k: _feats.get(k) for k in (
                     "day_range_pct", "typical_day_range_pct", "range_pos_pct",
@@ -1060,48 +1141,25 @@ async def _process_user_account_locked(db, cfg: dict):
                             signal=signal)
                         await inc_intel_counter(user_id, "exhaustion_chase_veto")
                         continue
-                if cfg.get("trend_ride_enabled", True):
-                    ride = trend_ride_check(signal["action"], _feats, _base)
-                    if ride:
-                        try:
-                            _entry = float(signal.get("entry_price") or 0)
-                            _tp = float(signal.get("take_profit") or 0)
-                            _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)
-                            if _entry and _tp and _mult > 1.0:
-                                # user policy (2026-07-16): trend-ride may
-                                # widen the TP but NEVER past the hard cap —
-                                # this is what produced 450-pip gold TPs.
-                                from ai_signals import MTF_TP3_MAX_PIPS
-                                from pip_utils import pips_to_price
-                                _cap = pips_to_price(_base, MTF_TP3_MAX_PIPS)
-                                _dist = min(abs(_tp - _entry) * _mult, _cap)
-                                _sign = 1 if _tp >= _entry else -1
-                                signal["take_profit"] = round(
-                                    _entry + _sign * _dist, 5)
-                                _tps = signal.get("tp_pips")
-                                if isinstance(_tps, (int, float)):
-                                    signal["tp_pips"] = round(min(
-                                        float(_tps) * _mult,
-                                        MTF_TP3_MAX_PIPS), 1)
-                                elif isinstance(_tps, list) and _tps:
-                                    from ai_signals import (
-                                        MTF_TP1_MAX_PIPS, MTF_TP2_MAX_PIPS)
-                                    _caps = [MTF_TP1_MAX_PIPS,
-                                             MTF_TP2_MAX_PIPS,
-                                             MTF_TP3_MAX_PIPS]
-                                    signal["tp_pips"] = [
-                                        round(min(float(v) * _mult,
-                                                  _caps[min(i, 2)]), 1)
-                                        for i, v in enumerate(_tps)]
-                                signal["trend_ride"] = ride
-                                await inc_intel_counter(user_id, "trend_ride_applied")
-                                await _record_pulse(db, cfg, symbol=sym,
-                                    action="INFO", level="info",
-                                    reason=(f"Trend-ride: {ride['day_range_pct']:.2f}% "
-                                            f"{ride['direction']} day — TP widened ×{_mult} "
-                                            f"so the trailing stop can ride the move."))
-                        except (TypeError, ValueError):
-                            pass
+                # v1.60.36 (revised) — trend-ride STAYS on for scalp engines (the 14 Oct winner reached +217 pips);
+                # every trade records whether it applied (`trend_ride_applied`) so both arms can be compared later
+                # in the Strategy Report before anyone changes a setting.
+                # v1.60.48 — the widening is applied AFTER the range gate below (the gate judges the base target;
+                # the widened ladder must itself fit the day's range forecast, else the base TP is kept).
+                ride = trend_ride_check(signal["action"], _feats, _base) if cfg.get("trend_ride_enabled", True) else None
+                # #75 — trend-day entries only after a pullback to EMA20/VWAP. Shadow by default: the verdict is recorded on
+                # the signal (`trend_day_pullback`) and the Signals notes; enforced only with trend_day_pullback_enabled=true.
+                from payoff_guard import trend_day_pullback_check
+                _pb = trend_day_pullback_check(signal["action"], _feats, ride)
+                if _pb is not None:
+                    signal["trend_day_pullback"] = {**_pb, "enforced": bool(cfg.get("trend_day_pullback_enabled"))}
+                    signal["key_factors"] = [*(signal.get("key_factors") or []),
+                                             f"trend day: {_pb['why']}" + ("" if cfg.get("trend_day_pullback_enabled") else " (shadow)")]
+                    if not _pb["ok"] and cfg.get("trend_day_pullback_enabled"):
+                        await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info",
+                                            reason=f"#75 trend-day {signal['action']} without pullback — {_pb['why']}")
+                        await inc_intel_counter(user_id, "trend_day_pullback_block")
+                        continue
             try:
                 from market import get_history
                 rf = build_range_forecast(await get_history(sym),
@@ -1122,6 +1180,33 @@ async def _process_user_account_locked(db, cfg: dict):
                     await inc_intel_counter(user_id, "range_gate_veto")
                     continue
                 signal["range_gate_advisory"] = rg
+            if ride and _det_scope:                     # #62 — deterministic scopes (gold_trend_pulse, hf_scalp…) keep their own TP clamp / BE geometry
+                signal["trend_ride_skipped"] = "deterministic scope — engine TP clamp kept (no trend-ride / TP rescale)"
+                ride = None
+            if ride:
+                try:
+                    _mult = float(cfg.get("trend_ride_tp_mult") or 1.8)
+                    # user policy (2026-07-16): trend-ride may widen the TP but NEVER past the hard cap —
+                    # this is what produced 450-pip gold TPs. v1.60.36: take_profit, tp1/tp2/tp3 and
+                    # tp_pips are widened TOGETHER so the trade's tp fields match the broker TP.
+                    from exit_sync import widen_signal_targets
+                    _probe = dict(signal)
+                    if widen_signal_targets(_probe, _mult, _base) and range_gate(
+                            signal["action"], signal.get("entry_price"),
+                            _probe.get("tp1") or _probe.get("take_profit"), rf) is None:
+                        widen_signal_targets(signal, _mult, _base)
+                        signal["trend_ride"] = ride
+                        await inc_intel_counter(user_id, "trend_ride_applied")
+                        await _record_pulse(db, cfg, symbol=sym,
+                            action="INFO", level="info",
+                            reason=(f"Trend-ride: {ride['day_range_pct']:.2f}% "
+                                    f"{ride['direction']} day — TP widened ×{_mult} "
+                                    f"so the trailing stop can ride the move."))
+                    else:
+                        signal["trend_ride_skipped"] = "widened TP outside the day's range forecast"
+                        await inc_intel_counter(user_id, "trend_ride_skipped_range")
+                except (TypeError, ValueError):
+                    pass
             if _base == "XAUUSD":
                 try:
                     tone = await get_fed_tone()
@@ -1533,8 +1618,17 @@ async def _process_user_account_locked(db, cfg: dict):
             await stamp_lineage(db, signal)
         except Exception as e:  # noqa: BLE001
             logger.debug("model lineage skipped: %s", e)
+        # v1.60.36 — DXY / VIX / 10Y / MTF / setup score at entry, for every engine (scalps included)
+        try:
+            from entry_context import build_entry_context
+            signal["entry_context"] = await build_entry_context(signal)
+        except Exception as e:  # noqa: BLE001
+            logger.debug("entry context skipped: %s", e)
         result = await db.signals.insert_one(signal)
         signal_id = str(result.inserted_id)
+        if signal.get("gold_bias"):                                  # v1.60.60 #71 — shadow log (no trading effect)
+            from gold_bias import shadow_log
+            await shadow_log(db, {**signal, "_id": signal_id}, signal["gold_bias"])
         broadcast_payload = {**signal, "id": signal_id}
         broadcast_payload.pop("_id", None)
         await ws_manager.broadcast(user_id, "signal_created", broadcast_payload)
@@ -1625,7 +1719,7 @@ async def _process_user_account_locked(db, cfg: dict):
         recent_closed = await db.trades.find(ls_q).sort(
             "closed_at", -1).limit(LOSS_STREAK_THRESHOLD).to_list(LOSS_STREAK_THRESHOLD)
         if (len(recent_closed) >= LOSS_STREAK_THRESHOLD
-                and all(float(t.get("pnl") or 0) < 0 for t in recent_closed)):
+                and all(is_streak_loss(t) for t in recent_closed)):   # v1.60.48 — scratches are not losses
             await _record_pulse(db, cfg, symbol=sym,
                 action="SKIP", level="warn",
                 reason=(f"Loss-streak circuit-breaker: last {LOSS_STREAK_THRESHOLD} "
@@ -1890,6 +1984,36 @@ async def _process_user_account_locked(db, cfg: dict):
         kelly_f = float(sized.get("kelly_f") or 0)
         kelly_cap = float(profile.get("kelly_cap") or 0)
         absolute_lot = float(sized["lot_size"])
+        # #42 — pip value provenance on the signal → decision ledger snapshot + decision context stage
+        signal["pip_value_source"] = sized.get("pip_value_source")
+        signal["pip_value_anomaly"] = bool(sized.get("pip_value_anomaly"))
+        try:
+            from decision_context import record_stage as _dcs
+            await _dcs(db, signal.get("decision_id"), "sizing",
+                       {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "pip_value_source", "pip_value_anomaly",
+                                                  "pip_value_candidate", "risk_amount_usd", "lot_size")})
+        except Exception:  # noqa: BLE001
+            pass
+        # #42 (b) — a pip value the sizer had to override is an ops event (dedupe per account+symbol)
+        if sized.get("pip_value_anomaly"):
+            try:
+                from alerting import raise_alert
+                await raise_alert(db, "pip_value_anomaly", "high", f"{target_account.get('label')} {sym}: {sized.get('pip_value_note')}",
+                                  dedup_key=f"pip_value_anomaly:{target_account.get('_id')}:{sym}",
+                                  meta={"account_id": str(target_account.get("_id")), "symbol": sym, "user_id": user_id,
+                                        "candidate": sized.get("pip_value_candidate"), "used": sized.get("pip_usd_per_lot")})
+            except Exception as _pe:  # noqa: BLE001 — alerting never changes sizing
+                logger.warning("pip value anomaly alert failed: %s", _pe)
+        # #42 (c) — hard reject BEFORE any trim: a raw lot above max_lot × 10 is a sizing anomaly, never "clamped down"
+        if raw_lot_anomaly(absolute_lot, max_lot_cap):
+            _msg = (f"Sizing anomaly: raw lot {absolute_lot:.2f} > {RAW_LOT_ANOMALY_MULT:.0f}× max lot {max_lot_cap} "
+                    f"(pip value ${sized.get('pip_usd_per_lot')} source={sized.get('pip_value_source')}) — trade rejected")
+            logger.error("%s user=%s sym=%s", _msg, user_id, sym)
+            await db.signals.update_one({"_id": result.inserted_id}, {"$set": {"sizing_rejected": _msg, "tradeable": False}})
+            await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=_msg, signal=signal)
+            await inc_intel_counter(user_id, "sizing_anomaly_block")
+            continue
+        _floored_trims: list[str] = []          # stages whose trim was floored to the broker minimum (audit)
         _min_lot, _lot_step = lot_spec(target_account, sym)
 
         # Position-sizing strategy when user has set a `max_lot_size`:
@@ -1906,8 +2030,9 @@ async def _process_user_account_locked(db, cfg: dict):
             effective_lot = min(absolute_lot, scaled_lot)
             sizing_method = "max_cap_kelly_scaled"
             if effective_lot < _min_lot:
-                await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "confidence-scaled cap")
-                continue
+                effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "confidence-scaled cap", sized, _floored_trims)
+                if effective_lot is None:
+                    continue
         else:
             effective_lot = absolute_lot
             # Hard-ceiling clamp (fixed-fraction mode or kelly_cap=0)
@@ -1921,8 +2046,9 @@ async def _process_user_account_locked(db, cfg: dict):
         if 0 < _md_mult < 1.0:
             effective_lot = floor_to_lot_step(effective_lot * _md_mult, _lot_step)
             if effective_lot < _min_lot:
-                await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "meta-decision")
-                continue
+                effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "meta-decision", sized, _floored_trims)
+                if effective_lot is None:
+                    continue
             sizing_method = f"{sizing_method}+meta_x{_md_mult}"
         # Portfolio Risk Brain — marginal contribution to the WHOLE
         # portfolio (correlated cluster / currency factor / stress), never
@@ -1973,8 +2099,9 @@ async def _process_user_account_locked(db, cfg: dict):
                     effective_lot = floor_to_lot_step(
                         effective_lot * float(_pv["approved_fraction"]), _lot_step)
                     if effective_lot < _min_lot:
-                        await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "portfolio brain")
-                        continue
+                        effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "portfolio brain", sized, _floored_trims)
+                        if effective_lot is None:
+                            continue
                     sizing_method = (f"{sizing_method}+portfolio_x"
                                      f"{_pv['approved_fraction']}")
             except Exception as e:  # noqa: BLE001
@@ -1988,8 +2115,9 @@ async def _process_user_account_locked(db, cfg: dict):
                     pass
                 effective_lot = floor_to_lot_step(effective_lot * 0.5, _lot_step)
                 if effective_lot < _min_lot:
-                    await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "degraded portfolio 0.5x")
-                    continue
+                    effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "degraded portfolio 0.5x", sized, _floored_trims)
+                    if effective_lot is None:
+                        continue
                 sizing_method = f"{sizing_method}+degraded_portfolio_x0.5"
 
         # Pre-Trade Digital Twin (v60) — simulate before committing
@@ -2028,8 +2156,9 @@ async def _process_user_account_locked(db, cfg: dict):
                     effective_lot = floor_to_lot_step(
                         effective_lot * float(_tw["approved_fraction"]), _lot_step)
                     if effective_lot < _min_lot:
-                        await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "digital twin")
-                        continue
+                        effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "digital twin", sized, _floored_trims)
+                        if effective_lot is None:
+                            continue
                     sizing_method = (f"{sizing_method}+twin_x"
                                      f"{_tw['approved_fraction']}")
             except Exception as e:  # noqa: BLE001
@@ -2073,8 +2202,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 if corr_kelly_scale < 1.0:
                     trimmed = floor_to_lot_step(effective_lot * corr_kelly_scale, _lot_step)
                     if trimmed < _min_lot:
-                        await _skip_below_min(db, cfg, sym, trimmed, _min_lot, "correlation-Kelly")
-                        continue
+                        trimmed = await _floor_or_skip(db, cfg, sym, trimmed, _min_lot, "correlation-Kelly", sized, _floored_trims)
+                        if trimmed is None:
+                            continue
                     logger.info(
                         "Correlation-Kelly trim acct=%s sym=%s lot=%s × scale=%.3f → %s · %s",
                         cfg_account_id or "default", sym, effective_lot,
@@ -2094,8 +2224,9 @@ async def _process_user_account_locked(db, cfg: dict):
         if _rl_scale < 1.0:
             effective_lot = floor_to_lot_step(effective_lot * _rl_scale, _lot_step)
             if effective_lot < _min_lot:
-                await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "RL/news scale")
-                continue
+                effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "RL/news scale", sized, _floored_trims)
+                if effective_lot is None:
+                    continue
             sizing_method = sizing_method + "+rl_scale"
             if signal.get("news_size_scale"):
                 sizing_method = sizing_method + "+narrative"
@@ -2112,8 +2243,9 @@ async def _process_user_account_locked(db, cfg: dict):
             if alloc.get("mode") == "enforce" and float(alloc.get("weight") or 1.0) < 1.0:
                 effective_lot = floor_to_lot_step(effective_lot * float(alloc["weight"]), _lot_step)
                 if effective_lot < _min_lot:
-                    await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "RL allocator")
-                    continue
+                    effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "RL allocator", sized, _floored_trims)
+                    if effective_lot is None:
+                        continue
                 sizing_method = sizing_method + "+allocator"
                 logger.info("RL allocator trim ×%.2f scope=%s user=%s: %s",
                             alloc["weight"], signal.get("scope"), user_id,
@@ -2145,8 +2277,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 if rev["scale"] < 1.0:
                     effective_lot = floor_to_lot_step(effective_lot * rev["scale"], _lot_step)
                     if effective_lot < _min_lot:
-                        await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "risk engine")
-                        continue
+                        effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "risk engine", sized, _floored_trims)
+                        if effective_lot is None:
+                            continue
                     sizing_method = sizing_method + "+risk_engine"
                     logger.info(
                         "Risk engine trim ×%.3f user=%s sym=%s: %s",
@@ -2457,8 +2590,9 @@ async def _process_user_account_locked(db, cfg: dict):
         if _mg.get("lot_scale", 1.0) < 1.0:
             effective_lot = floor_to_lot_step(effective_lot * _mg["lot_scale"], _lot_step)
             if effective_lot < _min_lot:
-                await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "operational mode")
-                continue
+                effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "operational mode", sized, _floored_trims)
+                if effective_lot is None:
+                    continue
             signal["operational_mode"] = _mg["mode"]
 
         engine = engine_for_account(target_account)
@@ -2491,8 +2625,9 @@ async def _process_user_account_locked(db, cfg: dict):
                 if 0 < _pm < 1.0:
                     effective_lot = floor_to_lot_step(effective_lot * _pm, _lot_step)
                     if effective_lot < _min_lot:
-                        await _skip_below_min(db, cfg, sym, effective_lot, _min_lot, "execution alpha")
-                        continue
+                        effective_lot = await _floor_or_skip(db, cfg, sym, effective_lot, _min_lot, "execution alpha", sized, _floored_trims)
+                        if effective_lot is None:
+                            continue
             except Exception as e:  # noqa: BLE001
                 logger.warning("execution alpha failed (fail-open): %s",
                                e)
@@ -2513,51 +2648,128 @@ async def _process_user_account_locked(db, cfg: dict):
             except Exception as e:  # noqa: BLE001
                 logger.warning("execution timing failed (fail-open): %s", e)
         from versioning import version_stamp
-        trade_doc = await engine.execute(
-            user_id=user_id,
-            account=target_account,
-            signal={
-                "signal_id": signal_id,
-                "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
-                "decision_id": signal.get("decision_id"),
-                "latency_trace": signal.get("latency_trace"),
-                "symbol": signal["symbol"],
-                "action": signal["action"],
-                "lot_size": effective_lot,
-                "entry_price": signal["entry_price"],
-                "stop_loss": signal["stop_loss"],
-                "take_profit": signal["take_profit"],
-                "tp1": signal.get("tp1"),
-                "tp2": signal.get("tp2"),
-                "tp3": signal.get("tp3"),
-                "sl_pips": signal.get("sl_pips"),
-                "tp_pips": signal.get("tp_pips"),
-                "risk_pct_cap": signal.get("risk_pct_cap"),
-                "origin": "auto",
-                "scope": signal.get("scope"),
-                "trend_ride": signal.get("trend_ride"),
-                "versions": version_stamp(signal.get("scope")),
-            },
-            max_concurrent=max_concurrent,
-            cfg_account_id=cfg_account_id,
-        )
-        if trade_doc.get("blocked"):
-            logger.warning(
-                "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
-                user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),
-            )
-            await _record_pulse(db, cfg, symbol=sym,
-                action="BLOCKED", level="block",
-                reason=f"Safety Guardian blocked execution: {trade_doc.get('blocked')}",
-                signal=signal,
-            )
-            continue
+        # v1.60.63 #85 — smart spread gate, AFTER every existing filter and right before dispatch (all engines incl.
+        # gold_trend_pulse). "shadow" (default) never blocks: the verdict is stamped on the signal and counted;
+        # "enforce" skips with a pulse; "off" does nothing. Fail-open on errors — never a new way to miss a trade.
+        _sg = None
+        try:
+            from trade_costs import evaluate_gate as _sg_eval, gate_mode as _sg_mode
+            if _sg_mode(cfg) != "off" and (target_account.get("connection_type") or "mt5") != "binance":
+                _sg = await _sg_eval(db, cfg, target_account, signal,
+                                     max_spread_pips.get(sym) if isinstance(max_spread_pips, dict) else None)
+                signal["spread_gate"] = _sg
+                await db.signals.update_one({"_id": result.inserted_id}, {"$set": {"spread_gate": _sg}})
+                if _sg.get("would_block"):
+                    await inc_intel_counter(user_id, "spread_gate_shadow" if _sg["mode"] == "shadow" else "spread_gate_block")
+                    if _sg["mode"] == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info", reason=_sg["reason"], signal=signal)
+                        continue
+        except Exception as e:  # noqa: BLE001
+            logger.warning("spread gate failed (fail-open): %s", e)
+        # v1.60.48/50 — per-USER cross-account exposure cap, reserved atomically right before the order is sent
+        user_dir_cap = int(cfg.get("user_direction_cap", USER_DIRECTION_CAP_DEFAULT) or 0)
+        _udc_res = None
+        # v1.60.52 — paper / shadow entries never count against the cap, so they take no reservation either
+        _udc_live = (target_account.get("mode") or "live") != "paper" and not shadow_only
+        if user_dir_cap > 0 and _udc_live:
+            # v1.60.50 — atomic: account loops run concurrently, so the slot is a unique reservation doc (TTL),
+            # released below when the entry is blocked / rejected; only LIVE automated trades count.
+            from user_direction_cap import reserve_user_direction
+            _udc_res, _occupied = await reserve_user_direction(
+                db, user_id=user_id, base_symbol=base_symbol(sym), action=signal["action"], cap=user_dir_cap,
+                account_id=cfg_account_id, symbol_match_q=symbol_match(sym),
+                basket_id=(signal.get("gold_trend_pulse") or {}).get("basket_id"))   # item 11 — a basket is ONE position
+            if _udc_res is None:
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="SKIP", level="warn",
+                    reason=(f"Cross-account cap: {_occupied} {signal['action']} {sym} already open/in flight across "
+                            f"your accounts (cap {user_dir_cap}) — the same signal is not doubled."),
+                )
+                await inc_intel_counter(user_id, "user_direction_cap_block")
+                continue
+
+        # v1.60.60 #72/#80 — exit_policy tp1_bank_runner: the BROKER holds SL + TP2 from entry; TP1 is a bot-side level
+        # (the bank). With the default fixed_tp the broker TP is the engine's TP1 exactly as before.
+        _tp_plan = None
+        from exit_policy_tp1 import ENGINES as _TP1_ENGINES, plan_targets as _plan_targets, policy_for as _policy_for
+        from strategy_engines import engine_for_signal as _efs2
+        if _policy_for(cfg) == "tp1_bank_runner" and _efs2(signal) in _TP1_ENGINES and signal.get("take_profit") and signal.get("stop_loss"):
+            _tp_plan = _plan_targets(float(signal["entry_price"]), float(signal["stop_loss"]), float(signal["take_profit"]),
+                                     signal["action"], float(cfg.get("tp2_multiple") or 2.0))
+        try:
+            try:
+                trade_doc = await engine.execute(
+                    user_id=user_id,
+                    account=target_account,
+                    signal={
+                        "signal_id": signal_id,
+                        "tp_plan": _tp_plan, "exit_policy": "tp1_bank_runner" if _tp_plan else "fixed_tp",
+                        "original_take_profit": signal["take_profit"],
+                        "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
+                        "decision_id": signal.get("decision_id"),
+                        "latency_trace": signal.get("latency_trace"),
+                        "symbol": signal["symbol"],
+                        "action": signal["action"],
+                        "lot_size": effective_lot,
+                        "_sizing": {k: sized.get(k) for k in ("sl_pips", "pip_usd_per_lot", "risk_amount_usd", "min_lot_risk_usd",
+                                                              "pip_value_source", "pip_value_anomaly")},
+                        "entry_price": signal["entry_price"],
+                        "stop_loss": signal["stop_loss"],
+                        "take_profit": _tp_plan["tp2"] if _tp_plan else signal["take_profit"],   # #80 — broker TP = TP2 under tp1_bank_runner
+                        "tp1": signal.get("tp1"),
+                        "tp2": signal.get("tp2"),
+                        "tp3": signal.get("tp3"),
+                        "sl_pips": signal.get("sl_pips"),
+                        "tp_pips": signal.get("tp_pips"),
+                        "risk_pct_cap": signal.get("risk_pct_cap"),
+                        "origin": "auto",
+                        "scope": signal.get("scope"),
+                        "trend_ride": signal.get("trend_ride"),
+                        "trend_ride_applied": bool(signal.get("trend_ride")),
+                        "trend_ride_skipped": signal.get("trend_ride_skipped"),
+                        "strategy_class": signal.get("strategy_class"),   # v1.60.48 — were dropped here → trades stored None
+                        "market_regime": signal.get("market_regime"),     #   and Regime Gating could not be measured
+                        "entry_context": signal.get("entry_context"),
+                        "dxy": signal.get("dxy"),                  # v1.60.39 — persisted on the trade for post-mortems
+                        "news_ai": signal.get("news_ai"),
+                        "sentiment": signal.get("sentiment"),
+                        "versions": version_stamp(signal.get("scope")),
+                    },
+                    max_concurrent=max_concurrent,
+                    cfg_account_id=cfg_account_id,
+                )
+            except StaleQuoteError as _sq:
+                # v1.60.50 — a stale quote never fills: skip this cycle (as before the stale fallback existed)
+                await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="warn", reason=f"Quote stale — entry skipped this cycle ({_sq})")
+                await inc_intel_counter(user_id, "stale_quote_skip")
+                continue
+            if trade_doc.get("blocked"):
+                logger.warning(
+                    "Auto-execute blocked user=%s acct=%s sym=%s reason=%s",
+                    user_id, cfg_account_id or "default", sym, trade_doc.get("blocked"),
+                )
+                await _record_pulse(db, cfg, symbol=sym,
+                    action="BLOCKED", level="block",
+                    reason=f"Safety Guardian blocked execution: {trade_doc.get('blocked')}",
+                    signal=signal,
+                )
+                continue
+        finally:
+            # v1.60.52 — the slot is held only while the order is in flight: an inserted trade counts itself from
+            # here on (no double count for the 180 s TTL), and ANY exception / block / stale quote frees it.
+            await _udc_release(db, _udc_res)
         logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
                     user_id, cfg_account_id or "default", sym, trade_doc.get("id"))
+        if _sg and trade_doc.get("id"):        # #85 — the gate verdict travels with the trade for the shadow scoreboard
+            try:
+                await db.trades.update_one({"_id": ObjectId(str(trade_doc["id"]))}, {"$set": {"spread_gate": _sg}})
+            except Exception:  # noqa: BLE001
+                pass
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {
             "consumed": True,
             **({"corr_kelly_trim": corr_kelly_info} if corr_kelly_info else {}),
             **({"sector_cap_fit": sector_fit_info} if sector_fit_info else {}),
+            **({"trim_floored_to_min": _floored_trims} if _floored_trims else {}),
             **({"adaptive_risk": adaptive_risk_info} if adaptive_risk_info else {}),
         }})
         await _record_pulse(db, cfg, symbol=sym,
@@ -2696,6 +2908,14 @@ async def loop():
                     )
             except Exception as e:
                 logger.exception("Auto-deleverage sweep failed: %s", e)
+            # #43 (b)+(c) — close commands without a terminal ack: alert at 60 s, expire at 5 min (management resumes)
+            try:
+                from close_watchdog import sweep as sweep_close_watchdog
+                cw = await sweep_close_watchdog(db)
+                if cw.get("alerted") or cw.get("expired"):
+                    logger.warning("Close watchdog · alerted=%d expired=%d", cw["alerted"], cw["expired"])
+            except Exception as e:
+                logger.exception("Close watchdog sweep failed: %s", e)
             # Self-Improving Research Agent — once-per-24h per user. The
             # per-user cooldown is enforced inside `run_for_user` so cheap to
             # call on every tick; >99% of calls return immediately.

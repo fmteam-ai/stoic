@@ -298,7 +298,6 @@ async def suggest_session_action(user=Depends(get_current_user)):
     Strategy: if at least one bucket has ≥5 trades AND a win-rate below 40%,
     suggest tightening min_confidence by +5 for that session (clamped 95).
     """
-    from database import get_db
     sessions = await compute_sessions(user["id"])
     buckets = sessions.get("buckets") or []
     worst = None
@@ -337,7 +336,6 @@ async def apply_session_action(payload: dict, user=Depends(get_current_user)):
     Only writes the default bot_config (account_id=None). Per-account
     overrides remain editable via the existing Bot Config page.
     """
-    from database import get_db
     field = payload.get("field")
     if field != "min_confidence_override":
         raise HTTPException(status_code=400, detail="Only min_confidence_override is supported")
@@ -442,7 +440,6 @@ async def get_learned_meta(user=Depends(get_current_user)):
 async def get_drift_status(user=Depends(get_current_user)):
     """ADWIN drift status across session buckets (iter-52)."""
     from drift_detector import check_drift
-    from database import get_db
     from entitlements import enforce_feature
     await enforce_feature(user, "drift_auto_retrain")
     return await check_drift(get_db())
@@ -452,7 +449,6 @@ async def get_drift_status(user=Depends(get_current_user)):
 async def check_drift_now(user=Depends(get_current_user)):
     """Force a drift check (respects cooldown). Returns whether a retrain fired."""
     from drift_detector import maybe_trigger_retrain
-    from database import get_db
     from entitlements import enforce_feature
     await enforce_feature(user, "drift_auto_retrain")
     return await maybe_trigger_retrain(get_db())

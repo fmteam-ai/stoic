@@ -95,6 +95,16 @@ function AccountCard({ a }) {
                             Trading paused after {lossStreak} consecutive losses.
                             Unfreezes in <span className="font-bold">{fmtCountdown(a.anti_tilt_unfreeze_in_seconds)}</span>.
                         </div>
+                        {/* #39 — same rule as bot_runner; list which trades count and why */}
+                        <div className="text-[9px] mt-1 text-[#A1A1AA] space-y-0.5" data-testid={`cooldown-frozen-trades-${a.account_id || 'default'}`}>
+                            {(a.anti_tilt_trades || []).slice(0, threshold || 3).map((t) => (
+                                <div key={t.trade_id}>
+                                    <span className={t.counts_as_loss ? "text-[#FF3B30]" : "text-[#52525B] line-through"}>{t.symbol} {t.pnl >= 0 ? "+" : ""}{Number(t.pnl).toFixed(2)}</span>
+                                    <span className="text-[#52525B]"> — {t.why}</span>
+                                </div>
+                            ))}
+                            {a.anti_tilt_rule && <div className="text-[#52525B]">rule: {a.anti_tilt_rule}</div>}
+                        </div>
                     </div>
                 </div>
             ) : threshold > 0 && lossStreak > 0 ? (

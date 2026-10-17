@@ -42,6 +42,7 @@ class AccountUpdate(BaseModel):
     group: str | None = None
     trading_enabled: bool | None = None
     server: str | None = None
+    account_type: Literal["microcent", "cent", "standard", "demo", "live"] | None = None   # bug 2c — step-up, audited
 
 
 from server_adopt import SERVER_NAME_RE, server_change_doc as _server_change_doc  # noqa: E402 — U2 shares the update with auto-adopt
@@ -52,7 +53,6 @@ def _ea_reported_server(acc: dict) -> str | None:
 
 
 def _iso_days_ago(days: int) -> str:
-    from datetime import timedelta
     return (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
 
 
@@ -86,6 +86,35 @@ def _serialize(doc: dict) -> dict:
     return doc
 
 
+def webrequest_hint(url: str) -> str:
+    """The exact MT5 allow-list line. MT5 matches the origin literally: https://stoicaibot.com and
+    https://www.stoicaibot.com are two different entries (prod: EA WebRequest error 4014 was invisible on the site)."""
+    bare = url.rstrip("/")
+    host = bare.split("://", 1)[-1]
+    variant = "without www" if not host.startswith("www.") else "with www"
+    return (f"MT5 is blocking the connection: Tools → Options → Expert Advisors → tick 'Allow WebRequest for listed URL' → "
+            f"add {bare} (exactly, {variant}) → OK, then restart the EA")
+
+
+def connection_hint(a: dict, conn: dict | None) -> dict | None:
+    """v1.60.30 — why the heartbeat is stale, on the card itself: a terminal that paired / ran the installer but
+    whose heartbeats never (or no longer) arrive is most often MT5 blocking WebRequest (error 4014 never reaches us)."""
+    if (a.get("mode") or "") == "paper" or not conn or conn.get("connected"):
+        return None
+    from install_progress import webrequest_url
+    url = webrequest_url()
+    paired = a.get("installer_paired_at") or a.get("bridge_token_hash") or a.get("bridge_token")
+    if not paired:
+        return None
+    state = conn.get("state")
+    code = "webrequest_blocked_likely" if state == "NEVER_CONNECTED" else "heartbeat_stale"
+    text = webrequest_hint(url) if url else ("MT5 is blocking the connection: Tools → Options → Expert Advisors → "
+                                              "Allow WebRequest → add the STOIC server URL exactly")
+    if state != "NEVER_CONNECTED":
+        text = "Heartbeat stopped — if MT5 is running, check the Experts tab for WebRequest error 4014. " + text
+    return {"code": code, "text": text, "url": url or None}
+
+
 @router.get("")
 async def list_accounts(user=Depends(get_current_user)):
     db = get_db()
@@ -103,12 +132,16 @@ async def list_accounts(user=Depends(get_current_user)):
                 logging.getLogger("accounts").warning("position mode resolution failed for %s: %s",
                                                       str(d["_id"]), type(e).__name__)
                 modes[str(d["_id"])] = {"mode": "unknown", "source": "error"}
+    raw_by_id = {str(d["_id"]): dict(d) for d in docs}
     out = [_serialize(d) for d in docs]
+    from state_contract import effective_connection_state
     for d in out:
         res = modes.get(d["id"])
         if res:
             d["position_mode"] = res["mode"]
             d["position_mode_source"] = res["source"]
+        raw = raw_by_id.get(d["id"]) or {}
+        d["connection_hint"] = connection_hint(raw, effective_connection_state(raw))     # v1.60.30 — WebRequest 4014 on the card
     return out
 
 
@@ -129,7 +162,6 @@ async def accounts_overview(user=Depends(get_current_user)):
     """
     db = get_db()
     accounts = await db.accounts.find({"user_id": user["id"]}).sort("created_at", -1).to_list(length=100)
-    from datetime import timedelta
     now = datetime.now(timezone.utc)
     hb_cutoff = (now - timedelta(minutes=5)).isoformat()
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
@@ -195,6 +227,7 @@ async def accounts_overview(user=Depends(get_current_user)):
             "balance": a.get("balance"), "equity": a.get("equity"),
             "open_positions": a.get("open_positions") or 0,
             "last_heartbeat": a.get("last_heartbeat"),
+            "connection_hint": connection_hint(a, conn),
             "pnl_today": round(b["today"], 2), "pnl_7d": round(b["d7"], 2),
             "pnl_30d": round(b["d30"], 2),
         })
@@ -233,7 +266,6 @@ async def accounts_equity_curve(days: int = 30, user=Depends(get_current_user)):
         {"account_id": 1, "pnl": 1, "closed_at": 1},
     ).to_list(length=50000)
 
-    from datetime import timedelta
     daily = {}  # date -> {account_id -> pnl}
     for t in trades:
         d = (t.get("closed_at") or "")[:10]
@@ -364,7 +396,6 @@ async def broker_comparison(days: int = 30, user=Depends(get_current_user)):
     days = max(1, min(days, 365))
     db = get_db()
     since = _iso_days_ago(days)
-    from datetime import timedelta
     hb_cutoff = (datetime.now(timezone.utc) - timedelta(minutes=5)).isoformat()
 
     accounts = await db.accounts.find({"user_id": user["id"]}).to_list(length=100)
@@ -476,7 +507,7 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
         raise HTTPException(status_code=400, detail={
             "code": "invalid_server_name",
             "message": "Server must be the exact MT5 server name (2-64 characters: letters, digits, space, '.', '_', '-')"})
-    if not updates and new_server is None:
+    if not updates and new_server is None and payload.account_type is None:
         raise HTTPException(status_code=400, detail="Nothing to update")
     db = get_db()
     oid = parse_object_id(account_id, "Account")
@@ -487,6 +518,39 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
         raise HTTPException(status_code=404, detail="Account not found")
     if is_admin and acc.get("user_id") != user["id"]:
         require_admin(user)          # SEC-021 — cross-owner edits go through the MFA-enrolled admin gate, not a bare role check
+    if payload.trading_enabled is True and acc.get("mode") != "paper" and acc.get("trading_enabled") is not True:
+        # prod v1.60.23 (bug 3) — trading can only be turned ON for an account the rules policy ADMITTED; the UI
+        # shows the admission reason instead of an ON switch. (Server-side so the API path cannot bypass it.)
+        import rules_policy as _rp
+        rules = await _rp.active(db)
+        adm = acc.get("admission") or {}
+        if rules and not rules.get("expired") and adm.get("state") != "admitted":
+            raise HTTPException(status_code=409, detail={"code": "not_admitted", "state": adm.get("state") or "pending",
+                                                         "message": adm.get("reason") or "The rules policy has not admitted this account yet — connect the EA and wait for the DEMO attestation",
+                                                         "fix": adm.get("fix")})
+    if payload.account_type is not None:
+        # bug 2c (prod v1.60.23) — the Edit dialog can correct a wrongly saved type. "demo"/"live" also set the
+        # declared environment the UI + auto-attestation read; broker truth (real/contest trade mode) still wins.
+        if acc.get("mode") == "paper":
+            raise HTTPException(status_code=400, detail="Paper accounts have no broker account type")
+        if payload.account_type == "live" and await demo_only_policy_active(db):
+            raise HTTPException(status_code=409, detail={"code": "demo_only_policy", "message": "The active rules policy admits demo accounts only — a live account cannot be declared during the demo period"})
+        from step_up import audit_event, require_step_up
+        await require_step_up(db, user, request, "account_type_edit")
+        new_type = "standard" if payload.account_type == "live" else payload.account_type
+        env = "DEMO" if payload.account_type == "demo" else ("LIVE" if payload.account_type == "live" else None)
+        updates["account_type"] = new_type
+        if env:
+            updates["broker_environment"] = env
+            updates["declared_environment"] = "demo" if env == "DEMO" else "real"
+        if (acc.get("account_type") != new_type) or (env and acc.get("broker_environment") != env):
+            if env and str(acc.get("broker_environment") or "").upper() != env and (acc.get("environment_attestation") or {}).get("approved_by"):
+                # the DEMO attestation was bound to the old declaration — re-earned on the next heartbeat
+                await db.accounts.update_one({"_id": oid}, {"$unset": {"environment_attestation": ""}})
+            await audit_event(db, user["id"], "account_type_edited",
+                              {"account_id": account_id, "from": {"account_type": acc.get("account_type"), "broker_environment": acc.get("broker_environment")},
+                               "to": {"account_type": new_type, "broker_environment": env}, "owner_user_id": acc.get("user_id"),
+                               "on_behalf": acc.get("user_id") != user["id"]}, request, step_up=True)
     if new_server is not None:
         if acc.get("mode") == "paper":
             raise HTTPException(status_code=400, detail="Paper accounts have no broker server")
@@ -518,26 +582,43 @@ async def update_account(account_id: str, payload: AccountUpdate, request: Reque
 
 @router.get("/close-only-notice")
 async def close_only_notice(user=Depends(get_current_user)):
-    """main128 — "why am I close-only": the caller's own rule breaches from the inventory projection
-    (`per_user_blocks`), one line + what fixes it. Never another user's data. {"blocked": false} when clean."""
+    """main128 — "why am I close-only": the caller's own rule breaches from the inventory projection, one line + what
+    fixes it. prod v1.60.24 — built from `per_account_blocks`, so the line names ONLY the blocked account(s); accounts
+    switched OFF on purpose are never mentioned. Never another user's data. {"blocked": false} when clean."""
     from inventory_projection import projection
     import rules_policy as rp
     db = get_db()
     proj = await projection(db, user["id"])       # SEC-021 — caller-scoped projection: cheaper, and nothing foreign is even computed
-    mine = (proj.get("per_user_blocks") or {}).get(str(user["id"])) or []
-    if not mine:
-        return {"blocked": False, "reasons": [], "line": None, "fix": None, "policy_version": proj["counts"].get("rules_policy")}
+    blocks = proj.get("per_account_blocks") or {}
+    accounts = []
+    async for a in db.accounts.find({"user_id": user["id"]}, {"label": 1, "trading_enabled": 1}):
+        texts = blocks.get(str(a["_id"])) or []
+        if texts and a.get("trading_enabled") is True:
+            accounts.append({"account_id": str(a["_id"]), "label": a.get("label") or str(a["_id"]), "reasons": texts})
+    policy_version = proj["counts"].get("rules_policy")
+    if not accounts:
+        return {"blocked": False, "reasons": [], "accounts": [], "line": None, "fix": None, "policy_version": policy_version}
+    mine = [f"{acc['label']}: {t}" for acc in accounts for t in acc["reasons"]]
     rules = await rp.active(db) or {}
     cap = int(rules.get("max_accounts_per_user") or 0)
-    if any("above the policy cap" in r for r in mine):
+    if any("risk per trade" in r for r in mine):
+        rcap = (rules.get("risk_caps") or {}).get("max_risk_pct")
+        fix = {"action": "lower_risk", "label": f"Lower the bot's risk to ≤ {float(rcap):g}% (Bot Config → Risk level)" if rcap else
+               "Lower the bot's risk to the policy cap (Bot Config → Risk level)"}
+    elif any("policy cap" in r for r in mine):
         fix = {"action": "remove_account", "label": f"Keep {cap} account{'s' if cap != 1 else ''} — delete or disable the rest"}
     elif any("not attested DEMO" in r for r in mine):
         fix = {"action": "demo_only", "label": "Demo-only policy — connect a DEMO account or ask the operator"}
     else:
         fix = {"action": "admission", "label": "Open the account's status line and follow its one fix"}
-    return {"blocked": True, "reasons": mine, "policy_version": rules.get("policy_version"),
-            "line": f"Your accounts are close-only (no new trades): {mine[0]}" + (f" (+{len(mine) - 1} more)" if len(mine) > 1 else ""),
-            "fix": fix}
+    if len(accounts) == 1:
+        acc = accounts[0]
+        line = (f"Account «{acc['label']}» is close-only (no new trades): {acc['reasons'][0]}"
+                + (f" (+{len(acc['reasons']) - 1} more)" if len(acc["reasons"]) > 1 else ""))
+    else:
+        line = f"{len(accounts)} accounts are close-only (no new trades): " + ", ".join(a["label"] for a in accounts)
+    return {"blocked": True, "reasons": mine, "accounts": accounts, "policy_version": rules.get("policy_version") or policy_version,
+            "line": line, "fix": fix}
 
 
 @router.get("/{account_id}/status-line")
@@ -685,7 +766,6 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         # Cross-user: only block if the OTHER user's EA is actively heartbeating
         # (within the last 24h). A long-abandoned record shouldn't lock the
         # broker account out for a new owner who legitimately took it over.
-        from datetime import timedelta
         active_cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
         cross_dup = await db.accounts.find_one({
             "user_id": {"$ne": user["id"]},
@@ -746,6 +826,11 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
         "mode": payload.mode,
         # A17-13 — what the owner DECLARED (never authoritative: broker_env.attested_environment decides) + consent record
         "declared_environment": None if is_paper else payload.declared_environment,
+        # prod v1.60.23 (bug 2b) — the owner's declaration is reflected in the classification the UI and the auto
+        # DEMO attestation read (`broker_environment`), instead of the lot-size `account_type` silently meaning LIVE.
+        # Never authoritative: broker truth (ACCOUNT_TRADE_MODE real/contest) still overrides to LIVE.
+        "broker_environment": (None if is_paper else ("DEMO" if payload.declared_environment == "demo" or payload.account_type == "demo"
+                                                      else ("LIVE" if payload.declared_environment == "real" else None))),
         "algo_trading_consent_at": (datetime.now(timezone.utc).isoformat()
                                     if (payload.algo_trading_consent and not is_paper) else None),
         **__import__("bridge_tokens").token_fields(_new_token),  # P1-01 — hash only; paper needs no EA token
@@ -782,55 +867,30 @@ async def create_account(payload: AccountCreate, user=Depends(get_current_user))
 
 
 @router.delete("/{account_id}")
-async def delete_account(account_id: str, force: bool = False,
-                         user=Depends(get_current_user)):
-    """Delete an account.
+async def delete_account(account_id: str, user=Depends(get_current_user)):
+    """Delete an account (P1-01, main131: no `force` escape hatch).
 
-    Refuses if the account has any non-terminal trades attached (open or
-    pending). This prevents the orphan-trades-on-deleted-account class of
-    bug. The frontend should:
-      1. Call POST /api/trades/reconcile to sync stale state
-      2. Manually close any genuinely-open trades
-      3. Retry DELETE
-    Pass `?force=true` to override (admin / cleanup escape hatch).
+    Refuses (409) while the account has open / pending / UNKNOWN trades or stale broker truth (last
+    heartbeat older than 10 min). An account that never connected and never traded may be deleted.
+    Anything else is an admin decision: POST /api/admin/accounts/{id}/force-delete.
     """
     db = get_db()
-    if not force:
-        non_terminal = await db.trades.count_documents({
-            "account_id": account_id,
-            "user_id": user["id"],
-            "status": {"$in": ["open", "pending"]},
-        })
-        if non_terminal > 0:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"Cannot delete account: {non_terminal} non-terminal "
-                    "trade(s) still attached. Click SYNC WITH BROKER on the "
-                    "Trades page to clear orphans, or close them manually first. "
-                    "Pass ?force=true to override."
-                ),
-            )
+    from account_deletion import delete_refusal, purge_account
+    oid = parse_object_id(account_id, "Account")
+    acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not acc:
+        raise HTTPException(status_code=404, detail="Account not found")
+    non_terminal = await db.trades.count_documents({"account_id": account_id, "user_id": user["id"], "status": {"$in": ["open", "pending"]}})
+    unknown = await db.execution_intents.count_documents({"account_id": account_id, "status": "unknown"})
+    ever_traded = bool(await db.trades.find_one({"account_id": account_id}, {"_id": 1}))
+    refusal = delete_refusal(acc, non_terminal=non_terminal, unknown=unknown, ever_traded=ever_traded)
+    if refusal:
+        raise HTTPException(status_code=409, detail=refusal)
     # U18 (Phase 1) — tombstone BEFORE the row goes: the EA on the VPS keeps polling with the old token; the
     # bridge answers 410 account_deleted (EA 1.64 stops itself) and the security agent files ONE info finding
-    # instead of a CRITICAL token-guessing storm.
-    _doomed = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]},
-                                         {"bridge_token_hash": 1, "bridge_token_prev_hash": 1, "bridge_token_retired_hashes": 1,
-                                          "label": 1, "account_number": 1, "broker": 1})
-    if _doomed:
-        from account_tombstones import write_tombstone
-        await write_tombstone(db, _doomed, deleted_by=user["id"])
-    result = await db.accounts.delete_one(
-        {"_id": parse_object_id(account_id, "Account"), "user_id": user["id"]}
-    )
-    if result.deleted_count == 0:
-        raise HTTPException(status_code=404, detail="Account not found")
-    # U11 — every bot config bound to the account goes with it (one bot per account, never an orphan)
-    await db.bot_configs.delete_many({"account_id": account_id})
-    # M119-5 — pairing tokens + open alerts go with the account (an orphan token kept VPS PAIRING SILENT firing)
-    from account_cleanup import cleanup_deleted_account
-    cleanup = await cleanup_deleted_account(db, account_id)
-    return {"ok": True, **{k: v for k, v in cleanup.items() if k != "account_id"}}
+    # instead of a CRITICAL token-guessing storm. U11 — bot configs go with it; M119-5 — pairing tokens + alerts too.
+    cleanup = await purge_account(db, acc, deleted_by=user["id"])
+    return {"ok": True, **cleanup}
 
 
 @router.get("/{account_id}/installations")
@@ -1049,7 +1109,7 @@ async def rotate_token(account_id: str, request: Request, user=Depends(get_curre
 
 
 @router.post("/{account_id}/request-sync")
-async def request_broker_sync(account_id: str, user=Depends(get_current_user)):
+async def request_broker_sync(account_id: str, request: Request, user=Depends(get_current_user)):
     """Queue a deep broker-history sync (7-day lookback) for the EA.
 
     The EA (v1.39+) picks the request up on its next poll (~5s), re-scans the
@@ -1058,10 +1118,15 @@ async def request_broker_sync(account_id: str, user=Depends(get_current_user)):
     or missing P&L with the exact broker figures.
     """
     db = get_db()
+    from security import rate_limit
+    await rate_limit(db, "request_sync", user["id"], 6, 3600, request=request,
+                     message="Too many sync requests — a deep history re-read is heavy for the terminal; try again later")  # SEC-025-1
     oid = parse_object_id(account_id)
     acc = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
     if not acc:
         raise HTTPException(status_code=404, detail="Account not found")
+    if acc.get("pending_history_sync"):
+        return {"ok": True, "already_pending": True, **{k: acc["pending_history_sync"].get(k) for k in ("lookback_seconds", "requested_at")}}
     lookback = 7 * 86400
     now_iso = datetime.now(timezone.utc).isoformat()
     await db.accounts.update_one({"_id": oid}, {"$set": {
@@ -1650,11 +1715,77 @@ async def fire_test_trade(account_id: str, user=Depends(get_current_user)):
     }
 
 
+def _certification_fix(key: str, a: dict, *, v, hb_age, pm, sync_stuck, pending_sync, base_pass, cert_age) -> dict:
+    """v1.60.27 — state-specific guidance for a FAILING certification check: what the user does, in their own words,
+    plus the in-app action that does it when one exists (`action` is consumed by AccountCertification.jsx)."""
+    from routes.diagnostic_routes import LATEST_EA
+    paired = bool(a.get("bridge_token_hash") or a.get("bridge_token"))
+    never_hb = hb_age is None
+    if key == "ea_version":
+        if not v:
+            return {"text": "No EA has reported yet. Download the EA, attach it to one MT5 chart with Algo Trading ON and paste this account's bridge token.",
+                    "action": "download_ea"}
+        return {"text": f"Terminal runs EA v{v}; download v{LATEST_EA}, replace the file in MQL5/Experts, recompile and re-attach it to the chart.",
+                "action": "download_ea"}
+    if key == "bridge_paired":
+        return {"text": "Generate a bridge token for this account and paste it into the EA's BridgeToken input.", "action": "pair_bridge"}
+    if key == "heartbeat":
+        if never_hb:
+            return {"text": "The EA never connected. Check that MT5 is running, Algo Trading is ON, the chart has the EA attached and the server URL is in Tools → Options → Expert Advisors → Allow WebRequest.",
+                    "action": "download_ea" if not paired else None}
+        return {"text": f"Last heartbeat {int(hb_age // 60)} min ago. Re-open MT5 / the chart with the EA, make sure Algo Trading is ON and the terminal is online.",
+                "action": None}
+    if key == "account_type":
+        if never_hb:
+            return {"text": "Reported by the EA on its first heartbeat — bring the terminal online first.", "action": None}
+        return {"text": f"Your EA predates margin-mode reporting; update to v{LATEST_EA}. An admin can also set hedging / netting manually.",
+                "action": "download_ea"}
+    if key in ("symbol_specs", "stop_freeze_levels", "symbol_mapping"):
+        if never_hb:
+            return {"text": "Sent by the EA with its heartbeat — bring the terminal online first.", "action": None}
+        return {"text": "Add the traded symbols (e.g. XAUUSD, BTCUSD) to MT5 Market Watch and to the EA's TrackedSymbols input, then wait for the next heartbeat.",
+                "action": None}
+    if key == "spread_feed":
+        return {"text": ("Bring the terminal online first." if never_hb
+                         else "Spreads arrive with each heartbeat while the market is open; make sure TrackedSymbols lists your symbols and MT5 is connected to the broker."),
+                "action": None}
+    if key == "clock_sync":
+        return {"text": ("Reported by the EA on its heartbeat — bring the terminal online first." if never_hb
+                         else f"Your EA predates broker-time reporting; update to v{LATEST_EA} (it is learned from deals otherwise)."),
+                "action": None if never_hb else "download_ea"}
+    if key == "history_sync":
+        if sync_stuck:
+            return {"text": f"A sync was requested but the EA never confirmed it — it needs EA v1.39+ (you run v{v or '?'}). Update the EA, then request the sync again.",
+                    "action": "request_sync"}
+        if pending_sync:
+            return {"text": "Sync queued — the EA picks it up on its next poll (a few seconds while online).", "action": None}
+        if never_hb:
+            return {"text": "Queued automatically on the first verified heartbeat — bring the terminal online first.", "action": None}
+        return {"text": "Request a broker-history sync now; the EA re-reads 7 days of deals and confirms.", "action": "request_sync"}
+    if key == "identity":
+        return {"text": "The terminal is logged into a different broker account than this card. Log MT5 into the right account, or pair the EA with the card that matches it.",
+                "action": None}
+    if key in ("order_check", "fill_policy"):
+        if not v:
+            return {"text": "Follows from the EA version — install and connect the EA first (see EA version above).", "action": None}
+        need = "1.50" if key == "order_check" else "1.28"
+        return {"text": f"{'OrderCheck preflight' if key == 'order_check' else 'Filling-mode auto-select'} needs EA v{need}+; update to v{LATEST_EA}.",
+                "action": "download_ea"}
+    if key == "demo_certified":
+        if not base_pass:
+            return {"text": "Clear every check above first — CERTIFY NOW appears here as soon as they all pass.", "action": None}
+        if cert_age is not None:
+            return {"text": "Certification is older than 30 days — press CERTIFY NOW to re-stamp it.", "action": "certify"}
+        return {"text": "All checks pass — press CERTIFY NOW to stamp this account.", "action": "certify"}
+    return {"text": "See the hint for this check.", "action": None}
+
+
 @router.get("/certification")
 async def accounts_certification(user=Depends(get_current_user)):
     """Iter-151 · per-account go-live certification checklist, computed from
     the EA's own reported state (heartbeats, specs, clock, history sync)."""
     from routes.diagnostic_routes import LATEST_EA
+    from routes.bridge_routes import broker_offset_sec, position_mode_resolution
     db = get_db()
     now = datetime.now(timezone.utc)
 
@@ -1675,8 +1806,15 @@ async def accounts_certification(user=Depends(get_current_user)):
         specs_age = _age(a.get("symbol_specs_updated_at"))
         spreads_age = _age(a.get("spreads_updated_at"))
         sync_age = _age(a.get("last_full_sync_at"))
-        v = a.get("ea_version")
-        acct_type = str(a.get("account_type") or "").lower()
+        v = a.get("ea_version") or (a.get("ea_identity") or {}).get("ea_version")
+        # prod v1.60.26 — read the facts where the EA/backend actually store them: `account_type` is the LOT type
+        # (microcent/cent/standard), the hedging/netting verdict is the EA-reported ACCOUNT_MARGIN_MODE
+        # (position_mode_resolution); the broker clock offset is heartbeat `broker_time` (broker_offset_sec).
+        pm = await position_mode_resolution(db, a)
+        clock_off, clock_src = broker_offset_sec(a)
+        pending_sync = a.get("pending_history_sync") or {}
+        pending_age = _age(pending_sync.get("requested_at")) if pending_sync else None
+        sync_stuck = pending_age is not None and pending_age > 900
         checks = [
             {"key": "ea_version", "label": "EA version",
              "value": v or "—", "ok": bool(v) and v == LATEST_EA,
@@ -1687,9 +1825,11 @@ async def accounts_certification(user=Depends(get_current_user)):
             {"key": "heartbeat", "label": "EA heartbeat",
              "value": f"{int(hb_age)}s ago" if hb_age is not None else "never",
              "ok": hb_age is not None and hb_age < HEARTBEAT_FRESH_S},
-            {"key": "account_type", "label": "Account type",
-             "value": acct_type or "unknown",
-             "ok": acct_type in ("hedging", "netting")},
+            {"key": "account_type", "label": "Position mode (hedging / netting)",
+             "value": (f"{pm['mode']} · {pm['source']}" if pm["source"] in ("ea", "admin")
+                       else f"unknown · {pm['source']} assumes {pm['mode']}"),
+             "ok": pm["mode"] in ("hedging", "netting") and pm["source"] in ("ea", "admin"),
+             "hint": "ACCOUNT_MARGIN_MODE reported by the EA on every heartbeat (or set by an admin)"},
             {"key": "symbol_specs", "label": "Symbol / stop-level specs",
              "value": f"{len(specs)} symbols",
              "ok": len(specs) > 0 and specs_age is not None
@@ -1699,14 +1839,15 @@ async def accounts_certification(user=Depends(get_current_user)):
                        if spreads_age is not None else "never"),
              "ok": spreads_age is not None and spreads_age < 600},
             {"key": "clock_sync", "label": "Broker clock offset",
-             "value": (f"{a.get('broker_utc_offset_sec')}s"
-                       if a.get("broker_utc_offset_sec") is not None
-                       else "unknown"),
-             "ok": a.get("broker_utc_offset_sec") is not None},
+             "value": (f"{clock_off:+d}s · {clock_src}" if clock_src != "unknown" else "unknown"),
+             "ok": clock_src != "unknown",
+             "hint": "EA v1.54+ reports the server GMT offset on every heartbeat"},
             {"key": "history_sync", "label": "History synchronization",
-             "value": (f"{int(sync_age / 3600)}h ago"
-                       if sync_age is not None else "never"),
-             "ok": sync_age is not None and sync_age < 86400},
+             "value": ("sync requested, EA has not confirmed" if sync_stuck
+                       else f"{int(sync_age / 3600)}h ago · 60 s sweep keeps it current" if sync_age is not None
+                       else "pending" if pending_sync else "never"),
+             "ok": sync_age is not None and not sync_stuck,
+             "hint": "one deep sync is queued automatically on the first verified heartbeat; the EA sweeps deals every 60 s afterwards"},
             {"key": "identity", "label": "Terminal identity",
              "value": ("mismatch" if a.get("broker_account_mismatch")
                        else "verified"),
@@ -1743,6 +1884,10 @@ async def accounts_certification(user=Depends(get_current_user)):
              "ok": cert_age is not None and cert_age < 30 * 86400,
              "hint": "stamped via POST /accounts/{id}/certify once all "
                      "other checks pass"})
+        for c in checks:
+            if not c["ok"]:
+                c["fix"] = _certification_fix(c["key"], a, v=v, hb_age=hb_age, pm=pm, sync_stuck=sync_stuck,
+                                              pending_sync=pending_sync, base_pass=base_pass, cert_age=cert_age)
         passed = sum(1 for c in checks if c["ok"])
         out.append({"account_id": str(a["_id"]), "label": a.get("label"),
                     "mode": a.get("mode"),
@@ -1794,7 +1939,6 @@ async def account_execution_health(account_id: str, user=Depends(get_current_use
 async def account_execution_brake_release(account_id: str, request: Request, user=Depends(get_current_user)):
     """Resume after an execution brake — operator spec: ADMIN only (after checking the
     EA / VPS), step-up verified, audited. Owners see the brake but cannot lift it."""
-    from auth import require_admin
     require_admin(user)
     db = get_db()
     acc = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account")},

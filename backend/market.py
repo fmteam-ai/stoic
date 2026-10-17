@@ -376,16 +376,47 @@ async def _fx_history(base: str, quote: str) -> list:
         return history[-365:]
 
 
+QUOTE_ATTEMPTS = 2
+QUOTE_ATTEMPT_TIMEOUT_SEC = 6.0
+QUOTE_RETRY_DELAY_SEC = 0.5
+STALE_MAX_AGE_SEC = {"forex": 60, "commodity": 60, "index": 120, "crypto": 60}   # v1.60.50 — stale fallback age limit
+STALE_RECHECK_SEC = 10                                                          # don't re-wait 12 s on every call
+_LAST_GOOD: dict = {}            # symbol -> (fetched_epoch, result)
+
+
+class StaleQuoteError(RuntimeError):
+    """Raised instead of serving a stale quote when `allow_stale=False` (trading paths)."""
+
+
+def quote_is_stale(q: dict | None) -> bool:
+    return bool((q or {}).get("stale"))
+
+
 # ---------- Public API ----------
-async def get_quote(symbol: str) -> dict:
+def _stale_checked(sym: str, cache_key: str, cached: dict | None, allow_stale: bool) -> dict | None:
+    """A cached STALE copy is served only while the last good quote is within its age limit (v1.60.52) and only to
+    callers that accept stale; trading paths (`allow_stale=False`) get StaleQuoteError instead."""
+    if not cached or not cached.get("stale"):
+        return cached
+    last = _LAST_GOOD.get(sym)
+    max_age = STALE_MAX_AGE_SEC.get((SYMBOL_MAP.get(sym) or {}).get("asset"), 60)
+    if not last or time.time() - last[0] > max_age:
+        _cache.pop(cache_key, None)                  # past the limit: drop the copy and re-fetch
+        return None
+    if not allow_stale:
+        raise StaleQuoteError(f"stale quote for {sym} refused by trading path")
+    return {**cached, "stale_age_sec": round(time.time() - last[0], 1)}
+
+
+async def get_quote(symbol: str, *, allow_stale: bool = True) -> dict:
     sym = _key(symbol)
     cache_key = f"quote:{sym}"
-    cached = _cache_get(cache_key)
+    cached = _stale_checked(sym, cache_key, _cache_get(cache_key), allow_stale)
     if cached:
         return {**cached, "cached": True}
 
     async with _lock_for(cache_key):
-        cached = _cache_get(cache_key)
+        cached = _stale_checked(sym, cache_key, _cache_get(cache_key), allow_stale)
         if cached:
             return {**cached, "cached": True}
 
@@ -393,39 +424,60 @@ async def get_quote(symbol: str) -> dict:
         if not meta:
             raise RuntimeError(f"Symbol {sym} not supported")
 
-        try:
+        async def _fetch():
             if meta["asset"] == "crypto":
                 try:
-                    q = await _coinbase_quote(sym)
+                    return await _coinbase_quote(sym)
                 except Exception:
-                    q = await _cg_quote(meta["cg_id"])
-            elif meta["asset"] == "commodity":
-                q = await _gold_quote()
-            elif meta["asset"] == "index":
-                q = await _yahoo_index_quote(meta["yh"])
-            elif meta["asset"] == "forex":
-                q = await _fx_quote(meta["base"], meta["quote"])
-            else:
-                raise RuntimeError("Unknown asset class")
-            result = {"symbol": sym, **q}
-            _cache_set(cache_key, result, ttl_seconds_for_quote(meta["asset"]))
-            # Persist into Mongo time-series collection for fast windowed queries
+                    return await _cg_quote(meta["cg_id"])
+            if meta["asset"] == "commodity":
+                return await _gold_quote()
+            if meta["asset"] == "index":
+                return await _yahoo_index_quote(meta["yh"])
+            if meta["asset"] == "forex":
+                return await _fx_quote(meta["base"], meta["quote"])
+            raise RuntimeError("Unknown asset class")
+
+        # v1.60.48 — per-attempt timeout + one retry ("Quote fetch failed XAUUSD" ×4 at 20:00 stalled the Strategy
+        # agent to p95 12.7 s); after the last attempt the previous good quote is served, flagged stale.
+        last_err: Exception | None = None
+        for attempt in range(QUOTE_ATTEMPTS):
             try:
-                from database import get_db
-                from datetime import datetime, timezone
-                db = get_db()
-                await db.price_ticks.insert_one({
-                    "ts": datetime.now(timezone.utc),
-                    "symbol": sym,
-                    "price": float(result.get("price") or 0),
-                    "bid": float(result.get("bid") or 0),
-                    "ask": float(result.get("ask") or 0),
-                })
-            except Exception:
-                pass  # never block live quotes on persistence
-            return {**result, "cached": False}
-        except httpx.HTTPError as e:
-            raise RuntimeError(f"Quote fetch failed for {sym}: {e}")
+                q = await asyncio.wait_for(_fetch(), timeout=QUOTE_ATTEMPT_TIMEOUT_SEC)
+                result = {"symbol": sym, **q}
+                _cache_set(cache_key, result, ttl_seconds_for_quote(meta["asset"]))
+                _LAST_GOOD[sym] = (time.time(), result)
+                # Persist into Mongo time-series collection for fast windowed queries
+                try:
+                    from database import get_db
+                    db = get_db()
+                    await db.price_ticks.insert_one({
+                        "ts": datetime.now(timezone.utc),
+                        "symbol": sym,
+                        "price": float(result.get("price") or 0),
+                        "bid": float(result.get("bid") or 0),
+                        "ask": float(result.get("ask") or 0),
+                    })
+                except Exception:
+                    pass  # never block live quotes on persistence
+                return {**result, "cached": False}
+            except (httpx.HTTPError, asyncio.TimeoutError, ValueError, KeyError) as e:
+                last_err = e
+                if attempt + 1 < QUOTE_ATTEMPTS:
+                    await asyncio.sleep(QUOTE_RETRY_DELAY_SEC * (attempt + 1))
+        last = _LAST_GOOD.get(sym)
+        age = (time.time() - last[0]) if last else None
+        max_age = STALE_MAX_AGE_SEC.get(meta["asset"], 60)
+        if last and age <= max_age:
+            stale_q = {**last[1], "cached": True, "stale": True, "stale_age_sec": round(age, 1)}
+            # brief: callers don't each wait ~12 s — but never beyond the age limit (v1.60.52)
+            _cache_set(cache_key, stale_q, max(1, min(STALE_RECHECK_SEC, int(max_age - age))))
+            log.warning("Quote fetch failed for %s after %d attempts (%s) — serving %.0fs-old quote (stale)",
+                        sym, QUOTE_ATTEMPTS, last_err, age)
+            if not allow_stale:
+                raise StaleQuoteError(f"stale quote for {sym} ({age:.0f}s old) refused by trading path")
+            return stale_q
+        raise RuntimeError(f"Quote fetch failed for {sym}: {last_err}")
 
 
 def ttl_seconds_for_quote(asset: str) -> int:

@@ -9,11 +9,13 @@ from auth import get_current_user
 from database import get_db
 from step_up import require_step_up, audit_event
 from models import BotConfigUpdate, BotConfigOut
+from pydantic import BaseModel, Field
 from route_utils import parse_object_id
 from risk import get_profile, compute_lot_for_account
 from pip_utils import floor_to_lot_step
 from intelligence_counters import get_window_24h as intel_window_24h
 from strategy_presets import list_presets, get_preset
+from anti_tilt import evaluate as anti_tilt_evaluate
 
 # audit r4 P0 · minimum EA version with command fencing + intent journaling —
 # live activation is blocked below this (paper accounts unaffected).
@@ -61,47 +63,13 @@ async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = No
         cfg = await db.bot_configs.find_one(_config_filter(user_id, account_id))
         if cfg:
             return cfg
+    # v1.60.48 (audit item 15) — ONE source of defaults: models.BotConfigUpdate (conservative first-live defaults,
+    # audit C2/C3: risk low, 1 concurrent trade, spread filter ON). This dict used to disagree (medium / 3 / off).
     new_cfg = {
+        **BotConfigUpdate().model_dump(),
         "user_id": user_id,
         "account_id": account_id,  # None = default profile
-        "risk_level": "medium",
-        "symbols": ["XAUUSD", "BTCUSD"],
         "active": False,
-        "max_concurrent_trades": 3,
-        "auto_execute": True,
-        "breakeven_enabled": True,
-        "breakeven_trigger_r": 1.0,
-        "partial_close_enabled": True,
-        "partial_close_trigger_r": 1.0,
-        "partial_close_fraction": 0.5,
-        "trailing_enabled": True,
-        "trailing_start_r": 1.5,
-        "trailing_distance_r": 0.7,
-        "daily_drawdown_pct": 3.0,
-        "daily_drawdown_enabled": True,
-        "weekly_drawdown_pct": 7.0,
-        "weekly_drawdown_enabled": True,
-        "spread_filter_enabled": False,
-        "max_spread_pips": {"XAUUSD": 50.0, "BTCUSD": 100.0},
-        "auto_tune_enabled": True,
-        "slippage_veto_enabled": True,
-        "max_slippage_pips": {"XAUUSD": 20.0, "BTCUSD": 80.0},
-        "anti_tilt_enabled": True,
-        "anti_tilt_consecutive_losses": 3,
-        "anti_tilt_freeze_hours": 4,
-        "trade_of_day_cap": 1,
-        "asia_session_skip_xau": True,
-        "sl_cooldown_enabled": True,
-        "sl_cooldown_minutes": 45,
-        "loss_cooldown_enabled": True,
-        "loss_cooldown_minutes": 30,
-        "min_final_rr": 0.75,
-        "payoff_guard_enabled": True,
-        "payoff_guard_max_sl_tp1": 1.2,
-        "pre_news_protect_enabled": True,
-        "pre_news_protect_minutes": 5,
-        "min_confidence_override": 0,
-        "max_lot_size": 0.0,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
     if account_id is None:
@@ -109,13 +77,35 @@ async def _get_or_create_config(db, user_id: str, account_id: Optional[str] = No
         new_cfg["_id"] = None
         new_cfg["virtual"] = True
         return new_cfg
+    new_cfg["operational_mode"] = await default_operational_mode(db, account_id)
     result = await db.bot_configs.insert_one(new_cfg)
     new_cfg["_id"] = result.inserted_id
     return new_cfg
 
 
+async def default_operational_mode(db, account_id: str) -> str:
+    """v1.60.29 item 5(b) — a new bot starts in `demo_autopilot` on PAPER / attested-DEMO accounts and in `shadow`
+    on anything that could be real money. `active` stays False — the mode never turns trading on by itself."""
+    from broker_env import attested_environment
+    try:
+        acc = await db.accounts.find_one({"_id": ObjectId(account_id)})
+    except Exception:
+        acc = None
+    if not acc:
+        return "shadow"
+    return "demo_autopilot" if acc.get("mode") == "paper" or attested_environment(acc) in ("PAPER", "DEMO") else "shadow"
+
+
 def _serialize(cfg: dict) -> dict:
-    return {
+    # v1.60.39 hotfix — EVERY BotConfigUpdate field is returned (model default when unset). Omitting a field here
+    # made the UI fall back to its own default and the next SAVE wrote that default over the user's value
+    # (gold_off_hours_* on 15 Oct). test_v1_60_39_bot_config_serialize guards this.
+    out = {name: cfg.get(name, f.get_default(call_default_factory=True))
+           for name, f in BotConfigUpdate.model_fields.items()}
+    if cfg.get("signal_cooldown_minutes") is None:
+        # unset → the runtime default bot_runner._cooldown_minutes() actually uses (env, then 5)
+        out["signal_cooldown_minutes"] = int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "5"))
+    out.update({
         "id": str(cfg["_id"]) if cfg.get("_id") is not None else None,
         "virtual": bool(cfg.get("virtual")),
         "user_id": cfg["user_id"],
@@ -125,14 +115,6 @@ def _serialize(cfg: dict) -> dict:
         "active": cfg.get("active", False),
         "max_concurrent_trades": cfg.get("max_concurrent_trades", 3),
         "auto_execute": cfg.get("auto_execute", True),
-        "breakeven_enabled": cfg.get("breakeven_enabled", True),
-        "breakeven_trigger_r": cfg.get("breakeven_trigger_r", 1.0),
-        "partial_close_enabled": cfg.get("partial_close_enabled", True),
-        "partial_close_trigger_r": cfg.get("partial_close_trigger_r", 1.0),
-        "partial_close_fraction": cfg.get("partial_close_fraction", 0.5),
-        "trailing_enabled": cfg.get("trailing_enabled", True),
-        "trailing_start_r": cfg.get("trailing_start_r", 1.5),
-        "trailing_distance_r": cfg.get("trailing_distance_r", 0.7),
         "daily_drawdown_pct": cfg.get("daily_drawdown_pct", 3.0),
         "daily_drawdown_enabled": cfg.get("daily_drawdown_enabled", True),
         "weekly_drawdown_pct": cfg.get("weekly_drawdown_pct", 7.0),
@@ -151,7 +133,6 @@ def _serialize(cfg: dict) -> dict:
         "anti_tilt_consecutive_losses": cfg.get("anti_tilt_consecutive_losses", 3),
         "anti_tilt_freeze_hours": cfg.get("anti_tilt_freeze_hours", 4),
         "trade_of_day_cap": cfg.get("trade_of_day_cap", 1),
-        "asia_session_skip_xau": cfg.get("asia_session_skip_xau", True),
         "sl_cooldown_enabled": cfg.get("sl_cooldown_enabled", True),
         "sl_cooldown_minutes": cfg.get("sl_cooldown_minutes", 45),
         "loss_cooldown_enabled": cfg.get("loss_cooldown_enabled", True),
@@ -174,14 +155,13 @@ def _serialize(cfg: dict) -> dict:
         # iter-39 — Paper Shadow Mode (run pipeline, never execute) +
         # per-account crypto risk cap override.
         "paper_shadow_mode": bool(cfg.get("paper_shadow_mode", False)),
+        "pattern_gate_enabled": bool(cfg.get("pattern_gate_enabled", False)),   # Spec B — observe-only unless an admin flipped it
         "crypto_risk_pct_per_trade": cfg.get("crypto_risk_pct_per_trade"),
         # iter-41 — payoff-ratio repair (Soft-Stop + Let Winners Run)
-        "soft_stop_enabled": bool(cfg.get("soft_stop_enabled", False)),
-        "soft_stop_loss_fraction": float(cfg.get("soft_stop_loss_fraction") or 0.6),
-        "soft_stop_min_minutes": int(cfg.get("soft_stop_min_minutes") or 10),
         "let_winners_run": bool(cfg.get("let_winners_run", False)),
         "updated_at": cfg.get("updated_at"),
-    }
+    })
+    return out
 
 
 @router.get("/sizing-preview")
@@ -297,7 +277,40 @@ async def get_config(account_id: Optional[str] = None, user=Depends(get_current_
         if not owns:
             raise HTTPException(status_code=404, detail="Account not found")
     cfg = await _get_or_create_config(db, user["id"], account_id)
-    return _serialize(cfg)
+    out = _serialize(cfg)
+    out["policy_risk_cap_pct"] = await policy_risk_cap(db)        # cap-aware UI: risk levels above the cap are marked on first load, not only after a save
+    await _attach_cooldown_floor(out, user)
+    return out
+
+
+async def _attach_cooldown_floor(out: dict, user: dict) -> None:
+    """v1.60.39 — plan floor + the cooldown the runner really applies (max of setting and floor)."""
+    from entitlements import cooldown_floor
+    floor = int(await cooldown_floor(user) or 1)
+    out["plan_min_signal_cooldown_minutes"] = floor
+    out["effective_signal_cooldown_minutes"] = max(int(out.get("signal_cooldown_minutes") or 1), floor)
+
+
+class ConfigDriftReport(BaseModel):
+    fields: list = Field(default_factory=list, max_length=200)
+    account_id: Optional[str] = None
+
+
+@router.post("/config/drift")
+async def report_config_drift(payload: ConfigDriftReport, request: Request, user=Depends(get_current_user)):
+    """v1.60.40 — Drift Telemetry: the client reports fields whose saved value differed from the server echo.
+    Stored per user (values truncated), surfaced as a count on Admin → Bot Health (/ops/config-drift)."""
+    fields = []
+    for f in payload.fields[:200]:
+        if not isinstance(f, dict) or not f.get("field"):
+            continue
+        fields.append({"field": str(f["field"])[:80], "sent": str(f.get("sent"))[:120], "server": str(f.get("server"))[:120]})
+    if not fields:
+        return {"recorded": 0}
+    await get_db().config_drift_events.insert_one({
+        "user_id": user["id"], "account_id": payload.account_id, "fields": fields,
+        "at": datetime.now(timezone.utc), "ua": (request.headers.get("user-agent") or "")[:160]})
+    return {"recorded": len(fields)}
 
 
 @router.get("/configs")
@@ -328,6 +341,17 @@ async def mtf_confluence_report(symbol: str = "XAUUSD", user=Depends(get_current
     return {"available": True, "symbol": symbol, "live_price": live, **report}
 
 
+def _effective_cooldown_min(cfg: dict, plan_floor: int = 1) -> int:
+    """v1.60.40 — the cooldown bot_runner really applies for this config: its own signal_cooldown_minutes
+    (env default when unset) floored by the plan."""
+    v = cfg.get("signal_cooldown_minutes")
+    try:
+        v = int(v) if v is not None else int(os.environ.get("BOT_SIGNAL_COOLDOWN_MIN", "5"))
+    except (TypeError, ValueError):
+        v = 5
+    return max(1, v, int(plan_floor or 1))
+
+
 @router.get("/pulse")
 async def get_bot_pulse(user=Depends(get_current_user)):
     """Return the latest cycle verdict for every bot_config the user owns.
@@ -348,6 +372,8 @@ async def get_bot_pulse(user=Depends(get_current_user)):
     db = get_db()
     cursor = db.bot_configs.find({"user_id": user["id"]})
     docs = await cursor.to_list(length=100)
+    from entitlements import cooldown_floor
+    plan_floor = int(await cooldown_floor(user) or 1)
     locked_ids = {str(a["_id"]) async for a in db.accounts.find(
         {"user_id": user["id"], "authority_lock.reason": "panic"}, {"_id": 1})}
     # A7d — accounts under the execution-health brake (new entries paused)
@@ -420,10 +446,22 @@ async def get_bot_pulse(user=Depends(get_current_user)):
             else:
                 p = get_preset(active_preset)
                 strategy_label = (p or {}).get("label") or active_preset.title()
+        # v1.60.40 — the countdown uses THIS account's cooldown, measured on the server clock and capped at the
+        # cooldown (VTMarkets showed "NEXT IN 33M" on a 30-min cooldown: client clock skew + uncapped ISO delta)
+        cooldown_min = _effective_cooldown_min(d, plan_floor)
+        next_in = None
+        if pulse and pulse.get("next_eligible_at"):
+            try:
+                nxt = datetime.fromisoformat(str(pulse["next_eligible_at"]).replace("Z", "+00:00"))
+                next_in = max(0, min(int((nxt - now).total_seconds()), cooldown_min * 60))
+            except (TypeError, ValueError):
+                next_in = None
         out.append({
             "config_id": str(d["_id"]),
             "account_id": acct_id,
             "unbound": acct_id is None,
+            "cooldown_minutes": cooldown_min,
+            "next_eligible_in_seconds": next_in,
             "label": label,
             "active": bool(d.get("active")),
             "locked": (str(acct_id) in locked_ids) if acct_id else bool(locked_ids),
@@ -503,46 +541,18 @@ async def get_cooldowns(user=Depends(get_current_user)):
                 "reopens_in_hours": closure["reopens_in_hours"] if closure else None,
             })
 
-        # Loss streak — consecutive closed losing trades on this account.
-        anti_tilt_n = int(cfg.get("anti_tilt_consecutive_losses", 3) or 0)
-        anti_tilt_hours = int(cfg.get("anti_tilt_freeze_hours", 4) or 0)
-        anti_tilt_enabled = bool(cfg.get("anti_tilt_enabled", True))
+        # Loss streak + anti-tilt — #39: the SAME evaluation bot_runner gates on (anti_tilt.evaluate):
+        # origin=auto, not stats_excluded, loss = is_streak_loss. Lists which trades count and why.
+        tilt = await anti_tilt_evaluate(db, user["id"], cfg, now)
+        anti_tilt_n, anti_tilt_enabled = tilt["n"], tilt["enabled"]
+        loss_streak, win_streak = tilt["loss_streak"], tilt["win_streak"]
+        anti_tilt_active, freeze_unfreeze_in_seconds = tilt["active"], tilt["remaining_seconds"]
 
+        # Last closed trade summary (any symbol on this account)
         trade_q: dict = {"user_id": user["id"], "status": "closed"}
         if acct_id:
             trade_q["account_id"] = acct_id
-        recent = await db.trades.find(trade_q).sort("closed_at", -1).limit(
-            max(anti_tilt_n, 5)
-        ).to_list(length=max(anti_tilt_n, 5))
-
-        loss_streak = 0
-        win_streak = 0
-        for t in recent:
-            pnl = float(t.get("pnl") or 0)
-            if pnl < 0 and win_streak == 0:
-                loss_streak += 1
-            elif pnl > 0 and loss_streak == 0:
-                win_streak += 1
-            else:
-                break
-
-        # Anti-tilt status — freeze active iff last N trades all lost AND most
-        # recent loss is within the freeze window.
-        anti_tilt_active = False
-        freeze_unfreeze_in_seconds = None
-        if anti_tilt_enabled and anti_tilt_n > 0 and loss_streak >= anti_tilt_n:
-            last_close = recent[0].get("closed_at") if recent else None
-            if last_close:
-                try:
-                    lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
-                    elapsed = (now - lc).total_seconds()
-                    if elapsed < anti_tilt_hours * 3600:
-                        anti_tilt_active = True
-                        freeze_unfreeze_in_seconds = int(anti_tilt_hours * 3600 - elapsed)
-                except Exception:
-                    pass
-
-        # Last closed trade summary (any symbol on this account)
+        recent = await db.trades.find(trade_q).sort("closed_at", -1).limit(1).to_list(length=1)
         last_trade = None
         if recent:
             lt = recent[0]
@@ -570,6 +580,8 @@ async def get_cooldowns(user=Depends(get_current_user)):
             "anti_tilt_enabled": anti_tilt_enabled,
             "anti_tilt_active": anti_tilt_active,
             "anti_tilt_unfreeze_in_seconds": freeze_unfreeze_in_seconds,
+            "anti_tilt_trades": tilt["trades"],
+            "anti_tilt_rule": tilt["rule"],
             "last_trade": last_trade,
         })
     # Active accounts first, then by label
@@ -708,8 +720,7 @@ GUARD_FLAG_FIELDS = ("daily_drawdown_enabled", "weekly_drawdown_enabled", "month
                      "risk_engine_enabled", "spread_filter_enabled", "friday_flat_enabled",
                      "slippage_veto_enabled", "anti_tilt_enabled", "sl_cooldown_enabled",
                      "loss_cooldown_enabled", "payoff_guard_enabled", "pre_news_protect_enabled",
-                     "adaptive_sizing_enabled", "breakeven_enabled", "trailing_enabled",
-                     "regime_gating_enabled", "asia_session_skip_xau")
+                     "adaptive_sizing_enabled", "regime_gating_enabled", "asia_session_skip_xau")
 GUARD_MODE_FIELDS = ("uncertainty_gate_mode", "calendar_intel_mode")   # enforce → anything else
 
 
@@ -739,8 +750,44 @@ def _cfg_value(cur: dict, field: str):
     """Stored value, else the model default (a missing field never reads as 0)."""
     if cur.get(field) is not None:
         return cur[field]
-    from models import BotConfigUpdate
     return BotConfigUpdate.model_fields[field].default
+
+
+async def policy_risk_cap(db):
+    """Active rules-policy max_risk_pct (None when no policy / no cap)."""
+    import rules_policy as rp
+    return (await rp.risk_caps(db)).get("max_risk_pct")
+
+
+def effective_risk_for(cfg: dict, cap: float) -> float:
+    """Pure — the risk a saved config could actually use under `cap`: risk level / explicit % / adaptive cap, with the
+    active preset (style such as SCALPER / FAST SCALP) overlaid first."""
+    import rules_policy as rp
+    import strategy_presets as sp
+    merged = dict(cfg)
+    preset = sp.get_preset(str(merged.get("active_preset") or "")) if merged.get("active_preset") else None
+    if preset:
+        merged.update(preset.get("config") or {})
+    return rp.effective_max_risk_pct(merged, clamp=cap)
+
+
+async def _refuse_risk_above_policy_cap(db, current_cfg: dict | None, update: dict) -> None:
+    """v1.60.30 — a config whose EFFECTIVE risk exceeds the active policy cap is never saved (the projection would
+    only block it afterwards with "risk per trade above the policy cap")."""
+    cap = await policy_risk_cap(db)
+    if cap is None:
+        return
+    merged = {**(current_cfg or {}), **{k: v for k, v in update.items() if k != "updated_at"}}
+    eff = effective_risk_for(merged, float(cap))
+    try:
+        adaptive_raise = update.get("adaptive_risk_cap_pct") is not None and float(update["adaptive_risk_cap_pct"]) > float(cap) + 1e-9
+    except (TypeError, ValueError):
+        adaptive_raise = False
+    if eff > float(cap) + 1e-9 or adaptive_raise:
+        raise HTTPException(status_code=409, detail={
+            "code": "risk_above_policy_cap", "cap_pct": float(cap), "effective_pct": round(eff, 3),
+            "message": f"Effective risk {eff:g}% exceeds the policy cap {float(cap):g}% — lower the bot's risk to ≤ {float(cap):g}% "
+                       "(Bot Config → Risk level)"})
 
 
 def _is_risk_raise(update: dict, current: dict) -> bool:
@@ -796,6 +843,19 @@ async def update_config(payload: BotConfigUpdate,
     # PATCH semantics — only fields explicitly sent by the client are written.
     # Lets the UI / API do partial updates without nuking other settings.
     update = payload.model_dump(exclude_unset=True)
+    if update.get("gold_trend_pulse_mode") == "demo_live":
+        # #64 — every path to demo_live goes through the confirm_live + attested-DEMO check of POST /gold-trend-pulse/config
+        raise HTTPException(status_code=422, detail={"code": "gtp_confirm_live_required",
+                                                     "message": "gold_trend_pulse_mode=demo_live must be set via POST /api/gold-trend-pulse/config with confirm_live=true on an attested DEMO account"})
+    if "pattern_gate_enabled" in update:
+        # Spec B — enforcing the chart-pattern gate is an OPERATOR decision: admin-only, audited.
+        # SEC-022-2: the TOTP-enrolled admin gate (require_admin), not the bare role string.
+        if user.get("role") != "admin":
+            raise HTTPException(status_code=403, detail={"code": "admin_only", "message": "pattern_gate_enabled can only be changed by an admin"})
+        from auth import require_admin
+        require_admin(user)
+        await audit_event(db, user["id"], "pattern_gate_enabled_changed",
+                          {"account_id": account_id, "to": bool(update["pattern_gate_enabled"])}, request)
     if update.get("active") is True and owns is not None:
         problems = await _activation_readiness(db, owns)
         if problems:
@@ -812,9 +872,11 @@ async def update_config(payload: BotConfigUpdate,
     if (wants_activation or risk_raise) and await _live_context(db, user["id"], account_id, owns):
         action = "live_activation" if wants_activation else "risk_raise"
         await require_step_up(db, user, request, action)
+        # v1.60.48 (audit item 10) — log the fields that actually CHANGE, not every field the client sent
+        changed_fields = sorted(k for k, v in update.items() if (current_cfg or {}).get(k) != v)
         await audit_event(db, user["id"], action,
                           {"account_id": account_id, "via": "config_update",
-                           "fields": sorted(update.keys())},
+                           "fields": changed_fields},
                           request, step_up=True)
 
     # Operational-mode promotion gate — moving TOWARD live execution is
@@ -877,6 +939,17 @@ async def update_config(payload: BotConfigUpdate,
         }
     if "max_lot_size" in update:
         update["max_lot_size"] = max(0.0, float(update["max_lot_size"]))
+    cooldown_clamped = None
+    if "signal_cooldown_minutes" in update:
+        # v1.60.39 — respect the plan floor at the boundary (the runner clamps too); tell the UI when we did
+        from entitlements import cooldown_floor
+        floor = int(await cooldown_floor(user) or 1)
+        asked = max(1, int(update["signal_cooldown_minutes"] or 1))
+        if asked < floor:
+            cooldown_clamped = floor
+            await audit_event(db, user["id"], "cooldown_clamped_to_plan_floor",
+                              {"requested": asked, "floor": floor, "account_id": account_id}, request)
+        update["signal_cooldown_minutes"] = max(asked, floor)
     # iter-65: Coerce bogus profit-target-action values at write time so the
     # DB never carries garbage like "TURBO_LOCK". The runtime evaluator also
     # coerces, but cleaning at the boundary keeps stored state honest.
@@ -915,6 +988,7 @@ async def update_config(payload: BotConfigUpdate,
     if "auto_preset_enabled" in update:
         update["auto_preset_enabled"] = bool(update["auto_preset_enabled"])
     update["updated_at"] = datetime.now(timezone.utc).isoformat()
+    await _refuse_risk_above_policy_cap(db, current_cfg, update)
 
     # Ensure the target doc exists, then PATCH atomically (correction #4:
     # config change + immutable version + pointer + audit as one unit).
@@ -923,7 +997,12 @@ async def update_config(payload: BotConfigUpdate,
     await apply_config_change(db, user["id"], account_id, update,
                               label="post-update", source="config_update")
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
-    return _serialize(cfg)
+    out = _serialize(cfg)
+    out["policy_risk_cap_pct"] = await policy_risk_cap(db)        # v1.60.30 — shown next to the risk field
+    await _attach_cooldown_floor(out, user)
+    if cooldown_clamped is not None:
+        out["cooldown_clamped_to_plan_floor"] = cooldown_clamped
+    return out
 
 
 @router.delete("/config")
@@ -1083,11 +1162,29 @@ async def stop_bot(account_id: Optional[str] = None, user=Depends(get_current_us
     return {"active": False, "account_id": None, "stopped_account_ids": owned, "stopped": int(res.modified_count)}
 
 
+def preset_cap_fit(cfg: dict | None, overlay: dict | None, cap: float | None) -> dict | None:
+    """Pure — would this preset, overlaid on the account's current config, still fit under the policy cap?
+    Same arithmetic as the save refusal (`effective_risk_for`), so the UI can never disagree with the server."""
+    if cap is None:
+        return None
+    merged = {**(cfg or {}), **(overlay or {})}
+    merged.pop("active_preset", None)
+    eff = effective_risk_for(merged, float(cap))
+    return {"effective_risk_pct": round(eff, 3), "cap_pct": float(cap), "fits_cap": eff <= float(cap) + 1e-9}
+
+
 @router.get("/presets")
-async def get_strategy_presets(user=Depends(get_current_user)):
-    """Return built-in presets + the user's own saved presets, in one payload."""
+async def get_strategy_presets(account_id: Optional[str] = None, user=Depends(get_current_user)):
+    """Built-in presets + the user's own saved presets, each annotated with `cap_fit` against the active policy cap
+    for the selected account (null when no cap is active)."""
+    db = get_db()
     custom = await list_user_presets(user["id"])
-    return {"presets": list_presets(), "custom": custom}
+    cap = await policy_risk_cap(db)
+    scope = await _resolve_account_scope(db, user["id"], account_id)
+    cfg = (await db.bot_configs.find_one(_config_filter(user["id"], scope))) or {} if cap is not None else {}
+    presets = [{**p, "cap_fit": preset_cap_fit(cfg, p.get("config"), cap)} for p in list_presets()]
+    custom = [{**c, "cap_fit": preset_cap_fit(cfg, c.get("config"), cap)} for c in custom]
+    return {"presets": presets, "custom": custom, "policy_risk_cap_pct": cap}
 
 
 @router.get("/adaptive-status")
@@ -1194,13 +1291,23 @@ async def apply_strategy_preset(key: str, account_id: Optional[str] = None,
         overlay_config = builtin["config"]
 
     account_id = (await _get_or_create_config(db, user["id"], account_id)).get("account_id")   # U11 — resolved scope
+    current_cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
+    # cap-aware presets: a style that lifts the EFFECTIVE risk above the policy cap is refused here, not at SAVE
+    await _refuse_risk_above_policy_cap(db, current_cfg, {**overlay_config, "active_preset": key})
     overlay = {**overlay_config, "active_preset": key,
                "updated_at": datetime.now(timezone.utc).isoformat()}
-    await db.bot_configs.update_one(
-        _config_filter(user["id"], account_id), {"$set": overlay}
-    )
+    # #78 — same audited path as the Bot Config PATCH: config change + immutable config_version + pointer + audit entry
+    # (action config_change_applied, source "preset_apply", with the preset key/label and the fields it changed).
+    from config_promotion import apply_config_change
+    preset_fields = sorted(k for k in overlay if k != "updated_at")
+    version_id = await apply_config_change(
+        db, user["id"], account_id, overlay, label=f"preset:{key}", source="preset_apply",
+        audit_detail={"preset_key": key, "preset_label": preset_label, "preset_fields": preset_fields,
+                      "preset_kind": "custom" if key.startswith("custom:") else "builtin"})
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
-    return {"applied": key, "label": preset_label, "config": _serialize(cfg)}
+    # v1.60.52 — only the fields this preset actually changed (the UI keeps them dirty until the next SAVE)
+    return {"applied": key, "label": preset_label, "config": _serialize(cfg),
+            "preset_fields": preset_fields, "config_version_id": version_id}
 
 
 @router.post("/my-presets")
@@ -1253,16 +1360,17 @@ async def safety_status(user=Depends(get_current_user)):
 
     live_accounts, stale_feeds = [], []
     paper_count, max_hb_age = 0, None
+    from broker_env import attested_environment
     async for a in db.accounts.find(
-            {"user_id": user["id"], "status": {"$ne": "deleted"}},
-            {"label": 1, "mode": 1, "trading_enabled": 1,
-             "last_heartbeat": 1, "dormant": 1}):
+            {"user_id": user["id"], "status": {"$ne": "deleted"}}):
         if a.get("dormant") or a.get("trading_enabled") is not True:  # P0: missing = OFF
             continue
-        if str(a.get("mode") or "").lower() == "live":
-            live_accounts.append(a.get("label"))
-        elif str(a.get("mode") or "").lower() == "paper":
+        # v1.60.29 item 6 — `mode == "live"` means "MT5-connected" (demo included); LIVE = attested environment only
+        env = attested_environment(a)
+        if str(a.get("mode") or "").lower() == "paper" or env == "PAPER":
             paper_count += 1
+        elif env == "LIVE":
+            live_accounts.append(a.get("label"))
         age = _age(a.get("last_heartbeat"))
         if age is not None:
             max_hb_age = age if max_hb_age is None else max(max_hb_age, age)
@@ -1329,6 +1437,7 @@ async def safety_status(user=Depends(get_current_user)):
                                          if max_hb_age is not None else None),
             "panic_active": panic_active,
             "live_accounts": live_accounts,
+            "paper_accounts": paper_count,
             "unprotected_open": unprotected,
             "unresolved_submissions": unresolved,
             "stale_feeds": stale_feeds,
@@ -1790,6 +1899,61 @@ async def bot_health_score(user=Depends(get_current_user)):
                        "fix": f"Check {', '.join(stale_accounts)} in MT5 — the EA may have detached.",
                        "details": stale_accounts})
 
+    # v1.60.51 — DXY cache staleness (amber): macro/dxy keeps serving the old document when the download fails;
+    # entry_context stops using it after DXY_MAX_AGE_HOURS, so entries are stamped "DXY unknown" until it refreshes.
+    try:
+        from entry_context import DXY_MAX_AGE_HOURS, dxy_cache_age_hours
+        _dxy_doc = await db.dxy_cache.find_one({"_id": "latest"}, {"fetched_at": 1, "as_of_date": 1})
+        _dxy_age = dxy_cache_age_hours(_dxy_doc, now)
+        if _dxy_age is None or _dxy_age > DXY_MAX_AGE_HOURS:
+            score -= 5
+            issues.append({"severity": "warning", "code": "dxy_cache_stale",
+                           "label": ("DXY cache missing — entries stamped DXY unknown" if _dxy_age is None else
+                                     f"DXY cache {int(_dxy_age)} h old (> {DXY_MAX_AGE_HOURS} h) — entries stamped DXY unknown"),
+                           "fix": "The Stooq/FRED dollar-index download is failing; check outbound HTTPS from the "
+                                  "backend and the macro worker log (\"DXY fetch failed\").",
+                           "details": {"fetched_at": (_dxy_doc or {}).get("fetched_at"),
+                                       "as_of_date": (_dxy_doc or {}).get("as_of_date")}})
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("dxy staleness check skipped: %s", _e)
+
+    # v1.60.53 — Finnhub (info when not configured), GVZ/VIX staleness (amber), broker-price age per account (amber)
+    _broker_price_health: dict = {}
+    try:
+        from providers.finnhub import status as _fh_status
+        _fh = _fh_status()
+        if not _fh.get("configured"):
+            issues.append({"severity": "info", "code": "finnhub_not_configured", "label": _fh["message"],
+                           "fix": "Set FINNHUB_API_KEY (or FINNHUB_API_KEY_FILE) on the backend to enable the primary "
+                                  "economic calendar + forex news feed (advisory)."})
+        from macro.fred import vol_context
+        _fred = await db.fred_cache.find_one({"_id": "snapshot"}, {"payload.series": 1})
+        _vol = vol_context(((_fred or {}).get("payload") or {}).get("series"))
+        for _k, _name in (("gvz", "GVZ"), ("vix", "VIX")):
+            if _vol.get(f"{_k}_stale"):
+                score -= 3
+                issues.append({"severity": "warning", "code": f"{_k}_stale",
+                               "label": f"{_name} (FRED) older than 4 trading days — ignored in the risk advisory",
+                               "fix": "FRED fetch is failing or lagging; check the macro worker log."})
+        import broker_price as _bp
+        _open = await db.trades.find({"user_id": user["id"], "status": "open", "mode": {"$ne": "paper"}},
+                                     {"account_id": 1, "mode": 1, "status": 1, "mt5_ticket": 1, "live_price": 1,
+                                      "live_price_at": 1, "live_at": 1}).to_list(length=500)
+        _bph = _bp.health_for_trades(_open)
+        for _acc, _row in _bph.items():
+            if _row["amber"]:
+                score -= 3
+                _age = _row["max_age_ms"]
+                issues.append({"severity": "warning", "code": "broker_price_stale",
+                               "label": (f"Account {_acc[-6:]}: {_row['open_trades']} open trade(s) without a fresh broker "
+                                         f"price ({'none reported' if _age is None else f'{_age // 1000}s old'} > "
+                                         f"{_bp.HEALTH_AMBER_MS // 1000}s) — tier management is skipping"),
+                               "fix": "The EA heartbeat / position report is late — check the terminal is connected.",
+                               "details": {"account_id": _acc, **_row}})
+        _broker_price_health = _bph
+    except Exception as _e:  # noqa: BLE001
+        logger.debug("v1.60.53 health checks skipped: %s", _e)
+
     if dormant_account_ids:
         score -= 5
         dormant_labels = [str(a.get("label")) for a in accs
@@ -1928,40 +2092,26 @@ async def bot_health_score(user=Depends(get_current_user)):
     # after N consecutive losses. We surface it explicitly so the user knows
     # *why* no trades are firing, with a small deduction to make sure the
     # widget catches their eye instead of showing a misleading "100/100".
+    # #39 — the SAME evaluation bot_runner gates on (anti_tilt.evaluate): origin=auto, not stats_excluded,
+    # loss = is_streak_loss. The old all(pnl<0)-over-any-trade rule showed "freeze 46m" with 0 runner blocks.
     tilt_frozen_accounts = []
     tilt_cfgs = await db.bot_configs.find({"user_id": user["id"]}).to_list(length=20)
     for tc in tilt_cfgs:
-        if not tc.get("anti_tilt_enabled", True):
-            continue
-        atn = int(tc.get("anti_tilt_consecutive_losses", 3) or 0)
-        ath = int(tc.get("anti_tilt_freeze_hours", 4) or 0)
-        if atn <= 0 or ath <= 0:
-            continue
-        at_q = {"user_id": user["id"], "status": "closed"}
-        if tc.get("account_id"):
-            at_q["account_id"] = tc["account_id"]
-        at_recent = await db.trades.find(at_q).sort("closed_at", -1).limit(atn).to_list(length=atn)
-        if len(at_recent) == atn and all(float(r.get("pnl") or 0) < 0 for r in at_recent):  # iter-45: strict losses only
-            last_close = at_recent[0].get("closed_at")
-            try:
-                lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
-                unfreeze_at = lc + timedelta(hours=ath)
-                remaining = (unfreeze_at - now).total_seconds()
-                if remaining > 0:
-                    mins_left = int(remaining // 60)
-                    hrs, mins = divmod(mins_left, 60)
-                    eta = f"{hrs}h {mins}m" if hrs else f"{mins}m"
-                    label = tc.get("account_id") or "default"
-                    tilt_frozen_accounts.append({"scope": label, "eta": eta,
-                                                  "unfreeze_at": unfreeze_at.isoformat()})
-            except Exception:
-                pass
+        tilt = await anti_tilt_evaluate(db, user["id"], tc, now)
+        if tilt["active"]:
+            tilt_frozen_accounts.append({"scope": tc.get("account_id") or "default", "eta": tilt["eta"],
+                                         "unfreeze_at": tilt["frozen_until"], "rule": tilt["rule"],
+                                         "trades": tilt["trades"]})
     if tilt_frozen_accounts:
         score -= 5
         eta_first = tilt_frozen_accounts[0]["eta"]
+        counted = [t for t in tilt_frozen_accounts[0]["trades"] if t["counts_as_loss"]]
         issues.append({"severity": "warning", "code": "anti_tilt_freeze",
                        "label": f"Anti-tilt freeze active — auto-execute paused for {eta_first}",
-                       "fix": "Designed protection after consecutive losses. Lower freeze window or disable in Bot Config → Capital Preservation if intentional.",
+                       "fix": ("Designed protection after consecutive losses (same rule as the bot: origin=auto trades, "
+                               "loss = gave back > 0.1R). Counted: "
+                               + "; ".join(f"{t['symbol']} {t['pnl']:+.2f} ({t['why']})" for t in counted)
+                               + ". Lower the freeze window or disable in Bot Config → Capital Preservation if intentional."),
                        "details": tilt_frozen_accounts})
 
     # --- review P0-3: FAIL-CLOSED HARD CAPS ------------------------------
@@ -2094,6 +2244,7 @@ async def bot_health_score(user=Depends(get_current_user)):
         "issues": issues,
         "hard_caps": hard_caps,
         "checked_at": now.isoformat(),
+        "broker_price": _broker_price_health,          # v1.60.53 (D5) per-account broker-price age for open trades
         "context": {
             # audit v3 P0-2 — canonical inventory counters, never recomputed
             "accounts_connected": inv["ea_connection"]["fresh"]
@@ -2170,7 +2321,6 @@ async def _quick_truth_safe(db, user_id: str, open_count: int) -> dict:
         from state_contract import quick_truth
         return await quick_truth(db, user_id, open_count)
     except Exception as e:  # noqa: BLE001
-        import logging
         logging.getLogger("bot_routes").warning(
             "quick_truth failed for %s: %s", user_id, e)
         return {"position_truth": "UNKNOWN", "open_trades_broker": None,
@@ -2294,33 +2444,11 @@ async def get_bot_status(account_id: Optional[str] = None,
     # Anti-tilt freeze: bot_runner.py silently halts auto-execute when the last
     # N closed trades all lost within the freeze window. Mirror the exact logic
     # here so the UI can show the user *why* no trades are firing + a countdown.
-    anti_tilt_frozen_until = None
-    anti_tilt_reason = None
-    if cfg.get("anti_tilt_enabled", True):
-        atn = int(cfg.get("anti_tilt_consecutive_losses", 3) or 0)
-        ath = int(cfg.get("anti_tilt_freeze_hours", 4) or 0)
-        if atn > 0 and ath > 0:
-            at_q = {"user_id": user["id"], "status": "closed"}
-            if cfg.get("account_id"):
-                at_q["account_id"] = cfg["account_id"]
-            at_recent = await db.trades.find(at_q).sort("closed_at", -1).limit(atn).to_list(length=atn)
-            if len(at_recent) == atn and all(float(r.get("pnl") or 0) < 0 for r in at_recent):  # iter-45: strict losses only
-                last_close = at_recent[0].get("closed_at")
-                try:
-                    lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
-                    unfreeze_at = lc + timedelta(hours=ath)
-                    remaining = (unfreeze_at - datetime.now(timezone.utc)).total_seconds()
-                    if remaining > 0:
-                        anti_tilt_frozen_until = unfreeze_at.isoformat()
-                        mins_left = int(remaining // 60)
-                        hrs, mins = divmod(mins_left, 60)
-                        eta = f"{hrs}h {mins}m" if hrs else f"{mins}m"
-                        anti_tilt_reason = (
-                            f"Anti-tilt freeze: last {atn} trades lost — auto-execute "
-                            f"paused for {eta}. Adjust in Bot Config → Capital Preservation."
-                        )
-                except Exception:
-                    pass
+    # #39 — shared evaluation (anti_tilt.evaluate), identical to the runner's gate.
+    tilt = await anti_tilt_evaluate(db, user["id"], cfg)
+    anti_tilt_frozen_until = tilt["frozen_until"]
+    anti_tilt_reason = (f"Anti-tilt freeze: last {tilt['n']} trades lost — auto-execute paused for {tilt['eta']}. "
+                        "Adjust in Bot Config → Capital Preservation.") if tilt["active"] else None
 
     # A4 — a PANIC lock dominates every other state on the dashboard
     lock_q = {"user_id": user["id"], "authority_lock.reason": "panic"}
@@ -2410,8 +2538,11 @@ async def get_bot_status(account_id: Optional[str] = None,
     })
 
     intelligence = await intel_window_24h(user["id"])
+    from policy_summary import active_policy_summary
+    policy = await active_policy_summary(db)
 
     return {
+        "policy": policy,
         "active": cfg.get("active", False),
         "panic_locked": bool(panic_lock),
         "panic_lock": panic_lock,

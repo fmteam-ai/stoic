@@ -21,7 +21,7 @@ def _read(*rel):
 
 def test_ea_1_61_server_url_autoload_and_self_check():
     mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
-    assert '#define EA_CLIENT_VERSION "1.64"' in mq5 and '#property version   "1.64"' in mq5
+    assert '#define EA_CLIENT_VERSION "1.66"' in mq5 and '#property version   "1.66"' in mq5
     assert "preview.emergentagent.com" not in mq5.split("string ResolveServerUrl")[0].split("input string ServerUrl")[1].split("\n")[0]
     assert 'input string ServerUrl              = "https://stoicaibot.com"' in mq5
     assert 'FileIsExist("STOIC-Server.txt")' in mq5 and "g_server_url = ResolveServerUrl();" in mq5
@@ -35,10 +35,10 @@ def test_ea_1_61_server_url_autoload_and_self_check():
     assert init.index("g_server_url = ResolveServerUrl();") < init.index("SendHeartbeat();")
     # version surfaces
     import ea_capabilities as ec
-    assert ec.latest_ea_version() == "1.64"                                     # N111-6 — derived from the MQ5
+    assert ec.latest_ea_version() == "1.66"                                     # N111-6 — derived from the MQ5
     assert '"ea_latest_version": latest_ea_version()' in _read("backend", "routes", "setup_routes.py")
     assert 'LATEST_EA = latest_ea_version()' in _read("backend", "routes", "bot_routes.py")
-    assert 'LATEST_EA_VERSION = "1.64"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
+    assert 'LATEST_EA_VERSION = "1.66"' in _read("frontend", "src", "components", "EaVersionStrip.jsx")
     import demo_readiness as dr
     assert "1.60" in dr.DEMO_ACCEPTED_EA                   # a 1.60 terminal stays accepted during the demo
 
@@ -184,7 +184,8 @@ def test_add_account_wizard_wired_and_spec_brokers_present():
         assert f'"{tid}"' in wiz or f"'{tid}'" in wiz or f"`{tid}`" in wiz or tid in wiz, tid
     assert 'api.post("/accounts", payload)' in wiz and "<QuickInstallPanel" in wiz
     acc = _read("frontend", "src", "pages", "Accounts.jsx")
-    assert "<AddAccountWizard" in acc and 'onClick={() => setShowWizard(true)} data-testid="add-account-button"' in acc
+    assert "<AddAccountWizard" in acc and 'onClick={() => setShowWizard(true)} data-testid="add-account-advanced"' in acc   # Easy Start: ADD BROKER opens EasyStartWizard, ADVANCED keeps the manual wizard
+    assert 'onClick={() => setEasyStart({ account: null })} data-testid="add-account-button"' in acc
     assert "installer_paired_hostname" in acc           # VPS picker lists already-paired hosts
 
 

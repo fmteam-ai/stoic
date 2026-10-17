@@ -2,6 +2,7 @@
 and canonical authority may only allow new exposure — on terminals whose
 STOIC EA carries the destination-side controls. Versions are compared as
 numeric tuples, never as strings."""
+from __future__ import annotations   # host-side gate imports this under Python 3.9 (no `X | None` at runtime)
 import os
 import re
 
@@ -11,6 +12,9 @@ CAPABILITIES = {
     "nl_close_fence_v1": (1, 57),       # close_idem_key dedupe + per-trade close_seq ordering (r17/r18)
     "margin_mode_v1": (1, 58),          # heartbeat reports ACCOUNT_MARGIN_MODE (main92 H1)
     "trade_mode_v1": (1, 60),           # heartbeat reports ACCOUNT_TRADE_MODE (main98 N98-6)
+    "modify_tp_v1": (1, 65),            # MODIFY_SL may carry new_tp; ack reports confirmed_position_tp (EA 1.65)
+    "m1_stream_v1": (1, 65),            # M1 bar stream for the scalp symbol, batched once per minute (EA 1.65)
+    "h4_history_v1": (1, 66),           # answers poll-trades `candles_request` with CopyRates(H4) history (EA 1.66, #81)
 }
 LIVE_REQUIRED = ("command_fencing_v1", "nl_close_fence_v1")
 LIVE_MIN_VERSION = max(CAPABILITIES[c] for c in LIVE_REQUIRED)
@@ -139,8 +143,6 @@ _EXPECTED_CACHE: dict = {}
 
 def shipped_ea_version(mq5_path: str | None = None) -> str:
     """`#property version` of the MQ5 this server ships (falls back to the live minimum)."""
-    import os
-    import re
     path = mq5_path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "EmergentTradingBridge.mq5")
     try:
         m = re.search(r'^#property\s+version\s+"([\d.]+)"', open(path, encoding="utf-8", errors="replace").read(), re.M)
@@ -166,7 +168,6 @@ def accepted_ea_sha256s() -> list[str]:
         record's `previous` entry (the last signed release) so a rollout never puts terminals
         still on the previous EA into CLOSE_ONLY. Never from account metadata; an unsigned or
         drifted record contributes nothing (fail closed)."""
-    import os
     out: list[str] = []
     for name in ("EA_RELEASE_SHA256", "EA_RELEASE_SHA256_PREVIOUS"):
         env = (os.environ.get(name) or "").strip().lower()
@@ -181,11 +182,22 @@ def accepted_ea_sha256s() -> list[str]:
     return out
 
 
+def accepted_ea_versions() -> list[str]:
+    """v1.60.43 — EA versions the signed release record accepts: current + signed `previous` (the rollout the
+    signed-previous record exists for). The pre-promotion gate `single_ea_version` must not contradict it."""
+    rec = _signed_release_record()
+    out: list[str] = []
+    if rec:
+        for v in (rec.get("version"), (rec.get("previous") or {}).get("version")):
+            if v and str(v) not in out:
+                out.append(str(v))
+    return out
+
+
 def _signed_release_record() -> dict | None:
     """The verified EA release entry (current + optional signed `previous`) or None."""
     import hashlib
     import json
-    import os
     here = os.path.dirname(os.path.abspath(__file__))
     mq5_path = os.path.join(here, "static", "EmergentTradingBridge.mq5")
     candidates = list(_EA_RELEASE_FILES) + [os.path.join(here, "..", "docs", "RELEASE_HASHES.json"),

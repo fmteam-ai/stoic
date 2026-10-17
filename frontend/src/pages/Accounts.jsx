@@ -7,6 +7,7 @@ import { AddAccountWizard } from "@/components/AddAccountWizard";
 import { EditAccountDialog } from "@/components/EditAccountDialog";
 import { StatusFixDialog } from "@/components/StatusFixDialog";
 import { CloseOnlyBanner } from "@/components/CloseOnlyBanner";
+import { EasyStartWizard } from "@/components/EasyStartWizard";
 import { StatusLine } from "@/components/StatusLine";
 import { VpsOfferButton } from "@/components/VpsOffer";
 import { InstallProgressChip } from "@/components/InstallProgressPanel";
@@ -18,7 +19,7 @@ import MultiAccountOverview from "@/components/MultiAccountOverview";
 // Used in the download URL so the filename changes per release (e.g.
 // `EmergentTradingBridge_v1.35.mq5`) — defeats aggressive browser caching
 // of the prior .mq5, which otherwise re-downloads stale source.
-const LATEST_EA_VERSION = "1.64";
+const LATEST_EA_VERSION = "1.66";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import { Plus, Pencil, Trash2 as Trash, Copy, Download, RefreshCw as ArrowsClockwise, Plug, PlugZap as PlugsConnected, Info, Lock, Eye, EyeOff, KeyRound, Layers, ChevronDown, CheckCircle2, AlertTriangle, ExternalLink, Folder, Terminal, Wand2, Save, X, Zap as Lightning, ShieldCheck } from "lucide-react";
 const Warning = AlertTriangle;
@@ -129,6 +130,12 @@ export default function Accounts() {
     }, []);
 
     useEffect(() => { load(); }, [load]);
+    // v1.60.29 item 4 — certification map / status lines follow the live heartbeat (30 s), not the first paint
+    useEffect(() => {
+        const id = setInterval(load, 30000);
+        window.addEventListener("focus", load);
+        return () => { clearInterval(id); window.removeEventListener("focus", load); };
+    }, [load]);
 
     // Fix-It Shortcuts: ?focus=<accountId> scrolls to and highlights the card
     useEffect(() => {
@@ -358,6 +365,7 @@ export default function Accounts() {
     const [overviewKey, setOverviewKey] = useState(0);
     const [editAccount, setEditAccount] = useState(null);     // M123-4 — Edit button on the account card
     const [statusFix, setStatusFix] = useState(null);         // U15 — { account, fix } opened from the StatusLine fix button
+    const [easyStart, setEasyStart] = useState(null);         // Easy Start Wizard — { account|null } (null account = new broker)
     const patchAccount = async (id, payload, okMsg) => {
         try {
             await api.patch(`/accounts/${id}`, payload);
@@ -366,6 +374,16 @@ export default function Accounts() {
             setOverviewKey(k => k + 1);
         } catch (e) { toast.error(formatApiError(e)); }
     };
+    // v1.60.29 item 5(c) — one-click repair of INVENTORY_DRIFT (account ON, bot off)
+    const enableBot = async (id) => {
+        try {
+            await api.put(`/bot/config?account_id=${encodeURIComponent(id)}`, { active: true });
+            toast.success("Bot turned on — drift repaired");
+            await load();
+            setOverviewKey(k => k + 1);
+        } catch (e) { toast.error(formatApiError(e)); }
+    };
+
     const editGroup = (a) => {
         const g = window.prompt(
             "Group label for this account (e.g. AGGRESSIVE, PROP, FAMILY).\nLeave empty to remove the group.",
@@ -399,10 +417,12 @@ export default function Accounts() {
                                 <ShieldCheck className="w-3.5 h-3.5" /> SIGNED EX5 <span>· {ex5Available === null ? "checking…" : "not published yet"}</span>
                             </span>
                         )}
-                        <button onClick={() => setShowWizard(true)} data-testid="add-account-button"
+                        <button onClick={() => setEasyStart({ account: null })} data-testid="add-account-button"
                             className="flex items-center gap-2 px-3 py-2 bg-[#00FF41] hover:bg-[#00E53A] text-black font-medium text-xs tracking-widest transition-colors">
-                            <Plus className="w-3.5 h-3.5" /> ADD ACCOUNT
+                            <Plus className="w-3.5 h-3.5" /> ADD BROKER
                         </button>
+                        <button onClick={() => setShowWizard(true)} data-testid="add-account-advanced" title="Paper account or manual setup"
+                            className="px-2 py-2 text-[10px] font-mono tracking-widest text-[#52525B] hover:text-white">ADVANCED</button>
                     </div>
                 }
             />
@@ -419,6 +439,8 @@ export default function Accounts() {
                     onSaved={() => { load(); setOverviewKey(k => k + 1); }} />
                 {statusFix && <StatusFixDialog account={statusFix.account} fix={statusFix.fix} onClose={() => setStatusFix(null)}
                     onDone={() => { load(); setOverviewKey(k => k + 1); }} />}
+                <EasyStartWizard open={!!easyStart} account={easyStart?.account || null} onClose={() => setEasyStart(null)}
+                    onChanged={() => { load(); setOverviewKey(k => k + 1); }} />
 
                 {/* Multi-account portfolio overview (iter-137) */}
                 <MultiAccountOverview refreshKey={overviewKey} />
@@ -575,8 +597,10 @@ export default function Accounts() {
                 ) : accounts.length === 0 ? (
                     <div className="border border-dashed border-[#1F1F1F] p-12 text-center" data-testid="accounts-empty">
                         <Plug className="w-10 h-10 text-[#52525B] mx-auto mb-3" />
-                        <div className="font-display font-bold text-lg mb-1">No accounts connected</div>
-                        <div className="text-sm text-[#A1A1AA]">Add an MT5 microcent account to start live trading.</div>
+                        <div className="font-display font-bold text-lg mb-1">Connect your first broker</div>
+                        <div className="text-sm text-[#A1A1AA] mb-4">Four screens, one button each — under five minutes with a demo login and a Windows VPS.</div>
+                        <button onClick={() => setEasyStart({ account: null })} data-testid="accounts-empty-add-broker"
+                            className="px-4 py-2 bg-[#00FF41] hover:bg-[#00E53A] text-black font-bold text-xs font-mono tracking-widest">CONNECT YOUR FIRST BROKER</button>
                     </div>
                 ) : (
                     <div className="space-y-2">
@@ -586,9 +610,14 @@ export default function Accounts() {
                                 <div key={a.id} id={`account-${a.id}`}
                                     className={`border ${a.id === focusId ? "border-[#FFD700] shadow-[0_0_0_1px_#FFD700]" : "border-[#1F1F1F]"} bg-[#0A0A0A] p-5`}
                                     data-testid={`account-row-${a.account_number}`}>
+                                    {a.mode !== "paper" && a.trading_enabled !== true && (
+                                        <button onClick={() => setEasyStart({ account: a })} data-testid={`continue-setup-${a.id}`}
+                                            className="mb-1 text-[10px] font-mono tracking-widest text-[#FFD700] hover:underline">CONTINUE SETUP →</button>
+                                    )}
                                     <StatusLine account={a} onFix={(fix) => {
                                         // U15 — one fix button: Start acts inline, everything else opens its dialog on the card
                                         if (fix.action === "start") patchAccount(a.id, { trading_enabled: true }, "Trading started");
+                                        else if (fix.action === "enable_bot") enableBot(a.id);
                                         else setStatusFix({ account: a, fix });
                                     }} />
                                     {a.broker_account_mismatch && (() => {
@@ -621,6 +650,17 @@ export default function Accounts() {
                                                     {live ? <><PlugsConnected className="w-3 h-3 inline mr-1" /> CONNECTED</> : "● DISCONNECTED"}
                                                 </span>
                                                 {a.mode !== "paper" && <InstallProgressChip accountId={a.id} />}
+                                                {(() => {
+                                                    // prod v1.60.23 (bug 3) — no ON switch for an account the rules policy has not admitted: show the reason instead
+                                                    const adm = a.admission || {};
+                                                    const notAdmitted = a.mode !== "paper" && a.trading_enabled !== true && adm.state && adm.state !== "admitted";
+                                                    if (notAdmitted) return (
+                                                        <span data-testid={`trading-not-admitted-${a.account_number}`} title={adm.reason || "not admitted by the rules policy"}
+                                                            className="font-mono text-[10px] tracking-widest px-2 py-0.5 border border-[#FFB000]/40 text-[#FFB000] bg-[#FFB000]/10 max-w-[260px] truncate">
+                                                            ⏻ NOT ADMITTED · {adm.reason || "waiting for the rules policy"}
+                                                        </span>
+                                                    );
+                                                    return (
                                                 <button
                                                     onClick={() => patchAccount(a.id, { trading_enabled: a.trading_enabled !== true },
                                                         a.trading_enabled !== true ? `Trading enabled on ${a.label}` : `Trading disabled on ${a.label}`)}
@@ -635,6 +675,8 @@ export default function Accounts() {
                                                     }`}>
                                                     {a.trading_enabled !== true ? "⏻ TRADING OFF" : "⏻ TRADING ON"}
                                                 </button>
+                                                    );
+                                                })()}
                                                 {a.trading_enabled !== false && (() => {
                                                     const c = certMap[a.id];
                                                     if (!c || c.passed >= c.total) return null;
@@ -739,6 +781,17 @@ export default function Accounts() {
                                                         </div>
                                                     );
                                                 })()}
+                                                {a.connection_hint && !isFresh(a.last_heartbeat) && (
+                                                    <div className="mt-1 border border-[#FFB000]/40 bg-[#FFB000]/5 px-2 py-1 font-mono text-[10px] text-[#FFB000]"
+                                                        data-testid={`connection-hint-${a.account_number}`}>
+                                                        {a.connection_hint.text}
+                                                        {a.connection_hint.url && (
+                                                            <button onClick={() => { navigator.clipboard?.writeText(a.connection_hint.url); toast.success("URL copied"); }}
+                                                                data-testid={`connection-hint-copy-${a.account_number}`}
+                                                                className="ml-2 underline hover:text-white">COPY URL</button>
+                                                        )}
+                                                    </div>
+                                                )}
                                                 <button onClick={() => refreshBalance(a.id)}
                                                     disabled={!!refreshingBalance[a.id]}
                                                     data-testid={`refresh-balance-${a.account_number}`}
@@ -893,7 +946,7 @@ export default function Accounts() {
                                         </div>
                                     )}
 
-                                    <AccountCertification accountId={a.id} />
+                                    <AccountCertification accountId={a.id} item={certMap[a.id] || null} onChanged={load} />
                                 </div>
                             );
                         })}

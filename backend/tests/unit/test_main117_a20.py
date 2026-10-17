@@ -216,6 +216,6 @@ def test_update_sh_defaults_to_the_signed_policy_not_633():
     upd = open(os.path.join(ROOT, "deploy", "update.sh")).read()
     seg = upd[upd.index("APP_ENV_VAL=$(app_env)"):upd.index("pruning dangling images")]
     assert 'APPROVED_POLICY="${APPROVED_POLICY:-approved}"' in seg and ':-6/3/3}' not in seg
-    assert "|approved)$'" in seg and 'if [ "${RECONCILE_EXPECT}" != approved ]' in seg
+    assert "|approved|rules)$'" in seg and 'if [ "${RECONCILE_EXPECT}" != approved ] && [ "${RECONCILE_EXPECT}" != rules ]' in seg   # A2 (Easy Start): rules is the default
     for f in ("docs/RELEASE_ACCEPTANCE_CHECKLIST.md", "docs/PRODUCTION_DEPLOY_CHECKLIST.md"):
         assert "--expect approved" in open(os.path.join(ROOT, f)).read() or "RECONCILE_EXPECT=approved" in open(os.path.join(ROOT, f)).read()

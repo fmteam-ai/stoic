@@ -145,7 +145,10 @@ The Dashboard BOT PULSE panel shows the bot's latest verdict for every account, 
 - **Cooldowns** — after a loss the same setup is blocked for a while (anti-tilt).
 - **Drawdown ladder** — after a bad day the bot stands down for the window. This is a feature.
 - **No edge** — ranging, conflicted markets can legitimately produce nothing for hours.
-- **News freeze** — high-impact events (FOMC, CPI, NFP) freeze new entries around the print.
+- **News freeze** — high-impact events (FOMC, CPI, NFP) freeze new entries around the print (management of open positions keeps running).
+- **Cross-account loss cooldown** — another of your accounts just lost on the same symbol + direction; all accounts wait out the cooldown.
+- **Gold off-hours / Asia skip** — 21:00–06:00 UTC and 00:00–07:00 UTC weekdays by default for XAUUSD.
+- **Spread unknown or stale** — deterministic engines refuse to enter when the broker spread is missing or older than two minutes.
 
 ## When it is an actual problem
 - Account shows DISCONNECTED → your EA / terminal / VPS is offline.
@@ -163,6 +166,44 @@ Press **REPLAY** to step through the trade's flight recorder: decision → entry
 
 ## Loss Lab
 Losing trades get an automatic AI post-mortem: what the market did, what the bot believed, and the mistake taxonomy. Recurring mistakes automatically tighten future behavior (wider stops, higher confidence floors) — you can see and revert every adjustment.`,
+    },
+    {
+        slug: "deterministic-engines", cat: "bot", title: "Scalp Fast Path, deterministic engines and Gold Trend Pulse",
+        summary: "Rule-based engines with fixed geometry — what each one does and how to read the Scalp page.",
+        body: `## Why deterministic engines?
+The Dual-AI path explains and scores; the **deterministic engines** place the actual scalps with fixed, auditable geometry. No LLM sits in their loop, so they behave identically whether or not an AI key is configured.
+
+## The engines
+- **hf_scalp / hf_scalp_fast** — tick-driven gold scalps (EMA slope, RSI reset, Donchian breakout), broker-side SL/TP, cost-aware break-even, time stop.
+- **breakout_m15** — M15 range breakout with ATR-scaled targets.
+- **range_fade** — mean reversion at range edges in a RANGE regime.
+- **gold_trend_pulse** — XAUUSD-only M5 trend-pulse engine. **Ships disabled**; starts in SHADOW mode (records, never orders). demo_live only on attested DEMO accounts after confirmation and a rolling gate of ≥ 100 labelled shadow baskets.
+
+## Reading the Scalp page
+Each runner card shows the engine, symbol, live features (slope, RSI, breakout distance), the last decisions with their reasons, and **Shadow Performance** scoped to that runner. Gold Trend Pulse adds the News Mode plan (next USD event, PRE policy, release window) and the sweep/runner status.
+
+## Live-price features (optional)
+\`engine_live_features_enabled\` (Bot Config, default OFF) lets price-dependent inputs update from the current broker price instead of the last closed bar. With the flag off nothing changes while a one-week shadow comparison is recorded for review.
+
+## Guardrails that always apply
+Loss cooldown across all your accounts, anti-tilt, calendar/news freeze, gold off-hours, Friday flat, EOD quiet window (panic/protection closes exempt), broker-side SL/TP mandatory, close watchdog with EA acknowledgement. See Guide sections 16–18.`,
+    },
+    {
+        slug: "ai-provider-keys", cat: "bot", title: "AI provider: Anthropic key vs Emergent Universal Key",
+        summary: "Which AI features need a key, how to switch to direct Anthropic, and what still works without one.",
+        body: `## What the AI layer does — and does not do
+Claude writes signal explanations, scores news sentiment and Fed tone, runs post-mortems, the Strategy Optimizer, Bot Doctor, the Co-Pilot and the weekly digest. It **never** opens, sizes or closes a trade. Engines and guardrails are deterministic and keep running if the model is unreachable.
+
+## Two providers
+1. **Direct Anthropic (recommended for self-hosted)** — Admin → Integrations → AI → paste \`ANTHROPIC_API_KEY\` (sk-ant-…) → **Test**. Takes precedence, applies instantly, billed by Anthropic.
+2. **Emergent Universal Key** — fallback. Works only for apps hosted on Emergent; any other host receives *403 Forbidden* before the key is checked.
+
+## Where to look
+- **Bot Health → LLM PROVIDER · COST** — active provider, models per tier, today's calls per feature against the daily cap, last (redacted) error. "Universal Key not allowed from this host" means exactly that — don't regenerate the key.
+- **Bot Health → News veto** — turns amber with *news veto inactive — LLM unavailable* when sentiment is empty; the same note appears in each signal's notes.
+
+## When the model is unavailable
+Signals keep firing from the engines (without narration), Bot Doctor uses its rule-based fallback, post-mortems/optimizer/Co-Pilot pause. Keys are never logged or returned by any endpoint.`,
     },
     // ── Billing ────────────────────────────────────────────────────────
     {

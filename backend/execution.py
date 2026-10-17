@@ -16,6 +16,7 @@ from safety_guardian import audit_pre_trade
 from order_authorization import authorize_order
 from ws_manager import manager as ws_manager
 from silent_failures import record_swallow
+from strategy_engines import engine_for_signal
 
 logger = logging.getLogger("execution")
 
@@ -35,6 +36,25 @@ def broker_identity_snapshot(account: dict) -> dict:
                             or (account.get("ea_identity") or {})
                             .get("installation_id")),
     }
+
+
+def _entry_dxy_value(signal: dict):
+    """v1.60.39 — DXY level at entry: signal.dxy (snapshot dict or number) else entry_context.dxy."""
+    dxy = signal.get("dxy")
+    if isinstance(dxy, dict):
+        return dxy.get("current_price")
+    if isinstance(dxy, (int, float)):
+        return dxy
+    return (signal.get("entry_context") or {}).get("dxy")
+
+
+async def _cached_news_ai(base: str):
+    """v1.60.39 — cache-only read for engines that bypass the signal pipeline (scalp); never fetches."""
+    try:
+        from news_understanding import cached_news_ai
+        return await cached_news_ai(base)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def stamp_pamm_identity(trade_doc: dict, signal: dict) -> None:
@@ -397,6 +417,8 @@ class MT5BridgeEngine(ExecutionEngine):
             "stop_loss": signal["stop_loss"],
             "original_stop_loss": signal["stop_loss"],
             "take_profit": signal["take_profit"],
+            "original_take_profit": signal.get("original_take_profit") or signal["take_profit"],
+            "tp_plan": signal.get("tp_plan"), "exit_policy": signal.get("exit_policy") or "fixed_tp",
             "tp1": signal.get("tp1"),
             "tp2": signal.get("tp2"),
             "tp3": signal.get("tp3"),
@@ -420,14 +442,23 @@ class MT5BridgeEngine(ExecutionEngine):
             "closed_at": None,
             "error": None,
             "origin": signal.get("origin", "manual"),
-            "engine": signal.get("engine"),           # N99-1 — "scalp" marks the scalp counter; origin stays "auto"
+            "engine": engine_for_signal(signal),      # N99-1 / v1.60.32 — persisted at open (scope fallback), never None for a known engine
             "scope": signal.get("scope"),
+            "gold_trend_pulse": signal.get("gold_trend_pulse"),   # v1.60.57 — regime / trigger / basket / time-stop for the exit rules
+            "stale_feature_entry": bool(signal.get("stale_feature_entry")),   # #55(5) — live price was > 0.5×ATR15 from the closed-bar features
+            "engine_shadow_compare": signal.get("engine_shadow_compare"),
             "strategy_class": signal.get("strategy_class"),
             "market_regime": signal.get("market_regime"),
             "risk_pct": (signal.get("risk_pct")
                          or (signal.get("adaptive_sizing") or {}).get("risk_pct")),
             "scalp_lease_epoch": signal.get("scalp_lease_epoch"),
             "trend_ride": signal.get("trend_ride"),
+            "trend_ride_applied": bool(signal.get("trend_ride")),   # v1.60.36 — compare both arms in the Strategy Report
+            "entry_context": signal.get("entry_context"),           # v1.60.36 — DXY/VIX/10Y/MTF/setup score at entry
+            # v1.60.39 — raw entry snapshots too, so post-mortems never show null when the data existed
+            "dxy": _entry_dxy_value(signal),
+            "news_ai": signal.get("news_ai") or await _cached_news_ai(base_symbol),
+            "sentiment": signal.get("sentiment"),
             "versions": signal.get("versions"),
             "partial_closed": False,
             "breakeven_set": False,
@@ -619,7 +650,7 @@ class PaperEngine(ExecutionEngine):
             )
             return {"blocked": "market_closed", **closure}
         # caps enforced by the account-wide reservation (A13 P1-02)
-        quote = await get_quote(signal["symbol"])
+        quote = await get_quote(signal["symbol"], allow_stale=False)   # v1.60.50 — no fills on a stale quote
         fill_price = quote.get("price") or signal["entry_price"]
 
         trade_doc = {
@@ -633,6 +664,8 @@ class PaperEngine(ExecutionEngine):
             "entry_price": round(fill_price, 5),
             "stop_loss": signal["stop_loss"],
             "take_profit": signal["take_profit"],
+            "original_take_profit": signal.get("original_take_profit") or signal["take_profit"],
+            "tp_plan": signal.get("tp_plan"), "exit_policy": signal.get("exit_policy") or "fixed_tp",
             "tp1": signal.get("tp1"),
             "tp2": signal.get("tp2"),
             "tp3": signal.get("tp3"),
@@ -658,7 +691,7 @@ class PaperEngine(ExecutionEngine):
             "closed_at": None,
             "error": None,
             "origin": signal.get("origin", "manual"),
-            "engine": signal.get("engine"),           # N99-1 / A15-7 — paper rows carry the engine too: scalp vs auto caps stay separate
+            "engine": engine_for_signal(signal),      # N99-1 / A15-7 / v1.60.32 — paper rows carry the engine too
             # N108-2 — NO `scope` on paper rows: the scalp safety sweep (scalp/engine.py) reconciles scope=scalp_fast
             # rows against broker fills, which paper trades never get → it would block paper accounts (position_mismatch)
             "strategy_class": signal.get("strategy_class"),
@@ -720,7 +753,7 @@ async def settle_paper_trades_against_price() -> int:
         sym = t["symbol"]
         if sym not in quote_cache:
             try:
-                quote_cache[sym] = await get_quote(sym)
+                quote_cache[sym] = await get_quote(sym, allow_stale=False)   # v1.60.50
             except Exception:
                 continue
         q = quote_cache[sym]

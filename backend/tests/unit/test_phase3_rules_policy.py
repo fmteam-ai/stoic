@@ -190,8 +190,13 @@ def test_u14_inventory_auto_approved_under_rules(signer, monkeypatch):
     assert len(proj2["per_user_blocks"]["u1"]) == 2
     import trading_authority as ta
     monkeypatch.setattr(ip, "production_mode", lambda: False)
+    # prod v1.60.23 (bug 3) — the breach closes ONLY the breaching account (the younger, beyond-cap one);
+    # the owner's older admitted account and every other user stay FULL
+    assert set(proj2["per_account_blocks"]) == {str(other["_id"])}
     mine = _run(ta.inventory_domain(db, {"_id": acc["_id"], "user_id": "u1"}))
-    assert mine["level"] == "CLOSE_ONLY" and "rules policy breach for this user" in mine["reason"]
+    assert mine["level"] == "FULL"
+    second = _run(ta.inventory_domain(db, {"_id": other["_id"], "user_id": "u1"}))
+    assert second["level"] == "CLOSE_ONLY" and "this account:" in second["reason"] and "beyond the policy cap" in second["reason"]
     theirs = _run(ta.inventory_domain(db, {"_id": ObjectId(), "user_id": "u2"}))
     assert theirs["level"] == "FULL"                                      # another user is untouched
     src = _read("backend", "inventory_projection.py")

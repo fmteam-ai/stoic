@@ -13,6 +13,7 @@ Returns the absolute dollar VaR plus a per-symbol breakdown.
 """
 import math
 import logging
+import os
 from typing import Iterable
 
 from market import get_history, compute_indicators
@@ -218,6 +219,23 @@ async def calculate_var(
     var_99_usd = Z_99 * sigma_pct * total_notional
     cvar_95_usd = ES_MULT_95 * sigma_pct * total_notional
     cvar_99_usd = ES_MULT_99 * sigma_pct * total_notional
+    # prod v1.60.28 — stop-aware bound: when EVERY priceable position carries a protective stop, the 1-day loss
+    # cannot exceed the sum of stop distances (× STOP_GAP_FACTOR for slippage/gaps). Unbounded parametric VaR on
+    # a single 0.05-lot XAUUSD position on $10k read ~6-7 % and tripped the 5 % cap although the stop risked <1 %.
+    stop_bound = _stop_bounded_loss_usd(positions, rows)
+    if stop_bound is None:
+        # #43 (a) — MIXED bound: positions WITH a stop contribute their stop distance (× gap factor), only the
+        # positions without one keep their parametric share. One stop-less row used to unbound the whole book.
+        stop_bound = _mixed_bounded_loss_usd(positions, rows, var_95_usd)
+        if stop_bound is not None:
+            notes.append("VaR mixed bound: stop distance for stopped positions, parametric share for the rest")
+    if stop_bound is not None and stop_bound < var_95_usd:
+        notes.append(f"VaR bounded by protective stops: ${stop_bound:,.2f} (parametric ${var_95_usd:,.2f}; "
+                     f"gap factor ×{STOP_GAP_FACTOR})")
+        var_95_usd = min(var_95_usd, stop_bound)
+        var_99_usd = min(var_99_usd, stop_bound)
+        cvar_95_usd = min(cvar_95_usd, stop_bound)
+        cvar_99_usd = min(cvar_99_usd, stop_bound)
     return {
         "var_95_usd": round(var_95_usd, 2),
         "var_95_pct_equity": round((var_95_usd / equity) * 100.0, 3) if equity else 0.0,
@@ -228,9 +246,74 @@ async def calculate_var(
         "cvar_99_usd": round(cvar_99_usd, 2),
         "cvar_99_pct_equity": round((cvar_99_usd / equity) * 100.0, 3) if equity else 0.0,
         "portfolio_sigma_pct": round(sigma_pct * 100.0, 3),
+        "stop_bounded_loss_usd": round(stop_bound, 2) if stop_bound is not None else None,
         "horizon_days": horizon_days,
         "equity": equity,
         "positions": rows,
         "correlation_matrix": corr,
         "notes": notes,
     }
+
+
+STOP_GAP_FACTOR = float(os.environ.get("PORTFOLIO_VAR_STOP_GAP_FACTOR", "1.5"))
+
+
+def open_risk_usd(position: dict, notional: float | None = None) -> float | None:
+    """v1.60.52 (#37) — distance-to-stop risk of ONE position in USD (no gap factor): |entry − stop| / entry × notional.
+    0.0 when the stop sits at or beyond breakeven (BUY stop ≥ entry, SELL stop ≤ entry — zero open risk);
+    None when there is no usable stop (then only the parametric figure can describe it)."""
+    entry = float(position.get("entry_price") or 0)
+    lot = float(position.get("lot_size") or 0)
+    if entry <= 0 or lot <= 0:
+        return None
+    try:
+        # #43 (a) — a row whose live stop is not (yet) mirrored still has the stop it was opened with
+        sl = float(position.get("stop_loss") or position.get("original_stop_loss") or 0)
+    except (TypeError, ValueError):
+        return None
+    if sl <= 0:
+        return None
+    side = str(position.get("action") or position.get("side") or "").upper()
+    if (side in ("BUY", "LONG") and sl >= entry) or (side in ("SELL", "SHORT") and sl <= entry):
+        return 0.0
+    if notional is None:
+        from instruments import notional_usd
+        notional = notional_usd(base_symbol(position.get("symbol")), lot, entry)
+    return abs(entry - sl) / entry * float(notional)
+
+
+def _stop_bounded_loss_usd(positions: list[dict], rows: list[dict]) -> float | None:
+    """Pure — Σ open_risk_usd × gap factor over the priced rows, or None when any priced position has no usable stop:
+    then the parametric figure stands unbounded. v1.60.52 (#37): a stop at/beyond breakeven counts as ZERO risk
+    (it used to return None → unbounded parametric VaR → a protected scratch was closed as 'var_cap')."""
+    priced = [p for p in positions if float(p.get("lot_size") or 0) > 0 and float(p.get("entry_price") or 0) > 0
+              and base_symbol(p.get("symbol"))]
+    if len(priced) != len(rows) or not priced:
+        return None
+    total = 0.0
+    for p, r in zip(priced, rows):
+        risk = open_risk_usd(p, r["notional"])
+        if risk is None:
+            return None
+        total += risk
+    return total * STOP_GAP_FACTOR
+
+
+def _mixed_bounded_loss_usd(positions: list[dict], rows: list[dict], parametric_var_usd: float) -> float | None:
+    """#43 (a) — Σ stop-bounded loss (× gap factor) over positions with a usable stop + the parametric VaR share
+    (by notional weight) of the positions without one. None when no position has a stop (pure parametric)."""
+    priced = [p for p in positions if float(p.get("lot_size") or 0) > 0 and float(p.get("entry_price") or 0) > 0
+              and base_symbol(p.get("symbol"))]
+    if len(priced) != len(rows) or not priced:
+        return None
+    total, unstopped_weight, any_stop = 0.0, 0.0, False
+    for p, r in zip(priced, rows):
+        risk = open_risk_usd(p, r["notional"])
+        if risk is None:
+            unstopped_weight += float(r.get("weight") or 0)
+        else:
+            any_stop = True
+            total += risk * STOP_GAP_FACTOR
+    if not any_stop:
+        return None
+    return total + parametric_var_usd * unstopped_weight

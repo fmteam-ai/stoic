@@ -234,7 +234,6 @@ def _pairing_code() -> str:
 
 
 def _digest(value: str) -> str:
-    import hashlib
     return hashlib.sha256(value.encode()).hexdigest()
 
 

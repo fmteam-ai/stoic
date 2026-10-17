@@ -89,7 +89,9 @@ class TestWiring:
     def test_crypto_exempt_and_idempotent(self):
         src = open(os.path.join(BACKEND, "friday_flat.py")).read()
         assert "CRYPTO_BASES" in src
-        assert '"friday_flat_at": {"$exists": False}' in src
+        # #48 — no longer idempotent-by-exclusion: Friday Flat re-issues via close_commands.mandatory_close (backoff)
+        # until the position is confirmed gone, and takes over unacked closes instead of skipping them
+        assert '"close_requested": {"$ne": True}' not in src and "mandatory_close(db, tr, reason=\"friday_flat\"" in src
 
     def test_frontend_ui(self):
         fe = open(_os.path.join(_REPO_DIR, "frontend", "src/pages/BotConfig.jssx").replace("jssx", "jsx")).read()

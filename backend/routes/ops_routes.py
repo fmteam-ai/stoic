@@ -1,5 +1,6 @@
 """Release-readiness probe — verifies the complete trading topology before a
 deployment is accepted (used by deploy/update.sh). METRICS_TOKEN gated."""
+import json
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -68,6 +69,7 @@ async def _ops_admin_step_up(request: Request, action: str):
     await require_step_up(db, u, request, action)
     await audit_event(db, u["id"], action, {"path": str(request.url.path)},
                       request, step_up=True)
+    request.state.ops_actor_id = u["id"]
     return True, u.get("email") or "admin"
 
 
@@ -85,6 +87,44 @@ def _as_dt(v):
 def _iso(v):
     dt = _as_dt(v)
     return dt.isoformat() if dt else None
+
+
+@router.post("/ops/dependency-audit")
+async def publish_dependency_audit(request: Request):
+    """daily report D1/D2 — CI (security-scan / weekly dependency-audit) publishes its scan result here so the
+    security worker reads platform_state.dependency_audit_{python|frontend} instead of reporting "no data".
+    METRICS_TOKEN bearer or admin session; body ≤ 256 KiB; vulnerabilities normalised to
+    {package, version, id, score, fix}. Idempotent upsert, never deletes."""
+    allowed, actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=401, content={"detail": "METRICS_TOKEN bearer or admin session required"})
+    raw = await request.body()
+    if len(raw) > 262_144:
+        return JSONResponse(status_code=413, content={"detail": "payload too large"})
+    try:
+        body = json.loads(raw or b"{}")
+    except ValueError:
+        return JSONResponse(status_code=400, content={"detail": "invalid JSON"})
+    kind = str(body.get("kind") or "")
+    if kind not in ("python", "frontend"):
+        return JSONResponse(status_code=400, content={"detail": "kind must be python or frontend"})
+    vulns = []
+    for v in (body.get("vulnerabilities") or [])[:500]:
+        if not isinstance(v, dict):
+            continue
+        try:
+            score = float(v.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0.0
+        vulns.append({"package": str(v.get("package") or "")[:120], "version": str(v.get("version") or "")[:60],
+                      "id": str(v.get("id") or "")[:80], "score": score, "fix": (str(v.get("fix"))[:120] if v.get("fix") else None)})
+    db = get_db()
+    doc = {"kind": kind, "vulnerabilities": vulns, "count": len(vulns),
+           "source": str(body.get("source") or "ci")[:80], "commit": str(body.get("commit") or "")[:64],
+           "tool": str(body.get("tool") or "")[:80], "published_by": actor,
+           "published_at": datetime.now(timezone.utc).isoformat()}
+    await db.platform_state.update_one({"_id": f"dependency_audit_{kind}"}, {"$set": doc}, upsert=True)
+    return {"ok": True, "kind": kind, "count": len(vulns), "published_at": doc["published_at"]}
 
 
 @router.get("/ops/release-readiness")
@@ -476,7 +516,6 @@ async def soak_report(request: Request, days: int = 14):
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
     db = get_db()
-    from datetime import timedelta
     days = min(max(int(days), 1), 45)
     since = datetime.now(timezone.utc) - timedelta(days=days)
     samples = await db.ops_soak_samples.find(
@@ -597,19 +636,201 @@ async def slo_status(request: Request):
     return {"slos": await compute_slos(get_db())}
 
 
+@router.get("/ops/ea-fleet")
+async def ea_fleet(request: Request):
+    """v1.60.43 — Stable EX5 panel + Canary Soak panel. Which EX5 hashes the server accepts (signed record:
+    current + signed previous), how many terminals run each (and any terminal on an UNACCEPTED build), and for
+    terminals on the current (candidate) EA: heartbeat version/age, M1 payloads per hour (24 h), acks / failures /
+    TP-confirmed counts."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from ea_capabilities import accepted_ea_sha256s, _signed_release_record
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    rec = _signed_release_record() or {}
+    prev = rec.get("previous") or {}
+    accepted = []
+    for h in accepted_ea_sha256s():
+        role = "current" if h == str(rec.get("ex5_sha256") or "").lower() else \
+               "previous" if h == str(prev.get("ex5_sha256") or "").lower() else "env_pin"
+        ver = rec.get("version") if role == "current" else prev.get("version") if role == "previous" else None
+        accepted.append({"sha256": h, "role": role, "version": ver, "terminals": 0})
+    by_hash = {a["sha256"]: a for a in accepted}
+    terminals, unaccepted, canary = [], [], []
+    since = now - timedelta(hours=24)
+    async for acc in db.accounts.find({"mode": {"$ne": "paper"}, "ea_version": {"$exists": True}},
+                                      {"label": 1, "ea_version": 1, "ea_binary_sha256": 1, "last_heartbeat": 1, "trading_enabled": 1,
+                                       "broker_server": 1, "environment_attestation": 1, "ea_cmd_stats": 1, "account_number": 1}):
+        h = str(acc.get("ea_binary_sha256") or "").lower()
+        hb = _as_dt(acc.get("last_heartbeat"))
+        row = {"account_id": str(acc["_id"]), "label": acc.get("label") or acc.get("account_number"), "broker_server": acc.get("broker_server"),
+               "ea_version": acc.get("ea_version"), "ex5_sha256": h or None, "accepted": h in by_hash,
+               "role": (by_hash.get(h) or {}).get("role"), "trading_enabled": bool(acc.get("trading_enabled")),
+               "heartbeat_age_sec": None if hb is None else int((now - hb).total_seconds()),
+               "attested": ((acc.get("environment_attestation") or {}).get("environment"))}
+        if h in by_hash:
+            by_hash[h]["terminals"] += 1
+        elif acc.get("trading_enabled"):
+            unaccepted.append(row)
+        terminals.append(row)
+        if rec.get("version") and str(acc.get("ea_version")) == str(rec.get("version")) and prev:
+            hourly = {}
+            async for ev in db.ea_feed_events.find({"account_id": str(acc["_id"]), "at": {"$gte": since}}, {"at": 1, "payloads": 1}):
+                k = ev["at"].strftime("%Y-%m-%dT%H:00Z") if hasattr(ev["at"], "strftime") else str(ev["at"])[:13]
+                hourly[k] = hourly.get(k, 0) + int(ev.get("payloads") or 1)
+            st = acc.get("ea_cmd_stats") or {}
+            canary.append({**row, "m1_payloads_24h": sum(hourly.values()), "m1_payloads_per_hour": round(sum(hourly.values()) / 24, 1),
+                           "m1_hourly": dict(sorted(hourly.items())), "acks_ok": int(st.get("ok") or 0),
+                           "acks_failed": int(st.get("failed") or 0), "tp_confirmed": int(st.get("tp_confirmed") or 0),
+                           "last_cmd_error": st.get("last_error"), "last_cmd_at": st.get("last_at")})
+    return {"record": {"version": rec.get("version"), "ex5_sha256": rec.get("ex5_sha256"), "previous_version": prev.get("version"),
+                       "previous_ex5_sha256": prev.get("ex5_sha256"), "signed": bool(rec)},
+            "accepted": accepted, "terminals": terminals, "unaccepted_enabled": unaccepted,
+            "canary": {"version": rec.get("version") if prev else None, "terminals": canary,
+                       "soak_ok": bool(canary) and all(c["acks_failed"] == 0 and c["accepted"] for c in canary)},
+            "at": now.isoformat()}
+
+
+@router.get("/ops/loops")
+async def safety_loops(request: Request):
+    """v1.60.39 — last-run time of every background loop (loop_progress), so a loop that stops is visible on
+    Admin → Bot Health instead of silently never running (13 Oct intent sweep, 14 Oct deploy watch)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    rows = []
+    async for lp in db.loop_progress.find({}):
+        done = _as_dt(lp.get("last_iteration_completed_at"))
+        ivl = int(lp.get("expected_interval_sec") or 60)
+        age = (now - done).total_seconds() if done else None
+        rows.append({"loop": str(lp["_id"]), "last_run_at": _iso(done), "age_sec": None if age is None else int(age),
+                     "expected_interval_sec": ivl, "fresh": bool(done and age <= max(3 * ivl, 120)),
+                     "processed_count": lp.get("processed_count"), "last_duration_ms": lp.get("last_duration_ms"),
+                     "worker": lp.get("worker") or lp.get("host")})
+    rows.sort(key=lambda r: (r["fresh"], r["loop"]))
+    st = await db.platform_state.find_one({"_id": "release_state"}, {"deploy_watch": 1}) or {}
+    return {"loops": rows, "deploy_watch_pending": bool(st.get("deploy_watch")),
+            "in_process_workers": os.environ.get("BACKGROUND_WORKERS_IN_PROCESS", "").lower() == "true",
+            "generated_at": now.isoformat()}
+
+
+@router.get("/ops/config-drift")
+async def config_drift(request: Request, days: int = 7):
+    """v1.60.40 — Config Drift telemetry: every SAVE whose response differed from what the client sent
+    (recorded by POST /bot/config/drift). Count + per-field tally so a recurring mismatch is visible on Bot Health."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    days = max(1, min(90, int(days)))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    db = get_db()
+    per_field: dict = {}
+    events = 0
+    users: set = set()
+    last = None
+    async for ev in db.config_drift_events.find({"at": {"$gte": since}}, {"fields": 1, "user_id": 1, "at": 1}).sort("at", -1).limit(2000):
+        events += 1
+        users.add(str(ev.get("user_id")))
+        last = last or _iso(_as_dt(ev.get("at")))
+        for f in ev.get("fields") or []:
+            name = str(f.get("field") or "?")
+            per_field[name] = per_field.get(name, 0) + 1
+    top = sorted(({"field": k, "count": v} for k, v in per_field.items()), key=lambda x: -x["count"])[:12]
+    return {"days": days, "events": events, "users": len(users), "last_at": last, "fields": top}
+
+
+@router.get("/ops/risk-regime")
+async def risk_regime_card(request: Request):
+    """v1.60.53 (B5) — advisory risk regime card: score, components, top drivers, last update. SHADOW — not
+    affecting trades. Also Finnhub + GVZ/VIX status so Bot Health can show 'not configured' / stale (info/amber)."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    db = get_db()
+    from risk_regime import latest_advisory
+    from providers.finnhub import status as finnhub_status
+    from macro.fred import vol_context
+    adv = await latest_advisory(db)
+    fred = await db.fred_cache.find_one({"_id": "snapshot"}, {"payload.series": 1})
+    series = ((fred or {}).get("payload") or {}).get("series") or {}
+    return {"advisory": adv, "shadow": True, "note": "SHADOW — not affecting trades",
+            "geo_risk_gate_enabled_default": False, "finnhub": finnhub_status(),
+            "vol": {**vol_context(series), "GVZCLS": series.get("GVZCLS"), "VIXCLS": series.get("VIXCLS")}}
+
+
+@router.get("/ops/news-sources")
+async def news_sources(request: Request):
+    """v1.60.39 — calendar ✓ / RSS+AI ✓ / NewsAPI off. Status is read from platform_state.news_sources (written by
+    the worker that fetches) with the in-process view as fallback, so production shows the real wire state."""
+    allowed, _actor = await _ops_actor(request)
+    if not allowed:
+        return JSONResponse(status_code=403, content={"detail": "forbidden"})
+    from economic_calendar import feed_status
+    from news_status import load_source_status, newsapi_configured
+    from news_understanding import CACHE_TTL, FAIL_TTL, source_status
+    persisted = await load_source_status()
+    now = datetime.now(timezone.utc)
+    cal = persisted.get("calendar") or feed_status()
+    rss = persisted.get("rss_ai") or source_status()
+    fetched = _as_dt(rss.get("last_fetch_at"))
+    scored = _as_dt(rss.get("last_scored_at"))
+    age = (now - fetched).total_seconds() if fetched else None
+    if fetched is None:
+        rss_state = "IDLE"
+    elif rss.get("last_error") or rss.get("last_llm_error") or (scored is None):
+        rss_state = "DEGRADED" if rss.get("rss_items") else "DOWN"
+    else:
+        rss_state = "OK" if age <= 2 * (CACHE_TTL + FAIL_TTL) else "STALE"
+    bases = []
+    async for doc in get_db().news_ai_cache.find({}, {"net": 1, "label": 1, "headlines": 1, "fetched_at": 1}):
+        bases.append({"base": str(doc["_id"]), "net": doc.get("net"), "label": doc.get("label"),
+                      "headlines": doc.get("headlines"), "fetched_at": doc.get("fetched_at")})
+    return {
+        "calendar": {"status": cal.get("status"), "provider": cal.get("provider"),
+                     "last_fetch_at": cal.get("last_fetch_at"), "cached_events": cal.get("cached_events"),
+                     "last_error": cal.get("last_error"),
+                     # v1.60.40 — dual source + staleness alert (> 2 h) + fail-safe (> 6 h)
+                     "active_source": cal.get("active_source"), "sources": cal.get("sources") or {},
+                     "stale": cal.get("stale"), "failsafe_active": cal.get("failsafe_active"),
+                     "stale_after_min": cal.get("stale_after_min"), "failsafe_after_min": cal.get("failsafe_after_min"),
+                     "attribution": cal.get("attribution")},
+        "rss_ai": {"status": rss_state, "last_fetch_at": _iso(fetched), "last_scored_at": _iso(scored),
+                   "age_sec": None if age is None else int(age), "rss_items": rss.get("rss_items"),
+                   "newsapi_items": rss.get("newsapi_items"), "headlines": rss.get("headlines"),
+                   "last_error": rss.get("last_error"), "last_llm_error": rss.get("last_llm_error"),
+                   "bases": bases},
+        "newsapi": {"configured": newsapi_configured(),
+                    "note": "optional supplement only — free tier delays articles up to 24 h"},
+        "sentiment_source": "rss_ai",
+        "generated_at": now.isoformat(),
+    }
+
+
 @router.get("/ops/releases")
 async def releases_state(request: Request):
     """iter-160 — canary/staged rollout state + deployment history."""
     allowed, _actor = await _ops_actor(request)
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
-    from release_channels import sync_channels
+    from release_channels import promotion_readiness, sync_channels
     db = get_db()
     st = await sync_channels(db)
     st.pop("_id", None)
     history = await db.release_history.find(
         {}, {"_id": 0}, sort=[("at", -1)]).limit(10).to_list(10)
-    return {"state": st, "history": history}
+    return {"state": st, "history": history, "readiness": await promotion_readiness(db)}
+
+
+async def _channel_audit(request: Request, actor, action: str, before: dict, after: dict):
+    """v1.60.35 — who / when / from → to for every manual channel change (append-only audit_log)."""
+    from step_up import audit_event
+    await audit_event(get_db(), getattr(request.state, "ops_actor_id", None) or actor, action,
+                      {"by": actor, "from": before.get("stable"), "to": after.get("stable"),
+                       "candidate_before": before.get("candidate"), "pinned_after": bool(after.get("pinned"))},
+                      request, step_up=True)
 
 
 @router.post("/ops/releases/canary")
@@ -632,11 +853,14 @@ async def releases_promote(request: Request):
     allowed, actor = await _ops_admin_step_up(request, "release_promote")
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
-    from release_channels import promote
+    from release_channels import _state, promote
+    db = get_db()
+    before = await _state(db)
     try:
-        st = await promote(get_db(), actor=actor or "admin")
+        st = await promote(db, actor=actor or "admin")
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": error_detail(400, "release_promote_invalid", e)})
+    await _channel_audit(request, actor, "release_promote_done", before, st)
     st.pop("_id", None)
     return st
 
@@ -646,11 +870,14 @@ async def releases_rollback(request: Request):
     allowed, actor = await _ops_admin_step_up(request, "release_rollback")
     if not allowed:
         return JSONResponse(status_code=403, content={"detail": "forbidden"})
-    from release_channels import rollback
+    from release_channels import _state, rollback
+    db = get_db()
+    before = await _state(db)
     try:
-        st = await rollback(get_db(), actor=actor or "admin")
+        st = await rollback(db, actor=actor or "admin")
     except ValueError as e:
         return JSONResponse(status_code=400, content={"detail": error_detail(400, "release_rollback_invalid", e)})
+    await _channel_audit(request, actor, "release_rollback_done", before, st)
     st.pop("_id", None)
     return st
 
@@ -1100,3 +1327,56 @@ async def ack_all_alerts(request: Request):
         {"$set": {"acked_at": datetime.now(timezone.utc),
                   "acked_by": actor}})
     return {"ok": True, "acked": res.modified_count}
+
+
+@router.get("/ops/go-live-checklist")
+async def go_live_checklist(request: Request):
+    """A5 (Easy Start) — ONE page of green/red rows for the operator: release signed · rules policy active · workers
+    healthy · Cloudflare IP trust · backups · admin 2FA. Every red row carries one fix (a button action or the one
+    command to copy). Built on release_readiness (admin + enrolled 2FA, or the metrics token)."""
+    resp = await release_readiness(request)
+    if resp.status_code == 403:
+        return resp
+    import json as _json
+    ready = _json.loads(bytes(resp.body).decode()) if isinstance(resp, JSONResponse) else resp
+    checks = ready.get("checks") or {}
+    db = get_db()
+    import rules_policy as rp
+    pol = await rp.active(db)
+    exp = rp.expiry(pol)
+    admins = await db.users.find({"role": "admin"}, {"email": 1, "two_factor_enabled": 1}).to_list(length=50)
+    no_2fa = [a.get("email") for a in admins if not a.get("two_factor_enabled")]
+    cf_trust = os.environ.get("TRUST_CF_CONNECTING_IP", "false").lower() == "true"
+    behind_cf = bool(request.headers.get("cf-connecting-ip") or request.headers.get("cf-ray"))
+    backup_at = None
+    bk = await db.platform_state.find_one({"_id": "last_backup"}) or {}
+    backup_at = bk.get("at")
+    backup_age_h = None
+    if backup_at:
+        try:
+            backup_age_h = (datetime.now(timezone.utc) - datetime.fromisoformat(str(backup_at).replace("Z", "+00:00"))).total_seconds() / 3600
+        except ValueError:
+            backup_age_h = None
+    ea = checks.get("ea_release") or {}
+    workers = checks.get("workers") or {}
+    from release_truth import release_signed_verdict
+    rs = release_signed_verdict(ea, checks.get("release_attestation"))
+    rows = [
+        {"id": "release_signed", "label": "Release signed (EA + installer)", "ok": rs["ok"], "detail": rs["detail"], "checks": rs["checks"],
+         "fix": None if rs["ok"] else {"kind": "command", "label": "Run the ea-release workflow, then", "command": "deploy/update.sh <tag>"}},
+        {"id": "rules_policy", "label": "Rules policy active", "ok": bool(pol) and not exp["expired"],
+         "detail": (f"{pol.get('policy_version')} · {exp['days_left']} day(s) left" if pol and not exp["expired"] else ("expired" if pol else "none active")),
+         "fix": None if (pol and not exp["expired"]) else {"kind": "action", "label": "Load latest signed policy", "action": "load_latest_policy", "link": rp.renew_link()}},
+        {"id": "workers", "label": "Workers healthy", "ok": bool(workers.get("ok")), "detail": ", ".join(f"{k} {'ok' if v.get('alive') else 'DOWN'}" for k, v in (workers.get("detail") or {}).items()) or "no worker leases",
+         "fix": None if workers.get("ok") else {"kind": "command", "label": "On the VPS", "command": "docker compose restart worker-trading worker-ops && docker compose logs --tail 50 worker-trading"}},
+        {"id": "cloudflare", "label": "Cloudflare IP trust", "ok": cf_trust or not behind_cf,
+         "detail": "TRUST_CF_CONNECTING_IP=true" if cf_trust else ("behind Cloudflare but client IPs are NOT trusted — rate limits see Cloudflare's IPs" if behind_cf else "not behind Cloudflare"),
+         "fix": None if (cf_trust or not behind_cf) else {"kind": "command", "label": "In backend/.env on the VPS, then restart", "command": "TRUST_CF_CONNECTING_IP=true"}},
+        {"id": "backups", "label": "Backups (last 24 h)", "ok": backup_age_h is not None and backup_age_h <= 24,
+         "detail": f"last backup {backup_age_h:.1f} h ago" if backup_age_h is not None else "no backup recorded",
+         "fix": None if (backup_age_h is not None and backup_age_h <= 24) else {"kind": "command", "label": "On the VPS", "command": "deploy/backup.sh && cat backups/latest.txt"}},
+        {"id": "admin_2fa", "label": "Admin accounts with authenticator 2FA", "ok": not no_2fa and bool(admins),
+         "detail": f"{len(admins) - len(no_2fa)}/{len(admins)} enrolled" + (f" — missing: {', '.join(no_2fa)}" if no_2fa else ""),
+         "fix": None if not no_2fa else {"kind": "link", "label": "Enroll in Settings → Security", "href": "/settings"}},
+    ]
+    return {"ok": all(r["ok"] for r in rows), "rows": rows, "generated_at": datetime.now(timezone.utc).isoformat()}

@@ -128,7 +128,7 @@ def test_n99_1_scalp_trades_stay_origin_auto_with_engine_marker_and_separate_cou
     for rel, needle in (("circuit_breakers.py", '"origin": "auto"'), ("eod_flatten.py", '"origin": "auto"'),
                         ("entitlements.py", 'signal.get("origin") == "auto"')):
         assert needle in _src("backend", rel), rel
-    assert '"engine": signal.get("engine")' in _src("backend", "execution.py")
+    assert '"engine": engine_for_signal(signal)' in _src("backend", "execution.py")
     # scalp config is read and the account-wide total cap applies to scalp too
     db.bot_configs.rows.append({"user_id": "u", "account_id": aid, "max_concurrent_trades": 2,
                                 "scalp": {"max_concurrent": 1, "max_trades_per_symbol_per_day": 4}})

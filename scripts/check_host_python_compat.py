@@ -19,7 +19,7 @@ import traceback
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MIN_SUPPORTED = (3, 9)
 # backend modules a host script may import whose own imports are pure (no DB, no app bootstrap)
-BACKEND_IMPORT_ALLOWLIST = {"release_signing", "model_manifest", "base"}
+BACKEND_IMPORT_ALLOWLIST = {"release_signing", "model_manifest", "base", "ea_capabilities"}   # v1.60.42: fleet gate imports ea_capabilities
 
 
 def host_scripts() -> list[str]:

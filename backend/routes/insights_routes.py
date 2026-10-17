@@ -1,20 +1,15 @@
 """Insights aggregation routes — Weekly AI Digest and related analytical
 summaries the dashboard surfaces to users.
 """
-import os
 import logging
-import uuid
 from datetime import datetime, timedelta, timezone
-import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from bson import ObjectId
 
 from auth import get_current_user
 from database import get_db
 from email_sender import send_email, is_configured as email_is_configured
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger("insights")
 router = APIRouter(prefix="/insights", tags=["insights"])
@@ -36,17 +31,11 @@ Output: plain text only. No markdown, no JSON, no headings."""
 
 
 async def _generate_ai_reflection(digest_payload: dict) -> Optional[str]:
-    """Ask Claude Sonnet 4.5 for a narrative reflection on the digest data."""
-    key = os.environ.get("EMERGENT_LLM_KEY")
-    if not key:
+    """Ask Claude (`analysis` tier) for a narrative reflection on the digest data."""
+    import llm_client
+    if not llm_client.configured():
         return None
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=key,
-            session_id=f"weekly-digest-{uuid.uuid4().hex[:8]}",
-            system_message=_REFLECTION_SYSTEM_PROMPT,
-        ).with_model(PROVIDER, model_for("analysis"))
         # Pass a slim payload — Claude doesn't need the raw trade list.
         slim = {
             "stats": digest_payload.get("stats"),
@@ -57,7 +46,7 @@ async def _generate_ai_reflection(digest_payload: dict) -> Optional[str]:
             "window_days": digest_payload.get("window_days"),
         }
         prompt = f"Here is this week's digest:\n\n{slim}\n\nWrite the reflection."
-        response = await chat.send_message(UserMessage(text=prompt))
+        response = await llm_client.complete("analysis", _REFLECTION_SYSTEM_PROMPT, prompt, feature="weekly_digest", seconds=30)
         text = str(response).strip()
         return text or None
     except Exception as e:
@@ -205,7 +194,12 @@ async def weekly_digest(days: int = 7, include_ai: bool = False,
         "suggested_action": _suggest_action(stats),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-    # iter-69 · Optional LLM-written reflection (Claude Sonnet 4.5).
+    try:                                        # v1.60.63 #85 — trading costs section (per broker + shadow gate scoreboard)
+        from trade_costs import report as _costs_report
+        payload["trading_costs"] = await _costs_report(db, user["id"], days)
+    except Exception as _e:  # noqa: BLE001
+        payload["trading_costs"] = {"error": str(_e)[:200]}
+    # iter-69 · Optional LLM-written reflection (Claude, `analysis` tier).
     # Frontend opts in via ?include_ai=true to avoid a slow LLM call on
     # every dashboard refresh.
     if include_ai:
@@ -298,6 +292,8 @@ async def email_weekly_digest(days: int = 7, user=Depends(get_current_user)):
     recipient = user.get("email")
     if not recipient:
         raise HTTPException(status_code=400, detail="User has no email on file")
+    from notification_settings import alert_email_for
+    recipient = await alert_email_for(get_db(), user["id"], recipient, category="digest")
 
     # Build the same payload as the GET, with AI reflection enabled.
     payload = await weekly_digest(days=days, include_ai=True, user=user)

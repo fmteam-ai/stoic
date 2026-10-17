@@ -18,6 +18,7 @@ Pending-order cancellation is a different verb (cancel_pending) and never goes
 through position close.
 """
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
 
@@ -90,6 +91,10 @@ async def request_close(db, query: dict, *, reason: str, actor: str, ctx: dict |
     """Close every OPEN position matching `query` under one command id.
     Returns {command_id, trades_marked_for_close, trade_ids, commands}."""
     ctx = ctx or {}
+    stamp = dict(stamp or {})
+    if pending_modification is None and "pending_modification" in stamp:
+        # v1.60.48 — a FULL_CLOSE carried in `stamp` is fenced too (intent_id + seq), never written bare
+        pending_modification = stamp.pop("pending_modification")
     kw = dict(reason=reason, actor=actor, ctx=ctx, stamp=stamp, pending_modification=pending_modification)
     if session is not None:
         return await _request_close(db, query, session=session, **kw)
@@ -199,10 +204,161 @@ async def _acknowledge_close(db, trade, *, broker_deal_id, occurred_at, result, 
     return ack
 
 
+ACK_GRACE_SEC = int(os.environ.get("CLOSE_ACK_GRACE_SEC", "120"))
+
+
+def ack_in_grace(ack: dict | None, now: datetime | None = None) -> bool:
+    """SEC-001 — a successful terminal ack is only trusted for CLOSE_ACK_GRACE_SEC: the broker OUT deal must follow.
+    A position still open after the grace window is treated as NOT in flight (ack was wrong or forged)."""
+    ack = ack or {}
+    if not ack.get("success"):
+        return False
+    at = _parse(ack.get("at"))
+    if at is None:
+        return False
+    now = now or datetime.now(timezone.utc)
+    return (now - at).total_seconds() <= ACK_GRACE_SEC
+
+
+def close_in_flight(trade: dict, now: datetime | None = None) -> bool:
+    """#48 — True only while the terminal has ACKED the outstanding close within the grace window (it is executing
+    it). A bare `close_requested` flag, a failed ack, or a success ack with no OUT deal after CLOSE_ACK_GRACE_SEC is
+    NOT in flight and must not stop panic / friday_flat / eod_flatten from taking over with their own FULL_CLOSE."""
+    cmd = trade.get("close_command") or {}
+    return bool(trade.get("close_requested")) and cmd.get("state") == "requested" and ack_in_grace(cmd.get("terminal_ack"), now)
+
+
+async def mandatory_close(db, trade: dict, *, reason: str, actor: str, stamp: dict | None = None,
+                          now: datetime | None = None, full_close: bool = True, account: dict | None = None) -> str:
+    """#48 — issue a MANDATORY close (friday_flat / eod_flatten / protection) that takes over any unacked request
+    and re-issues itself with backoff until the position is confirmed closed.
+    #50 — ANY pending mandatory reason counts as "own" (friday_flat and eod_flatten overlap on Fridays and must not
+    re-issue each other's command every tick); the STRONGEST reason is kept (panic > protection > friday_flat > eod > manual).
+    Returns: "in_flight" (terminal already executing a close — leave it), "backoff" (a mandatory request is pending,
+    not due yet), "quiet" (EA EOD quiet window — deferred), "issued" (first command or takeover), "reissued"."""
+    from close_watchdog import ea_quiet, is_mandatory_close, redispatch_due, strongest_reason
+    now = now or datetime.now(timezone.utc)
+    if trade.get("netting_close_acked"):
+        return "in_flight"           # #51 — acked volume-limited netting leg: the OUT deal closes it, never re-issue
+    if close_in_flight(trade, now):
+        return "in_flight"
+    cmd = trade.get("close_command") or {}
+    pending = bool(trade.get("close_requested")) and cmd.get("state") == "requested"
+    own_pending = pending and is_mandatory_close(cmd.get("reason"))
+    if own_pending:
+        reason = strongest_reason(cmd.get("reason"), reason)
+    rd = trade.get("close_redispatch") or {}
+    count = int(rd.get("count") or 0)
+    if own_pending:
+        last = _parse(rd.get("last_at")) or _parse(cmd.get("requested_at")) or now
+        if not redispatch_due(count, (now - last).total_seconds()):
+            return "backoff"
+        if ea_quiet(account, now, reason):
+            return "quiet"           # #49 — the EA drops FULL_CLOSE in its quiet window; re-issue when it reopens (#61: never for panic/protection)
+    pm = {"type": "FULL_CLOSE", "reason": reason, "requested_at": now.isoformat()} if full_close else None
+    st = dict(stamp or {})
+    if "close_reason_pending" in st:
+        st["close_reason_pending"] = reason
+    if own_pending:
+        first_at = rd.get("first_at") or cmd.get("requested_at") or now.isoformat()
+        st["close_redispatch"] = {"count": count + 1, "last_at": now.isoformat(), "first_at": first_at, "of": cmd.get("key")}
+    res = await request_close(db, {"_id": trade["_id"]}, reason=reason, actor=actor, stamp=st,
+                              pending_modification=pm, emergency=True)
+    if not res.get("trades_marked_for_close"):
+        return "gone"
+    return "reissued" if own_pending else "issued"
+
+
+def _parse(v):
+    try:
+        d = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+async def record_terminal_ack(db, trade: dict, *, success: bool, error: str | None = None,
+                              terminal: bool = False, at: str | None = None) -> dict | None:
+    """#43 (b) — the EA acknowledged (or failed) the trade's outstanding close command: stamp `terminal_ack`
+    on the immutable row and the trade pointer. A terminal failure (position_not_found, non-retryable) marks the
+    row `failed` and EXPIRES the close request so trade management is not frozen behind a close that will never
+    happen — EXCEPT for MANDATORY reasons (SEC-001): panic / friday_flat / eod_flatten / protection / manual closes
+    are never released by a terminal message; the ack is recorded and the watchdog keeps re-dispatching until the
+    broker OUT deal confirms or the position is gone. A successful ack leaves the row `requested` — broker
+    confirmation (the OUT deal) completes it."""
+    from close_watchdog import is_mandatory_close
+    cmd = trade.get("close_command") or {}
+    key = cmd.get("key")
+    if not key or cmd.get("state") != "requested":
+        return None
+    at = at or _now()
+    ack = {"at": at, "success": bool(success), "error": (str(error)[:200] if error else None), "terminal": bool(terminal)}
+    mandatory = is_mandatory_close(cmd.get("reason") or trade.get("close_reason"))
+    failed = (not success) and terminal and not mandatory
+    if (not success) and terminal and mandatory:
+        ack["kept_mandatory"] = True
+        log.warning("terminal failure on MANDATORY close %s (trade %s): %s — kept pending, watchdog will re-dispatch",
+                    cmd.get("reason"), trade.get("_id"), error)
+    sets = {"terminal_ack": ack}
+    if failed:
+        sets.update({"state": "failed", "failed_at": at})
+    res = await db.close_commands.update_one(
+        {"_id": f"{key}:{trade['_id']}", "state": "requested"}, {"$set": sets})
+    if res.matched_count == 0:
+        return None
+    await db.trades.update_one({"_id": trade["_id"], "close_command.key": key},
+                               {"$set": {"close_command.terminal_ack": ack,
+                                         **({"close_command.state": "failed"} if failed else {})}})
+    if failed:
+        await expire_close(db, trade, key, reason=f"terminal failure: {error or 'unknown'}", state="failed")
+    return ack
+
+
+async def expire_close(db, trade: dict, key: str, *, reason: str, state: str = "expired") -> bool:
+    """#43 (c) — release a close request that the terminal never completed: close_requested → False, the
+    FULL_CLOSE modification that belongs to this command is cleared, the ledger row is `expired` / `failed` and
+    the trade records why. Trade management resumes on the next cycle. Returns True when the trade was released."""
+    now = _now()
+    pm = trade.get("pending_modification") or {}
+    owns_pm = pm.get("type") == "FULL_CLOSE" and (pm.get("close_command_key") in (None, key))
+    upd = {"$set": {"close_requested": False, "close_command.state": state,
+                    "close_request_expired": {"key": key, "at": now, "reason": reason, "state": state},
+                    **({"pending_modification": None} if owns_pm else {})},
+           "$push": {"close_request_expiry_history": {"$each": [{"key": key, "at": now, "reason": reason}], "$slice": -20}}}
+    res = await db.trades.update_one({"_id": trade["_id"], "status": "open", "close_requested": True,
+                                      "close_command.key": key}, upd)
+    await db.close_commands.update_one({"_id": f"{key}:{trade['_id']}", "state": {"$in": ["requested", "failed"]}},
+                                       {"$set": {"state": state, "expired_at": now, "expiry_reason": reason}})
+    return bool(res.modified_count)
+
+
 async def cancel_pending(db, query: dict, *, reason: str, actor: str, session=None, stamp: dict | None = None) -> int:
-    """Pending ORDERS are cancelled, never position-closed."""
+    """Pending ORDERS are cancelled, never position-closed. prod v1.60.28 — the cancel also terminalises the
+    trade's execution intent and releases its risk reservation; an intent left 'submitted' forever put execution
+    authority in CLOSE_ONLY ("broker-accepted execution past settlement SLA") and blocked every new entry."""
+    q = {**query, "status": "pending"}
+    ids = [t["_id"] async for t in db.trades.find(q, {"_id": 1}, session=session)]
+    if not ids:
+        return 0
     res = await db.trades.update_many(
-        {**query, "status": "pending"},
+        {"_id": {"$in": ids}, "status": "pending"},
         {"$set": {"status": "cancelled", "close_reason": reason, "cancelled_by": actor,
                   "closed_at": _now(), **(stamp or {})}}, session=session)
+    await settle_cancelled_trades(db, ids, reason=f"{actor}: {reason}")
     return res.modified_count
+
+
+async def settle_cancelled_trades(db, trade_ids: list, *, reason: str) -> int:
+    """Idempotent tail of every pending-order cancellation: intent → cancelled/expired, reservation → RELEASED."""
+    from execution_intents import settle_intent_from_trade
+    from scalp.risk_reservations import release_for_trade
+    settled = 0
+    for tid in trade_ids:
+        tr = await db.trades.find_one({"_id": tid}, {"status": 1, "execution_intent_id": 1})
+        if not tr or tr.get("status") != "cancelled":
+            continue
+        if tr.get("execution_intent_id"):
+            if await settle_intent_from_trade(db, tr["execution_intent_id"], "cancelled", detail=reason[:200]):
+                settled += 1
+        await release_for_trade(db, str(tid), "cancelled")
+    return settled

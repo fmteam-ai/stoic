@@ -45,6 +45,14 @@ def problems(pol: dict, *, now: datetime | None = None) -> list:
     from release_signing import verify_hex
     now = now or _now()
     errs = []
+    if not isinstance(pol, dict):
+        return ["policy is not an object"]
+    try:                                                   # C2 — a future-dated issue would win every "newest" comparison
+        issued = datetime.fromisoformat(str(pol.get("issued_at")).replace("Z", "+00:00"))
+        if issued > now + timedelta(minutes=5):
+            errs.append("issued_at is in the future")
+    except (TypeError, ValueError):
+        pass
     if pol.get("schema") != SCHEMA:
         errs.append(f"schema must be {SCHEMA}")
     if not re.match(VERSION_RE, str(pol.get("policy_version") or "")):
@@ -141,8 +149,16 @@ async def load_from_repo(db) -> dict | None:
         except (OSError, ValueError) as e:
             logger.warning("rules policy file %s unreadable: %s", name, e)
             continue
-        if problems(pol):
-            logger.info("rules policy file %s skipped: %s", name, problems(pol)[:2])
+        if not isinstance(pol, dict):                      # C1 — a JSON list/scalar is not a policy
+            logger.warning("rules policy file %s skipped: not an object", name)
+            continue
+        try:
+            errs = problems(pol)
+        except Exception as e:  # noqa: BLE001 — C1: one malformed file must never abort loading of the others
+            logger.warning("rules policy file %s skipped: malformed (%s)", name, type(e).__name__)
+            continue
+        if errs:
+            logger.info("rules policy file %s skipped: %s", name, errs[:2])
             continue
         if best is None or str(pol.get("issued_at")) > str(best.get("issued_at")):
             best = pol
@@ -154,6 +170,15 @@ async def load_from_repo(db) -> dict | None:
 
 
 # ── admission ─────────────────────────────────────────────────────────────────────────────────────────
+def cap_count_query(acc: dict) -> dict:
+    """Easy Start — accounts that count toward max_accounts_per_user for THIS account: itself plus every ENABLED
+    non-paper account of the same user that is OLDER (_id < this one). Ranking by age (M2, main130) means adding
+    a second account can never take admission away from the first — the newest account is the one blocked, and
+    the wizard's "Disable it" is a real fix for whichever one the user drops (a disabled account stops counting)."""
+    return {"user_id": acc.get("user_id"), "mode": {"$ne": "paper"},
+            "$or": [{"trading_enabled": True, "_id": {"$lt": acc["_id"]}}, {"_id": acc["_id"]}]}
+
+
 def broker_allowed(pol: dict, broker: str) -> bool:
     allowed = {str(x).strip().lower() for x in (pol.get("allowed_brokers") or [])}
     b = str(broker or "").strip().lower()
@@ -163,7 +188,7 @@ def broker_allowed(pol: dict, broker: str) -> bool:
     return b in allowed
 
 
-def effective_max_risk_pct(cfg: dict | None) -> float:
+def effective_max_risk_pct(cfg: dict | None, clamp: float | None = None) -> float:
     """M2 (main127) — the risk the bot can ACTUALLY use for this config: the risk-level profile's risk_pct, lifted
     to adaptive_risk_cap_pct when adaptive sizing may scale up (bot_runner: adaptive → cap → Kelly). Saved configs
     carry risk_level/adaptive_risk_cap_pct, never a literal risk_per_trade_pct."""
@@ -177,7 +202,10 @@ def effective_max_risk_pct(cfg: dict | None) -> float:
         except (TypeError, ValueError):
             pass
     if cfg.get("adaptive_sizing_enabled", True):
-        base = max(base, float(cfg.get("adaptive_risk_cap_pct") or 2.0))
+        adaptive = float(cfg.get("adaptive_risk_cap_pct") or 2.0)
+        if clamp is not None:
+            adaptive = min(adaptive, float(clamp))      # the runtime clamp (bot_runner) caps adaptive scaling at the policy cap
+        base = max(base, adaptive)
     return base
 
 
@@ -203,8 +231,9 @@ def evaluate_admission(acc: dict, pol: dict, *, user_account_count: int, bot_cfg
     }
     rc = pol.get("risk_caps") or {}
     if bot_cfg is not None and rc.get("max_risk_pct") is not None:
-        checks["risk_within_cap"] = effective_max_risk_pct(bot_cfg) <= float(rc["max_risk_pct"])
-        checks["effective_max_risk_pct"] = effective_max_risk_pct(bot_cfg)
+        eff = effective_max_risk_pct(bot_cfg, clamp=float(rc["max_risk_pct"]))
+        checks["risk_within_cap"] = eff <= float(rc["max_risk_pct"])
+        checks["effective_max_risk_pct"] = eff
     if not checks["broker_allowed"]:
         return {"state": "blocked", "reason": f"broker {acc.get('broker')} is not in the policy's allowed brokers", "checks": checks}
     if not checks["within_account_cap"]:
@@ -224,7 +253,7 @@ async def sync_admission(db, acc: dict) -> dict | None:
     pol = await active(db)
     if not pol:
         return None
-    n = await db.accounts.count_documents({"user_id": acc.get("user_id"), "mode": {"$ne": "paper"}})
+    n = await db.accounts.count_documents(cap_count_query(acc))
     cfg = await db.bot_configs.find_one({"account_id": str(acc["_id"])},
                                         {"risk_level": 1, "risk_percent": 1, "risk_per_trade_pct": 1, "risk_pct": 1,
                                          "adaptive_sizing_enabled": 1, "adaptive_risk_cap_pct": 1})
@@ -258,7 +287,7 @@ async def operator_approve(db, acc: dict, *, approver_email: str) -> dict:
         raise HTTPException(status_code=409, detail={"code": "no_active_rules_policy"})
     if pol.get("demo_only"):
         raise HTTPException(status_code=409, detail={"code": "demo_only_policy", "message": "the active policy admits demo accounts only"})
-    n = await db.accounts.count_documents({"user_id": acc.get("user_id"), "mode": {"$ne": "paper"}})
+    n = await db.accounts.count_documents(cap_count_query(acc))
     d = evaluate_admission(acc, pol, user_account_count=n)
     if d["state"] == "blocked":
         raise HTTPException(status_code=409, detail={"code": "admission_blocked", "message": d["reason"]})
@@ -277,3 +306,158 @@ async def operator_approve(db, acc: dict, *, approver_email: str) -> dict:
 
 def days(n: int) -> timedelta:
     return timedelta(days=n)
+
+
+# ── Easy Start A1 / A3 / A4 ───────────────────────────────────────────────────────────────────────────
+RENEW_REMINDER_DAYS = 7
+
+
+def github_repo() -> str:
+    return (os.environ.get("GITHUB_REPO") or "").strip().strip("/")
+
+
+def renew_link() -> str | None:
+    repo = github_repo()
+    return f"https://github.com/{repo}/actions/workflows/rules-policy.yml" if repo else None
+
+
+def expiry(pol: dict | None, now: datetime | None = None) -> dict:
+    """A4 — {'expires_at','days_left','reminder_due','expired'} for the ACTIVE rules policy (7-day reminder)."""
+    if not pol or not pol.get("expires_at"):
+        return {"expires_at": None, "days_left": None, "reminder_due": False, "expired": False}
+    now = now or _now()
+    try:
+        exp_at = datetime.fromisoformat(str(pol["expires_at"]).replace("Z", "+00:00"))
+    except ValueError:
+        return {"expires_at": str(pol["expires_at"]), "days_left": 0, "reminder_due": False, "expired": True}
+    left = (exp_at - now).total_seconds() / 86400
+    import math
+    days_left = max(0, math.ceil(left))
+    return {"expires_at": exp_at.isoformat(), "days_left": days_left, "reminder_due": 0 < left <= RENEW_REMINDER_DAYS, "expired": left <= 0}
+
+
+def renewal_prefill(pol: dict) -> dict:
+    """A4 — the workflow-form values for the next period (same rules, new version suffix)."""
+    v = str(pol.get("policy_version") or "rules-v1")
+    m = re.search(r"(\d+)$", v)
+    nxt = (v[: m.start()] + str(int(m.group(1)) + 1)) if m else v + "-2"
+    rc = pol.get("risk_caps") or {}
+    exp = expiry(pol)
+    issued, expires = pol.get("issued_at"), pol.get("expires_at")
+    try:
+        period_days = max(1, round((datetime.fromisoformat(str(expires).replace("Z", "+00:00")) - datetime.fromisoformat(str(issued).replace("Z", "+00:00"))).days))
+    except (TypeError, ValueError):
+        period_days = 30 if pol.get("demo_only") else 45
+    return {"policy_version": nxt, "demo_only": bool(pol.get("demo_only")), "max_accounts_per_user": pol.get("max_accounts_per_user"),
+            "allowed_brokers": ",".join(pol.get("allowed_brokers") or ["*"]), "max_risk_pct": rc.get("max_risk_pct"),
+            "max_daily_loss_pct": rc.get("max_daily_loss_pct"), "expires_days": period_days, "installation_id": pol.get("installation_id"),
+            "reason": f"renew {v} ({exp['days_left']} day(s) left)", "link": renew_link()}
+
+
+def _github_headers() -> dict:
+    h = {"Accept": "application/vnd.github+json", "User-Agent": "stoic-rules-policy"}
+    tok = os.environ.get("GITHUB_DISPATCH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if tok:
+        h["Authorization"] = f"Bearer {tok}"
+    return h
+
+
+async def fetch_candidates_from_github() -> list:
+    """A1 — every policies/*.json on the repo's default branch (GITHUB_REPO; token optional for public repos).
+    Returns [] when the repo is not configured or unreachable — the caller falls back to the local policies/ dir."""
+    repo = github_repo()
+    if not repo:
+        return []
+    import httpx
+    out = []
+    try:
+        async with httpx.AsyncClient(timeout=15, headers=_github_headers()) as cli:
+            r = await cli.get(f"https://api.github.com/repos/{repo}/contents/policies")
+            if r.status_code != 200:
+                logger.info("rules policy: github contents %s", r.status_code)
+                return []
+            for item in r.json() if isinstance(r.json(), list) else []:
+                if not str(item.get("name", "")).endswith(".json") or not item.get("download_url"):
+                    continue
+                if not str(item["download_url"]).startswith("https://raw.githubusercontent.com/"):
+                    continue
+                f = await cli.get(item["download_url"])
+                if f.status_code == 200:
+                    try:
+                        pol = f.json()
+                        if isinstance(pol, dict):
+                            out.append({"name": item["name"], "policy": pol})
+                    except ValueError:
+                        pass
+    except Exception as e:  # noqa: BLE001 — network is best effort; the local dir is the fallback
+        logger.warning("rules policy: github fetch failed: %s", type(e).__name__)
+    return out
+
+
+def local_candidates() -> list:
+    out = []
+    if not os.path.isdir(POLICIES_DIR):
+        return out
+    for name in sorted(os.listdir(POLICIES_DIR)):
+        if name.endswith(".json"):
+            try:
+                out.append({"name": name, "policy": json.load(open(os.path.join(POLICIES_DIR, name), encoding="utf-8"))})
+            except (OSError, ValueError):
+                pass
+    return out
+
+
+async def load_latest(db, *, actor: str) -> dict:
+    """A1 — one click: newest VALID signed policy from GitHub policies/ (or the local dir) becomes active.
+    Verifies only (signature, installation, environment, expiry, nonce). Never downgrades to an older issue."""
+    cands = await fetch_candidates_from_github()
+    source = "github"
+    if not cands:
+        cands, source = local_candidates(), "repo"
+    repo_note = None if github_repo() else "GITHUB_REPO not configured — only the image's local policies/ dir was searched; set GITHUB_REPO (and GITHUB_DISPATCH_TOKEN for a private repo) in backend/.env"
+    valid, rejected = [], []
+    for c in cands:
+        pol = c.get("policy")
+        if not isinstance(pol, dict):                      # C1 — a JSON list/scalar is not a policy
+            rejected.append({"name": c["name"], "problems": ["not an object"]})
+            continue
+        try:
+            errs = problems(pol)
+        except Exception as e:  # noqa: BLE001 — C1 (main130 follow-up): one malformed file must never 500 the whole load
+            logger.warning("rules policy candidate %s skipped: malformed (%s)", c.get("name"), type(e).__name__)
+            rejected.append({"name": c["name"], "problems": [f"malformed: {type(e).__name__}"]})
+            continue
+        (rejected if errs else valid).append({"name": c["name"], "problems": errs[:2]} if errs else c)
+    if not valid:
+        reason = "no valid signed policy found" if github_repo() else "repo not configured"
+        return {"activated": False, "source": source, "reason": reason, "repo_configured": bool(github_repo()), "note": repo_note, "rejected": rejected[:5]}
+    best = max(valid, key=lambda c: str(c["policy"].get("issued_at") or ""))
+    cur = await db.platform_state.find_one({"_id": STATE_ID}, {"policy_version": 1, "issued_at": 1})
+    if cur and str(cur.get("issued_at") or "") >= str(best["policy"].get("issued_at") or ""):
+        return {"activated": False, "source": source, "reason": f"{cur.get('policy_version')} is already the newest", "policy_version": cur.get("policy_version"),
+                "repo_configured": bool(github_repo()), "note": repo_note, "rejected": rejected[:5]}
+    doc = await activate(db, best["policy"], actor=actor, source=source)
+    return {"activated": True, "source": source, "policy_version": doc["policy_version"], "expires_at": doc["expires_at"], "file": best["name"],
+            "repo_configured": bool(github_repo()), "note": repo_note, "rejected": rejected[:5]}
+
+
+async def retire_id_list(db, *, actor: str, reason: str = "") -> dict:
+    """A3 — one-time: the signed per-account id list (platform_state.inventory_expectation) is retired in favour
+    of the active rules policy. Archived (never deleted outright), audited. Refused without an unexpired policy."""
+    pol = await active(db)
+    if not pol or pol.get("expired"):
+        raise HTTPException(status_code=409, detail={"code": "rules_policy_required", "message": "activate an unexpired rules policy first — fail closed"})
+    exp = await db.platform_state.find_one({"_id": "inventory_expectation"})
+    if not exp:
+        return {"retired": False, "reason": "no account-list policy in force", "rules_policy": pol.get("policy_version")}
+    now = _now().isoformat()
+    archived = {**exp, "_id": "inventory_expectation_retired", "retired_at": now, "retired_by": actor,
+                "replaced_by_rules_policy": pol.get("policy_version"), "retire_reason": reason}
+    await db.platform_state.replace_one({"_id": "inventory_expectation_retired"}, archived, upsert=True)
+    await db.platform_state.delete_one({"_id": "inventory_expectation"})
+    from audit_chain import append_chained
+    await append_chained(db, {"actor_email": actor, "action": "inventory_expectation_retired", "target_kind": "platform",
+                              "target_id": "inventory_expectation", "reason": reason or "replaced by rules policy", "at": now,
+                              "meta": {"retired_policy_version": exp.get("policy_version"), "account_ids": exp.get("account_ids"),
+                                       "rules_policy": pol.get("policy_version")}})
+    return {"retired": True, "retired_policy_version": exp.get("policy_version"), "rules_policy": pol.get("policy_version")}

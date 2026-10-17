@@ -125,22 +125,20 @@ def test_auto_mode_pulls_attested_digests_without_flipping_deploy_mode(tmp_path)
     assert "admission gate: PASSED" in r.stdout and "image provenance (registry)" in r.stdout
 
 
-def test_auto_mode_falls_back_to_on_host_build_when_pull_fails(tmp_path):
+def test_auto_mode_fails_cleanly_instead_of_building_when_the_registry_pull_fails(tmp_path):
+    """v1.60.43 — an attested release expects the SIGNED registry image; a host build can never match the locked
+    digest (15 Oct: 22-min pull stall → fallback build → digest gate red). The pull is retried with a timeout and
+    provision_images then fails so update.sh rolls back / holds."""
     root, env = _world(tmp_path)
     (root / ".env").write_text("APP_ENV=production\nGITHUB_REPO=x/y\nCOMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml:docker-compose.registry.yml\n"
                                f"STOIC_BACKEND_IMAGE={BE}\nSTOIC_FRONTEND_IMAGE={FE}\n")   # a previous registry deploy
-    r = _run(root, dict(env, STUB_PULL_RC="1"), "provision_images; echo RC=$?")
-    assert "RC=0" in r.stdout, r.stdout + r.stderr
-    assert "falling back to an on-host build" in r.stdout and "GHCR outage" in r.stdout
+    r = _run(root, dict(env, STUB_PULL_RC="1", PULL_ATTEMPTS="2", PULL_TIMEOUT_SEC="5"), "provision_images; echo RC=$?")
+    assert "RC=1" in r.stdout, r.stdout + r.stderr
+    assert "NOT building on the host" in r.stdout and "pull attempt 2/2" in r.stdout and "pull failed after 2 attempts" in r.stdout
     log = _log(env)
-    assert "docker pull -q" in log and "docker compose build" in log
-    envf = (root / ".env").read_text()
-    assert "COMPOSE_FILE=docker-compose.yml:docker-compose.tls.yml\n" in envf        # registry overlay dropped
-    assert "STOIC_BACKEND_IMAGE" not in envf and "STOIC_FRONTEND_IMAGE" not in envf
-    assert "STOIC_IMAGE_DIGEST=sha256:" + "b" * 64 in envf                           # the locally built image id
-    s = _src(root)
-    assert s["source"] == "build-fallback" and "pull/verification failed" in s["reason"]
-    assert "registry-fallback-build" in (root / "deploy" / "releases.log").read_text()
+    assert log.count("docker pull -q") == 2 and "docker compose build" not in log
+    assert "registry-pull-failed" in (root / "deploy" / "releases.log").read_text()
+    assert "falling back to an on-host build" not in r.stdout
 
 
 def test_strict_registry_mode_never_builds(tmp_path):
@@ -243,10 +241,11 @@ def test_compose_up_no_build_after_registry_pull_and_truth_folder_cleared(tmp_pa
     r = _run(root, env, "provision_images >/dev/null; images_from_registry; echo IFR=$?; compose_up 2>/dev/null; echo CU=$?")
     assert "IFR=0" in r.stdout, r.stdout + r.stderr
     assert any("compose" in ln and "up" in ln and "--no-build" in ln for ln in _log(env).splitlines())   # M120-2: auto mode after a pull
-    # a build (fallback) must not pass --no-build
+    # v1.60.43 — a failed pull of an attested release no longer builds: provision_images fails and the previous
+    # registry provenance stays (nothing was provisioned); a real build mode still must not pass --no-build
     (tmp_path / "docker.log").unlink()
-    r = _run(root, dict(env, STUB_PULL_RC="1"), "provision_images >/dev/null; images_from_registry; echo IFR=$?; compose_up 2>/dev/null; echo CU=$?")
-    assert "IFR=1" in r.stdout and not any("--no-build" in ln for ln in _log(env).splitlines() if " up" in ln)
+    r = _run(root, dict(env, STUB_PULL_RC="1", PULL_ATTEMPTS="1", PULL_TIMEOUT_SEC="5"), "provision_images >/dev/null; echo PI=$?; images_from_registry; echo IFR=$?")
+    assert "PI=1" in r.stdout and "IFR=0" in r.stdout and "docker compose build" not in _log(env)
     # tidy: the host truth folder never keeps the previous release's attestation after verify_attestation of an untagged build
     pub = root / "deploy" / "state" / "release"; pub.mkdir(parents=True, exist_ok=True)
     (pub / "attestation.current.json").write_text('{"commit": "old"}')
@@ -373,7 +372,7 @@ def test_rollback_and_doctor_wiring():
     doc = open(os.path.join(ROOT, "deploy", "doctor.sh")).read()
     assert 'hdr "key & certificate ages' in doc and "rotate in %d d" in doc and "Origin CA certificate: expires" in doc
     dep = open(os.path.join(ROOT, "docs", "DEPLOYMENT.md")).read()
-    assert "### Registry deploys (default since v1.60.12" in dep and "read:packages" in dep and "registry-fallback-build" in dep
+    assert "### Registry deploys (default since v1.60.12" in dep and "read:packages" in dep
     fp = [ln.split() for ln in open(os.path.join(ROOT, "release", "release_key.fingerprint")) if ln.strip() and not ln.startswith("#")]
     assert [(p[0], p[2]) for p in fp] == [("stoic-release-ed25519-v2", "current"), ("stoic-release-ed25519-v1", "revoked")]
     for f in ("lib.sh", "update.sh", "rollback.sh", "doctor.sh"):

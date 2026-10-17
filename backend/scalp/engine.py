@@ -953,7 +953,7 @@ class ScalpRunner:
         # pullback setup, chosen per regime from realised performance
         _sel = strategy_select.get_cached(self.symbol,
                                           perms.get("regime") or "UNKNOWN")
-        cand = setup.detect(feats, self.state, params=_sel["params"])
+        cand = setup.detect(feats, self.state, params=_sel["params"], symbol=self.symbol)
         if cand is None:
             return
         _lt["t2_ms"] = now_ms()   # T2 — opportunity detected
@@ -1546,7 +1546,6 @@ class ScalpRunner:
                 unacked += 1
         # review item 2 — uncertain/unqueued provisional reservations are
         # invisible to db.trades: count them as held exposure too.
-        from scalp import risk_reservations
         reserved_unaccounted = await risk_reservations.unaccounted_count(
             db, self.account_id)
         broker_pos = (self.account or {}).get("open_positions")
@@ -1717,6 +1716,31 @@ class ScalpRunner:
         # N97-2 — scalp reserves through the ACCOUNT-WIDE service (same caps and
         # per-account lease as the main bot), never around it.
         import account_reservations as _ar
+        # v1.60.52 (#38) — per-user same-direction cap across ALL accounts AND engines: a scalp XAUUSD BUY must not
+        # stack on a main-bot XAUUSD BUY (or vice versa). Same atomic reservation as bot_runner; released once the
+        # trade row exists (it then counts itself) or on any refusal / failure.
+        from user_direction_cap import reserve_user_direction, release_user_direction, user_direction_cap_for
+        from pip_utils import symbol_match, base_symbol as _base_symbol
+        from intelligence_counters import increment as inc_intel_counter
+        _udc_res = None
+        _udc_cap = await user_direction_cap_for(db, self.user_id, self.account_id)
+        if _udc_cap > 0:
+            _udc_res, _udc_occ = await reserve_user_direction(
+                db, user_id=self.user_id, base_symbol=_base_symbol(self.symbol) or self.symbol,   # #47 — GOLD# → XAUUSD
+                action=decision["direction"], cap=_udc_cap,
+                account_id=self.account_id, symbol_match_q=symbol_match(self.symbol))
+            if _udc_res is None:
+                await release_broker_submission_slot(db, slot)
+                self.state.record_reject()
+                _bg(lambda s={"status": "refused_caps", "refusal": "user_direction_cap",
+                              "violations": [f"user_direction_cap: {_udc_occ} {decision['direction']} {self.symbol} "
+                                             f"already open/in flight across your accounts (cap {_udc_cap})"]}:
+                    db.scalp_decisions.update_one({"decision_id": decision["decision_id"]}, {"$set": s}),
+                    "decision_update")
+                _bg(lambda: inc_intel_counter(self.user_id, "user_direction_cap_block"), "intel_counter")
+                logger.info("scalp submit refused by user_direction_cap decision=%s occupied=%s cap=%s",
+                            decision["decision_id"], _udc_occ, _udc_cap)
+                return
         try:
             _got = await _ar.reserve_entry(
                 db, account_id=self.account_id, user_id=self.user_id, source="scalp",
@@ -1727,10 +1751,12 @@ class ScalpRunner:
                                         max_concurrent=None, origin="scalp"))
         except Exception:
             # review item 8 — the DB refused: fail closed, free the slot.
+            await release_user_direction(db, _udc_res)
             await release_broker_submission_slot(db, slot)
             self.state.record_reject()
             raise
         if not _got["ok"]:
+            await release_user_direction(db, _udc_res)
             await release_broker_submission_slot(db, slot)
             self.state.record_reject()
             _bg(lambda s={"status": "refused_caps", "refusal": _got.get("blocked"),
@@ -1751,6 +1777,12 @@ class ScalpRunner:
                             "final_net_edge_pips": round(final_net_edge, 3)})
         _active_submissions += 1
         try:
+            from entry_context import build_entry_context
+            _ectx = await build_entry_context({"symbol": self.symbol, "action": decision["direction"],
+                                               "strategy_engine": "scalp_fast"})
+        except Exception:  # noqa: BLE001
+            _ectx = None
+        try:
             trade = await engine.execute(
                 user_id=self.user_id, account=account,
                 signal={"symbol": self.symbol, "action": decision["direction"],
@@ -1758,6 +1790,7 @@ class ScalpRunner:
                         "entry_price": round_to_tick(entry, tick),
                         "stop_loss": round_to_tick(sl, tick),
                         "take_profit": round_to_tick(tp, tick),
+                        "entry_context": _ectx,
                         # N99-1 — origin stays "auto" so every auto safety filter (circuit breaker,
                         # EOD flatten, entitlements, adaptive sizing) applies; engine marks the counter
                         "origin": "auto", "engine": "scalp", "scope": "scalp_fast",
@@ -1782,6 +1815,7 @@ class ScalpRunner:
             raise
         finally:
             _active_submissions = max(0, _active_submissions - 1)
+            await release_user_direction(db, _udc_res)      # v1.60.52 — the trade row (or the failure) now speaks
         # round 15 items 2/9 — persist the COMMITMENT context: the final
         # pre-submit snapshot the order was actually sized against, plus
         # latency decomposition stamps (EA poll latency lives on the trade
@@ -2148,6 +2182,18 @@ class ScalpRunner:
             mod = {"type": "PARTIAL_CLOSE", "new_volume": new_volume,
                    "requested_at": datetime.now(timezone.utc).isoformat(),
                    "reason": act["reason"]}
+            if be_sl is not None:
+                # v1.60.42 — the EA clamps to the stops level from the market: a BE that would land below entry is not sent
+                from trade_manager import be_clamp
+                clamp = be_clamp({"entry_price": info["entry_px"], "action": d}, be_sl, mid,
+                                 float(spec.get("stops_level_points") or 0) * tick)
+                if clamp is not None:
+                    clamp.update({"source": "scalp_partial_be_combo", "decision": "skip",
+                                  "at": datetime.now(timezone.utc).isoformat()})
+                    _bg(lambda t=tid, c=clamp: db.trades.update_one(
+                        {"_id": _oid(t)}, {"$push": {"be_clamped": c}, "$inc": {"be_clamped_count": 1},
+                                           "$set": {"be_clamped_last_at": c["at"]}}), "be_clamped")
+                    be_sl = None
             if be_sl is not None:
                 be_sl = round_to_tick(be_sl, tick)
                 if (d == "BUY" and be_sl > cur_sl) or \
@@ -2856,12 +2902,27 @@ class ScalpRunner:
                 or (self._tick_buffer and nm - self._last_flush_ms >= TICK_FLUSH_MS)):
             batch, self._tick_buffer = self._tick_buffer, []
             self._last_flush_ms = nm
-            _bg(lambda b=batch: db.scalp_ticks.insert_one({
-                "user_id": self.user_id, "account_id": self.account_id,
-                "symbol": self.symbol, "n": len(b),
-                "first_ms": b[0]["tm"], "last_ms": b[-1]["tm"],
-                "stored_at": datetime.now(timezone.utc).isoformat(),
-                "ticks": b}), "tick_batch")
+            _bg(lambda b=batch: self._store_tick_batch(db, b), "tick_batch")
+
+    async def _store_tick_batch(self, db, b: list):
+        # v1.60.50 — the broker offset is stored WITH the batch (broker clocks follow DST; the account's current
+        # offset is wrong for ticks recorded under the other regime). deferred_shadow prefers this value.
+        off = None
+        try:
+            from routes.bridge_routes import broker_offset_sec
+            from bson import ObjectId as _OID
+            acc = await db.accounts.find_one({"_id": _OID(str(self.account_id))},
+                                             {"broker_time_info": 1, "broker_utc_offset_sec": 1})
+            off = broker_offset_sec(acc or {})[0]
+        except Exception:  # noqa: BLE001
+            off = None
+        await db.scalp_ticks.insert_one({
+            "user_id": self.user_id, "account_id": self.account_id,
+            "symbol": self.symbol, "n": len(b),
+            "first_ms": b[0]["tm"], "last_ms": b[-1]["tm"],
+            "broker_offset_sec": off,
+            "stored_at": datetime.now(timezone.utc).isoformat(),
+            "ticks": b})
 
     def fill_stats(self) -> dict:
         """Empirical fill probability with an optimistic Beta(8,1) prior so a
@@ -2875,6 +2936,7 @@ class ScalpRunner:
         return {
             "account_id": self.account_id, "symbol": self.symbol,
             "enabled": self.enabled, "mode": self.mode,
+            "requested_mode": getattr(self, "requested_mode", self.mode), "live_gate": getattr(self, "live_gate", None),
             "model_key": self.model_key(),
             "risk_restored": self._risk_restored,
             "health": self.health,
@@ -2917,8 +2979,10 @@ class ScalpRunner:
                 kill.clock_drift_residual_ms(self.state.clock_drift_ms)),
             "clock_drift_samples": len(getattr(self.state, "_offsets", ()) or ()),
             "clock_drift_limit_ms": kill.MAX_CLOCK_DRIFT_MS,
-            "features": ({k: round(v, 3) for k, v in feats.items()
-                          if not k.startswith("_")} if feats else None),
+            # v1.60.31 hotfix — the 5-minute features (range_5m_pips, break_*_pips, twap_dev_pips, ret_5m) are None
+            # until five minutes of ticks exist; round(None) made every /scalp/status poll a 500.
+            "features": ({k: (round(v, 3) if isinstance(v, (int, float)) and not isinstance(v, bool) else v)
+                          for k, v in feats.items() if not k.startswith("_")} if feats else None),
             "risk": {
                 "consecutive_losses": self.risk_state.consecutive_losses,
                 "daily_loss_usd": round(self.risk_state.daily_loss_usd, 2),
@@ -3479,7 +3543,19 @@ async def apply_config(db, account: dict, symbol: str, enabled: bool, mode: str,
     if r is None:
         return None
     r.enabled = enabled
+    # v1.60.29 A1(c) — `demo_live` is honoured only once the shadow record passes the live gate (≥ 300 labeled
+    # samples, positive net expectancy after costs, PF > 1); otherwise the engine runs SHADOW and says why.
+    requested_mode = mode
+    r.live_gate = None
+    if mode == "demo_live":
+        from scalp.live_gate import live_eligibility
+        r.live_gate = await live_eligibility(db, account["user_id"], symbol.upper())
+        if not r.live_gate["eligible"]:
+            mode = "shadow"
+            logger.warning("scalp %s: demo_live requested but the live gate is closed (%s) — running SHADOW",
+                           symbol, "; ".join(r.live_gate["reasons"]))
     r.mode = mode
+    r.requested_mode = requested_mode
     r.account = account
     r.broker = str(account.get("broker") or "")
     r.account_type = str(account.get("account_type") or "")
@@ -3488,7 +3564,8 @@ async def apply_config(db, account: dict, symbol: str, enabled: bool, mode: str,
     await scalp_model.load_persisted(db, r.model_key())
     await db.scalp_configs.update_one(
         {"account_id": str(account["_id"]), "symbol": symbol.upper()},
-        {"$set": {"user_id": account["user_id"], "enabled": enabled, "mode": mode,
+        {"$set": {"user_id": account["user_id"], "enabled": enabled, "mode": mode, "requested_mode": requested_mode,
+                  "live_gate": r.live_gate,
                   "commission_usd_per_lot_side": r.commission_usd_per_lot_side,
                   "removed": False,
                   "updated_at": datetime.now(timezone.utc).isoformat()}},

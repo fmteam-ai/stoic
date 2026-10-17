@@ -8,6 +8,10 @@ in access log, plus baseline regression (health/login/bot-status/trades).
 Run against the preview backend; DB access is local Mongo on the pod.
 """
 from __future__ import annotations
+import os as _os_p
+_BACKEND_ROOT = _os_p.path.dirname(_os_p.path.dirname(_os_p.path.abspath(__file__)))
+_ENV_BE = _os_p.path.join(_BACKEND_ROOT, ".env")
+_ENV_FE = _os_p.path.join(_os_p.path.dirname(_BACKEND_ROOT), "frontend", ".env")
 import os, time, json, re, logging
 import pytest
 import requests
@@ -186,7 +190,7 @@ def test_a7d_brake_engages_and_release(sess, admin_account_id, db):
     # Try the direct python module approach (same pod).
     try:
         import sys
-        sys.path.insert(0, "/app/backend")
+        sys.path.insert(0, _BACKEND_ROOT)
         from motor.motor_asyncio import AsyncIOMotorClient
         import asyncio
         async def _run():

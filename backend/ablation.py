@@ -15,30 +15,38 @@ HORIZON_BARS = 96  # 24h of M15 — same as the Monte Carlo horizon
 
 
 def replay_outcome(action: str, entry: float, sl: float, tp: float,
-                   bars: list) -> dict | None:
-    """Walk bars after the veto: TP-first / SL-first / timeout (+R at end)."""
+                   bars: list, horizon_bars: int | None = None) -> dict | None:
+    """Walk bars after the veto: TP-first / SL-first / timeout (+R at end).
+
+    v1.60.39 — `horizon_bars` lets callers replay finer bars over the same 24 h span (M1 → 1440). When both
+    SL and TP touch inside ONE bar the call stays conservative (SL first) but is flagged `ambiguous`, so a
+    coarse-bar replay (M15 with a 6–9 pt scalp stop) is visible as a resolution problem, not a verdict."""
     if not bars or not entry or not sl:
         return None
     sl_dist = abs(entry - sl)
     if sl_dist <= 0:
         return None
+    horizon = int(horizon_bars or HORIZON_BARS)
+    action = str(action or "").upper()
+    if action not in ("BUY", "SELL"):
+        return None          # v1.60.49 (#33) — HOLD was silently replayed as SELL (233/233 deferred rows)
     is_buy = action == "BUY"
-    for i, b in enumerate(bars[:HORIZON_BARS]):
+    for i, b in enumerate(bars[:horizon]):
         hi, lo = float(b["h"]), float(b["l"])
         sl_hit = (lo <= sl) if is_buy else (hi >= sl)
         tp_hit = bool(tp) and ((hi >= tp) if is_buy else (lo <= tp))
         if sl_hit and tp_hit:
-            # both touched in one bar — conservative: assume SL first
-            return {"outcome": "sl_first", "r": -1.0, "bars": i + 1}
+            # both touched in one bar — conservative: assume SL first, but say so
+            return {"outcome": "sl_first", "r": -1.0, "bars": i + 1, "ambiguous": True}
         if sl_hit:
-            return {"outcome": "sl_first", "r": -1.0, "bars": i + 1}
+            return {"outcome": "sl_first", "r": -1.0, "bars": i + 1, "ambiguous": False}
         if tp_hit:
             return {"outcome": "tp_first",
-                    "r": round(abs(tp - entry) / sl_dist, 2), "bars": i + 1}
-    last = float(bars[min(len(bars), HORIZON_BARS) - 1]["c"])
+                    "r": round(abs(tp - entry) / sl_dist, 2), "bars": i + 1, "ambiguous": False}
+    last = float(bars[min(len(bars), horizon) - 1]["c"])
     r = ((last - entry) if is_buy else (entry - last)) / sl_dist
     return {"outcome": "timeout", "r": round(r, 2),
-            "bars": min(len(bars), HORIZON_BARS)}
+            "bars": min(len(bars), horizon), "ambiguous": False}
 
 
 async def run_gate_ablation(db, user_id: str, days: int = 30) -> dict:

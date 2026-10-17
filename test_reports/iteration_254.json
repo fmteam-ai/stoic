@@ -1,0 +1,41 @@
+{
+  "summary": "Verified prod fixes A/B/C on preview (GET-only, no mutations). (A) /api/performance/verified: headline = current accounts only (Start Trader, DEMO), overall.deals == sum(accounts.deals), 7 archived orphan accounts (2104 deals) reported separately with all required keys, integrity computed from same deal set (archived_accounts_excluded=7, archived_deals_excluded=2104, broker_verified_trades == overall.closed_positions). UI: integrity-pct reads '... 2104 deals of 7 deleted accounts archived', archived-accounts header correct, archived-row-0..6 'DELETED ACCOUNT …xxxxxx' UNKNOWN, verified-accounts lists only Start Trader; no page-level horizontal overflow at 390px (table scrolls inside its own container). (B) /api/infra/certification clock_synchronization=true with details {ea_broker_time,10800,Start Trader}; /api/infra/overview server_backups {mounted:false, files:[], newest_age_h:null}, backups list. UI cert-clock_synchronization PASS + cert-clock-detail exact text; vps-backups shows both SERVER and VPS FLEET sections + unmounted message. (C) unit tests test_prod_v1_60_28_execution_bugs + verified_performance_deleted_accounts + infra_shadow_clock_and_backups: 20 passed. Regression: presets policy_risk_cap_pct=1.0 + cap_fit on every preset; Bot Config UI shows cap banner + 8 cap-fit pills. SECURITY: found the CURRENT admin password committed (string-split to dodge scanner) in backend/tests/test_audit_p3_live_iter228.py — patched to read from env; rotation required.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "N/A (repo secret)", "issue": "backend/tests/test_audit_p3_live_iter228.py hardcoded the CURRENT TEST_ADMIN_PASSWORD (split into string fragments to evade gitleaks). It is in git history (commit 3465fd97). Testing agent replaced it with env lookup; password must be rotated + sessions revoked.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/public/performance/{share_id}", "issue": "When attestation_blocked, the code pops row keys 'net','wins','losses','win_rate','profit_factor' but rows carry 'net_pnl' — per-account net_pnl still leaks on a blocked share (pre-existing), and the new 'archived' rows (net_pnl, deals, account_id_suffix, deleted_at, broker) are not stripped/masked at all on the public share."},
+      {"endpoint": "_verified_payload", "issue": "broker_deals query .limit(20000) sorted ascending across current+archived accounts — for users with many archived deals, oldest archived deals can consume the limit and truncate headline deals. Filter headline/archived separately or use aggregation."},
+      {"endpoint": "_verified_payload", "issue": "Soft-deleted accounts (status=deleted, doc still present, no tombstone) fall into archived as 'DELETED ACCOUNT …' with UNKNOWN env though label/env are available from the account doc."},
+      {"endpoint": "GET /api/infra/certification", "issue": "checks.broker_reconciliation uses db.broker_deals.find_one({}) — not user-scoped (pre-existing); clock detail takes first non-paper account in natural order, not the freshest heartbeat."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/performance", "issues": ["Integrity stamp missing space: 'archived· source: broker_deals'", "Negative P&L formatted '$-27.46' while positive '+$7928.9' — use '-$27.46' and 2 decimals/thousands separators ('+$7,928.90')", "Archived header/rows #52525B on near-black — low contrast", "Mobile: archived table needs horizontal scroll within container (POSITIONS/DELETED columns off-screen) — acceptable but consider stacked layout"]},
+      {"screen": "/infrastructure mobile", "issues": ["cert-clock-detail wraps inside the cell and is partially covered by the floating chat FAB"]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iter254_verified_archived_infra_live.py", "/app/test_reports/pytest/iter254.xml"],
+  "action_items": [
+    "ROTATE the admin password (TEST_ADMIN_PASSWORD / both preview admins) and revoke sessions — the current value was committed in backend/tests/test_audit_p3_live_iter228.py",
+    "Public share: strip/mask 'archived' rows and fix the pop of 'net' → 'net_pnl' when attestation_blocked",
+    "Split the 20000-deal limit so archived deals cannot truncate the headline",
+    "Fix integrity stamp spacing and negative currency formatting on VerifiedPerf.jsx"
+  ],
+  "critical_code_review_comments": [
+    "Hardcoded current credential in a committed test file (scanner evasion via concatenation)",
+    "Public share masking incomplete for archived rows and net_pnl",
+    "Deal-query limit shared between headline and archived sets"
+  ],
+  "updated_files": ["/app/backend/tests/test_iter254_verified_archived_infra_live.py", "/app/backend/tests/test_audit_p3_live_iter228.py"],
+  "success_rate": {"backend": "100% (8/8 live + 20/20 unit)", "frontend": "100% (all requested checks)"},
+  "seed_data_creation": "None. No mutations performed.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Live suite tests/test_iter254_verified_archived_infra_live.py reads creds from backend/.env (run with STOIC_TESTS_ALLOW_DB_NAME=1). Cloudflare challenges page.goto() on deep links in browser automation — log in on /login then navigate client-side via history.pushState + popstate. Bot Config lives at /bot.",
+  "test_credentials": "admin from TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD in backend/.env (see /app/memory/test_credentials.md)"
+}

@@ -89,10 +89,10 @@ class ScalpConfigRequest(BaseModel):
 
 @router.post("/config")
 async def set_config(req: ScalpConfigRequest, user=Depends(get_current_user)):
-    from scalp.instruments import approved
+    from scalp.instruments import APPROVED, approved
     if approved(req.symbol) is None:
         raise HTTPException(status_code=422,
-                            detail=f"{req.symbol} is not in the approved scalp universe (EURUSD only)")
+                            detail=f"{req.symbol} is not in the approved scalp universe ({', '.join(sorted(APPROVED))})")
     if req.mode not in ("shadow", "demo_live"):
         raise HTTPException(status_code=422, detail="mode must be shadow or demo_live")
     if req.mode == "demo_live" and not req.confirm_live:
@@ -163,7 +163,6 @@ async def scalp_review(user=Depends(get_current_user)):
     """Iter-156 · Fast-Scalp review: execution heatmap (dow×hour), gate
     effectiveness (what each veto avoided, shadow-labeled), per-broker
     calibration and cost/latency attribution."""
-    from datetime import datetime, timezone
     db = get_db()
 
     def _stage(d):
@@ -276,15 +275,31 @@ async def scalp_review(user=Depends(get_current_user)):
 async def remove_config(account_id: str, symbol: str = "EURUSD",
                         user=Depends(get_current_user)):
     """Remove a runner from the Scalp page entirely (tombstoned so incoming
-    EA ticks for this account/symbol are ignored until re-enabled)."""
+    EA ticks for this account/symbol are ignored until re-enabled).
+
+    Ownership is the caller's: the account (if it still exists) OR the scalp config / in-memory runner the
+    caller created. An ORPHAN runner — account deleted, config left behind — is hard-deleted instead of
+    tombstoned (prod: three EURUSD cards could never be removed, every attempt answered 404)."""
     db = get_db()
-    account = await db.accounts.find_one({"_id": parse_object_id(account_id, "Account"),
-                                          "user_id": user["id"]})
-    if not account:
-        raise HTTPException(status_code=404, detail="Account not found")
-    sym = (symbol or "EURUSD").upper()
     from scalp.engine import _runners
-    runner = _runners.get(f"{account_id}:{sym}")
+    sym = (symbol or "EURUSD").upper()
+    key = f"{account_id}:{sym}"
+    oid = parse_object_id(account_id, "Account")
+    account = await db.accounts.find_one({"_id": oid, "user_id": user["id"]})
+    if not account:
+        if await db.accounts.find_one({"_id": oid}, {"_id": 1}):
+            raise HTTPException(status_code=404, detail="Account not found")     # someone else's account
+        runner = _runners.get(key)
+        owned = (runner is not None and runner.user_id == user["id"]) or \
+            await db.scalp_configs.find_one({"account_id": account_id, "user_id": user["id"]}, {"_id": 1}) is not None
+        if not owned:
+            raise HTTPException(status_code=404, detail="Account not found")
+        if runner is not None and len(runner.live_trades) > 0:
+            raise HTTPException(status_code=409, detail="Runner has open live scalps — close them before removing")
+        res = await db.scalp_configs.delete_many({"account_id": account_id, "symbol": sym, "user_id": user["id"]})
+        _runners.pop(key, None)
+        return {"ok": True, "removed": key, "orphan": True, "configs_deleted": res.deleted_count}
+    runner = _runners.get(key)
     if runner is not None and len(runner.live_trades) > 0:
         raise HTTPException(status_code=409,
                             detail="Runner has open live scalps — close them before removing")
@@ -293,8 +308,23 @@ async def remove_config(account_id: str, symbol: str = "EURUSD",
         {"$set": {"user_id": user["id"], "enabled": False, "mode": "shadow",
                   "removed": True}},
         upsert=True)
-    _runners.pop(f"{account_id}:{sym}", None)
-    return {"ok": True, "removed": f"{account_id}:{sym}"}
+    _runners.pop(key, None)
+    return {"ok": True, "removed": key}
+
+
+@router.get("/exit-rules")
+async def exit_rules(days: int = 30, user=Depends(get_current_user)):
+    """v1.60.32 — Exit Rule Scoreboard: what the 0.5R breakeven and the 90-min time-stop did to closed scalp trades."""
+    from scalp.reports import exit_rule_scoreboard
+    return await exit_rule_scoreboard(get_db(), user["id"], days=max(1, min(int(days), 365)))
+
+
+@router.get("/expectancy")
+async def expectancy(user=Depends(get_current_user)):
+    """v1.60.32 — Shadow Expectancy Report per approved symbol (gate verdict + shadow and live-mode outcomes)."""
+    from scalp.instruments import APPROVED
+    from scalp.reports import shadow_expectancy_report
+    return await shadow_expectancy_report(get_db(), user["id"], list(APPROVED))
 
 
 @router.get("/status")
@@ -316,7 +346,8 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
     from scalp import permissions as _perms
     from state_contract import effective_connection_state
     from bson import ObjectId
-    for r in _runners.values():
+    # snapshot: the loop awaits, so runners may be added/removed meanwhile
+    for r in list(_runners.values()):
         if r.user_id != user["id"]:
             continue
         if account_id and r.account_id != account_id:
@@ -349,6 +380,7 @@ async def status(account_id: str = None, user=Depends(get_current_user)):
                 "connected": conn.get("connected")}
         else:
             st["terminal"] = None
+            st["account_missing"] = True        # orphan runner — account deleted; REMOVE hard-deletes it
         out.append(st)
     from scalp.engine import audit_backlog
     return {"runners": out, "audit": audit_backlog()}
@@ -360,7 +392,6 @@ async def scalp_executions(limit: int = 25, account_id: str = None,
     """Iter-154 · execution metadata for scalp-originated orders: intent /
     reservation / order / deal / position identifiers, broker latency,
     lifecycle timeline and protection state."""
-    from datetime import datetime, timezone
     db = get_db()
     q = {"user_id": user["id"], "scope": "scalp_fast"}
     if account_id:
@@ -441,20 +472,22 @@ async def scalp_executions(limit: int = 25, account_id: str = None,
 
 
 @router.get("/decisions")
-async def decisions(limit: int = 50, symbol: str = None,
+async def decisions(limit: int = 50, symbol: str = None, account_id: str = None,
                     user=Depends(get_current_user)):
     db = get_db()
     q = {"user_id": user["id"]}
     if symbol:
         q["symbol"] = symbol.upper()
-    docs = await db.scalp_decisions.find(q).sort("ts_ms", -1).to_list(min(limit, 200))
+    if account_id:                                       # v1.60.44 — the page scopes decisions to the selected runner
+        q["account_id"] = account_id
+    docs = await db.scalp_decisions.find(q).sort("ts_ms", -1).to_list(min(max(int(limit), 1), 200))
     for d in docs:
         d["id"] = str(d.pop("_id"))
     return {"decisions": docs}
 
 
 @router.get("/metrics")
-async def metrics(symbol: str = "EURUSD", account_id: str = None,
+async def metrics(symbol: str = "EURUSD", account_id: str = None, setup: str = None,
                   user=Depends(get_current_user)):
     """Step 18 production metrics: alpha / execution / risk / stability.
 
@@ -467,10 +500,25 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
          "outcome.result": {"$in": ["target_first", "stop_first", "timeout"]}}
     if account_id:
         q["account_id"] = account_id
+    if setup:                                            # v1.60.44 — one setup only (the runner's current setup)
+        q["setup.setup"] = setup
     docs = await db.scalp_decisions.find(q).sort("ts_ms", -1).to_list(5000)
     n = len(docs)
+    # v1.60.44 — per-setup breakdown of the same rolling sample, so the UI can show the CURRENT setup next to
+    # the all-setups aggregate (the page used to show the lifetime EURUSD aggregate under an XAUUSD card).
+    by_setup: dict = {}
+    for d in docs:
+        key = str(((d.get("setup") or {}).get("setup")) or "unknown")
+        b = by_setup.setdefault(key, {"n": 0, "net": 0.0, "win": 0.0, "loss": 0.0})
+        v = float((d.get("outcome") or {}).get("net_pips") or 0)
+        b["n"] += 1
+        b["net"] += v
+        b["win" if v > 0 else "loss"] += v
+    setups = {k: {"n": b["n"], "net_expectancy_pips": round(b["net"] / b["n"], 3),
+                  "profit_factor": (round(b["win"] / abs(b["loss"]), 3) if b["loss"] < 0 else None)}
+              for k, b in by_setup.items()}
     if n == 0:
-        return {"symbol": symbol.upper(), "n": 0}
+        return {"symbol": symbol.upper(), "account_id": account_id, "setup": setup, "n": 0, "by_setup": {}}
     tf = [d for d in docs if d["outcome"]["result"] == "target_first"]
     sf = [d for d in docs if d["outcome"]["result"] == "stop_first"]
     # Review item 1: outcome.net_pips is ALREADY fully cost-loaded
@@ -577,7 +625,7 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
                  "P95/P99 matter more than averages for scalping"),
     }
     # Round 17 item 10 — distributed submission-capacity operational view.
-    from datetime import datetime, timedelta, timezone
+    from datetime import timedelta
     from scalp.engine import (MAX_BROKER_CONCURRENT_SUBMISSIONS,
                               _slot_metrics, capacity_integrity_reason)
     now_dt = datetime.now(timezone.utc)
@@ -623,7 +671,8 @@ async def metrics(symbol: str = "EURUSD", account_id: str = None,
         "capacity_rejections_24h": cap_rejections,
     }
     return {
-        "symbol": symbol.upper(), "n": n,
+        "symbol": symbol.upper(), "account_id": account_id, "setup": setup, "n": n,
+        "by_setup": setups,
         "window": {
             "type": "rolling", "max_samples": 5000, "n": n,
             "from_ts_ms": docs[-1].get("ts_ms"),

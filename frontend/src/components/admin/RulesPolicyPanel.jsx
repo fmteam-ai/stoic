@@ -23,8 +23,10 @@ export function RulesPolicyPanel() {
     const upload = async () => {
         setBusy(true);
         try {
-            const policy = JSON.parse(text);
-            const { data } = await api.post("/authority/policy/upload", { policy });
+            // Prod fix (12 Oct): send the pasted file AS TEXT — JSON.parse would turn 5.0 into 5 and the server
+            // could no longer rebuild the exact bytes the signer signed ("signature does not verify").
+            JSON.parse(text);                                    // client-side syntax check only
+            const { data } = await api.post("/authority/policy/upload", { policy_text: text });
             toast.success(`Rules policy ${data.policy_version} active until ${String(data.expires_at).slice(0, 10)}`);
             setText(""); load();
         } catch (e) { toast.error(e instanceof SyntaxError ? "Not valid JSON" : formatApiError(e)); }
@@ -37,6 +39,26 @@ export function RulesPolicyPanel() {
         finally { setBusy(false); }
     };
     const [deploying, setDeploying] = useState(false);
+    const [renewal, setRenewal] = useState(null);
+    const [opBusy, setOpBusy] = useState("");
+    const loadRenewal = () => api.get("/authority/policy/renewal").then((r) => setRenewal(r.data)).catch(() => setRenewal(null));
+    useEffect(() => { loadRenewal(); }, [pol]);
+    const loadLatest = async () => {
+        setOpBusy("load");
+        try {
+            const { data } = await api.post("/authority/policy/load-latest");
+            if (data.activated) toast.success(`Rules policy ${data.policy_version} active (${data.source})`, { description: `expires ${String(data.expires_at).slice(0, 10)}` });
+            else if (data.repo_configured === false) toast.warning("Repo not configured", { description: data.note || "set GITHUB_REPO in backend/.env" });
+            else toast.info(data.reason || "nothing newer", { description: (data.rejected || []).map((r) => `${r.name}: ${(r.problems || []).join("; ")}`).join(" · ") || undefined });
+            if (data.activated) window.location.reload();
+        } catch (e) { toast.error(formatApiError(e)); } finally { setOpBusy(""); }
+    };
+    const retire = async () => {
+        if (!window.confirm("Replace the signed per-account id list with the active rules policy? The list is archived and audited; accounts are then governed by the rules only.")) return;
+        setOpBusy("retire");
+        try { const { data } = await api.post("/authority/policy/retire-id-list", { reason: "Easy Start A3" }); toast.success(data.retired ? `Retired ${data.retired_policy_version} → rules ${data.rules_policy}` : data.reason); loadRenewal(); }
+        catch (e) { toast.error(formatApiError(e)); } finally { setOpBusy(""); }
+    };
     const deployLatest = async () => {
         if (!window.confirm("Deploy the latest GitHub release to production now? (deploy-production workflow: backup → signed release → rollback on failure)")) return;
         setDeploying(true);
@@ -48,10 +70,32 @@ export function RulesPolicyPanel() {
         <section className="rounded-xl border border-white/10 bg-black/40 p-4 space-y-3" data-testid="rules-policy-panel">
             <div className="flex items-center justify-between gap-2 flex-wrap">
                 <div className="font-mono text-xs text-white/60">Operator shortcuts</div>
-                <Button size="sm" variant="outline" data-testid="deploy-latest-btn" disabled={deploying} onClick={deployLatest} title="Dispatches .github/workflows/deploy-production.yml with the newest release tag (step-up; needs GITHUB_DISPATCH_TOKEN on the server)">
-                    {deploying ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null} DEPLOY LATEST RELEASE
-                </Button>
+                <div className="flex items-center gap-2 flex-wrap">
+                    <Button size="sm" data-testid="load-latest-policy-btn" disabled={!!opBusy} onClick={loadLatest} title="Fetches the newest signed file from the repo's policies/ (GitHub API or local dir), verifies the v2 signature and activates it — step-up; no release, no deploy">
+                        {opBusy === "load" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null} LOAD LATEST SIGNED POLICY
+                    </Button>
+                    {renewal && renewal.repo_configured === false && (
+                        <span className="font-mono text-[10px] text-[#FFB000]" data-testid="rules-policy-repo-not-configured" title="GITHUB_REPO is not set in backend/.env — Load latest can only see the image's local policies/ dir">repo not configured</span>
+                    )}
+                    {renewal?.legacy_id_list && (
+                        <Button size="sm" variant="outline" data-testid="retire-id-list-btn" disabled={!!opBusy || !pol || pol.expired} onClick={retire} title="A3 — one-time: archive the signed per-account id list; the rules policy governs from then on">
+                            {opBusy === "retire" ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null} REPLACE ACCOUNT LIST WITH RULES POLICY
+                        </Button>
+                    )}
+                    <Button size="sm" variant="outline" data-testid="deploy-latest-btn" disabled={deploying} onClick={deployLatest} title="Dispatches .github/workflows/deploy-production.yml with the newest release tag (step-up; needs GITHUB_DISPATCH_TOKEN on the server)">
+                        {deploying ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null} DEPLOY LATEST RELEASE
+                    </Button>
+                </div>
             </div>
+            {renewal && (renewal.reminder_due || renewal.expired) && (
+                <div className={`rounded-lg border p-3 text-xs font-mono ${renewal.expired ? "border-[#FF3B30]/50 bg-[#FF3B30]/10 text-[#FF3B30]" : "border-[#FFB000]/50 bg-[#FFB000]/10 text-[#FFB000]"}`} data-testid="rules-policy-renewal-banner">
+                    {renewal.expired ? `Rules policy ${renewal.policy_version} EXPIRED — every account is close-only until a new one is active.` : `Rules policy ${renewal.policy_version} expires in ${renewal.days_left} day(s).`}
+                    {renewal.prefill && <span className="text-white/70"> Next: version {renewal.prefill.policy_version} · cap {renewal.prefill.max_accounts_per_user} · brokers {renewal.prefill.allowed_brokers} · {renewal.prefill.expires_days} days.</span>}
+                    {renewal.renew_link ? <a href={renewal.renew_link} target="_blank" rel="noopener noreferrer" className="ml-2 underline text-white" data-testid="rules-policy-renew-link">Renew (workflow form) →</a>
+                        : <span className="ml-2 text-white/60">set GITHUB_REPO for the Renew link</span>}
+                    <span className="text-white/60"> then LOAD LATEST SIGNED POLICY.</span>
+                </div>
+            )}
             <div className="flex items-center gap-2 font-mono text-sm text-white"><ShieldCheck className="h-4 w-4 text-[#00FF41]" /> RULES POLICY <span className="text-white/40">· signed · no release needed</span></div>
             {pol === undefined ? <div className="text-xs text-white/50">loading…</div> : pol === null ? (
                 <div className="text-xs text-[#FFB000]" data-testid="rules-policy-none">No rules policy active — accounts are governed by the legacy per-account expectation. Upload a signed policy (scripts/sign_rules_policy.py) or commit it under policies/.</div>

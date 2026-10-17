@@ -263,3 +263,38 @@ def trend_ride_check(action: str, feats: dict, symbol: str) -> dict | None:
     if action == "BUY" and 55 <= pos < 100 - EXHAUSTION_POS_BAND and slope >= 0:
         return {"day_range_pct": rng, "range_pos_pct": pos, "direction": "UP"}
     return None
+
+
+# ── #75 — trend-day BUYs (and SELLs) only after a pullback to EMA20 / session VWAP ───────────────────
+PULLBACK_ATR_FRAC = 0.35          # "at" the mean = within 0.35 × ATR15 of EMA20 or VWAP (or already through it)
+
+
+def trend_day_pullback_check(action: str, feats: dict, ride: dict | None) -> dict | None:
+    """On a trend-ride day, an entry WITH the trend is only sound after price has pulled back to EMA20 or the session
+    VWAP — chasing the extension is what made the 16–17 Oct trend-day buys lose. Returns None when not a trend day;
+    otherwise {ok, why, dist_ema20_atr, dist_vwap_atr}. Pure; the caller decides (shadow or enforce)."""
+    if not ride or action not in ("BUY", "SELL") or not feats:
+        return None
+    try:
+        px = float(feats.get("last_price") or feats.get("last") or feats.get("price") or 0)
+        atr = float(feats.get("atr15") or 0)
+    except (TypeError, ValueError):
+        return None
+    if px <= 0 or atr <= 0:
+        return {"ok": False, "why": "pullback check unavailable (no price/ATR)", "dist_ema20_atr": None, "dist_vwap_atr": None}
+    sign = 1 if action == "BUY" else -1
+    dists = {}
+    for name in ("ema20", "session_vwap"):
+        ref = feats.get(name)
+        if ref is None:
+            dists[name] = None
+            continue
+        # positive = price is EXTENDED beyond the mean in the trade direction; ≤ frac means pulled back to / through it
+        dists[name] = round(sign * (px - float(ref)) / atr, 3)
+    cands = [d for d in dists.values() if d is not None]
+    if not cands:
+        return {"ok": False, "why": "pullback check unavailable (no EMA20/VWAP)", "dist_ema20_atr": None, "dist_vwap_atr": None}
+    ok = min(cands) <= PULLBACK_ATR_FRAC
+    why = ("pulled back to EMA20/VWAP" if ok else
+           f"extended {min(cands):.2f}×ATR15 beyond EMA20/VWAP — wait for the pullback (≤ {PULLBACK_ATR_FRAC}×ATR15)")
+    return {"ok": ok, "why": why, "dist_ema20_atr": dists.get("ema20"), "dist_vwap_atr": dists.get("session_vwap")}

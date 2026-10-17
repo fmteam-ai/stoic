@@ -11,7 +11,6 @@ Returns a structured pass/fail report covering:
 Plus POST /diagnostic/auto-fix to run safe remediations in one click.
 """
 from datetime import datetime, timezone, timedelta
-import os
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 
@@ -205,39 +204,45 @@ async def _check_risk_state(db, user_id: str) -> dict:
     now = datetime.now(timezone.utc)
     cfgs = await db.bot_configs.find({"user_id": user_id}).to_list(length=20)
 
-    # Anti-tilt freeze
-    frozen_scopes = []
+    # Anti-tilt freeze — #39: shared evaluation (anti_tilt.evaluate), identical to the runner's gate
+    from anti_tilt import evaluate as anti_tilt_evaluate
+    frozen_scopes, streaks, rule = [], [], None
     for tc in cfgs:
-        if not tc.get("anti_tilt_enabled", True):
-            continue
-        atn = int(tc.get("anti_tilt_consecutive_losses", 3) or 0)
-        ath = int(tc.get("anti_tilt_freeze_hours", 4) or 0)
-        if atn <= 0 or ath <= 0:
-            continue
-        q = {"user_id": user_id, "status": "closed", "stats_excluded": {"$ne": True}}
-        if tc.get("account_id"):
-            q["account_id"] = tc["account_id"]
-        recent = await db.trades.find(q).sort("closed_at", -1).limit(atn).to_list(length=atn)
-        if len(recent) == atn and all(float(r.get("pnl") or 0) < 0 for r in recent):  # iter-45: strict losses only
-            last_close = recent[0].get("closed_at")
-            try:
-                lc = datetime.fromisoformat(str(last_close).replace("Z", "+00:00"))
-                unfreeze = lc + timedelta(hours=ath)
-                rem = (unfreeze - now).total_seconds()
-                if rem > 0:
-                    mins = int(rem // 60)
-                    hrs, mm = divmod(mins, 60)
-                    eta = f"{hrs}h {mm}m" if hrs else f"{mm}m"
-                    frozen_scopes.append(f"{tc.get('account_id') or 'default'} (resumes in {eta})")
-            except Exception:
-                pass
+        tilt = await anti_tilt_evaluate(db, user_id, tc, now)
+        rule = rule or tilt.get("rule")
+        streaks.append(f"{tc.get('account_id') or 'default'}: {tilt.get('loss_streak', 0)}/{tilt.get('n')} real losses")
+        if tilt["active"]:
+            frozen_scopes.append(f"{tc.get('account_id') or 'default'} (resumes in {tilt['eta']})")
+    # #77 — the banner states the rule actually enforced (real losses only; scratches never count)
     if frozen_scopes:
         checks.append(_mk("Anti-tilt freeze", "fail",
-                          "Bot frozen on: " + ", ".join(frozen_scopes),
+                          "Bot frozen on: " + ", ".join(frozen_scopes) + (f" · rule: {rule}" if rule else ""),
                           fix_code="release_anti_tilt",
                           fix_label="Release anti-tilt freeze"))
     else:
-        checks.append(_mk("Anti-tilt freeze", "pass", "No active freeze"))
+        checks.append(_mk("Anti-tilt freeze", "pass", "No active freeze · " + "; ".join(streaks) + (f" · rule: {rule}" if rule else "")))
+
+    # #81 — GTP H4 warm-up: "GTP: H4 bars n/200" for every config that has gold_trend_pulse enabled
+    for tc in cfgs:
+        if not tc.get("gold_trend_pulse_enabled"):
+            continue
+        try:
+            from gold_h4_history import health_check as _h4_health
+            acc = None
+            if tc.get("account_id"):
+                from bson import ObjectId
+                try:
+                    acc = await db.accounts.find_one({"_id": ObjectId(str(tc["account_id"]))})
+                except Exception:  # noqa: BLE001
+                    acc = None
+            if acc is None:
+                acc = await db.accounts.find_one({"user_id": user_id, "status": "connected"}) or await db.accounts.find_one({"user_id": user_id})
+            row = await _h4_health(db, user_id, acc, now)
+            if len(cfgs) > 1:
+                row["label"] = f"GTP: H4 bars ({(acc or {}).get('label') or tc.get('account_id') or 'default'})"
+            checks.append(row)
+        except Exception as _h4e:  # noqa: BLE001
+            checks.append(_mk("GTP: H4 bars", "warn", f"could not read the XAUUSD H4 history: {_h4e}"))
 
     # Safety Guardian: confirm hard-floors are active + report recent blocks.
     try:
@@ -353,21 +358,42 @@ async def _check_ea_config(db, user_id: str) -> dict:
         checks.append(_mk("Bot ON toggle", "pass",
                           f"{active_count}/{len(cfgs)} config(s) active"))
 
-    # API keys
-    has_claude = bool(os.environ.get("EMERGENT_LLM_KEY"))
-    if has_claude:
-        from llm_models import describe as _llm_describe
-        tiers = _llm_describe()["tiers"]
-        summary = " · ".join(f"{t}={v['model']}{'*' if v['overridden'] else ''}" for t, v in tiers.items())
-        checks.append(_mk("Claude LLM", "pass", f"Configured (emergent backend) · {summary}"))
-    else:
+    # LLM provider (v1.60.59 — direct Anthropic vs Emergent Universal Key; the latter is refused off-platform)
+    import llm_client
+    st = await llm_client.status_with_db(db)
+    if st["provider"] == llm_client.PROVIDER_NONE:
         checks.append(_mk("Claude LLM", "fail",
-                          "Missing EMERGENT_LLM_KEY — AI signals disabled.",
-                          fix_label="Add EMERGENT_LLM_KEY in backend/.env"))
+                          "No LLM credential — AI narration, news veto, Co-Pilot and agents are off (trading engines unaffected).",
+                          fix_label="Add ANTHROPIC_API_KEY under Admin → Integrations → AI"))
+    else:
+        tiers = st["models"]
+        summary = " · ".join(f"{t}={m}" for t, m in tiers.items() if t in ("fast", "analysis", "deep"))
+        label = "direct Anthropic" if st["provider"] == llm_client.PROVIDER_DIRECT else "Emergent Universal Key"
+        err = st.get("last_error_kind")
+        if err == llm_client.KIND_BLOCKED:
+            checks.append(_mk("Claude LLM", "fail", f"{label}: Universal Key not allowed from this host (Emergent proxy 403). "
+                                                   f"News veto inactive, Co-Pilot/agents off. {st.get('last_error_at')}",
+                              fix_label="Add ANTHROPIC_API_KEY under Admin → Integrations → AI"))
+        elif err and (st.get("last_error_at") or "") > (st.get("last_ok_at") or ""):
+            checks.append(_mk("Claude LLM", "warn", f"{label} · last error ({err}): {st.get('last_error')} · {summary}"))
+        else:
+            checks.append(_mk("Claude LLM", "pass", f"{label} · {st['today_calls']}/{st['daily_call_cap']} calls today · {summary}"))
+    # news veto depends on the LLM sentiment score
+    from news_understanding import _status as ns, news_cache_stale
+    stale, age_h = news_cache_stale(ns.get("last_scored_at"))
+    if ns.get("last_llm_error") or (st["provider"] == llm_client.PROVIDER_NONE) or st.get("last_error_kind") == llm_client.KIND_BLOCKED:
+        checks.append(_mk("News veto", "warn", "news veto inactive — LLM unavailable (sentiment empty; MTF hard veto cannot fire)",
+                          fix_label="Fix the Claude LLM check above"))
+    elif stale:   # #76 — a score older than 6 h is not a live veto
+        checks.append(_mk("News veto", "warn", f"news veto inactive — news cache stale ({'never scored' if age_h is None else f'{age_h:.1f} h old'} > 6 h)",
+                          fix_label="Check the news feeds / LLM provider"))
+    else:
+        checks.append(_mk("News veto", "pass", f"sentiment scored {ns.get('last_scored_at')} ({age_h:.1f} h ago)"))
 
     # Per-user Telegram (notifications collection)
-    tg = await db.notifications.find_one({"user_id": user_id, "kind": "telegram"})
-    if tg and tg.get("chat_id"):
+    from notification_settings import get_settings
+    tg = await get_settings(db, user_id)
+    if tg.get("telegram_enabled") and tg.get("telegram_chat_id"):
         checks.append(_mk("Telegram alerts", "pass", "Configured for this user"))
     else:
         checks.append(_mk("Telegram alerts", "warn",
@@ -568,6 +594,49 @@ async def ai_latency_view(hours: int = 24, user=Depends(get_current_user)):
     """AI latency card — per provider/model p50/p95, timeouts and errors from every process. Admin only (audit P3)."""
     from auth import require_admin
     require_admin(user)
-    from database import get_db
     from llm_timeout import latency_summary
     return await latency_summary(get_db(), hours=max(1, min(int(hours or 24), 168)))
+
+
+@router.get("/llm-status")
+async def llm_status_view(user=Depends(get_current_user)):
+    """v1.60.59 — active LLM provider (direct Anthropic vs Emergent Universal Key), last error, per-feature daily call
+    counters and the news-veto state. Admin only. Never includes a key."""
+    from auth import require_admin
+    require_admin(user)
+    import llm_client
+    from news_understanding import _status as ns
+    out = await llm_client.status_with_db(get_db())
+    from llm_models import pretty_models
+    out["models_pretty"] = pretty_models()
+    blocked = out.get("last_error_kind") == llm_client.KIND_BLOCKED
+    from news_understanding import news_cache_stale
+    stale, age_h = news_cache_stale(ns.get("last_scored_at"))
+    llm_down = out["provider"] == llm_client.PROVIDER_NONE or blocked or bool(ns.get("last_llm_error"))
+    out["news_veto"] = {"active": not llm_down and not stale, "cache_age_hours": age_h,
+                        "note": ("news veto inactive — LLM unavailable" if llm_down
+                                 else "news veto inactive — news cache stale (> 6 h)" if stale else ""),
+                        "last_scored_at": ns.get("last_scored_at"), "last_llm_error": llm_client.redact(ns.get("last_llm_error") or "") or None}
+    return out
+
+
+@router.get("/llm-models")
+async def llm_models_view(user=Depends(get_current_user)):
+    """#74 — tier → model id / display name for UI labels (any signed-in user; no keys, no errors, no counters)."""
+    from llm_models import TIERS, model_for, pretty_models
+    import llm_client
+    return {"models": {t: model_for(t) for t in TIERS}, "models_pretty": pretty_models(),
+            "provider": llm_client.active_provider()}
+
+
+@router.get("/trade-costs")
+async def trade_costs_view(days: int = 7, user=Depends(get_current_user)):
+    """v1.60.63 #85 — per-broker trading-cost ledger (spread by session, entry/exit slippage, cost in R and % of TP,
+    worst 5 trades) + the spread-gate shadow scoreboard. Own data only."""
+    from trade_costs import gate_mode, report
+    db = get_db()
+    out = await report(db, user["id"], days)
+    cfg = await db.bot_configs.find_one({"user_id": user["id"]}, {"spread_gate_mode": 1, "spread_gate_mult": 1, "max_cost_pct_of_tp": 1, "max_spread_pips": 1})
+    out["gate"].update(mode=gate_mode(cfg), mult=(cfg or {}).get("spread_gate_mult") or 1.5,
+                       max_cost_pct_of_tp=(cfg or {}).get("max_cost_pct_of_tp") or 12.0, static_caps=(cfg or {}).get("max_spread_pips") or {})
+    return out

@@ -9,14 +9,11 @@ Two LLM-powered surfaces over the bot:
                                    a list of structured actions executed on the
                                    running bot thread.
 
-Backed by Claude Sonnet 4.5 via the Emergent LLM Key. Strict JSON only; any
+Backed by Claude (`analysis` tier, llm_models.model_for) via llm_client. Strict JSON only; any
 ambiguity returns a clarification request instead of inventing parameters.
 """
-import os
 import json
-import uuid
 import re
-from llm_models import PROVIDER, model_for
 
 
 # --- Strategy Builder -------------------------------------------------------
@@ -27,8 +24,9 @@ this exact schema (do not invent extra keys):
 {
   "risk_level": "low" | "medium" | "high" | "extreme",
   "symbols": ["XAUUSD" | "BTCUSD" | "EURUSD" | ...],
-  "max_concurrent_trades": 1..10,
-  "auto_execute": true | false,
+  "max_concurrent_trades": 1..10,        (positions open AT THE SAME TIME — "max 2 trades at once")
+  "max_trades_per_day": 0..20,           (NEW entries per UTC day — "max 2 trades a day"; 0 = unlimited)
+  "auto_execute": true | false,          (ONLY when the user explicitly asks to turn automatic execution on/off)
   "session_preference": "london" | "ny" | "tokyo" | "any",
   "strategy_style": "trend_following" | "mean_reversion" | "scalping" | "swing",
   "notes": "...one short sentence explaining your translation..."
@@ -39,7 +37,9 @@ Rules:
 - If the prompt is ambiguous, output: {"clarification_needed": "...question..."}
 - Map vague risk words: 'safe/conservative'→low, 'balanced'→medium, 'aggressive'→high, 'yolo/max'→extreme
 - Default symbols to ["XAUUSD","BTCUSD"] if not specified
-- Always include max_concurrent_trades (default 2)
+- Include max_concurrent_trades only when the prompt limits SIMULTANEOUS positions; include max_trades_per_day only
+  when it limits trades per day ("2 trades a day" → max_trades_per_day: 2, NOT max_concurrent_trades)
+- Omit auto_execute unless the user explicitly asks to enable or disable automatic execution — never default it
 """
 
 
@@ -89,27 +89,15 @@ def _parse_json(text: str) -> dict:
 
 async def build_strategy(prompt: str) -> dict:
     """Convert NL strategy description → structured bot config."""
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"strategy-{uuid.uuid4().hex[:8]}",
-        system_message=STRATEGY_BUILDER_SYSTEM,
-    ).with_model(PROVIDER, model_for("analysis"))
-
-    response = await chat.send_message(UserMessage(text=prompt))
+    import llm_client
+    response = await llm_client.complete("analysis", STRATEGY_BUILDER_SYSTEM, prompt, feature="nl_strategy", seconds=30)
     parsed = _parse_json(str(response))
     return parsed
 
 
 async def interpret_command(prompt: str) -> dict:
     """Convert NL command → structured action list."""
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"command-{uuid.uuid4().hex[:8]}",
-        system_message=COMMAND_INTERPRETER_SYSTEM,
-    ).with_model(PROVIDER, model_for("analysis"))
-
-    response = await chat.send_message(UserMessage(text=prompt))
+    import llm_client
+    response = await llm_client.complete("analysis", COMMAND_INTERPRETER_SYSTEM, prompt, feature="nl_command", seconds=30)
     parsed = _parse_json(str(response))
     return parsed

@@ -67,7 +67,43 @@ function TelegramVerify({ cfg, onVerified }) {
     );
 }
 
-export const AlertTestPanel = ({ cfg, userEmail, onResult, onVerified }) => {
+function EmailVerify({ cfg, onVerified }) {
+    const [code, setCode] = useState("");
+    const [sent, setSent] = useState(false);
+    const [busy, setBusy] = useState(false);
+    if (!cfg?.alert_email || cfg?.alert_email_verified) return null;
+    const start = async () => {
+        setBusy(true);
+        try { const { data } = await api.post("/notifications/email/verify/start"); setSent(true); toast.success(`Code sent to ${data.delivered_to}`); }
+        catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
+    };
+    const confirm = async () => {
+        setBusy(true);
+        try { await api.post("/notifications/email/verify/confirm", { code }); toast.success("Alert e-mail verified"); onVerified?.(); }
+        catch (e) { toast.error(formatApiError(e)); } finally { setBusy(false); }
+    };
+    return (
+        <div className="flex flex-col sm:flex-row gap-2 p-3 border border-[#FFB000]/40 bg-[#FFB000]/5" data-testid="email-verify-block">
+            <div className="flex-1 text-xs text-[#A1A1AA]">
+                <span className="text-[#FFB000] font-mono text-[10px] tracking-widest">UNVERIFIED ALERT E-MAIL</span>
+                <div>Prove you own {cfg.alert_email} with a one-time code — alerts keep going to your login e-mail until then.</div>
+            </div>
+            {!sent ? (
+                <button onClick={start} disabled={busy} data-testid="email-verify-start"
+                    className="px-3 py-2 border border-[#FFB000]/50 text-[#FFB000] hover:bg-[#FFB000]/10 text-xs tracking-widest disabled:opacity-40">SEND CODE</button>
+            ) : (
+                <div className="flex gap-2">
+                    <input value={code} onChange={e => setCode(e.target.value)} placeholder="6-digit code" inputMode="numeric"
+                        data-testid="email-verify-code" className="w-28 bg-[#050505] border border-[#1F1F1F] px-2 py-1 text-sm font-mono text-[#FAFAFA]" />
+                    <button onClick={confirm} disabled={busy || code.length < 6} data-testid="email-verify-confirm"
+                        className="px-3 py-2 border border-[#00FF41]/50 text-[#00FF41] hover:bg-[#00FF41]/10 text-xs tracking-widest disabled:opacity-40">VERIFY</button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+export const AlertTestPanel = ({ cfg, userEmail, onResult, onVerified, onEmailVerified }) => {
     const [busy, setBusy] = useState(null);
 
     const run = async (channel) => {
@@ -100,9 +136,11 @@ export const AlertTestPanel = ({ cfg, userEmail, onResult, onVerified }) => {
                 <ChannelRow id="telegram" icon={Send} label="Telegram" hint={cfg?.telegram_verified ? "Push message to your verified chat" : "Push message to your configured chat (verify it first)"}
                     disabled={!cfg?.has_token || !cfg?.telegram_verified} disabledReason={!cfg?.has_token ? "Save a bot token first" : "Verify the chat with the one-time code first"}
                     last={cfg?.last_test?.telegram} busy={busy === "telegram"} onSend={() => run("telegram")} />
-                <ChannelRow id="email" icon={Mail} label="Email" hint={`Delivered to ${userEmail || "your account email"}`}
-                    disabled={!cfg?.email_configured} disabledReason="Email delivery is not configured on this server"
+                <ChannelRow id="email" icon={Mail} label="Email" hint={`Delivered to ${cfg?.alert_email && cfg?.alert_email_verified ? cfg.alert_email : (userEmail || "your account email")}`}
+                    disabled={!cfg?.email_configured || (!!cfg?.alert_email && !cfg?.alert_email_verified)}
+                    disabledReason={!cfg?.email_configured ? "Email delivery is not configured on this server" : "Verify the alert e-mail with the one-time code first"}
                     last={cfg?.last_test?.email} busy={busy === "email"} onSend={() => run("email")} />
+                <EmailVerify cfg={cfg} onVerified={onEmailVerified} />
             </div>
         </div>
     );

@@ -1,4 +1,5 @@
 """Global Trading Authority API — /api/authority"""
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -141,7 +142,6 @@ async def inventory_policies_ep(user=Depends(get_current_user)):
     if not _admin_ok(user):
         raise HTTPException(status_code=403, detail="Admin only")
     import glob
-    import json
     import os
     from inventory_projection import installation_id, environment_label
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "release", "policy_migrations")
@@ -317,10 +317,62 @@ async def rules_policy_upload(payload: dict, request: Request, user=Depends(_adm
     from step_up import audit_event, require_step_up
     db = get_db()
     await require_step_up(db, user, request, "authority_relax")
-    pol = payload.get("policy") if isinstance(payload.get("policy"), dict) else payload
+    # Prod fix (12 Oct): the browser's JSON.parse turns 5.0 into 5, so a dict payload can no longer reproduce the
+    # bytes the signer signed ("5.0" vs "5" → "signature does not verify"). The UI sends the pasted file as a raw
+    # string (`policy_text`) and Python's json.loads keeps 5.0 a float — body() then matches the signer exactly.
+    raw = payload.get("policy_text")
+    if isinstance(raw, str):
+        if len(raw) > 65536:
+            raise HTTPException(status_code=413, detail={"code": "policy_too_large", "message": "policy file over 64 KiB"})
+        try:
+            pol = json.loads(raw)
+        except ValueError:
+            raise HTTPException(status_code=422, detail={"code": "policy_not_json", "message": "Not valid JSON — paste the signed policy file exactly as written by the signer"})   # SEC-023-1: no parser internals echoed
+        if not isinstance(pol, dict):
+            raise HTTPException(status_code=422, detail={"code": "policy_not_object", "message": "the policy file must be a JSON object"})
+    else:
+        pol = payload.get("policy") if isinstance(payload.get("policy"), dict) else payload
     doc = await rp.activate(db, pol, actor=user["email"], source="upload")
     await audit_event(db, user["id"], "rules_policy_uploaded", {"policy_version": doc["policy_version"]}, request)
     return {"ok": True, "policy_version": doc["policy_version"], "expires_at": doc["expires_at"]}
+
+
+@router.post("/policy/load-latest")
+async def rules_policy_load_latest(request: Request, user=Depends(_admin)):
+    """A1 — one click: fetch the newest signed policy from the repo's policies/ (GitHub API, or the local dir),
+    verify, activate. Admin + step-up; no release, no deploy."""
+    import rules_policy as rp
+    from step_up import audit_event, require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    out = await rp.load_latest(db, actor=user["email"])
+    await audit_event(db, user["id"], "rules_policy_load_latest", {k: out.get(k) for k in ("activated", "source", "policy_version", "reason")}, request)
+    return out
+
+
+@router.post("/policy/retire-id-list")
+async def rules_policy_retire_id_list(payload: dict | None = None, request: Request = None, user=Depends(_admin)):
+    """A3 — one-time migration: replace the signed per-account id list with the active rules policy (archived + audited)."""
+    import rules_policy as rp
+    from step_up import audit_event, require_step_up
+    db = get_db()
+    await require_step_up(db, user, request, "authority_relax")
+    out = await rp.retire_id_list(db, actor=user["email"], reason=str((payload or {}).get("reason") or ""))
+    await audit_event(db, user["id"], "inventory_expectation_retire_clicked", out, request)
+    return out
+
+
+@router.get("/policy/renewal")
+async def rules_policy_renewal(user=Depends(_admin)):
+    """A4 — banner data: days left, reminder due, pre-filled workflow-form values + link; plus whether the legacy id list is still in force."""
+    _ = user
+    import rules_policy as rp
+    db = get_db()
+    pol = await rp.active(db)
+    legacy = await db.platform_state.find_one({"_id": "inventory_expectation"}, {"policy_version": 1, "account_ids": 1})
+    return {"policy_version": (pol or {}).get("policy_version"), **rp.expiry(pol),
+            "prefill": rp.renewal_prefill(pol) if pol else None, "renew_link": rp.renew_link(), "repo_configured": bool(rp.github_repo()),
+            "legacy_id_list": {"policy_version": legacy.get("policy_version"), "accounts": len(legacy.get("account_ids") or [])} if legacy else None}
 
 
 @router.post("/admission/{account_id}/approve")

@@ -154,6 +154,13 @@ async def get_dxy_snapshot(*, force_refresh: bool = False) -> Optional[dict]:
         logger.warning("DXY fetch failed: %s", e)
         cached = await db.dxy_cache.find_one({"_id": "latest"})
         if cached:
+            # v1.60.52 — same 48 h limit as entry_context.cached_dxy: a days-old snapshot is not a fallback
+            from entry_context import DXY_MAX_AGE_HOURS, dxy_cache_age_hours
+            age = dxy_cache_age_hours(cached)
+            if age is None or age > DXY_MAX_AGE_HOURS:
+                logger.warning("DXY fallback cache stale: fetched_at=%s age=%sh (> %dh) — returning None",
+                               cached.get("fetched_at"), None if age is None else round(age, 1), DXY_MAX_AGE_HOURS)
+                return None
             cached.pop("_id", None)
             return cached
         return None

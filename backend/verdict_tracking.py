@@ -234,14 +234,21 @@ async def effectiveness_summary(db, days: int = 30,
                                      - d["opportunity_cost_usd"], 2)
     return {"days": days, "totals": totals, "by_verdict": by_verdict,
             "by_limiting_factor": by_factor,
-            "lesson": ("Risk reductions are net "
-                       + ("SAVING money — the curves are earning their keep."
-                          if totals["net_benefit_usd"] >= 0 else
-                          "COSTING opportunity — review the tightest "
-                          "limiting factors."))
-            if totals["resolved"] else
-            "No resolved verdicts yet — reductions are scored when the "
-            "trade closes; blocks via counterfactual price simulation."}
+            "lesson": _lesson(totals)}
+
+
+def _lesson(totals: dict) -> str:
+    """v1.60.31 item 6 — never claim 'SAVING money' over a $0 ledger."""
+    if not totals["resolved"]:
+        return ("No resolved verdicts yet — reductions are scored when the "
+                "trade closes; blocks via counterfactual price simulation.")
+    if not totals["saved_usd"] and not totals["opportunity_cost_usd"]:
+        return (f"{totals['resolved']} verdict(s) resolved at $0 — no measurable "
+                "saving or cost yet; the lesson needs resolved trades with a price path.")
+    if totals["net_benefit_usd"] >= 0:
+        return "Risk reductions are net SAVING money — the curves are earning their keep."
+    return ("Risk reductions are net COSTING opportunity — review the tightest "
+            "limiting factors.")
 
 
 async def ensure_verdict_indexes(db) -> None:

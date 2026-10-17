@@ -61,8 +61,8 @@ async def _send_reply(token: str, chat_id, text: str) -> None:
 
 
 async def _load_user_by_secret(secret: str) -> Optional[dict]:
-    db = get_db()
-    return await db.notifications.find_one({"webhook_secret": secret})
+    from notification_settings import by_webhook_secret
+    return await by_webhook_secret(get_db(), secret)
 
 
 # ---------- Command handlers ----------
@@ -349,8 +349,9 @@ class WebhookEnableRequest(BaseModel):
 async def enable_webhook(payload: WebhookEnableRequest, user=Depends(get_current_user)):
     """Generate a new webhook_secret, register it with Telegram, persist it locally."""
     db = get_db()
-    doc = await db.notifications.find_one({"user_id": user["id"]})
-    if not doc or not doc.get("telegram_bot_token"):
+    from notification_settings import get_settings
+    doc = await get_settings(db, user["id"])
+    if not doc.get("telegram_bot_token"):
         raise HTTPException(status_code=400, detail="Configure your Telegram bot token first")
 
     try:
@@ -381,22 +382,21 @@ async def enable_webhook(payload: WebhookEnableRequest, user=Depends(get_current
             desc = "Telegram rejected the webhook"
         raise HTTPException(status_code=400, detail=desc)
 
-    await db.notifications.update_one(
-        {"user_id": user["id"]},
-        {"$set": {
-            "webhook_secret": new_secret,
-            "webhook_url": webhook_url,
-            "webhook_enabled_at": datetime.now(timezone.utc).isoformat(),
-        }},
-    )
+    from notification_settings import update_settings
+    await update_settings(db, user["id"], {"$set": {
+        "webhook_secret": new_secret,
+        "webhook_url": webhook_url,
+        "webhook_enabled_at": datetime.now(timezone.utc).isoformat(),
+    }})
     return {"ok": True, "webhook_url": webhook_url}
 
 
 @router.post("/webhook/disable")
 async def disable_webhook(user=Depends(get_current_user)):
     db = get_db()
-    doc = await db.notifications.find_one({"user_id": user["id"]})
-    if not doc or not doc.get("telegram_bot_token"):
+    from notification_settings import get_settings, update_settings
+    doc = await get_settings(db, user["id"])
+    if not doc.get("telegram_bot_token"):
         return {"ok": True}
     try:
         token = vault_decrypt(doc["telegram_bot_token"])
@@ -408,17 +408,15 @@ async def disable_webhook(user=Depends(get_current_user)):
                 await client.post(f"{TELEGRAM_API}/bot{token}/deleteWebhook")
             except Exception:
                 pass  # best-effort
-    await db.notifications.update_one(
-        {"user_id": user["id"]},
-        {"$unset": {"webhook_secret": "", "webhook_url": "", "webhook_enabled_at": ""}},
-    )
+    await update_settings(db, user["id"], {"$unset": {"webhook_secret": "", "webhook_url": "", "webhook_enabled_at": ""}})
     return {"ok": True}
 
 
 @router.get("/webhook/status")
 async def webhook_status(user=Depends(get_current_user)):
     db = get_db()
-    doc = await db.notifications.find_one({"user_id": user["id"]}) or {}
+    from notification_settings import get_settings
+    doc = await get_settings(db, user["id"])
     return {
         "enabled": bool(doc.get("webhook_secret")),
         "webhook_url": doc.get("webhook_url"),

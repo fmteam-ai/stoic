@@ -1,0 +1,21 @@
+{
+  "allowed_brokers": [
+    "*"
+  ],
+  "demo_only": true,
+  "environment": "production",
+  "expires_at": "2026-11-11T17:37:22+00:00",
+  "installation_id": "stoic-f8b5c7f7082c287c",
+  "issued_at": "2026-10-12T17:37:22+00:00",
+  "issuer": "fmteam-ai via policy-approval",
+  "max_accounts_per_user": 1,
+  "nonce": "485b5ce5498e11515ac11958c6e33705",
+  "policy_version": "demo-rules-v1",
+  "reason": "Demo period: rules-based admission",
+  "risk_caps": {
+    "max_daily_loss_pct": 5.0,
+    "max_risk_pct": 1.0
+  },
+  "schema": "stoic.policy-rules/v1",
+  "signature_hex": "fa1e56a43c5061354cc2051ce87c154719312ce8875cc4825f3662f27fd121fec3f5723dbd15b8f87f2147b0ae92651668389da734acf3426b8d6b8712729300"
+}

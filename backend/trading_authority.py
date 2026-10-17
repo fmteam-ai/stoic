@@ -315,11 +315,12 @@ async def inventory_domain(db, account: dict | None = None) -> dict:
     proj = await projection(db, exp.get("scope_user_id"))
     if proj["blocking"]:
         return {"level": "CLOSE_ONLY", "reason": "; ".join(proj["platform_violations"][:3] or proj["violations"][:3])}
-    # H1 (main127) — rule breaches (per-user cap, not admitted, not DEMO) close ONLY the breaching user's accounts
-    if account is not None and account.get("user_id") is not None:
-        mine = (proj.get("per_user_blocks") or {}).get(str(account.get("user_id")))
+    # prod v1.60.23 (bug 3) — a defect or rule breach (relation broken, duplicate bots, beyond cap, not admitted,
+    # not DEMO) closes ONLY that account. The owner's other accounts and every other user stay FULL.
+    if account is not None and account.get("_id") is not None:
+        mine = (proj.get("per_account_blocks") or {}).get(str(account.get("_id")))
         if mine:
-            return {"level": "CLOSE_ONLY", "reason": "rules policy breach for this user: " + "; ".join(mine[:3])}
+            return {"level": "CLOSE_ONLY", "reason": "this account: " + "; ".join(mine[:3])}
     if exp.get("demo_only") and account is not None and "_id" in account:
         # A15-1 — a signed DEMO-only policy never authorises a real-money account
         from broker_env import attested_environment

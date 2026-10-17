@@ -13,8 +13,9 @@ from database import get_db
 from models import BridgeHeartbeat, BridgeTradeReport, BridgeExternalDeal
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips, base_symbol
+from entry_costs import commission_update, spread_at_entry
 from intelligence_counters import increment as inc_intel_counter
-from trade_reconciler import reconcile_account, reconcile_user
+from trade_reconciler import reconcile_account
 from silent_failures import record_swallow
 from broker_env import TRADE_MODES, _REAL_MONEY_MODES
 
@@ -450,6 +451,11 @@ async def heartbeat(payload: BridgeHeartbeat):
                 record_spread(str(acc["_id"]), clean)
             except Exception as _sw:  # noqa: BLE001
                 record_swallow("bridge", "heartbeat", _sw)
+            try:                                              # v1.60.63 #85 — hour-of-day spread history (14 d, TTL)
+                from trade_costs import record_spread_samples
+                await record_spread_samples(db, str(acc["_id"]), clean)
+            except Exception as _sw:  # noqa: BLE001
+                record_swallow("bridge", "heartbeat_spread_history", _sw)
     # EA v1.48+ — persist precise broker stop constraints per BASE symbol
     # (round 13 item 5); protection_guard consumes these when computing
     # emergency stops.
@@ -726,6 +732,14 @@ async def heartbeat(payload: BridgeHeartbeat):
                 )
 
     hb_update: dict = {"$set": set_doc}
+    # prod v1.60.26 — certification `history_sync` bootstrap: an account that has NEVER completed a deep history sync
+    # gets exactly ONE queued (EA v1.39+ confirms via /sync-complete); the autonomous 60 s sweep keeps it current.
+    if not mismatch and not acc.get("pending_history_sync") and "pending_history_sync" not in set_doc \
+            and not acc.get("last_full_sync_at") and not acc.get("history_sync_bootstrap_at"):
+        set_doc["history_sync_bootstrap_at"] = now_iso
+        set_doc["pending_history_sync"] = {"lookback_seconds": 7 * 86400, "requested_at": now_iso,
+                                           "requested_by": "certification_bootstrap"}
+        logger.info("Certification bootstrap queued deep broker sync for account=%s", str(acc["_id"]))
     if unset_doc:
         hb_update["$unset"] = unset_doc
     await db.accounts.update_one({"_id": acc["_id"]}, hb_update)
@@ -805,7 +819,11 @@ async def heartbeat(payload: BridgeHeartbeat):
                 if existing.get("status") == "open":
                     _live = {"live_volume": float(p.volume), "live_at": now_iso}   # R-6 — broker position volume
                     if p.current_price is not None:
-                        _live.update({"live_pnl": float(p.profit or 0.0), "live_price": float(p.current_price)})
+                        _live.update({"live_pnl": float(p.profit or 0.0), "live_price": float(p.current_price),
+                                      "live_price_at": now_iso})                  # v1.60.53 (D) receive timestamp
+                        for _k in ("bid", "ask"):                                 # EA ≥1.66 may report both
+                            if getattr(p, _k, None) is not None:
+                                _live[f"live_{_k}"] = float(getattr(p, _k))
                     # Q-1 — netting: every open leg sharing this position ticket carries the
                     # broker volume, so any leg can be closed by ticket without flattening blind.
                     await db.trades.update_many({"account_id": account_id, "mt5_ticket": int(p.ticket),
@@ -929,6 +947,7 @@ async def heartbeat(payload: BridgeHeartbeat):
                 if sib and await adopt_sibling(db, sib, ticket=p.ticket, price=p.price_open, via="heartbeat"):
                     logger.warning("heartbeat: adopted fill ticket=%s into bot trade %s", p.ticket, sib["_id"])
                     await handle_late_fill(db, sib, acc, "heartbeat")
+                    await notify_adopted_open(db, acc["user_id"], sib["_id"], "heartbeat")
                     continue
             # H5 — the ticket was matched above regardless of leg; a backfill row is unkeyed
             # (one row per netted position) so it can never sit beside a bot row for the same ticket.
@@ -943,6 +962,8 @@ async def heartbeat(payload: BridgeHeartbeat):
             if p.magic == STOIC_MAGIC_HB and panic_locked(acc):
                 # H4 — a bot position surfacing under PANIC with no adoptable sibling
                 await close_late_fill_after_panic(db, ins.inserted_id, acc, "heartbeat")
+            elif p.magic == STOIC_MAGIC_HB:
+                await notify_adopted_open(db, acc["user_id"], ins.inserted_id, "heartbeat_backfill")
         if backfilled > 0:
             await ws_manager.broadcast(acc["user_id"], "trades_backfilled", {
                 "account_id": account_id, "count": backfilled,
@@ -1258,6 +1279,23 @@ async def adopt_sibling(db, sibling: dict, *, ticket: int, price: float, via: st
     return True
 
 
+async def notify_adopted_open(db, user_id: str, trade_id, via: str) -> bool:
+    """v1.60.32 — a bot trade that lands through deal ingestion or heartbeat adoption/backfill gets the same
+    'Trade Opened' alert as one reported by /report. notified_opened is the single idempotency flag, so whichever
+    path fires first wins and /report never double-sends."""
+    try:
+        row = await db.trades.find_one({"_id": trade_id})
+        if not row or row.get("notified_opened") or row.get("status") != "open":
+            return False
+        from notifier import notify_trade_opened
+        sent = await notify_trade_opened(user_id, row)
+        await db.trades.update_one({"_id": trade_id}, {"$set": {"notified_opened": True, "notified_via": via}})
+        return bool(sent)
+    except Exception as _sw:  # noqa: BLE001
+        record_swallow("bridge", f"notify_adopted_open:{via}", _sw)
+        return False
+
+
 async def dispatch_lock_reason(db, acc: dict) -> str | None:
     """Fix plan A2/B4 — cheap lock check at the poll fence: platform kill switch
     or an account-level lock (PANIC, quarantine) ⇒ no NEW order reaches the EA.
@@ -1311,12 +1349,14 @@ def broker_offset_sec(acc: dict) -> tuple[int, str]:
     return 0, "unknown"
 
 
-def validate_bars(raw: list, timeframe: str) -> tuple[list[dict], int]:
+def validate_bars(raw: list, timeframe: str, grid_offset_sec: int = 0) -> tuple[list[dict], int]:
     """Fix plan A1 — bars validated at ingest: numeric, finite, positive prices,
     high ≥ max(open, close), low ≤ min(open, close), epoch aligned to the
-    timeframe and within ±30 days of now, de-duplicated by timestamp."""
+    timeframe and within the timeframe's history window, de-duplicated by timestamp.
+    #81 — H4/D1 bars open on the BROKER day grid: alignment is checked at t + grid_offset_sec."""
     import math
     tf_s = timeframe_seconds(timeframe)
+    max_age = history_window_sec(timeframe)
     now = int(datetime.now(timezone.utc).timestamp())
     out: dict[int, dict] = {}
     dropped = 0
@@ -1330,13 +1370,38 @@ def validate_bars(raw: list, timeframe: str) -> tuple[list[dict], int]:
                 raise ValueError("non-finite or non-positive")
             if h < max(o, c) or lo > min(o, c) or h < lo:
                 raise ValueError("ohlc geometry")
-            if t % tf_s != 0 or abs(now - t) > 30 * 86400 + 50400:
+            if (t + grid_offset_sec) % tf_s != 0 or abs(now - t) > max_age + 50400:
                 raise ValueError("timestamp")
         except (KeyError, TypeError, ValueError):
             dropped += 1
             continue
         out[t] = {"t": t, "o": o, "h": h, "l": lo, "c": c, "v": v}
     return [out[t] for t in sorted(out)], dropped
+
+
+_HISTORY_TF = ("H4", "D1")
+
+
+def history_window_sec(timeframe: str) -> int:
+    """#81 — 300 H4 bars span ~10 calendar weeks; intraday feeds keep the ±30-day window."""
+    return 150 * 86400 if str(timeframe).upper() in _HISTORY_TF else 30 * 86400
+
+
+def payload_cap(timeframe: str) -> int:
+    """#81 — an H4/D1 history payload may carry up to 400 bars; the streaming feeds stay at 200."""
+    return 400 if str(timeframe).upper() in _HISTORY_TF else 200
+
+
+def retention_bars(timeframe: str) -> int:
+    """EA 1.65 — M1 keeps 26 h (the deferred-shadow horizon is 24 h); everything else keeps the iter-125 800."""
+    return 1600 if str(timeframe).upper() == "M1" else 800
+
+
+def gap_count(bars: list[dict], timeframe: str) -> int:
+    """Missing bar slots between consecutive stored bars (weekend/closed-market gaps count too — diagnostics only)."""
+    tf_s = timeframe_seconds(timeframe)
+    ts = sorted(int(b["t"]) for b in bars)
+    return sum(max(0, (b - a) // tf_s - 1) for a, b in zip(ts, ts[1:]))
 
 
 def split_forming_bar(bars: list[dict], timeframe: str, now_ts: int) -> tuple[list[dict], int]:
@@ -1372,8 +1437,9 @@ async def receive_candles(payload: BridgeCandles):
             return dict(b, t=int(float(b["t"])) - offset)
         except (KeyError, TypeError, ValueError):
             return b
-    raw = [_shift(b) if isinstance(b, dict) else b for b in (payload.bars or [])[-200:]]
-    bars, dropped = validate_bars(raw, payload.timeframe)
+    raw = [_shift(b) if isinstance(b, dict) else b for b in (payload.bars or [])[-payload_cap(payload.timeframe):]]
+    _is_history = str(payload.timeframe).upper() in _HISTORY_TF
+    bars, dropped = validate_bars(raw, payload.timeframe, grid_offset_sec=offset if _is_history else 0)
     now_ts = int(datetime.now(timezone.utc).timestamp())
     # Fix plan A10 — the forming bar's close IS the broker's live tick.
     forming = [b for b in bars if int(b["t"]) + timeframe_seconds(payload.timeframe) > now_ts]
@@ -1381,6 +1447,15 @@ async def receive_candles(payload: BridgeCandles):
                  if forming else None)
     bars, forming_dropped = split_forming_bar(bars, payload.timeframe, now_ts)
     if not bars:
+        if str(payload.timeframe).upper() == "M1":          # v1.60.43 — canary soak: M1 payloads per hour per terminal
+            try:                                               # audit #34: one hourly bucket per account, not one doc per payload
+                hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+                await db.ea_feed_events.update_one(
+                    {"account_id": str(account["_id"]), "at": hour, "timeframe": "M1"},
+                    {"$inc": {"payloads": 1, "bars": len(bars), "dropped": dropped, "forming_dropped": forming_dropped},
+                     "$set": {"symbol": payload.symbol}}, upsert=True)
+            except Exception:  # noqa: BLE001
+                pass
         await db.candle_feed_health.update_one(health_key, {"$set": {
             "last_received_at": now_iso, "source_symbol": payload.symbol,
             "account_id": str(account["_id"]),
@@ -1409,10 +1484,10 @@ async def receive_candles(payload: BridgeCandles):
             old_bars = [dict(b, t=int(b["t"]) - offset) for b in old_bars]
         merged = {int(b["t"]): b for b in old_bars}
         merged.update({int(b["t"]): b for b in bars})
-        bars = [merged[t] for t in sorted(merged)][-800:]
+        bars = [merged[t] for t in sorted(merged)][-retention_bars(payload.timeframe):]
     write_ok = True
     try:
-        set_doc = {"bars": bars, "source_symbol": payload.symbol,
+        set_doc = {"bars": bars, "source_symbol": payload.symbol, "gap_bars": gap_count(bars[-120:], payload.timeframe),
                    "account_id": str(account["_id"]),
                    "updated_at": now_iso,
                    # main92 P9 — only claim UTC once the offset is known, so a
@@ -1421,6 +1496,9 @@ async def receive_candles(payload: BridgeCandles):
                    "broker_offset_sec": offset, "offset_source": offset_source}
         if last_tick:
             set_doc["last_tick"] = last_tick
+        if _is_history:          # #81 — an H4/D1 payload is a server-requested backfill: stamp it so the daily refresh is scheduled
+            set_doc["backfill_at"] = now_iso
+            set_doc["backfill_bars"] = len(bars)
         await db.intraday_candles.update_one(
             {"user_id": account["user_id"], "symbol": base,
              "timeframe": payload.timeframe},
@@ -1433,6 +1511,15 @@ async def receive_candles(payload: BridgeCandles):
         last_bar_ts = (max(int(b["t"]) for b in bars) if bars else None)
         bar_lag_s = (max(0, int(datetime.now(timezone.utc).timestamp())
                          - last_bar_ts) if last_bar_ts else None)
+        if str(payload.timeframe).upper() == "M1":          # v1.60.43 — canary soak: M1 payloads per hour per terminal
+            try:                                               # audit #34: one hourly bucket per account, not one doc per payload
+                hour = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+                await db.ea_feed_events.update_one(
+                    {"account_id": str(account["_id"]), "at": hour, "timeframe": "M1"},
+                    {"$inc": {"payloads": 1, "bars": len(bars), "dropped": dropped, "forming_dropped": forming_dropped},
+                     "$set": {"symbol": payload.symbol}}, upsert=True)
+            except Exception:  # noqa: BLE001
+                pass
         await db.candle_feed_health.update_one(health_key, {"$set": {
             "last_received_at": now_iso, "source_symbol": payload.symbol,
             "account_id": str(account["_id"]),
@@ -1803,6 +1890,9 @@ async def poll_trades(payload: PollRequest):
     netting = bool(mods) and any((m.get("pending_modification") or {}).get("type") == "FULL_CLOSE" for m in mods) \
         and (netting_acc or await is_netting_account(db, acc))
     modifications = list(netting_mods)
+    # EA 1.65 — new_tp only for EAs that declare modify_tp_v1; older EAs get the plain MODIFY_SL (TP untouched)
+    from ea_capabilities import capabilities_for as _ea_caps
+    _send_tp = "modify_tp_v1" in _ea_caps(acc.get("ea_version"))
     for t in mods:
         m = t.get("pending_modification") or {}
         if netting:
@@ -1819,7 +1909,7 @@ async def poll_trades(payload: PollRequest):
             "symbol": t["symbol"],
             "type": m.get("type"),
             "new_sl": m.get("new_sl"),
-            "new_tp": m.get("new_tp"),
+            "new_tp": m.get("new_tp") if _send_tp else None,
             "new_volume": m.get("new_volume"),
             # audit r4 P0 · EA v1.50 command fence: immutable intent + seq
             "intent_id": m.get("intent_id"),
@@ -1851,6 +1941,16 @@ async def poll_trades(payload: PollRequest):
             resp["sync_request"] = {
                 "lookback_seconds": int(pending_sync.get("lookback_seconds") or 604800),
             }
+
+    # #81 — XAUUSD H4 history backfill for gold_trend_pulse: EA ≥ 1.66 (`h4_history_v1`) answers with CopyRates(H4);
+    # 1.65 terminals never get the key. Fail-soft: a lookup error must not delay trade/modification dispatch.
+    try:
+        from gold_h4_history import pending_request as _h4_pending
+        _h4_req = await _h4_pending(db, acc)
+        if _h4_req:
+            resp["candles_request"] = _h4_req
+    except Exception as _h4_e:  # noqa: BLE001
+        logger.debug("h4 history request skipped: %s", _h4_e)
 
     return resp
 
@@ -1916,6 +2016,7 @@ class BridgeModificationAck(BaseModel):
     requested_sl: float | None = None            # EA v1.50 — SL as commanded
     applied_sl: float | None = None              # EA v1.50 — SL post clamp
     confirmed_position_sl: float | None = None   # EA v1.50 — live POSITION_SL
+    confirmed_position_tp: float | None = None   # EA v1.65+ — live POSITION_TP after a MODIFY_SL carrying new_tp
     remaining_volume: float | None = None        # EA v1.50 — actual broker vol
     replay: bool | None = None                   # EA v1.50 — fence re-ack
     superseded: bool | None = None               # EA v1.50 — stale-seq terminal
@@ -1943,11 +2044,24 @@ async def modification_ack(payload: BridgeModificationAck):
 
     # audit r3 P0 · sequence fence: a delayed/replayed ack for a SUPERSEDED
     # command must never clear the current one or apply an older stop.
-    from command_fence import is_stale_ack
-    if is_stale_ack(trade, payload.intent_id):
+    from command_fence import (is_stale_ack, ack_type_mismatch, is_close_leg_ack, is_duplicate_close_leg_ack,
+                               ack_clears_pending)
+    # v1.60.50 (PR #100 item 9) — the netting ClosePosition path acks with intent == close_idem_key. While a
+    # MODIFY_SL is pending that ack was judged stale and the close leg was re-dispatched every poll. Close intents
+    # take priority over a pending modify: they are never stale / mismatched against the modify slot.
+    _close_leg = is_close_leg_ack(trade, payload.intent_id)
+    # v1.60.52 — a DUPLICATE close-leg ack (intent already executed) is still stale
+    _dup_close = is_duplicate_close_leg_ack(trade, payload.intent_id)
+    if _dup_close or (not _close_leg and is_stale_ack(trade, payload.intent_id)):
         logger.warning("stale modification-ack ignored trade=%s intent=%s",
                        payload.trade_id, payload.intent_id)
         return {"status": "stale_intent_ignored"}
+    if not _close_leg and ack_type_mismatch(trade, payload.type):
+        # v1.60.48 — e.g. a PARTIAL_CLOSE ack arriving while a MODIFY_SL is pending: not this command's ack
+        logger.warning("modification-ack type mismatch ignored trade=%s ack=%s pending=%s intent=%s",
+                       payload.trade_id, payload.type,
+                       (trade.get("pending_modification") or {}).get("type"), payload.intent_id)
+        return {"status": "type_mismatch_ignored"}
 
     # EA v1.50 — superseded (stale-sequence) TERMINAL ack: clear the queue
     # entry it refers to WITHOUT ever treating the command as executed.
@@ -1968,7 +2082,7 @@ async def modification_ack(payload: BridgeModificationAck):
             {"_id": ObjectId(payload.trade_id),
              "pending_modification": {"$ne": None}},
             {"$inc": {"pending_modification.retry_count": 1},
-             "$set": {"pending_modification.last_error": payload.error}})
+             "$set": {"pending_modification.last_error": str(payload.error or "")[:200]}})
         return {"status": "retry_pending"}
 
     # Notifications to fire AFTER the EA confirms — collected here, dispatched
@@ -1976,6 +2090,7 @@ async def modification_ack(payload: BridgeModificationAck):
     # the broker never actually applied.
     pending_notifs: list = []
     combo_new_sl = None   # EA v1.50 — Tier-1 follow-up MODIFY_SL (if any)
+    combo_new_tp = None   # #80 — TP2 carried from the PARTIAL_CLOSE intent (EA ignores new_sl/new_tp on PARTIAL_CLOSE)
 
     # R-6 — a netting volume-limited close was dispatched as PARTIAL_CLOSE but the row's
     # intent is FULL_CLOSE: judge the ack as the FULL_CLOSE of THIS trade (its lots left the
@@ -1984,12 +2099,26 @@ async def modification_ack(payload: BridgeModificationAck):
     _close_path = bool(trade.get("close_requested")) and bool(payload.intent_id) \
         and payload.intent_id == trade.get("close_idem_key")
     if payload.type == "PARTIAL_CLOSE" and (
-            (_pm.get("type") == "FULL_CLOSE" and (not payload.intent_id or payload.intent_id == _pm.get("intent_id")))
+            (_pm.get("type") == "FULL_CLOSE" and payload.intent_id and payload.intent_id == _pm.get("intent_id"))
             or _close_path):
         payload.type = "FULL_CLOSE"
         payload.netting_volume_limited = True
 
-    update = {"pending_modification": None}
+    # v1.60.52 — a FAILED close-leg ack must not clear a pending MODIFY_SL that belongs to another intent: the
+    # position is still open and its stop move is still owed. Only a successful close consumes that slot.
+    update = {"pending_modification": None} if ack_clears_pending(trade, payload.intent_id, bool(payload.success), _close_leg) else {}
+    # #43 (b) — a FULL_CLOSE ack for the trade's outstanding close command is recorded on the command ledger
+    # (terminal_ack); a TERMINAL failure marks it failed and releases the close request (management resumes).
+    if payload.type == "FULL_CLOSE" and (trade.get("close_command") or {}).get("state") == "requested" and (
+            _close_path or payload.intent_id == _pm.get("intent_id")
+            or _pm.get("close_command_key") == (trade.get("close_command") or {}).get("key")):
+        try:
+            from close_commands import record_terminal_ack
+            await record_terminal_ack(db, trade, success=bool(payload.success), error=payload.error,
+                                      terminal=bool(payload.terminal) and not payload.success)
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "close_terminal_ack", _sw)
+    push_ops: dict = {}
     # Round 11 item 9 — protection-ack policy lives in a dependency-free
     # function (protection_guard.apply_protection_ack) so it is unit-testable
     # without FastAPI/BSON/Mongo.
@@ -1998,6 +2127,15 @@ async def modification_ack(payload: BridgeModificationAck):
         trade, bool(payload.success),
         new_sl=(payload.new_sl if payload.type == "MODIFY_SL" else None),
         error=payload.error))
+    try:                                                   # v1.60.43 — canary soak: acks / failures / TP-confirmed per terminal
+        inc = {f"ea_cmd_stats.{'ok' if payload.success else 'failed'}": 1}
+        if payload.success and payload.confirmed_position_tp:
+            inc["ea_cmd_stats.tp_confirmed"] = 1
+        await db.accounts.update_one({"_id": acc["_id"]}, {"$inc": inc, "$set": {
+            "ea_cmd_stats.last_at": datetime.now(timezone.utc).isoformat(),
+            **({"ea_cmd_stats.last_error": str(payload.error or "")[:200]} if not payload.success else {})}})
+    except Exception:  # noqa: BLE001
+        pass
     if payload.success:
         try:
             from trade_events import append as _ev_append, build as _ev_build
@@ -2016,8 +2154,38 @@ async def modification_ack(payload: BridgeModificationAck):
         # EA v1.50 — prefer the broker-CONFIRMED position SL over the intent
         actual_sl = payload.confirmed_position_sl or payload.new_sl
         if payload.type == "MODIFY_SL" and actual_sl is not None:
+            # v1.60.37 — ack loosen flag: the stored stop may only move AGAINST the position by the EA/broker (the
+            # server never asks for it). Record it as a self-account anomaly signal instead of silently adopting it.
+            prev_sl = float(trade.get("stop_loss") or 0)
+            if prev_sl > 0 and float(actual_sl) != prev_sl and (
+                    (trade.get("action") == "BUY" and float(actual_sl) < prev_sl)
+                    or (trade.get("action") == "SELL" and float(actual_sl) > prev_sl)):
+                loosen = {"from": prev_sl, "to": float(actual_sl), "requested": payload.new_sl,
+                          "intent_id": payload.intent_id, "at": datetime.now(timezone.utc).isoformat()}
+                update["ack_loosened_stop"] = True
+                push_ops["ack_loosen_events"] = loosen
+                logger.warning("ACK LOOSENED STOP trade=%s %s %s: %s → %s (requested %s)", str(trade["_id"]),
+                               trade.get("symbol"), trade.get("action"), prev_sl, actual_sl, payload.new_sl)
+                try:
+                    from execution_health import record_event
+                    await record_event(get_db(), str(acc["_id"]), acc.get("user_id"), "ack_loosened_stop",
+                                       trade_id=trade["_id"], detail=f"{prev_sl} → {actual_sl}")
+                except Exception as _sw:  # noqa: BLE001
+                    record_swallow("bridge", "exec_health_ack_loosen", _sw)
             update["stop_loss"] = float(actual_sl)
             update["confirmed_stop_loss"] = float(actual_sl)
+            # v1.60.36 — fill re-base: when the EA confirms the TP moved, the trade's tp fields follow the broker TP
+            rbf = (trade.get("fill_rebase") or {}).get("tp_fields") or {}
+            if payload.confirmed_position_tp and rbf.get("take_profit") and \
+                    abs(float(payload.confirmed_position_tp) - float(rbf["take_profit"])) < 1e-6:
+                update.update(rbf)
+                update["fill_rebase.tp_applied_at"] = datetime.now(timezone.utc).isoformat()
+            # EA 1.65 — when the command carried new_tp, the broker-confirmed TP is the truth for the trade's TP
+            _pm = trade.get("pending_modification") or {}
+            if payload.confirmed_position_tp and _pm.get("new_tp") and payload.success:
+                update["take_profit"] = float(payload.confirmed_position_tp)
+                update["confirmed_take_profit"] = float(payload.confirmed_position_tp)
+                update["tp_confirmed_at"] = datetime.now(timezone.utc).isoformat()
             if payload.stop_confirmed is not None:
                 # broker ACCEPTED vs position now SHOWS the expected stop
                 update["stop_confirmed"] = bool(payload.stop_confirmed)
@@ -2058,6 +2226,7 @@ async def modification_ack(payload: BridgeModificationAck):
             # fenced MODIFY_SL follow-up is enqueued below so the stop move
             # carries its own intent + seq and its own broker confirmation.
             combo_new_sl = mod_new_sl
+            combo_new_tp = mod.get("new_tp")                      # #80 — tp1_bank: broker TP → TP2 in the follow-up
             # Mark tier progression + compute R for the alert
             if not trade.get("tp1_closed"):
                 update["tp1_closed"] = True
@@ -2090,16 +2259,44 @@ async def modification_ack(payload: BridgeModificationAck):
         # ack after pending_modification is cleared can never re-apply
         upd_ops["$push"] = {"executed_intents": {
             "$each": [payload.intent_id], "$slice": -50}}
+    if push_ops:
+        upd_ops.setdefault("$push", {}).update(push_ops)
     await db.trades.update_one({"_id": ObjectId(payload.trade_id)}, upd_ops)
     # EA v1.50 — enqueue the Tier-1 combo stop move as its OWN durable,
-    # fenced command now that the partial close is broker-confirmed.
+    # fenced command now that the partial close is broker-confirmed — only if it still TIGHTENS the stop.
     if combo_new_sl is not None:
+        from trade_manager import record_sl_loosen_refusal, tightened_sl
+        requested = float(combo_new_sl)
+        combo_new_sl = tightened_sl(trade, requested)
+        if combo_new_sl is None:
+            await record_sl_loosen_refusal(trade, requested, "tier1_combo_followup")
+    if combo_new_sl is not None or combo_new_tp is not None:
         from command_fence import stamp_pending_modification
+        _follow = {"type": "MODIFY_SL", "reason": "tier1_combo_followup"}
+        if combo_new_sl is not None:
+            _follow["new_sl"] = float(combo_new_sl)
+        else:
+            _follow["new_sl"] = float(trade.get("stop_loss"))          # SL unchanged (loosen refused) — still move the TP
+        if combo_new_tp is not None:
+            _follow["new_tp"] = float(combo_new_tp)                 # #80 — TP2 applied here, the only place the EA honours it
         await stamp_pending_modification(
             db, {"_id": ObjectId(payload.trade_id), "status": "open",
-                 "pending_modification": None},
-            {"type": "MODIFY_SL", "new_sl": float(combo_new_sl),
-             "reason": "tier1_combo_followup"})
+                 "pending_modification": None}, _follow)
+    # v1.60.62 #84 — the adopted broker stop is LOOSER than the requested one beyond the broker tolerance
+    # (stops_level + 1 point): one fenced corrective MODIFY_SL (never a loosen); if the correction's own ack is still
+    # loose → ops WARNING "stop wider than planned" (+ optional fenced FULL_CLOSE when ack_loosen_close_enabled and
+    # the extra risk is > 0.25 R). The ack itself stays adopted as truth above.
+    if payload.success and payload.type == "MODIFY_SL" and (payload.new_sl is not None or payload.requested_sl is not None) \
+            and payload.confirmed_position_sl is not None and trade.get("status") == "open":
+        try:
+            from ack_loosen import handle_ack
+            _al = await handle_ack(db, trade, acc, requested_sl=(payload.requested_sl if payload.requested_sl is not None else payload.new_sl),
+                                   confirmed_sl=payload.confirmed_position_sl,
+                                   pending_reason=(trade.get("pending_modification") or {}).get("reason"))
+            if _al.get("action") != "none":
+                logger.warning("ACK LOOSEN #84 trade=%s %s", str(trade["_id"]), _al)
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "ack_loosen_84", _sw)
     # Scalp fast path (round 18 review item 2): a MODIFY_SL ack promotes the
     # runner's PENDING stop to the CONFIRMED stop — until this ack the bot
     # must keep behaving as if the original stop is live at the broker.
@@ -2361,8 +2558,30 @@ async def report_trade(payload: BridgeTradeReport):
         update["intended_entry_price"] = intended
         if requested > 0:
             update["requested_price"] = requested
+        _sp = spread_at_entry(acc, symbol)           # #53 — real spread at fill for the break-even cost buffer
+        if _sp is not None and not trade.get("spread_at_entry_pips"):
+            update["spread_at_entry_pips"] = _sp
         update["slippage_pips"] = round(slip_pips, 2)
+        # v1.60.36 — ALSO measure against the SIGNAL price (adverse-only, direction-aware) and keep the signed gap:
+        # 14 Oct fills were 5–6 pips worse than the signal while slippage_pips (vs requested) read 0.
+        from exit_sync import fill_rebase, signal_slippage
+        if intended > 0:
+            update["signal_slippage_pips"], update["signal_gap_pips"] = signal_slippage(action, intended, actual, symbol)
         update["slippage_checked"] = True
+        # v1.60.36 — re-base the stop to the actual fill at the designed sl_pips when the fill is > 2 pips off the
+        # signal price (today: stop 74 pips instead of 69.5). Only ever tightens; the EA keeps the broker TP.
+        try:
+            rb = fill_rebase(trade, actual)
+        except Exception as _rb:  # noqa: BLE001 — geometry must never block the fill report
+            logger.warning("fill rebase skipped trade=%s: %s", payload.trade_id, _rb)
+            rb = None
+        if rb and not trade.get("pending_modification") and not trade.get("close_requested"):
+            update["pending_modification"] = {
+                "type": "MODIFY_SL", "new_sl": rb["new_sl"], "new_tp": rb.get("new_tp"), "reason": "fill_rebase",
+                "requested_at": datetime.now(timezone.utc).isoformat()}
+            update["fill_rebase"] = {**rb, "at": datetime.now(timezone.utc).isoformat()}
+            logger.info("fill rebase trade=%s %s gap=%.1f pips → SL %.5f (was %.5f) TP %s", payload.trade_id, symbol,
+                        rb["gap_pips"], rb["new_sl"], rb["previous_sl"], rb.get("new_tp"))
         try:  # iter-153 — broker/server/symbol/session segmented evidence
             from execution_segments import record_fill
             await record_fill(db, trade=trade, account=acc, symbol=symbol,
@@ -2758,6 +2977,16 @@ async def _absorb_duplicate_ticket_row(db, account_id: str, ticket, position_leg
     return str(dup["_id"])
 
 
+async def _stamp_entry_costs(db, trade: dict, acc: dict, payload) -> None:
+    """#53 — the IN deal of a STOIC trade carries the entry commission: store it (once) for the BE cost buffer."""
+    if payload.deal_entry != "in" or trade.get("origin") not in ("auto", None) or trade.get("commission_entry") is not None:
+        return
+    upd = commission_update(payload.symbol, payload.lots, payload.commission,
+                            account_type=acc.get("account_type"), price=payload.price)
+    if upd:
+        await db.trades.update_one({"_id": trade["_id"], "commission_entry": {"$exists": False}}, {"$set": upd})
+
+
 @router.post("/external-deal")
 async def external_deal(payload: BridgeExternalDeal):
     """Report any broker-side deal — bot-initiated AND manual.
@@ -2964,7 +3193,9 @@ async def external_deal(payload: BridgeExternalDeal):
                         logger.warning("N5 leg upgrade for trade %s skipped — ticket %s leg %s already keyed",
                                        str(existing["_id"]), payload.mt5_ticket, payload.deal_id)
                     await _mark_deal_reconciled(db, payload.deal_id, account_id, note="leg_upgraded_to_deal_id")
+                    await _stamp_entry_costs(db, existing, acc, payload)
                     return {"ok": True, "noop": "ticket_already_tracked", "leg_upgraded": True}
+                await _stamp_entry_costs(db, existing, acc, payload)
                 return {"ok": True, "noop": "ticket_already_tracked"}
 
         # iter-93: race-condition fix. When STOIC fires an order, execution.py
@@ -2985,9 +3216,12 @@ async def external_deal(payload: BridgeExternalDeal):
             if sibling and await adopt_sibling(
                     db, sibling, ticket=payload.mt5_ticket, price=payload.price, via="external_deal",
                     position_leg=netting_leg(netting_acc, payload.deal_id),
-                    extra={"broker_deal_id": payload.deal_id}):
+                    extra={"broker_deal_id": payload.deal_id,
+                           **commission_update(payload.symbol, payload.lots, payload.commission,
+                                               account_type=acc.get("account_type"), price=payload.price)}):
                 await _mark_deal_reconciled(db, payload.deal_id, account_id, note="adopted_sibling")
                 await handle_late_fill(db, sibling, acc, "external_deal")
+                await notify_adopted_open(db, user_id, sibling["_id"], "external_deal")
                 await ws_manager.broadcast(user_id, "trade_updated", {
                     "trade_id": str(sibling["_id"]),
                     "status": "open",
@@ -3100,6 +3334,9 @@ async def external_deal(payload: BridgeExternalDeal):
                 await notify_trade_opened(user_id, trade_doc)
             except Exception as _sw:  # noqa: BLE001
                 record_swallow("bridge", "external_deal", _sw)
+        else:
+            # a STOIC-magic fill that reached us through deal ingestion before /report — same alert as /report
+            await notify_adopted_open(db, user_id, result.inserted_id, "external_deal_ingest")
         return {"ok": True, "created": tid, "external_open": is_external}
 
     # deal_entry == "out" or "inout" → CLOSE event
@@ -3218,6 +3455,10 @@ async def external_deal(payload: BridgeExternalDeal):
             )
             update["backfilled"] = True
             update["backfilled_at"] = datetime.now(timezone.utc).isoformat()
+            # v1.60.36 — was this a REAL reconciliation gap, or just the routine deal confirming a known close?
+            update["backfill_gap"] = bool(existing.get("pnl_unknown") or existing.get("pnl_estimated")
+                                          or existing.get("status") == "closed" or existing.get("adopted_at")
+                                          or is_external)
             update["pnl_unknown"] = False   # real P&L recovered
             update["pnl_estimated"] = False  # exact broker figures now
             # Distinguish "auto-repaired from reconciler ghost" vs "first-time
@@ -3230,6 +3471,11 @@ async def external_deal(payload: BridgeExternalDeal):
             update["close_command"] = close_ack
         await db.trades.update_one({"_id": existing["_id"]}, {"$set": update})
         tid = str(existing["_id"])
+        try:                                                  # v1.60.63 #85 — cost ledger: exit slippage + cost_summary
+            from trade_costs import stamp_exit_costs
+            await stamp_exit_costs(db, {**existing, **update, "_id": existing["_id"]}, acc, payload.price)
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "exit_costs_85", _sw)
         # Scalp fast-path AUTHORITATIVE financial reconciliation (round 5
         # item 1 / round 6 durable state): SIGNED profit/commission/swap +
         # exact exit price, idempotent per deal_id, marks the broker deal

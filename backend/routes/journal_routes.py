@@ -12,7 +12,6 @@ import logging
 import os
 import re
 import secrets
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -22,7 +21,7 @@ from auth import get_current_user
 from database import get_db
 from route_utils import parse_object_id
 from security import rate_limit
-from llm_models import PROVIDER, model_for
+from llm_models import model_for
 
 logger = logging.getLogger("journal")
 
@@ -119,7 +118,6 @@ minified JSON, no code fences, exactly these keys:
 
 
 async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
-    import os
     data = {
         "symbol": trade.get("symbol"), "action": trade.get("action"),
         "entry_price": trade.get("entry_price"),
@@ -137,13 +135,8 @@ async def _generate_card(trade: dict, include_reasoning: bool = False) -> dict:
         data["ai_reasoning_at_entry"] = (trade.get("reasoning") or "")[:400]
     payload = json.dumps(data, default=str)
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"journal-{trade.get('symbol', '?')}-{uuid.uuid4().hex[:8]}",
-            system_message=_SYSTEM,
-        ).with_model(PROVIDER, model_for("fast"))
-        raw = str(await chat.send_message(UserMessage(text=payload))).strip()
+        import llm_client
+        raw = str(await llm_client.complete("fast", _SYSTEM, payload, feature="journal_card", seconds=30)).strip()
         # LLM cost tracking — approximate tokens from character volume
         # (chars/4) at Claude Sonnet public pricing ($3/M in, $15/M out)
         try:

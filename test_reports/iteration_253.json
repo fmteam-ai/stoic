@@ -1,0 +1,23 @@
+{
+  "summary": "Cap-Aware Presets tested end-to-end. Backend (live HTTP via public URL, cookie+CSRF auth, creds read from backend/.env at runtime, never written): GET /api/bot/config returns policy_risk_cap_pct=1.0 (scoped and default); GET /api/bot/presets (with and without account_id) returns 8 built-in + 1 custom, all cap_fit {effective 1.0, cap 1.0, fits_cap true} at risk medium; POST preset/balanced -> 200 applied:'balanced' and persisted; unknown preset -> 404. With risk_level 'high' set directly in Mongo: POST preset/fast_scalp -> 409 {code:risk_above_policy_cap, cap_pct 1.0, effective_pct 2.5, message}, config left untouched (active_preset/updated_at unchanged), custom:<id> apply -> 409, GET presets all fits_cap=false effective 2.5. Restored risk_level 'medium' and re-applied fast_scalp (DB checked at end: medium / fast_scalp). Frontend /bot-config as admin: banner 'POLICY CAP · RISK PER TRADE ≤ 1% ...', 8 green 'FITS CAP ≤ 1%' pills (rgb 0,255,65), cards enabled with TAP TO APPLY, custom pill + enabled apply button. Over-cap after reload: all pills 'OVER CAP · 2.5% › 1%' red (rgb 255,59,48), all 8 preset-card-* disabled with 'BLOCKED BY POLICY CAP — LOWER RISK FIRST', apply-custom-* disabled; a forced click on a disabled card did not change the preset. After restore + reload the pills are green again and cards are enabled. Mobile 390px over-cap layout looks fine. Unit tests: 12/12 passed.",
+  "backend_issues": {"critical": [], "minor": [
+    {"endpoint": "PUT /api/bot/config risk_level=high", "issue": "Not a bug: for the admin, this is refused first by the MFA gate (detail.code=mfa_enrollment_required), before the policy-cap check runs. So the request's 'PUT high -> 409 policy cap' premise does not apply to this user. The policy-cap refusal was checked through the preset path instead."}
+  ]},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Bot Config presets grid (desktop 1920, over-cap state)", "issues": ["On the active card (Fast Scalp), the wider 'OVER CAP · 2.5% › 1%' pill next to the 'ACTIVE' badge pushes ACTIVE past the card's right border; the header row needs flex-wrap or a smaller pill text.", "Disabled cards are dimmed with opacity, so the red pill and footer text are low contrast. Readable, but faint."]},
+      {"screen": "Bot Config presets grid (fits state)", "issues": ["The 'TAP TO APPLY →' footer is dark grey on a near-black background: low contrast (minor)."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/unit/test_cap_aware_presets.py", "/app/backend/tests/unit/test_release_v1_60_30_items.py"],
+  "action_items": ["Optional: stop the ACTIVE badge overflowing on over-cap preset cards (flex-wrap on the card header).", "Optional: raise the contrast of the dimmed over-cap pill/footer text and the 'TAP TO APPLY' text."],
+  "critical_code_review_comments": ["bot_routes.py get_strategy_presets line ~1156: `(await find_one(...)) or {} if cap is not None else {}` is correct by Python precedence but hard to read; add parentheses.", "preset_cap_fit uses the same effective_risk_for as the save refusal, so the UI and the server agree (verified: 2.5 vs 1.0 in both)."],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (16/16 feature checks; the PUT-high check hit the expected MFA gate first)", "frontend": "100%"},
+  "seed_data_creation": "None persisted. risk_level was temporarily set to high in bot_configs for the admin account 6a435003545b76de9539d197 and restored to medium; active_preset was restored to fast_scalp.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Live HTTP check script at /tmp/cap_presets_http.py (reads creds from backend/.env, toggles risk in Mongo and restores in finally). /tmp/setrisk.py <level> toggles risk_level for the admin account. The Bot Config UI default scope 'Default Profile' maps to account 6a435003545b76de9539d197 for presets. The dev frontend sometimes shows 'STOIC IS TAKING LONGER THAN USUAL' on first load; retrying works."
+}

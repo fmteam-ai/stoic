@@ -93,6 +93,21 @@ def snapshot(state: ScalpState) -> dict | None:
     pctl = (sum(1 for s in spreads if s <= spread) / len(spreads)) if spreads else 1.0
 
     ticks_10s = sum(1 for tm, *_ in ticks if tm >= now - 10_000)
+    # v1.60.29 A1 — multi-minute context for the redesigned setup (range break with momentum, minutes not seconds)
+    mids_5m = [(tm, mid) for tm, _, _, mid in ticks if tm >= now - 300_000]
+    ret_5m = _ret_pips(ticks, now, 300_000, pip) if span_ms >= 300_000 else None
+    ret_1m = _ret_pips(ticks, now, 60_000, pip)
+    if len(mids_5m) >= 30:
+        prior = [m for tm, m in mids_5m if tm <= now - 30_000] or [m for _, m in mids_5m]
+        range_hi_5m, range_lo_5m = max(prior), min(prior)
+        twap_5m = sum(m for _, m in mids_5m) / len(mids_5m)
+        cur_mid = ticks[-1][3]
+        ctx_5m = {"range_5m_pips": round((range_hi_5m - range_lo_5m) / pip, 2),
+                  "break_up_pips": round((cur_mid - range_hi_5m) / pip, 2),
+                  "break_dn_pips": round((range_lo_5m - cur_mid) / pip, 2),
+                  "twap_dev_pips": round((cur_mid - twap_5m) / pip, 2)}
+    else:
+        ctx_5m = {"range_5m_pips": None, "break_up_pips": None, "break_dn_pips": None, "twap_dev_pips": None}
 
     return {
         "ret_1s": ret_1s, "ret_3s": ret_3s, "ret_5s": ret_5s,
@@ -106,6 +121,9 @@ def snapshot(state: ScalpState) -> dict | None:
         "spread_pctl": round(pctl, 3),
         "uptick_ratio": round(uptick_ratio, 3),
         "time_since_change_s": (now - state.last_price_change_ms) / 1000.0,
+        "ret_1m": ret_1m if ret_1m is not None else 0.0,
+        "ret_5m": ret_5m,
+        **ctx_5m,
         "_now_ms": now,
         "_bid": state.last_tick.bid,
         "_ask": state.last_tick.ask,

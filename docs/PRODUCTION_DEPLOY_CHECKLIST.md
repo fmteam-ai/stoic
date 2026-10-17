@@ -15,6 +15,23 @@ Reproduce the exact list locally at any time:
 python scripts/production_preflight.py        # exit 1 while verdict=will_crash
 ```
 
+
+## Current production state (14 Oct 2026 — external audit P2-07)
+- Release: **v1.60.32** healthy at https://stoicaibot.com (SEC-002-r21 "old build" CLOSED).
+- MongoDB: single-node replica set **rs0** (transactions available — `deploy/doctor.sh --db`).
+- EA: the shipped version is whatever `/api/health` → `ea_version` reports (derived from the EA source, never hand-typed);
+  every terminal must run that version with the signed EX5 hash. Older "EA v1.xx — rebuild required" sections below are HISTORY.
+- Policy: ONE active signed rules policy — **demo-rules-v2 (demo_only = true)**. The **6/3/3 identity-bound inventory** is the
+  FUTURE live-capital target, not an active policy. Live (real-money) authority stays **CLOSE_ONLY** until the live acceptance
+  pack (P0-02), authoritative release (P1-01), EA binary proof (P1-03) and the close-writer migration (P0-01) are done.
+- Release gate lock: the host adopts the signed `rc_lock.json` into `./release/rc_lock.json` (deploy/lib.sh) and
+  docker-compose mounts it read-only at `/app/release/rc_lock.json` with `RC_LOCK_PATH` set, so `release_gate.py` reads the
+  authoritative lock instead of the image's baked-in developer snapshot. `deploy/update.sh` fails the deploy when
+  `lock.git_commit != BUILD_SHA` or the lock is not authoritative.
+- Release channels: `platform_state.release_state` — promote the deployed EX5 from *candidate* to *stable* once soaked:
+  automatic after `promote_after_hours` (default 24 h, no corroborated deployment_failed) unless `pinned`, or manually with
+  `POST /api/ops/releases/promote` (admin step-up `release_promote`). A LIVE certification flags an un-promoted candidate.
+
 ## Current blockers (5)
 
 | # | Variable | Production inherits | Must be |
@@ -161,7 +178,7 @@ Before:
 - Keep the security agent in `observe` with no rules enabled; `RESEND_API_KEY`, `WEBAUTHN_*`, admin 2FA as in main92.
 After:
 - `docker compose logs worker-security` shows one lease holder (the API log says "standing by" when the worker owns it).
-- Admin → Bot Health → Release Identity shows BUILD SHA / IMAGE DIGEST / EA 1.60 / accepted EX5 hashes.
+- Admin → Bot Health → Release Identity shows BUILD SHA / IMAGE DIGEST / the shipped EA version (`/api/health` → `ea_version`) / accepted EX5 hashes.
 - Every user must sign in again once (access tokens are now revocable; pre-upgrade tokens are refused).
 - Confirm P3 (1 trade per symbol per day) in Bot Pulse; retrain ML models.
 

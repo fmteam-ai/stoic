@@ -18,7 +18,6 @@ from datetime import datetime, timezone, timedelta
 
 from bson import ObjectId
 
-from close_commands import request_close
 from pip_utils import base_symbol
 from ws_manager import manager as ws_manager
 
@@ -85,12 +84,10 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
     if not ff["in_window"]:
         return stats
     mode = (cfg.get("friday_flat_mode") or "close").lower()
-    q = {
-        "user_id": user_id,
-        "status": "open",
-        "close_requested": {"$ne": True},
-        "friday_flat_at": {"$exists": False},
-    }
+    # #48 — no `close_requested`/`friday_flat_at` exclusion: a VaR-flagged (unacked) position used to be skipped and
+    # stayed open over the weekend. Friday Flat now takes over any unacked close and RE-ISSUES its own command with
+    # backoff (close_commands.mandatory_close) until the position is confirmed gone.
+    q = {"user_id": user_id, "status": "open"}
     cfg_account_id = cfg.get("account_id")
     if cfg_account_id:
         q["account_id"] = cfg_account_id
@@ -113,8 +110,9 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
     for tr in open_trades:
         if base_symbol(tr.get("symbol")) in CRYPTO_BASES:
             continue  # crypto trades the weekend — no gap risk
-        if tr.get("pending_modification"):
-            continue  # don't stomp an in-flight management action
+        pm = tr.get("pending_modification") or {}
+        if pm and pm.get("type") != "FULL_CLOSE" and not tr.get("close_requested") and not tr.get("friday_flat_at"):
+            continue  # a fresh management action (SL/TP/partial) is in flight — take over next cycle
         aid = tr.get("account_id")
         if aid not in acc_cache:
             try:
@@ -126,19 +124,23 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
         if eff == "close" and not _ea_supports_full_close(acc):
             eff = "tighten"  # EA <v1.40 ignores FULL_CLOSE — degrade gracefully
         if eff == "close":
-            update = {
-                "close_reason_pending": "friday_flat",
-                "friday_flat_at": now_iso,
-                "friday_flat_action": "close",
-                "pending_modification": {
-                    "type": "FULL_CLOSE",
-                    "reason": "friday_flat",
-                    "requested_at": now_iso,
-                },
-            }
+            from close_commands import mandatory_close
+            # #61 — "first touch" of the CLOSE action: an earlier tighten also set friday_flat_at, the close must still notify
+            first_touch = not tr.get("friday_flat_at") or tr.get("friday_flat_action") != "close"
+            outcome = await mandatory_close(db, tr, reason="friday_flat", actor="friday_flat", account=acc,
+                                            stamp={"close_reason_pending": "friday_flat", "friday_flat_action": "close",
+                                                   **({"friday_flat_at": now_iso} if first_touch else {})})
+            if outcome in ("in_flight", "backoff", "quiet", "gone"):
+                continue
             stats["closed"] += 1
-            actions.append((tr, "close", None))
+            stats["reissued"] = stats.get("reissued", 0) + (1 if outcome == "reissued" else 0)
+            if first_touch:
+                actions.append((tr, "close", None))     # #49 — Telegram once per trade, never per re-issue
+            logger.warning("Friday Flat close %s user=%s sym=%s trade=%s", outcome, user_id, tr.get("symbol"), tr["_id"])
+            continue
         else:
+            if tr.get("friday_flat_at") or tr.get("pending_modification"):
+                continue   # tighten is one-shot; never stack on an in-flight modification
             new_sl = _tightened_sl(tr)
             if new_sl is None:
                 continue
@@ -154,15 +156,10 @@ async def sweep_user(db, user_id: str, cfg: dict) -> dict:
             }
             stats["tightened"] += 1
             actions.append((tr, "tighten", new_sl))
-        if eff == "close":
-            await request_close(db, {"_id": tr["_id"]}, reason="friday_flat", actor="friday_flat", stamp=update)
-        else:
-            await db.trades.update_one({"_id": tr["_id"]}, {"$set": update})
-        logger.warning(
-            "Friday Flat %s user=%s sym=%s trade=%s%s",
-            eff, user_id, tr.get("symbol"), tr["_id"],
-            f" new_sl={new_sl}" if eff == "tighten" else "",
-        )
+        from command_fence import stamp_pending_modification
+        mod = update.pop("pending_modification")
+        await stamp_pending_modification(db, {"_id": tr["_id"], "status": "open"}, mod, update)
+        logger.warning("Friday Flat tighten user=%s sym=%s trade=%s new_sl=%s", user_id, tr.get("symbol"), tr["_id"], new_sl)
 
     if actions:
         await ws_manager.broadcast(user_id, "friday_flat", {

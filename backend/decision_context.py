@@ -59,8 +59,7 @@ async def mint(db, user_id: str, signal: dict, cfg: dict | None = None,
                  "calendar": (signal.get("calendar_intel") or {}).get(
                      "event")},
         "risk": {"risk_profile": cfg.get("risk_profile"),
-                 "max_lot_size": cfg.get("max_lot_size"),
-                 "soft_stop_enabled": cfg.get("soft_stop_enabled")},
+                 "max_lot_size": cfg.get("max_lot_size")},
         "at": _now(),
     }
     try:

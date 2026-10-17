@@ -3,7 +3,7 @@ import { useParams } from "react-router-dom";
 import axios from "axios";
 import { API } from "@/lib/api";
 import { StoicOfficial } from "@/components/StoicLogo";
-import { EquityCurve, StatTiles, IntegrityStamp, AccountsTable } from "@/components/VerifiedPerf";
+import { EquityCurve, StatTiles, IntegrityStamp, AccountsTable, ArchivedAccountsTable } from "@/components/VerifiedPerf";
 import { AttestationSeal } from "@/components/AttestationSeal";
 
 export default function PublicPerformance() {
@@ -47,6 +47,7 @@ export default function PublicPerformance() {
                         {d.overall && <StatTiles overall={d.overall} maxDrawdown={d.max_drawdown} />}
                         {d.equity_curve?.length > 0 && <EquityCurve curve={d.equity_curve} />}
                         <AccountsTable accounts={d.accounts} />
+                        <ArchivedAccountsTable archived={d.archived} />
                         <div className="font-mono text-[9px] tracking-widest text-[#52525B] text-center pb-8">
                             GENERATED {d.generated_at} · POWERED BY STOIC — PAST PERFORMANCE IS NOT INDICATIVE OF FUTURE RESULTS
                         </div>

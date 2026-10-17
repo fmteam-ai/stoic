@@ -72,6 +72,45 @@ HIGH_CORR_THRESHOLD = _f("PORTFOLIO_HIGH_CORR_THRESHOLD", 0.70)
 VAR_CAP_PCT = _f("PORTFOLIO_VAR_CAP_PCT", 5.0)
 
 
+def sector_cap_deleverage_enabled() -> bool:
+    """#45 — v1.60.54 switched sector notional to the instrument table (100,000 units/lot forex, ×100 for every gold
+    alias), which makes the fx/commodity caps and the correlated bucket reachable for the first time. Until George
+    enables it, sector-cap / combined-corr deleverage is ADVISORY only (alert + pulse, no close)."""
+    return (os.environ.get("SECTOR_CAP_DELEVERAGE_ENABLED") or "false").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _open_risk(position: dict) -> float | None:
+    from portfolio.var import open_risk_usd
+    return open_risk_usd(position)
+
+
+def var_cap_exempt_reason(open_positions: list[dict], equity: float, cfg: dict | None) -> str | None:
+    """v1.60.52 (#37) — why the var_cap trigger must NOT deleverage this book (None = it may).
+    • every position has zero open risk (stops at/beyond breakeven)            → nothing to de-risk
+    • exactly one position and its distance-to-stop risk ≤ the per-trade cap   → the trade is inside its own budget"""
+    live = [p for p in open_positions if (p.get("status") or "open") in ("open", "pending")]
+    if not live:
+        return None
+    risks = [_open_risk(p) for p in live]
+    if all(r == 0.0 for r in risks):
+        return "all open positions have their stop at/beyond breakeven (zero open risk)"
+    if len(live) == 1 and risks[0] is not None and equity > 0:
+        from rules_policy import effective_max_risk_pct
+        cap_pct = effective_max_risk_pct(cfg or {"risk_level": "low"})
+        risk_pct = risks[0] / equity * 100.0
+        if cap_pct > 0 and risk_pct <= cap_pct + 1e-9:
+            return (f"single position with distance-to-stop risk {risk_pct:.2f}% of equity within the per-trade cap "
+                    f"{cap_pct:g}%")
+    # #43 (a) — when EVERY stop is known, the book cannot lose more than Σ stop distances (× gap factor): a book whose
+    # stop-bounded loss is inside the VaR cap is never deleveraged, whatever the parametric figure says.
+    if equity > 0 and all(r is not None for r in risks):
+        from portfolio.var import STOP_GAP_FACTOR
+        bound_pct = sum(risks) * STOP_GAP_FACTOR / equity * 100.0
+        if bound_pct <= VAR_CAP_PCT + 1e-9:
+            return f"stop-bounded book loss {bound_pct:.2f}% of equity (×{STOP_GAP_FACTOR} gap) within the VaR cap {VAR_CAP_PCT:g}%"
+    return None
+
+
 async def _sector_exposure(positions: list[dict], equity: float,
                            caps: dict | None = None) -> dict:
     """Group notional by sector. Returns {sector: {notional, pct_equity, positions: [...]}}
@@ -86,7 +125,8 @@ async def _sector_exposure(positions: list[dict], equity: float,
         sec = sector_for(sym)
         lot = float(p.get("lot_size") or 0)
         entry = float(p.get("entry_price") or 0)
-        notional = lot * entry * (100 if sym == "XAUUSD" else 1)
+        from instruments import notional_usd
+        notional = notional_usd(sym, lot, entry)      # #43 (a) — GOLD# / XAUUSD+ / forex via the instrument table
         grouped[sec]["notional"] += notional
         grouped[sec]["positions"].append({
             "trade_id": str(p.get("_id") or p.get("id") or ""),
@@ -185,42 +225,63 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
             })
             cum += n
 
+    # #45 — sector-cap / combined-corr culls honour the SAME exemptions as var_cap (zero-risk BE positions, a
+    # stop-bounded book inside the VaR cap) and are advisory unless SECTOR_CAP_DELEVERAGE_ENABLED.
+    advisory_actions: list[dict] = []
+    advisory_triggers: list[str] = []
+    cap_exempt = var_cap_exempt_reason(open_positions, equity, cfg)
+    cap_actions = actions if sector_cap_deleverage_enabled() else advisory_actions
+    cap_triggers = triggers if sector_cap_deleverage_enabled() else advisory_triggers
+    _by_id = {str(p.get("_id") or p.get("id") or ""): p for p in open_positions}
+
+    def _cap_candidates(rows: list[dict]) -> list[dict]:
+        return [r for r in rows if _open_risk(_by_id.get(r["trade_id"], {})) != 0.0]
+
     for sec, data in sectors.items():
-        if data["over_cap"]:
-            triggers.append(f"sector_cap_{sec}")
+        if data["over_cap"] and not cap_exempt and _cap_candidates(data["positions"]):
+            cap_triggers.append(f"sector_cap_{sec}")
             # iter-48 fix — prefer closing the WORST LOSER in the over-cap
             # sector rather than the largest position. Previous "largest"
             # rule kept culling underwater pyramids, locking in losses while
             # the bot opened more same-direction trades into the trap.
             # Fallback to largest by notional when live P&L is unavailable.
-            if data["positions"]:
-                has_pnl = any(p.get("live_pnl") for p in data["positions"])
-                if has_pnl:
-                    worst = min(data["positions"], key=lambda x: x.get("live_pnl") or 0)
-                else:
-                    worst = max(data["positions"], key=lambda x: x["notional"])
-                actions.append({
-                    "kind": "close_trade", "trade_id": worst["trade_id"],
-                    "symbol": worst["symbol"], "lot_size": worst["lot"],
-                    "reason": f"auto_deleverage_sector_cap_{sec}",
-                })
+            cands = _cap_candidates(data["positions"])
+            has_pnl = any(p.get("live_pnl") for p in cands)
+            if has_pnl:
+                worst = min(cands, key=lambda x: x.get("live_pnl") or 0)
+            else:
+                worst = max(cands, key=lambda x: x["notional"])
+            cap_actions.append({
+                "kind": "close_trade", "trade_id": worst["trade_id"],
+                "symbol": worst["symbol"], "lot_size": worst["lot"],
+                "reason": f"auto_deleverage_sector_cap_{sec}",
+            })
+        elif data["over_cap"]:
+            var.setdefault("notes", []).append(f"sector_cap_{sec} cull skipped: {cap_exempt or 'no position with open risk'}")
 
-    if bucket_breach:
-        triggers.append("combined_corr_bucket")
+    if bucket_breach and not cap_exempt:
+        cap_triggers.append("combined_corr_bucket")
         # 25% reduction of bucket exposure — close one (largest) trade from
         # whichever bucket sector contributes most.
         worst_sec = max(
             (s for s in COMBINED_RISK_BUCKET if s in sectors),
             key=lambda s: sectors[s]["notional"], default=None,
         )
-        if worst_sec and sectors[worst_sec]["positions"]:
-            worst = max(sectors[worst_sec]["positions"], key=lambda x: x["notional"])
-            actions.append({
+        if worst_sec and _cap_candidates(sectors[worst_sec]["positions"]):
+            worst = max(_cap_candidates(sectors[worst_sec]["positions"]), key=lambda x: x["notional"])
+            cap_actions.append({
                 "kind": "close_trade", "trade_id": worst["trade_id"],
                 "symbol": worst["symbol"], "lot_size": worst["lot"],
                 "reason": "auto_deleverage_combined_corr",
             })
 
+    # v1.60.52 (#37) — 16 Oct: a single 0.04-lot XAUUSD BUY with its stop already at breakeven was closed as
+    # 'var_cap' for −$1.41. Positions with ZERO open risk (stop at/beyond breakeven) are never deleverage candidates,
+    # and a lone position inside the per-trade risk cap is never deleveraged.
+    var_exempt = var_cap_exempt_reason(open_positions, equity, cfg)
+    if var_breach and var_exempt:
+        var_breach = False
+        var.setdefault("notes", []).append(f"var_cap deleverage skipped: {var_exempt}")
     if var_breach:
         triggers.append("var_cap")
         # Close the symbol with the largest weight × atr% contribution.
@@ -236,7 +297,8 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
                 # fix). The previous "first match" pick closed arbitrary
                 # positions and showed up as -$362 avg late-loser closes.
                 matches = [p for p in open_positions
-                           if (p.get("symbol") or "").upper() == r["symbol"]]
+                           if (p.get("symbol") or "").upper() == r["symbol"]
+                           and _open_risk(p) != 0.0]              # zero-risk (BE) positions are not candidates
                 if not matches:
                     continue
                 if any(p.get("live_pnl") for p in matches):
@@ -267,6 +329,10 @@ async def build_snapshot(db, *, account: dict, open_positions: list[dict],
         "drawdown": dd,
         "sectors": sectors,
         "var": var,
+        # #45 — what the sector / correlation caps WOULD close (alert + pulse only while the flag is off)
+        "advisory_actions": advisory_actions,
+        "advisory_triggers": advisory_triggers,
+        "sector_cap_deleverage_enabled": sector_cap_deleverage_enabled(),
         # Phase D — currency-leg exposure + deterministic stress scenarios
         # (gap-multiplied worst single-leg shock) from portfolio_risk
         "currency_exposure": _pr.currency_exposure(open_positions),
@@ -325,24 +391,26 @@ async def execute_deleveraging_actions(db, *, user_id: str, actions: list[dict])
             skipped += 1
             continue
         # Close open trades (real broker position exists).
+        # #43 (b) — 16 Oct: five var_cap close requests on one ticket were never executed (trades-block path, no
+        # pending_modification, no terminal ack). Deleverage closes now ride the fenced FULL_CLOSE modification
+        # path (intent_id + explicit EA ack, same as scalp / revive), so every outcome is acknowledged and auditable.
         from close_commands import request_close
-        res_open = await request_close(db, {"_id": oid, "user_id": user_id},
-                                       reason=a.get("reason") or "auto_deleverage",
-                                       actor="portfolio_risk_manager", stamp={"close_requested_at": now_iso})
+        reason = a.get("reason") or "auto_deleverage"
+        res_open = await request_close(db, {"_id": oid, "user_id": user_id}, reason=reason,
+                                       actor="portfolio_risk_manager", stamp={"close_requested_at": now_iso},
+                                       pending_modification={"type": "FULL_CLOSE", "reason": reason}, emergency=True)
         if res_open["trades_marked_for_close"]:
             closed += 1
             continue
-        # Cancel pending trades (not yet filled — no broker position).
-        res_pending = await db.trades.update_one(
-            {"_id": oid, "user_id": user_id, "status": "pending"},
-            {"$set": {
-                "status": "cancelled",
-                "close_reason": a.get("reason") or "auto_deleverage_cancel_pending",
-                "closed_at": now_iso,
-                "error": "Pending order cancelled by auto-deleverage before fill.",
-            }},
-        )
-        if res_pending.modified_count:
+        # Cancel pending trades (not yet filled — no broker position). prod v1.60.28 — through the unified
+        # cancel path, which also terminalises the execution intent and releases the risk reservation; a
+        # bare status flip left the intent 'submitted' and put the account in CLOSE_ONLY.
+        from close_commands import cancel_pending
+        n = await cancel_pending(db, {"_id": oid, "user_id": user_id},
+                                 reason=a.get("reason") or "auto_deleverage_cancel_pending",
+                                 actor="portfolio_risk_manager",
+                                 stamp={"error": "Pending order cancelled by auto-deleverage before fill."})
+        if n:
             cancelled += 1
         else:
             skipped += 1

@@ -89,38 +89,50 @@ def _summarise(rows: List[dict]) -> dict:
     }
 
 
-# MT5-standard contract sizes — used to derive USD-risk-at-entry per trade.
-# (Mirrors the table in Trades.jsx so SL distance × lot × contract = $ risk.)
-_CONTRACT_SIZE = {
-    "XAUUSD": 100,     # 1 lot = 100 oz
-    "XAGUSD": 5000,    # 1 lot = 5000 oz
-    "BTCUSD": 1,
-    "ETHUSD": 1,
-}
+def _r_multiple(row: dict, account: dict | None = None):
+    """Realized R-multiple for a closed trade, or None when SL / contract size is unknown.
 
-
-def _r_multiple(row: dict):
-    """Return realized R-multiple for a closed trade, or None if SL is missing.
-
-    R = pnl / risk_at_entry,  where  risk_at_entry = |entry - SL| × lot × contract.
-    Capped at ±10R to keep outliers from skewing the average.
+    R = pnl / risk_at_entry,  risk_at_entry = |entry − SL| × lot × contract.
+    #40 — the symbol is normalised with base_symbol() (GOLD#, XAUUSD+, XAUUSD.crp → XAUUSD) and the contract size
+    comes from the account's EA-reported symbol spec or the instrument table (forex 100,000). Unknown contract
+    size → None (never the old default of 1, which made every GOLD# scratch a clamped −10R).
+    Known sizes are still clamped to ±10R to keep outliers from skewing averages.
     """
     try:
+        from instruments import known_contract_size
         entry = float(row.get("entry_price") or 0)
         sl = float(row.get("stop_loss") or 0)
         lot = float(row.get("lot_size") or 0)
         pnl = float(row.get("pnl") or 0)
         if entry <= 0 or sl <= 0 or lot <= 0:
             return None
-        cs = _CONTRACT_SIZE.get((row.get("symbol") or "").upper(), 1)
+        cs = known_contract_size(row.get("symbol"), account)
+        if cs is None:
+            return None
         risk = abs(entry - sl) * lot * cs
         if risk <= 0:
             return None
-        r = pnl / risk
-        # Clamp pathological outliers
-        return max(-10.0, min(10.0, r))
+        return max(-10.0, min(10.0, pnl / risk))
     except Exception:
         return None
+
+
+def trade_r_multiple(trade: dict, account: dict | None = None):
+    """R against the ORIGINAL stop / filled volume when the trade carries them (post-BE `stop_loss` sits at entry)."""
+    row = dict(trade)
+    if trade.get("original_stop_loss"):
+        row["stop_loss"] = trade["original_stop_loss"]
+    if trade.get("original_lot_size"):
+        row["lot_size"] = trade["original_lot_size"]
+    return _r_multiple(row, account)
+
+
+async def account_specs(db, user_id: str) -> dict:
+    """{account_id: {"symbol_specs": …}} for every account of the user — the broker contract sizes for R math."""
+    out = {}
+    async for a in db.accounts.find({"user_id": user_id}, {"symbol_specs": 1}):
+        out[str(a["_id"])] = {"symbol_specs": a.get("symbol_specs") or {}}
+    return out
 
 
 def _bucketize(rows: List[dict], key_fn) -> List[dict]:
@@ -271,9 +283,10 @@ async def compute_sessions(user_id: str) -> dict:
     db = get_db()
     cursor = db.trades.find(
         {"user_id": user_id, "status": "closed"},
-        {"opened_at": 1, "pnl": 1, "symbol": 1, "entry_price": 1,
-         "stop_loss": 1, "lot_size": 1})
+        {"opened_at": 1, "pnl": 1, "symbol": 1, "entry_price": 1, "account_id": 1,
+         "stop_loss": 1, "lot_size": 1, "original_stop_loss": 1, "original_lot_size": 1})
     closed = await cursor.to_list(length=5000)
+    specs = await account_specs(db, user_id)
 
     enriched = []
     for t in closed:
@@ -288,7 +301,7 @@ async def compute_sessions(user_id: str) -> dict:
             "stop_loss": t.get("stop_loss"),
             "lot_size": t.get("lot_size"),
         }
-        row["r_multiple"] = _r_multiple(row)
+        row["r_multiple"] = trade_r_multiple(t, specs.get(str(t.get("account_id") or "")))
         row["bucket"] = bucket
         enriched.append(row)
 

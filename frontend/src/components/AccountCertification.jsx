@@ -1,34 +1,86 @@
 import { useEffect, useState } from "react";
-import api, { formatApiError } from "@/lib/api";
-import { BadgeCheck, XCircle, CheckCircle2 } from "lucide-react";
+import api, { formatApiError, API } from "@/lib/api";
+import { BadgeCheck, XCircle, CheckCircle2, Download, RefreshCw, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
-export function AccountCertification({ accountId }) {
+function FixAction({ check, accountId, onCertify, onRequestSync, busy }) {
+    const action = check.fix?.action;
+    const cls = "inline-flex items-center gap-1 font-mono text-[10px] tracking-widest px-1.5 py-0.5 border transition-colors";
+    if (action === "download_ea") {
+        return (
+            <a href={`${API}/ea-script`} target="_blank" rel="noopener noreferrer" download="EmergentTradingBridge.mq5"
+                data-testid={`cert-fix-download-ea-${check.key}-${accountId}`}
+                className={`${cls} border-[#00BFFF]/40 text-[#00BFFF] hover:bg-[#00BFFF]/10`}>
+                <Download className="w-3 h-3" /> DOWNLOAD EA
+            </a>
+        );
+    }
+    if (action === "request_sync") {
+        return (
+            <button onClick={onRequestSync} disabled={busy}
+                data-testid={`cert-fix-request-sync-${accountId}`}
+                className={`${cls} border-[#00BFFF]/40 text-[#00BFFF] hover:bg-[#00BFFF]/10 disabled:opacity-50`}>
+                <RefreshCw className={`w-3 h-3 ${busy ? "animate-spin" : ""}`} /> REQUEST SYNC
+            </button>
+        );
+    }
+    if (action === "certify") {
+        return (
+            <button onClick={onCertify} data-testid={`cert-fix-certify-${accountId}`}
+                className={`${cls} border-[#00FF41]/40 text-[#00FF41] hover:bg-[#00FF41]/10`}>
+                <BadgeCheck className="w-3 h-3" /> CERTIFY NOW
+            </button>
+        );
+    }
+    return null;
+}
+
+export function AccountCertification({ accountId, item = null, onChanged = null }) {
     const [items, setItems] = useState(null);
+    const [busy, setBusy] = useState(false);
+
+    const reload = async () => {
+        if (onChanged) { await onChanged(); return; }
+        const { data } = await api.get("/accounts/certification");
+        setItems(data.items || []);
+    };
 
     useEffect(() => {
+        if (item) return undefined;                 // page-owned data (Accounts.jsx polls every 30 s and passes it down)
         let dead = false;
         api.get("/accounts/certification")
             .then(({ data }) => { if (!dead) setItems(data.items || []); })
             .catch(() => { if (!dead) setItems([]); });
         return () => { dead = true; };
-    }, [accountId]);
+    }, [accountId, item]);
 
-    const cert = items?.find(i => i.account_id === accountId);
+    const cert = item || items?.find(i => i.account_id === accountId);
     if (!cert) return null;
 
     const certify = async () => {
         try {
             await api.post(`/accounts/${accountId}/certify`);
             toast.success("Demo certification stamped");
-            const { data } = await api.get("/accounts/certification");
-            setItems(data.items || []);
+            await reload();
         } catch (e) {
-            toast.error("Certification blocked", {
-                description: formatApiError(e),
-            });
+            toast.error("Certification blocked", { description: formatApiError(e) });
         }
     };
+
+    const requestSync = async () => {
+        setBusy(true);
+        try {
+            await api.post(`/accounts/${accountId}/request-sync`);
+            toast.success("Broker sync requested", { description: "The EA picks it up on its next poll." });
+            await reload();
+        } catch (e) {
+            toast.error("Sync request failed", { description: formatApiError(e) });
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const failing = cert.checks.filter(c => !c.ok);
 
     return (
         <div className="mt-3 border border-[#1F1F1F] bg-black/40 p-3"
@@ -66,6 +118,24 @@ export function AccountCertification({ accountId }) {
                     </div>
                 ))}
             </div>
+            {failing.length > 0 && (
+                <div className="mt-3 border-t border-[#1F1F1F] pt-2 space-y-1.5" data-testid={`cert-fixes-${accountId}`}>
+                    <div className="flex items-center gap-1.5 font-mono text-[10px] tracking-widest text-[#FFB000]">
+                        <Wrench className="w-3 h-3" /> HOW TO CLEAR {failing.length} FAILING CHECK{failing.length > 1 ? "S" : ""}
+                    </div>
+                    {failing.map(c => (
+                        <div key={c.key} className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-3 font-mono text-[10px]"
+                            data-testid={`cert-fix-${c.key}-${accountId}`}>
+                            <span className="text-[#FF3B30] shrink-0 sm:w-44">{c.label}</span>
+                            <span className="text-[#A1A1AA] flex-1" data-testid={`cert-fix-text-${c.key}-${accountId}`}>
+                                {c.fix?.text || c.hint}
+                            </span>
+                            <FixAction check={c} accountId={accountId} busy={busy}
+                                onCertify={certify} onRequestSync={requestSync} />
+                        </div>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }

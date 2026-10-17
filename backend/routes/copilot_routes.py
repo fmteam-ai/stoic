@@ -1,6 +1,5 @@
 """AI Co-Pilot routes — grounded chat assistant for the user's trading data."""
 import logging
-import os
 import time
 from collections import deque
 from typing import Deque, Dict
@@ -43,14 +42,14 @@ async def copilot_chat_endpoint(payload: dict, user=Depends(get_current_user)):
             detail="Slow down — too many Co-Pilot messages. Try again shortly.",
         )
 
-    if not os.environ.get("EMERGENT_LLM_KEY"):
+    import llm_client
+    if not llm_client.configured():
         raise HTTPException(
             status_code=503,
             detail={"code": "llm_key_missing",
-                    "message": "AI Co-Pilot is not configured on this server. An admin can paste the "
-                               "Emergent Universal Key (Emergent → Profile → Universal Key) under "
-                               "Admin → Integrations → AI (Emergent) — it applies instantly. Alternatively "
-                               "set EMERGENT_LLM_KEY in backend/.env and run deploy/restart.sh."},
+                    "message": "AI Co-Pilot is not configured on this server. An admin can paste an Anthropic API key "
+                               "(ANTHROPIC_API_KEY) or the Emergent Universal Key under Admin → Integrations → AI — it "
+                               "applies instantly. Alternatively set it in backend/.env and run deploy/restart.sh."},
         )
 
     session_id = payload.get("session_id")

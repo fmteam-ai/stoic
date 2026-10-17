@@ -1,9 +1,9 @@
 """Single source of truth for LLM model selection (roadmap step 7).
 
-Every AI call site asks for a TIER, never a model string:
+Every AI call site asks for a TIER, never a model string, through the one helper (v1.60.59):
 
-    from llm_models import model_for, PROVIDER
-    chat = LlmChat(...).with_model(PROVIDER, model_for("analysis"))
+    import llm_client
+    text = await llm_client.complete("analysis", system, user_text, feature="copilot")
 
 Tiers
 -----
@@ -25,7 +25,9 @@ import os
 
 PROVIDER = "anthropic"
 
-# Identifiers confirmed against the Emergent Universal Key model list (2026-10-02).
+# Identifiers confirmed against the Emergent Universal Key model list (2026-10-02) AND the direct Anthropic API
+# (platform.claude.com/docs/en/models/overview, 2026-10-16: claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5 current;
+# claude-haiku-4-5-20251001 legacy but available).
 DEFAULTS: dict[str, str] = {
     "fast": "claude-haiku-4-5-20251001",
     "analysis": "claude-sonnet-5-5",
@@ -54,6 +56,27 @@ def optimizer_candidates() -> list[tuple[str, str]]:
     if fallback != primary:
         out.append((PROVIDER, fallback))
     return out
+
+
+def pretty_name(model_id: str) -> str:
+    """'claude-sonnet-5-5' → 'Claude Sonnet 5.5'; 'claude-haiku-4-5-20251001' → 'Claude Haiku 4.5' (#74 — UI labels)."""
+    parts = [p for p in str(model_id or "").split("-") if p]
+    if not parts:
+        return "Claude"
+    words, nums = [], []
+    for p in parts:
+        if p.isdigit():
+            if len(p) >= 8:          # date suffix
+                continue
+            nums.append(p)
+        else:
+            words.append(p.capitalize())
+    return " ".join(words + ([".".join(nums)] if nums else []))
+
+
+def pretty_models() -> dict:
+    return {t: pretty_name(model_for(t)) for t in TIERS}
+
 
 
 def describe() -> dict:

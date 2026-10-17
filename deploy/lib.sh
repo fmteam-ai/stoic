@@ -292,9 +292,14 @@ build_with_provenance() {
   resolve_git_sha || return 1
   disable_registry_compose_file   # a build never runs under the registry overlay (pull_policy: never + pinned images)
   docker compose build || { echo "ERROR: image build failed — see the build log above (nothing was restarted)"; return 1; }
-  local img
+  local img repo_digest
   img=$(docker compose config --images 2>/dev/null | grep -m1 backend || true)
-  STOIC_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' "${img}" 2>/dev/null || true)
+  # v1.60.34 — pin the REGISTRY digest (RepoDigests, what release.yml writes into rc_lock), not the local .Id content
+  # hash: the two differ, so the release gate's digest compare failed even on the right image. A never-pushed local
+  # build has no RepoDigests → fall back to .Id (build mode can never satisfy the gate anyway).
+  repo_digest=$(docker inspect --format '{{if .RepoDigests}}{{index .RepoDigests 0}}{{end}}' "${img}" 2>/dev/null || true)
+  if [ -n "${repo_digest}" ]; then STOIC_IMAGE_DIGEST="${repo_digest#*@}"
+  else STOIC_IMAGE_DIGEST=$(docker inspect --format '{{.Id}}' "${img}" 2>/dev/null || true); fi
   if [ -z "${STOIC_IMAGE_DIGEST}" ]; then
     echo "ERROR: could not resolve the built backend image digest (${img})"
     return 1
@@ -337,6 +342,19 @@ wait_frontend() {
   return 1
 }
 
+# Prod fix (12 Oct): health THROUGH the frontend's nginx proxy — a healthy backend behind a stale nginx
+# upstream (old container IP) still served 502 to users for ~3 min. Success only when /api/health is 200 via :3000.
+wait_api_health_via_frontend() {
+  local n="${1:-45}" i code
+  for i in $(seq 1 "$n"); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/health 2>/dev/null || echo 000)
+    [ "${code}" = "200" ] && return 0
+    sleep 2
+  done
+  echo "!! /api/health via the frontend proxy returned ${code} after $((n * 2))s — nginx upstream stale? (docker compose restart frontend)" >&2
+  return 1
+}
+
 # Wait until the FULL topology readiness probe is green (workers need ~45s
 # to acquire leases). Prints the body on success; returns 1 on timeout.
 # Readiness policy mirrors deploy/install.sh: the INFRASTRUCTURE checks must be
@@ -364,11 +382,57 @@ sys.exit(0 if not missing else 1)
 ' "$1" "${READINESS_INFRA}"
 }
 
+# v1.60.42 — verify_attestation (run for the NEW tree before the gates) replaces release/attestation.current.json and
+# its deploy/state copy; a refused gate left v1.60.41's attestation published while v1.60.39 kept running, so
+# /api/health said "v1.60.41 … attested: false". After the checkout back to PREV, re-establish PREV's truth.
+restore_release_truth() {
+  local prev="$1"
+  rm -f release/attestation.current.json release/attestation.current.bundle deploy/state/release/attestation.current.json
+  if [ "$(deploy_mode)" != "build" ]; then
+    if verify_attestation >/dev/null 2>&1; then
+      echo "   release truth restored: attestation of ${prev:0:8} re-published"
+    else
+      echo "!! could not re-fetch the attestation of ${prev:0:8} — /api/health reports attested:false until the next successful update"
+    fi
+  fi
+  publish_release_truth
+}
+
+# v1.60.41 — refuse a release whose EA record does not accept the EX5 the fleet is running (PREV's record).
+ea_fleet_compat_gate() {
+  local prev="$1" tmp rc=0
+  [ -f scripts/check_ea_fleet_compat.py ] || { echo "   (gate script missing in this checkout — skipped)"; return 0; }
+  tmp=$(mktemp)
+  if git show "${prev}:release/ea_release.json" > "${tmp}" 2>/dev/null && [ -s "${tmp}" ]; then
+    # v1.60.42 — the gate imports backend/ea_capabilities + release_signing: run it with the interpreter the backend
+    # uses when one is on the host (3.11), else the deploy python (3.9-safe modules; a verification failure caused by
+    # the interpreter is reported as "cannot verify: …", never as an invalid record).
+    "$(gate_python)" scripts/check_ea_fleet_compat.py --stable-record "${tmp}" || rc=1
+  else
+    echo "   (previous checkout ${prev:0:8} carries no release/ea_release.json — nothing to compare)"
+  fi
+  rm -f "${tmp}"
+  return ${rc}
+}
+
+# Interpreter for gates that import backend modules: the first host python (backend's 3.11 preferred, then the
+# deploy python) that is >= 3.9 AND has `cryptography` — a bare interpreter would turn every record into "cannot verify".
+gate_python() {
+  local p
+  for p in python3.11 python3.12 python3.10 python3; do
+    command -v "${p}" >/dev/null 2>&1 || continue
+    "${p}" -c 'import sys, cryptography; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1 && { command -v "${p}"; return 0; }
+  done
+  command -v python3
+}
+
 # Production pre-build gate: operator state that no rebuild can change (EA release
 # record in the checkout, inventory approval + canonical decision on the RUNNING
 # stack). Refusing here avoids a build → restart → rollback churn for a known outcome.
 strict_prebuild_gate() {
   local tok body k bad=""
+  # verify_ea_release.py --check reads the three key pins (RELEASE_PUBLIC_KEY_B64 / RELEASE_SIGNER_KEY_ID /
+  # RELEASE_SIGNER) from backend/.env itself — the host shell never has them (12 Oct prod: every update refused)
   python3 scripts/verify_ea_release.py --check >/dev/null 2>&1 || bad="${bad} ea_release"
   tok=$(metrics_token) || return 1
   body=$(curl -sS -H "X-Metrics-Token: ${tok}" http://127.0.0.1:8001/api/ops/release-readiness 2>/dev/null || true)
@@ -701,7 +765,7 @@ _verify_attestation_core() {
 publish_release_truth() {
   mkdir -p deploy/state/release 2>/dev/null || return 0
   local f
-  for f in release/attestation.current.json release/rc_lock.json; do
+  for f in release/attestation.current.json release/rc_lock.json deploy/releases/deployment_state.json; do
     [ -s "${f}" ] && cp "${f}" "deploy/state/release/$(basename "${f}")" && chmod 644 "deploy/state/release/$(basename "${f}")"
   done
   return 0
@@ -777,7 +841,7 @@ pull_attested_images() {
         --certificate-oidc-issuer https://token.actions.githubusercontent.com >/dev/null \
       || { echo "!! image SIGNATURE invalid or not issued by ${repo} workflows: ${d}"; return 1; }
     echo "   image signature verified: ${d}"
-    docker pull -q "${d}" >/dev/null || { echo "!! pull failed: ${d} (GHCR outage, or a private package without a read:packages GITHUB_TOKEN in ./.env)"; return 1; }
+    pull_with_retry "${d}" || return 1
     id=$(docker inspect --format '{{index .RepoDigests 0}}' "${d}" 2>/dev/null || true)
     [ "${id}" = "${d}" ] || { echo "!! pulled digest ${id:-none} != attested ${d}"; return 1; }
   done
@@ -814,10 +878,11 @@ provision_images() {
         if pull_attested_images; then
           record_deploy_source registry "attested release $(git rev-parse --short "${GIT_SHA}")"
         else
-          echo "!! registry pull/verification failed — falling back to an on-host build of the same commit (deploy/state/deploy_source.json records it; the LIVE digest gate stays red until a registry deploy succeeds)"
-          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) registry-fallback-build sha=${GIT_SHA}" >> deploy/releases.log
-          build_with_provenance || return 1
-          record_deploy_source build-fallback "registry pull/verification failed"
+          # v1.60.43 — an attested release expects the SIGNED registry image: a host build can never match the locked
+          # digest, so do not build. Fail cleanly (the caller rolls back / holds); re-run once GHCR is reachable.
+          echo "!! registry pull/verification failed for an attested release — NOT building on the host (a local image cannot match the locked digest). Re-run deploy/update.sh when GHCR is reachable, or DEPLOY_MODE=build knowingly."
+          echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) registry-pull-failed sha=${GIT_SHA}" >> deploy/releases.log
+          return 1
         fi
       else
         local why="${ATTESTATION_FAIL_REASON:-no attested images for this ref}"
@@ -826,6 +891,25 @@ provision_images() {
         record_deploy_source build "${why}"
       fi ;;
   esac
+}
+
+# v1.60.43 — a `docker pull` of the backend image hung for 22 min on 15 Oct; after it was killed, auto mode built on the
+# host and the locally built image could never match the locked digest. Pull with a per-attempt timeout and retries
+# (PULL_ATTEMPTS × PULL_TIMEOUT_SEC, default 3 × 300 s) and fail cleanly instead.
+pull_with_retry() {
+  local d="$1" attempts="${PULL_ATTEMPTS:-3}" per="${PULL_TIMEOUT_SEC:-300}" i rc
+  for i in $(seq 1 "${attempts}"); do
+    timeout -k 10 "${per}" docker pull -q "${d}" >/dev/null; rc=$?
+    [ "${rc}" = 0 ] && return 0
+    if [ "${rc}" = 124 ]; then
+      echo "!! pull attempt ${i}/${attempts} of ${d} timed out after ${per}s"
+    else
+      echo "!! pull attempt ${i}/${attempts} of ${d} failed (rc=${rc})"
+    fi
+    [ "${i}" -lt "${attempts}" ] && sleep 5
+  done
+  echo "!! pull failed after ${attempts} attempts: ${d} (GHCR outage/stall, or a private package without a read:packages GITHUB_TOKEN in ./.env)"
+  return 1
 }
 
 # `docker compose up` for the active deploy mode — registry mode must never

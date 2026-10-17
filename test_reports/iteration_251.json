@@ -1,0 +1,19 @@
+{
+  "summary": "HTTP backend tests for main130/main131 fixes against preview (admin@stoicaibot.com). 7/7 passed — P2-04 /api/health release block, P2-02 /api/trades/predictions shape + symbol validation, P1-02 /api/ops/go-live-checklist release_signed row, P1-01 account delete (untouched 200, with-trade 409 trades_attached, force=true still 409, force-delete endpoint 4 branches 409/422/422/200 with audit log + trade close), M3 wizard use-reported-login 409 no_reported_login. No code changes required.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_main130_main131_http.py",
+    "/app/test_reports/pytest/main130_main131_http.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [],
+  "updated_files": ["/app/backend/tests/test_main130_main131_http.py"],
+  "success_rate": {"backend": "100%", "frontend": "n/a (skipped per request)"},
+  "test_credentials": "Read admin password at runtime from /app/memory/test_credentials.md (regex); STEP_UP_BYPASS_TOKEN, MONGO_URL, DB_NAME read from /app/backend/.env. No credential literal in test file or report.",
+  "seed_data_creation": "Created and deleted (or force-deleted) three throwaway accounts via /api/accounts and inserted/cleaned one open XAUUSD trade (marker _test_marker=main130_main131_http). Verified zero leftover test trades/accounts after suite.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Reusable HTTP suite at /app/backend/tests/test_main130_main131_http.py (pytest -m http). Covers release block, predictions shape+422, go-live checklist, account delete refusal + admin force-delete 4 branches, wizard use-reported-login refusal. Uses httpOnly cookie auth + X-CSRF-Token + X-Step-Up-Bypass header pattern. Reads password from /app/memory/test_credentials.md at runtime (regex on 'Password:' line) — do not hardcode.",
+  "rca of the issue": "n/a — all behaviours matched spec on first run."
+}

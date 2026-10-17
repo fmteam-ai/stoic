@@ -1,0 +1,17 @@
+# gitleaks config for scanning COMMIT MESSAGES (stdin mode) — SECURITY 2026-10-13.
+# Extends the default rule set; the only allowance is the platform's per-commit provenance trailer
+# `Emergent-Commit-Key: <64 hex>` (a public digest, present on every commit, not a credential).
+# Historical, ROTATED leaks are not allowlisted here: CI scans the push/PR range with gitleaks and the
+# whole history with scripts/commit_message_secret_scan.py (which knows the rotated fingerprints).
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "platform provenance trailer on every commit"
+# SEC-026-1 — match-scoped (not line-scoped): only the 64-hex digest itself is excused, so a secret placed on the
+# same line as a forged trailer is still reported.
+regexTarget = "match"
+regexes = [
+  '''^Emergent-Commit-Key: [0-9a-f]{64}$''',
+  '''^[0-9a-f]{64}$''',
+]

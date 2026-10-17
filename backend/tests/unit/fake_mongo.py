@@ -60,6 +60,16 @@ class _Cursor:
         self.rows = rows
 
     def sort(self, *a):
+        # honour single-key sorts ("field", dir) / [("field", dir)] when every row has the key
+        spec = a[0] if len(a) == 1 and isinstance(a[0], list) else (a if len(a) == 2 else None)
+        if spec:
+            pairs = spec if isinstance(spec, list) else [tuple(spec)]
+            for key, direction in reversed(pairs):
+                if all(key in r for r in self.rows):
+                    try:
+                        self.rows = sorted(self.rows, key=lambda r: r[key], reverse=direction == -1)
+                    except TypeError:
+                        pass
         return self
 
     def limit(self, n):
@@ -67,7 +77,7 @@ class _Cursor:
         return self
 
     async def to_list(self, length=None):
-        return self.rows
+        return self.rows if length is None else self.rows[:length]
 
     def __aiter__(self):
         self._it = iter(self.rows)
@@ -80,6 +90,31 @@ class _Cursor:
             raise StopAsyncIteration
 
 
+def _agg_eval(expr, r):
+    if isinstance(expr, str) and expr.startswith("$"):
+        return r.get(expr[1:])
+    if isinstance(expr, list):
+        return [_agg_eval(x, r) for x in expr]
+    if not isinstance(expr, dict):
+        return expr
+    if "$literal" in expr:
+        return expr["$literal"]
+    if "$ifNull" in expr:
+        a, b = expr["$ifNull"]
+        v = _agg_eval(a, r)
+        return v if v is not None else _agg_eval(b, r)
+    if "$add" in expr:
+        return sum(_agg_eval(x, r) or 0 for x in expr["$add"])
+    if "$concatArrays" in expr:
+        return [x for arr in expr["$concatArrays"] for x in (_agg_eval(arr, r) or [])]
+    if "$slice" in expr:
+        arr, n = expr["$slice"]
+        arr = _agg_eval(arr, r) or []
+        return arr[n:] if n < 0 else arr[:n]
+    return {k: _agg_eval(v, r) for k, v in expr.items()}
+
+
+
 class _Res:
     def __init__(self, **kw):
         self.__dict__.update(kw)
@@ -90,32 +125,54 @@ class FakeCollection:
         self.rows: list[dict] = []
         self.indexes: list = []
 
-    def find(self, q=None, proj=None):
+    def find(self, q=None, proj=None, sort=None, session=None):
         for r in self.rows:
             r.setdefault("_id", ObjectId())
-        return _Cursor([dict(r) for r in self.rows if _match(r, q or {})])
+        rows = [dict(r) for r in self.rows if _match(r, q or {})]
+        for key, direction in reversed(list(sort or [])):
+            rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=(direction == -1))
+        return _Cursor(rows)
 
-    async def find_one(self, q=None, proj=None, sort=None):
+    async def find_one(self, q=None, proj=None, sort=None, projection=None, session=None):
         rows = [r for r in self.rows if _match(r, q or {})]
         for key, direction in reversed(list(sort or [])):
             rows.sort(key=lambda r: (r.get(key) is None, r.get(key)), reverse=(direction == -1))
         return dict(rows[0]) if rows else None
 
-    async def count_documents(self, q):
-        return len([r for r in self.rows if _match(r, q)])
+    async def count_documents(self, q, **kw):
+        n = len([r for r in self.rows if _match(r, q)])
+        return min(n, kw["limit"]) if kw.get("limit") else n
 
-    async def insert_one(self, doc):
+    async def distinct(self, key, q=None):
+        out = []
+        for r in self.rows:
+            if not _match(r, q or {}):
+                continue
+            cur = r
+            for part in key.split("."):
+                cur = cur.get(part) if isinstance(cur, dict) else None
+            if cur is not None and cur not in out:
+                out.append(cur)
+        return out
+
+
+    async def insert_one(self, doc, session=None):
         d = dict(doc)
         d.setdefault("_id", ObjectId())
         self.rows.append(d)
         return _Res(inserted_id=d["_id"])
 
-    async def insert_many(self, docs):
+    async def insert_many(self, docs, session=None):
         for d in docs:
             await self.insert_one(d)
         return _Res(inserted_id=None)
 
     def _apply(self, r, upd):
+        if isinstance(upd, list):                           # aggregation-pipeline update ($literal/$add/$ifNull/"$field")
+            for stage in upd:
+                for k, v in (stage.get("$set") or {}).items():
+                    r[k] = _agg_eval(v, r)
+            return
         for k, v in (upd.get("$set") or {}).items():
             if "." in k:                                   # dotted $set → nested dict
                 cur = r
@@ -134,24 +191,33 @@ class FakeCollection:
             if v not in arr:
                 arr.append(v)
         for k, v in (upd.get("$push") or {}).items():
-            arr = r.setdefault(k, [])
+            parts = k.split(".")
+            cur = r
+            for part in parts[:-1]:
+                cur = cur.setdefault(part, {})
+            arr = cur.setdefault(parts[-1], [])
             arr.extend(v["$each"] if isinstance(v, dict) and "$each" in v else [v])
             if isinstance(v, dict) and "$slice" in v:
-                r[k] = arr[v["$slice"]:]
+                cur[parts[-1]] = arr[v["$slice"]:]
 
-    async def update_one(self, q, upd, upsert=False):
+    async def update_one(self, q, upd, upsert=False, session=None):
         for r in self.rows:
             if _match(r, q):
                 self._apply(r, upd)
-                return _Res(matched_count=1, modified_count=1)
+                return _Res(matched_count=1, modified_count=1, upserted_id=None)
         if upsert:
-            d = dict(q)
+            d = {k: v for k, v in q.items() if not k.startswith("$") and not isinstance(v, dict)}
+            d.update(upd.get("$setOnInsert") or {})
             self._apply(d, upd)
             d.setdefault("_id", ObjectId())
+            if any(r.get("_id") == d["_id"] for r in self.rows):
+                from pymongo.errors import DuplicateKeyError
+                raise DuplicateKeyError("E11000 duplicate key error (fake)")
             self.rows.append(d)
-        return _Res(matched_count=0, modified_count=0)
+            return _Res(matched_count=0, modified_count=0, upserted_id=d["_id"])
+        return _Res(matched_count=0, modified_count=0, upserted_id=None)
 
-    async def replace_one(self, q, doc, upsert=False):
+    async def replace_one(self, q, doc, upsert=False, session=None):
         for i, r in enumerate(self.rows):
             if _match(r, q):
                 self.rows[i] = dict(doc)
@@ -160,15 +226,21 @@ class FakeCollection:
             self.rows.append(dict(doc))
         return _Res(matched_count=0, modified_count=0)
 
-    async def find_one_and_update(self, q, upd, projection=None, return_document=None, **kw):
+    async def find_one_and_update(self, q, upd, projection=None, return_document=None, upsert=False, **kw):
         for r in self.rows:
             if _match(r, q):
                 before = dict(r)
                 self._apply(r, upd)
                 return dict(r) if return_document else before
+        if upsert:
+            d = {k: v for k, v in q.items() if not k.startswith("$") and not isinstance(v, dict)}
+            self._apply(d, upd)
+            d.setdefault("_id", ObjectId())
+            self.rows.append(d)
+            return dict(d) if return_document else None
         return None
 
-    async def update_many(self, q, upd):
+    async def update_many(self, q, upd, session=None):
         n = 0
         for r in self.rows:
             if _match(r, q):
@@ -176,13 +248,13 @@ class FakeCollection:
                 n += 1
         return _Res(matched_count=n, modified_count=n)
 
-    async def delete_many(self, q):
+    async def delete_many(self, q, session=None):
         keep = [r for r in self.rows if not _match(r, q)]
         n = len(self.rows) - len(keep)
         self.rows[:] = keep
         return _Res(deleted_count=n)
 
-    async def delete_one(self, q):
+    async def delete_one(self, q, session=None):
         for i, r in enumerate(self.rows):
             if _match(r, q):
                 del self.rows[i]
@@ -210,6 +282,13 @@ class FakeCollection:
                         if "$sum" in spec:
                             v = spec["$sum"]
                             acc[k] = acc.get(k, 0) + (float(r.get(v[1:]) or 0) if isinstance(v, str) else v)
+                        elif "$first" in spec:
+                            acc.setdefault(k, r.get(spec["$first"][1:]))
+                        elif "$min" in spec or "$max" in spec:
+                            op = "$min" if "$min" in spec else "$max"
+                            v = r.get(spec[op][1:])
+                            if v is not None:
+                                acc[k] = v if acc.get(k) is None else (min if op == "$min" else max)(acc[k], v)
                 rows = list(out.values())
         return _Cursor(rows)
 

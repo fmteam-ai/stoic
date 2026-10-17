@@ -39,13 +39,20 @@ def check(mq5: str = MQ5, hashes: str = HASHES, ea_release: str = EA_RELEASE) ->
     fails: list[str] = []
     on_disk = sha256_file(mq5)
     ea = (json.load(open(hashes)).get("ea") or {}) if os.path.exists(hashes) else {}
+    v = mq5_version(mq5)
+    # v1.60.61 — a human may not write `#ea` (protected-paths, v1.60.47); the ea-release bot captures + records on
+    # merge (verify_ea_release.record adopts a FORWARD version bump). So a MQ5 whose #property version moved past
+    # the recorded one is the pending re-release — WARN, never FAIL. Drift under the SAME version still fails.
+    pending_bump = bool(ea.get("version") and v and _version_tuple(v) > _version_tuple(ea["version"]))
     if not ea.get("mq5_sha256"):
         fails.append(f"no ea.mq5_sha256 recorded in {os.path.relpath(hashes, ROOT)} — {FIX}")
+    elif ea["mq5_sha256"] != on_disk and pending_bump:
+        print(f"WARN: MQ5 is {v}, docs/RELEASE_HASHES.json#ea records {ea['version']} — pending re-release: the ea-release "
+              "workflow (bot) captures, compiles and signs it on merge to main; tag only after that bot commit")
     elif ea["mq5_sha256"] != on_disk:
         fails.append("MQ5 source drifted from the recorded RC hash\n"
                      f"  recorded: {ea['mq5_sha256']}\n  on disk:  {on_disk}\n  {FIX}")
-    v = mq5_version(mq5)
-    if ea.get("version") and v and ea["version"] != v:
+    if ea.get("version") and v and ea["version"] != v and not pending_bump:
         fails.append(f"recorded EA version {ea['version']} != MQ5 #property version {v} — {FIX}")
     if os.path.exists(ea_release):
         rec = json.load(open(ea_release))

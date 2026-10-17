@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
+import { StrategyReport } from "@/components/StrategyReport";
 import { FailureTaxonomyCard } from "@/components/FailureTaxonomyCard";
 import { AttributionPanel } from "@/components/AttributionPanel";
 import { VerdictEffectivenessPanel } from "@/components/VerdictEffectivenessPanel";
@@ -146,6 +147,13 @@ function PostmortemCard({ pm }) {
                         <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border border-[#FF3B30]/40 text-[#FF3B30]">
                             {pm.trigger === "sl_hit" ? "SL HIT" : "CONSECUTIVE LOSS"}
                         </span>
+                        {pm.mirrored_accounts > 1 && (
+                            <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border border-[#52525B] text-[#A1A1AA]"
+                                  title="Same decision (symbol + direction + entry within ±2 min) mirrored on several accounts — counted once"
+                                  data-testid={`postmortem-mirrored-${pm.trade_id}`}>
+                                ×{pm.mirrored_accounts} ACCOUNTS · 1 DECISION
+                            </span>
+                        )}
                         {adj && (
                             <span className="font-mono text-[10px] tracking-widest px-1.5 py-0.5 border border-[#FFB000]/40 text-[#FFB000]"
                                   title={`Auto-tightened min_confidence ${adj.from}→${adj.to}`}>
@@ -163,6 +171,30 @@ function PostmortemCard({ pm }) {
             </div>
 
             <div className="p-4 space-y-3 text-sm leading-relaxed">
+                {Array.isArray(pm.ack_loosen_events) && pm.ack_loosen_events.length > 0 && (
+                    <div data-testid={`postmortem-ack-loosen-${pm.trade_id}`}
+                        className="border border-[#FF3B30]/40 bg-[#FF3B30]/5 px-2 py-1.5">
+                        <div className="font-mono text-[10px] text-[#FF3B30] tracking-widest mb-1">BROKER / EA LOOSENED THE STOP</div>
+                        <ul className="space-y-0.5 font-mono text-[11px] text-[#A1A1AA]">
+                            {pm.ack_loosen_events.map((e, i) => (
+                                <li key={i}>{e.from} → {e.to}<span className="text-[#52525B]"> · requested {e.requested ?? "—"} · {new Date(e.at).toLocaleString()}</span></li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
+                {Array.isArray(pm.sl_loosen_refusals) && pm.sl_loosen_refusals.length > 0 && (
+                    <div data-testid={`postmortem-stop-guard-${pm.trade_id}`}>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1">STOP GUARD · LOOSEN REFUSED</div>
+                        <ul className="space-y-1 font-mono text-[11px]">
+                            {pm.sl_loosen_refusals.map((r, i) => (
+                                <li key={i} className="text-[#A1A1AA]">
+                                    <span className="text-[#FFB000]">{r.source}</span> asked SL {r.requested_sl} — kept {r.current_sl}
+                                    <span className="text-[#52525B]"> · {new Date(r.at).toLocaleString()}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                )}
                 {n.summary && (
                     <div className="text-white">
                         <span className="font-mono text-[10px] text-[#52525B] tracking-widest mr-2">TL;DR</span>
@@ -486,6 +518,9 @@ export default function LossLab() {
                         {settings?.auto_tighten_enabled ? "● ENABLED" : "○ DISABLED"}
                     </button>
                 </div>
+
+                {/* v1.60.36 — evidence table before anyone changes a setting */}
+                <StrategyReport />
 
                 {/* Empty state */}
                 {patterns.length === 0 && postmortems.length === 0 && (

@@ -6,7 +6,8 @@ candidate build. Read-only. Exit 0 only when EVERY gate passes.
       --scope-user <tenant user id> --expect 6/3/3 [--expect-ids a,b,c]
 
 Gates (any failure → FAIL): signed topology reconciliation (production_reconcile
---strict), all enabled accounts LIVE, synthetic accounts enumerated+excluded,
+--strict), all enabled accounts LIVE — or, under an ACTIVE demo_only rules policy ("demo period"), all enabled
+accounts ATTESTED DEMO with the LIVE-only performance attestation skipped —, synthetic accounts enumerated+excluded,
 EA heartbeat consensus (fresh, verified identity, one EA version, worker view
 agrees), zero unresolved executions (UNKNOWN or aged) and zero position
 mismatches, canonical authority FULL and UI/enforced levels agree per account,
@@ -61,17 +62,52 @@ def preflight(args, env: dict) -> list:
     return p
 
 
+def regime_from_policy(policy: dict | None) -> dict:
+    """Item 4 (main132 follow-up): a demo-only production is governed by an ACTIVE demo_only rules policy. The
+    evidence gates then require every enabled account to be an ATTESTED DEMO account (server-authoritative
+    attestation, never a user-written field) and the LIVE-only performance attestation is skipped — every other
+    gate (EA fresh, identity, executions, position truth, authority, bot health) stays exactly as strict."""
+    demo = bool(policy) and bool(policy.get("demo_only")) and not policy.get("expired")
+    return {"demo_period": demo, "required_environment": "DEMO" if demo else "LIVE",
+            "policy_version": (policy or {}).get("policy_version"), "label": "demo period" if demo else "live"}
+
+
+def worker_enabled_view(worker_rows: list, totals: dict | None = None) -> dict:
+    """Worker-side counts over ENABLED accounts only — like with like. `contract().totals.eas_connected` counts every
+    account of the user, so a DISABLED account with a live EA inflated it against `ea_fresh` (enabled rows only) and
+    failed every production update (prod v1.60.25)."""
+    en = [r for r in worker_rows if r.get("account_enabled") is True]
+    return {"accounts_total": len(worker_rows), "accounts_enabled": len(en),
+            "eas_connected": sum(1 for r in en if r.get("ea_connected")),
+            "eas_connected_all_accounts": (totals or {}).get("eas_connected", sum(1 for r in worker_rows if r.get("ea_connected")))}
+
+
+def ea_count_gate(worker_view: dict, en_rows: list) -> bool:
+    return worker_view.get("eas_connected") == sum(1 for x in en_rows if x["ea_fresh"]) \
+        and worker_view.get("accounts_enabled") == len(en_rows)
+
+
+def environment_gates(en_rows: list, regime: dict) -> dict:
+    """Pure. LIVE regime: `all_enabled_live` (broker environment LIVE). Demo period: `all_enabled_attested_demo`
+    (attested_environment == DEMO on every enabled account; a LIVE account under a demo_only policy FAILS)."""
+    if regime.get("demo_period"):
+        return {"all_enabled_attested_demo": bool(en_rows) and all(x.get("attested_environment") == "DEMO" for x in en_rows)}
+    return {"all_enabled_live": bool(en_rows) and all(x.get("environment") == "LIVE" for x in en_rows)}
+
+
 async def collect(args) -> dict:
     from database import get_db
-    from broker_env import broker_environment
+    from broker_env import broker_environment, attested_environment
     from synthetic_data import is_synthetic_account
     from execution_truth import execution_truth_check
     from trading_authority import compute_authority
     from state_contract import contract
     from routes.performance_routes import _attestation_gate
+    import rules_policy as rp
     db = get_db()
     now = datetime.now(timezone.utc)
     gates: dict = {}
+    regime = regime_from_policy(await rp.active(db))
 
     # 1 · signed topology reconciliation (same script the deploy gate runs)
     cmd = [sys.executable, os.path.join(HERE, "production_reconcile.py"), "--expect", args.expect, "--scope-user", args.scope_user, "--strict"]
@@ -96,11 +132,12 @@ async def collect(args) -> dict:
     for a in real:
         age = _age(a.get("last_heartbeat"), now)
         acct_rows.append({"id_hash": _h(a["_id"]), "enabled": a.get("trading_enabled") is True, "environment": broker_environment(a),
+                          "attested_environment": attested_environment(a),
                           "bot_enabled": str(a["_id"]) in bots, "heartbeat_age_s": None if age is None else round(age),
                           "ea_fresh": age is not None and age <= FRESH_S, "ea_version": a.get("ea_version"),
                           "identity_verified": bool(a.get("verified_identity")), "open_positions_broker": a.get("open_positions")})
     en_rows = [x for x in acct_rows if x["enabled"]]
-    gates["all_enabled_live"] = all(x["environment"] == "LIVE" for x in en_rows) and bool(en_rows)
+    gates.update(environment_gates(en_rows, regime))
     gates["ea_heartbeat_fresh_all_enabled"] = all(x["ea_fresh"] for x in en_rows)
     gates["ea_identity_verified_all_enabled"] = all(x["identity_verified"] for x in en_rows)
     ea_versions = {x["ea_version"] for x in en_rows}
@@ -112,13 +149,24 @@ async def collect(args) -> dict:
     except Exception:  # noqa: BLE001
         _latest = None
     approved_ea = approved_ea or _latest
-    gates["single_ea_version"] = bool(en_rows) and len(ea_versions) == 1 and all(ea_versions) \
-        and (approved_ea is None or ea_versions == {approved_ea})
+    # v1.60.43 — a rollout runs the signed-previous EA next to the current one by design (15 Oct: fleet on 1.64 while
+    # the release declares 1.65 HELD the deploy). Every enabled account must run an ACCEPTED version (current or
+    # signed previous of the release record); exactly one version is only required when no signed record exists.
+    try:
+        from ea_capabilities import accepted_ea_versions
+        accepted = set(accepted_ea_versions())
+    except Exception:  # noqa: BLE001
+        accepted = set()
+    if accepted:
+        gates["single_ea_version"] = bool(en_rows) and all(ea_versions) and ea_versions <= accepted
+        gates["ea_versions_accepted"] = sorted(accepted)
+    else:
+        gates["single_ea_version"] = bool(en_rows) and len(ea_versions) == 1 and all(ea_versions) \
+            and (approved_ea is None or ea_versions == {approved_ea})
     gates["bot_map_one_to_one"] = sorted(str(a["_id"]) for a in enabled) == sorted(b for b in bots if b in {str(a["_id"]) for a in real})
     ctr = await contract(db, args.scope_user)
-    worker_view = ctr.get("totals") or {}
-    gates["ea_count_agrees_with_worker_view"] = worker_view.get("eas_connected") == sum(1 for x in en_rows if x["ea_fresh"]) \
-        and worker_view.get("accounts_enabled") == len(en_rows)
+    worker_view = worker_enabled_view(ctr.get("accounts") or [], totals=ctr.get("totals") or {})
+    gates["ea_count_agrees_with_worker_view"] = ea_count_gate(worker_view, en_rows)
 
     # 3 · execution truth (exact) + position truth
     et = await execution_truth_check(db, account_ids=[str(a["_id"]) for a in enabled] or None)
@@ -145,12 +193,18 @@ async def collect(args) -> dict:
                   "position_truth_not_fresh": [r.get("account_id") for r in rows if r.get("position_truth") not in (None, "FRESH") and r.get("bot_enabled")]}
     gates["bot_health_caps_clear"] = not any(cap_inputs.values())
 
-    # 6 · performance attestation gate (reconciled P&L, LIVE only, nothing synthetic)
-    perf_reasons = await _attestation_gate(db, args.scope_user)
-    gates["performance_reconciled_attestable"] = not perf_reasons
+    # 6 · performance attestation gate (reconciled P&L, LIVE only, nothing synthetic). Demo period: this LIVE-only
+    # claim is the ONE gate skipped — DEMO rows can never back a live-performance attestation and must not block.
+    if regime["demo_period"]:
+        perf_reasons = ["SKIPPED_DEMO_PERIOD"]
+        gates["performance_reconciled_attestable"] = True
+    else:
+        perf_reasons = await _attestation_gate(db, args.scope_user)
+        gates["performance_reconciled_attestable"] = not perf_reasons
 
     body = {"bundle": "pre-promotion-evidence", "read_only": True, "at": now.isoformat(),
             "build": os.environ.get("GIT_SHA"), "tenant_hash": _h(args.scope_user), "expected_topology": args.expect,
+            "regime": regime, "evidence_label": regime["label"],
             "accounts": acct_rows, "enabled_id_hashes": sorted(_h(i) for i in enabled_ids), "synthetic_excluded": synthetic,
             "topology_reconciliation": {k: recon.get(k) for k in ("result", "checks", "checks_ids", "failed_checks", "signature", "evidence_hash", "build")},
             "execution_truth": {k: et.get(k) for k in ("unresolved_executions", "unresolved_by_status", "unresolved_truncated",
@@ -192,7 +246,7 @@ def main() -> int:
     except OSError:
         pass
     print(json.dumps(body, indent=1, default=str))
-    print(f"PREPROMOTION {body['result']} failed_gates={body['failed_gates']}", file=sys.stderr)
+    print(f"PREPROMOTION {body['result']} [{body.get('evidence_label')}] failed_gates={body['failed_gates']}", file=sys.stderr)
     return 0 if body["result"] == "PASS" else 1
 
 

@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1189 |
-| integration | real MongoDB service container | CI `backend-integration` | 255 |
-| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4171 |
+| unit | pure logic, no external I/O | every CI job | 1838 |
+| integration | real MongoDB service container | CI `backend-integration` | 267 |
+| http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4176 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 5632 tests across 594 files.**
+**Total: 6298 tests across 683 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -278,6 +278,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter24g_wrong_terminal.py` | http-live | 4 |
 | `backend/tests/test_iter24h_position_snapshot.py` | http-live | 5 |
 | `backend/tests/test_iter24j_import_positions.py` | http-live | 5 |
+| `backend/tests/test_iter254_verified_archived_infra_live.py` | http-live | 8 |
 | `backend/tests/test_iter25_invalid_id_handler.py` | http-live | 3 |
 | `backend/tests/test_iter25_revive_clears_pending_mod.py` | http-live | 2 |
 | `backend/tests/test_iter25b_mod_ack_notifications.py` | http-live | 3 |
@@ -310,7 +311,6 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter37_multi_bot_targeting_extensions.py` | http-live | 9 |
 | `backend/tests/test_iter39_p2_polish.py` | http-live | 5 |
 | `backend/tests/test_iter40_ea_clamp_stops.py` | http-live | 5 |
-| `backend/tests/test_iter41_payoff_repair.py` | http-live | 14 |
 | `backend/tests/test_iter42_profit_tied_objective.py` | http-live | 15 |
 | `backend/tests/test_iter43_index_symbols.py` | http-live | 11 |
 | `backend/tests/test_iter43_session_breakdown.py` | http-live | 8 |
@@ -413,6 +413,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_iter_optimizer_http.py` | http-live | 11 |
 | `backend/tests/test_iter_plans_editor_http.py` | http-live | 7 |
 | `backend/tests/test_iter_trade_stats_perf.py` | http-live | 6 |
+| `backend/tests/test_main130_main131_http.py` | http-live | 7 |
 | `backend/tests/test_main92_live_iter227.py` | http-live | 16 |
 | `backend/tests/test_main93_live_iter229.py` | http-live | 8 |
 | `backend/tests/test_main94_live_iter230.py` | http-live | 5 |
@@ -435,6 +436,7 @@ fails when this file drifts from the tree.
 | `backend/tests/test_security_agent_sa4_live.py` | http-live | 18 |
 | `backend/tests/test_signer_service_contract.py` | http-live | 5 |
 | `backend/tests/test_step3_reconciliation_stale_orders.py` | http-live | 9 |
+| `backend/tests/test_v16029_smoke_http.py` | http-live | 4 |
 | `backend/tests/integration/scalp/test_iter56_ta_capacity_integrity.py` | integration | 1 |
 | `backend/tests/integration/scalp/test_iter63_db_roundtrips.py` | integration | 3 |
 | `backend/tests/integration/scalp/test_phaseA_lifecycle_db.py` | integration | 3 |
@@ -482,6 +484,7 @@ fails when this file drifts from the tree.
 | `backend/tests/integration/test_r27_account_environment_attestation.py` | integration | 2 |
 | `backend/tests/integration/test_r28_audit.py` | integration | 10 |
 | `backend/tests/integration/test_r29_audit.py` | integration | 8 |
+| `backend/tests/integration/test_v1_60_54_close_watchdog.py` | integration | 12 |
 | `e2e/tests/auth.setup.ts` | ui-e2e | 1 |
 | `e2e/tests/auth.spec.ts` | ui-e2e | 5 |
 | `e2e/tests/chart_provenance.spec.ts` | ui-e2e | 6 |
@@ -517,14 +520,19 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_a13_part2.py` | unit | 11 |
 | `backend/tests/unit/test_a13_part3.py` | unit | 13 |
 | `backend/tests/unit/test_account_role.py` | unit | 3 |
+| `backend/tests/unit/test_addons_spec.py` | unit | 24 |
 | `backend/tests/unit/test_admin_integrations.py` | unit | 6 |
 | `backend/tests/unit/test_alert_test_and_scalp_migration.py` | unit | 4 |
+| `backend/tests/unit/test_audit_followup_14oct.py` | unit | 4 |
 | `backend/tests/unit/test_authority_matrix.py` | unit | 8 |
 | `backend/tests/unit/test_blank_env_boot.py` | unit | 5 |
+| `backend/tests/unit/test_blocker_demo_autopilot_attested_env.py` | unit | 4 |
 | `backend/tests/unit/test_bypass_sentinel.py` | unit | 6 |
-| `backend/tests/unit/test_chart_patterns.py` | unit | 18 |
+| `backend/tests/unit/test_cap_aware_presets.py` | unit | 5 |
 | `backend/tests/unit/test_deferred_signer.py` | unit | 5 |
+| `backend/tests/unit/test_ea_1_65_candidate.py` | unit | 9 |
 | `backend/tests/unit/test_easy_connect_p1.py` | unit | 11 |
+| `backend/tests/unit/test_easy_start_wizard.py` | unit | 9 |
 | `backend/tests/unit/test_env_template_sync.py` | unit | 4 |
 | `backend/tests/unit/test_eod_flatten.py` | unit | 8 |
 | `backend/tests/unit/test_fixplan_a16_part1.py` | unit | 5 |
@@ -551,11 +559,17 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_fixplan_main99_phase3.py` | unit | 7 |
 | `backend/tests/unit/test_fixplan_main99_phase4.py` | unit | 3 |
 | `backend/tests/unit/test_forecast_status.py` | unit | 3 |
+| `backend/tests/unit/test_gold_trend_pulse.py` | unit | 20 |
+| `backend/tests/unit/test_gold_trend_pulse_news_sweep.py` | unit | 16 |
+| `backend/tests/unit/test_gold_trend_pulse_review_62_70.py` | unit | 9 |
 | `backend/tests/unit/test_host_migrator.py` | unit | 17 |
+| `backend/tests/unit/test_infra_shadow_clock_and_backups.py` | unit | 5 |
 | `backend/tests/unit/test_install_progress.py` | unit | 9 |
 | `backend/tests/unit/test_install_report_healthwatch.py` | unit | 3 |
 | `backend/tests/unit/test_inventory_null_account_profile.py` | unit | 3 |
 | `backend/tests/unit/test_investor_view.py` | unit | 7 |
+| `backend/tests/unit/test_item4_demo_period_evidence.py` | unit | 5 |
+| `backend/tests/unit/test_iter41_payoff_repair_live.py` | unit | 7 |
 | `backend/tests/unit/test_llm_models_single_source.py` | unit | 6 |
 | `backend/tests/unit/test_main114_followups.py` | unit | 9 |
 | `backend/tests/unit/test_main115_a18.py` | unit | 13 |
@@ -572,12 +586,21 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_main122_onboarding.py` | unit | 14 |
 | `backend/tests/unit/test_main123_golive.py` | unit | 8 |
 | `backend/tests/unit/test_main127_review.py` | unit | 10 |
+| `backend/tests/unit/test_main130_main131.py` | unit | 14 |
+| `backend/tests/unit/test_notification_settings_doc.py` | unit | 6 |
 | `backend/tests/unit/test_pairing_alerts.py` | unit | 5 |
 | `backend/tests/unit/test_phase1_onboarding.py` | unit | 14 |
 | `backend/tests/unit/test_phase2_installer.py` | unit | 7 |
 | `backend/tests/unit/test_phase3_rules_policy.py` | unit | 6 |
 | `backend/tests/unit/test_phase4_status_ui.py` | unit | 4 |
-| `backend/tests/unit/test_prediction_track.py` | unit | 11 |
+| `backend/tests/unit/test_prod_12oct_fixes.py` | unit | 8 |
+| `backend/tests/unit/test_prod_v1_60_22_bot_config_500.py` | unit | 5 |
+| `backend/tests/unit/test_prod_v1_60_23_three_bugs.py` | unit | 7 |
+| `backend/tests/unit/test_prod_v1_60_24_disabled_account_scope.py` | unit | 11 |
+| `backend/tests/unit/test_prod_v1_60_25_ea_count_gate.py` | unit | 4 |
+| `backend/tests/unit/test_prod_v1_60_26_certification_badge.py` | unit | 9 |
+| `backend/tests/unit/test_prod_v1_60_28_execution_bugs.py` | unit | 9 |
+| `backend/tests/unit/test_prod_v1_60_28_status_rules_declared.py` | unit | 4 |
 | `backend/tests/unit/test_public_status_bounded.py` | unit | 2 |
 | `backend/tests/unit/test_r25_close_writers_migrated.py` | unit | 7 |
 | `backend/tests/unit/test_r25_ea_binary_proof.py` | unit | 5 |
@@ -588,13 +611,17 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_rc_lock_manifest_bound.py` | unit | 1 |
 | `backend/tests/unit/test_release_attestation.py` | unit | 14 |
 | `backend/tests/unit/test_release_key_pin.py` | unit | 4 |
+| `backend/tests/unit/test_release_v1_60_30_items.py` | unit | 8 |
+| `backend/tests/unit/test_scalp_orphan_config_removal.py` | unit | 7 |
 | `backend/tests/unit/test_sec002_static_errors.py` | unit | 2 |
+| `backend/tests/unit/test_secret_scan_prose_fp.py` | unit | 3 |
 | `backend/tests/unit/test_security_agent_sa1_sa2.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa3.py` | unit | 7 |
 | `backend/tests/unit/test_security_agent_sa4.py` | unit | 6 |
 | `backend/tests/unit/test_security_audit12.py` | unit | 4 |
 | `backend/tests/unit/test_security_audit13.py` | unit | 5 |
 | `backend/tests/unit/test_security_audit8.py` | unit | 3 |
+| `backend/tests/unit/test_security_commit_message_scan.py` | unit | 9 |
 | `backend/tests/unit/test_security_telegram_vault.py` | unit | 4 |
 | `backend/tests/unit/test_selfhost_installer.py` | unit | 24 |
 | `backend/tests/unit/test_signer_verification_diagnosis.py` | unit | 6 |
@@ -603,9 +630,71 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_step4_fail_closed_risk.py` | unit | 5 |
 | `backend/tests/unit/test_step5_symbol_matching.py` | unit | 7 |
 | `backend/tests/unit/test_step6_signal_data.py` | unit | 9 |
-| `backend/tests/unit/test_strategy_lab_routes.py` | unit | 2 |
+| `backend/tests/unit/test_step_up_actions_registered.py` | unit | 2 |
 | `backend/tests/unit/test_test_identity.py` | unit | 4 |
 | `backend/tests/unit/test_trade_quality.py` | unit | 13 |
 | `backend/tests/unit/test_unit_independence.py` | unit | 2 |
 | `backend/tests/unit/test_update_preflight_shell.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_29_decision_cache.py` | unit | 5 |
+| `backend/tests/unit/test_v1_60_29_fix_list.py` | unit | 13 |
+| `backend/tests/unit/test_v1_60_31_hotfix.py` | unit | 10 |
+| `backend/tests/unit/test_v1_60_32_alerts_everywhere.py` | unit | 5 |
+| `backend/tests/unit/test_v1_60_32_scalp_reports.py` | unit | 3 |
+| `backend/tests/unit/test_v1_60_32_strategy_items.py` | unit | 6 |
+| `backend/tests/unit/test_v1_60_33_review_items.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_34_release_gate_digest.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_35_ops_cards.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_36_scalp_exits.py` | unit | 12 |
+| `backend/tests/unit/test_v1_60_37_scope.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_37_telegram_save.py` | unit | 2 |
+| `backend/tests/unit/test_v1_60_38_gold_off_hours.py` | unit | 5 |
+| `backend/tests/unit/test_v1_60_39_bot_config_serialize.py` | unit | 3 |
+| `backend/tests/unit/test_v1_60_39_calendar_freeze.py` | unit | 6 |
+| `backend/tests/unit/test_v1_60_39_ci_dependency_stall.py` | unit | 2 |
+| `backend/tests/unit/test_v1_60_39_deferred_shadow_m1.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_39_loop_owners.py` | unit | 5 |
+| `backend/tests/unit/test_v1_60_39_news_plumbing.py` | unit | 10 |
+| `backend/tests/unit/test_v1_60_39_signal_cooldown_config.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_40_calendar_backup.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_40_pulse_countdown.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_40_shadow_m1_only.py` | unit | 2 |
+| `backend/tests/unit/test_v1_60_41_audit_chain_race.py` | unit | 13 |
+| `backend/tests/unit/test_v1_60_41_ea_previous_chain.py` | unit | 12 |
+| `backend/tests/unit/test_v1_60_41_fleet_gate_rolled_back_tags.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_41_rollback_after_held_update.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_41_workflow_pins.py` | unit | 2 |
+| `backend/tests/unit/test_v1_60_42_be_clamp.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_42_fleet_gate_python39.py` | unit | 6 |
+| `backend/tests/unit/test_v1_60_43_open_items.py` | unit | 15 |
+| `backend/tests/unit/test_v1_60_44_scalp_metrics_scope.py` | unit | 3 |
+| `backend/tests/unit/test_v1_60_45_scalp_status_runner_mutation.py` | unit | 2 |
+| `backend/tests/unit/test_v1_60_47_protected_paths_guard.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_48_audit_batch2.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_48_audit_p1.py` | unit | 12 |
+| `backend/tests/unit/test_v1_60_48_audit_p2_p3.py` | unit | 11 |
+| `backend/tests/unit/test_v1_60_49_deferred_shadow_labels.py` | unit | 10 |
+| `backend/tests/unit/test_v1_60_50_pr100_review.py` | unit | 9 |
+| `backend/tests/unit/test_v1_60_51_dxy_cache_staleness.py` | unit | 5 |
+| `backend/tests/unit/test_v1_60_52_followups.py` | unit | 11 |
+| `backend/tests/unit/test_v1_60_52_var_cap_scalp.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_53_data_sources_broker_price.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_54_anti_tilt_r_multiple_market_intel.py` | unit | 17 |
+| `backend/tests/unit/test_v1_60_54_pip_value_sanity.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_54_var_deleverage_breakeven.py` | unit | 10 |
+| `backend/tests/unit/test_v1_60_55_review_items.py` | unit | 15 |
+| `backend/tests/unit/test_v1_60_56_followups.py` | unit | 14 |
+| `backend/tests/unit/test_v1_60_57_cross_account_loss_cooldown.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_57_engine_live_features.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_58_review_57_61.py` | unit | 9 |
+| `backend/tests/unit/test_v1_60_59_llm_client.py` | unit | 10 |
+| `backend/tests/unit/test_v1_60_59_review_74_labels.py` | unit | 3 |
+| `backend/tests/unit/test_v1_60_60_gold_bias_tp1_bank.py` | unit | 13 |
+| `backend/tests/unit/test_v1_60_60_review_79_news_untrusted.py` | unit | 5 |
+| `backend/tests/unit/test_v1_60_61_hotfix_ea_release_chain.py` | unit | 8 |
+| `backend/tests/unit/test_v1_60_61_review_80_tp1_bank_e2e.py` | unit | 5 |
+| `backend/tests/unit/test_v1_60_61_review_81_gtp_h4_history.py` | unit | 11 |
+| `backend/tests/unit/test_v1_60_62_display_fixes_82_83.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_62_review_84_ack_loosen.py` | unit | 7 |
+| `backend/tests/unit/test_v1_60_63_review_85_trade_costs.py` | unit | 8 |
+| `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 8 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |

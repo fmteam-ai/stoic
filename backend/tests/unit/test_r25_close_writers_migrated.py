@@ -53,7 +53,9 @@ def test_query_only_files_never_write_the_flag():
 
 def test_every_close_writer_uses_request_close():
     for rel in CLOSE_WRITERS:
-        assert "request_close(" in open(os.path.join(BACKEND, rel)).read(), rel
+        src = open(os.path.join(BACKEND, rel)).read()
+        # v1.60.55 #48 — friday_flat / eod_flatten use close_commands.mandatory_close (a request_close wrapper)
+        assert "request_close(" in src or "mandatory_close(" in src, rel
 
 
 def test_manual_close_keeps_position_open():

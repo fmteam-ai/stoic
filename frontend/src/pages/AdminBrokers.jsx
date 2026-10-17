@@ -7,6 +7,7 @@ import { AccountEnvironmentsPanel } from "@/components/admin/AccountEnvironments
 import { AccountPositionModesPanel } from "@/components/admin/AccountPositionModesPanel";
 import { InventoryGoLivePanel } from "@/components/admin/InventoryGoLivePanel";
 import { RulesPolicyPanel } from "@/components/admin/RulesPolicyPanel";
+import { GoLiveChecklist } from "@/components/admin/GoLiveChecklist";
 
 const EMPTY = {
     broker_id: "", name: "", server_aliases: [], symbol_map: {},
@@ -182,7 +183,7 @@ export default function AdminBrokers() {
             )}
             {editing && <EditModal broker={editing} onClose={() => setEditing(null)}
                 onSaved={() => { setEditing(null); load(); }} />}
-            <div className="px-4 md:px-8 pb-10 space-y-6"><RulesPolicyPanel /><AccountEnvironmentsPanel /><AccountPositionModesPanel /><InventoryGoLivePanel /></div>
+            <div className="px-4 md:px-8 pb-10 space-y-6"><GoLiveChecklist /><RulesPolicyPanel /><AccountEnvironmentsPanel /><AccountPositionModesPanel /><InventoryGoLivePanel /></div>
         </AppLayout>
     );
 }

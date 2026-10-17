@@ -308,7 +308,6 @@ async def _key_user(db, key: dict) -> dict:
 
 
 async def _key_account(db, key: dict, account_id: str) -> dict:
-    from route_utils import parse_object_id
     acc = await db.accounts.find_one(
         {"_id": parse_object_id(account_id, "Account"),
          "user_id": key["user_id"]})

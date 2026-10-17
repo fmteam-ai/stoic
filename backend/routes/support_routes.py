@@ -171,8 +171,11 @@ async def reply_ticket(ticket_id: str, payload: dict, request: Request,
                   "status": "answered" if by == "admin" else "open"}},
     )
     if by == "admin":
+        from notification_settings import alert_email_for
+        rcpt = await alert_email_for(db, str(t.get("user_id") or ""), t.get("user_email", ""), category="support") \
+            if t.get("user_id") else t.get("user_email", "")
         await _notify(
-            t.get("user_email", ""),
+            rcpt,
             f"[STOIC support] Reply to: {t.get('subject','your ticket')}",
             _email_html("Support replied to your ticket",
                         [f"Subject: {t.get('subject','')}", body[:400]],

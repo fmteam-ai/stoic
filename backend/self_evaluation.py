@@ -15,7 +15,6 @@ new signal in bot_runner."""
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger(__name__)
 
@@ -177,8 +176,7 @@ def evaluate_trade(trade, sig, bars) -> dict:
 
 async def _lesson_llm(trade, ev) -> str | None:
     """Claude one-liner: why was I wrong? (losses only)"""
-    import os
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
+    import llm_client
     ctx = (f"Trade: {trade.get('action')} {trade.get('symbol')} closed at "
            f"{ev.get('realized_r')}R. Entry quality {ev['entry_quality']}/100, "
            f"exit {ev['exit_quality']}/100, MFE {ev.get('mfe_r')}R, MAE "
@@ -186,15 +184,10 @@ async def _lesson_llm(trade, ev) -> str | None:
            f"{ev['stopped_then_reversed']}, regime {ev.get('regime')}, "
            f"volatility {ev['volatility']}, mistakes: "
            f"{', '.join(ev['mistakes']) or 'none flagged'}.")
-    chat = LlmChat(api_key=os.environ["EMERGENT_LLM_KEY"],
-                   session_id=f"selfeval-{trade.get('_id')}",
-                   system_message=("You are a trading coach reviewing a losing "
-                                   "trade. Answer 'why was I wrong?' in ONE "
-                                   "sentence, ≤25 words, specific and "
-                                   "actionable.")).with_model(
-        PROVIDER, model_for("analysis"))
-    from llm_timeout import send_with_timeout
-    out = await send_with_timeout(chat, UserMessage(text=ctx), label="self_eval", seconds=30)
+    out = await llm_client.complete("analysis", ("You are a trading coach reviewing a losing "
+                                                 "trade. Answer 'why was I wrong?' in ONE "
+                                                 "sentence, ≤25 words, specific and "
+                                                 "actionable."), ctx, feature="self_eval", seconds=30)
     return str(out).strip()[:300]
 
 

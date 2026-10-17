@@ -4,9 +4,12 @@ import api, { formatApiError } from "@/lib/api";
 import { registerStepUpHandler } from "@/lib/stepUp";
 import { getPasskeyAssertion, webauthnSupported } from "@/lib/webauthnClient";
 import { Fingerprint, ShieldCheck, KeyRound } from "lucide-react";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 const ACTION_LABELS = {
     live_activation: "Activate live trading",
+    account_type_edit: "Change the account type (demo / live)",
+    account_server_edit: "Correct the broker server name",
     risk_raise: "Raise risk limits",
     panic_release: "Release panic lock",
     api_key_create: "Create an API key",
@@ -89,16 +92,20 @@ export function StepUpDialog() {
         }
     };
 
+    // prod v1.60.23: rendered as a Radix Dialog so that, when the sensitive action started inside another modal
+    // (Edit account → PATCH → 403 step-up), this stacks as the TOP nested layer and receives focus + clicks instead
+    // of being locked out by the parent's pointer-events:none / focus trap.
     return (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 backdrop-blur-sm px-4"
-            data-testid="step-up-modal">
-            <div className="w-full max-w-sm border border-[#1F1F1F] bg-[#0A0A0A] p-6">
-                <div className="flex items-center gap-2 text-[#00FF41]">
+        <Dialog open onOpenChange={(o) => { if (!o) cancel(); }}>
+            <DialogContent className="z-[100] max-w-sm border border-[#1F1F1F] bg-[#0A0A0A] p-6 rounded-none [&>button]:hidden"
+                data-testid="step-up-modal" onPointerDownOutside={(e) => e.preventDefault()} onInteractOutside={(e) => e.preventDefault()}>
+                <DialogTitle className="flex items-center gap-2 text-[#00FF41]">
                     <ShieldCheck className="w-5 h-5" />
                     <span className="font-display font-bold text-sm tracking-widest">
                         SECURITY CHECK
                     </span>
-                </div>
+                </DialogTitle>
+                <DialogDescription className="sr-only">Confirm this sensitive action with your authenticator code or passkey.</DialogDescription>
                 <p className="text-sm text-[#A1A1AA] mt-3" data-testid="step-up-action-label">
                     <span className="text-white font-semibold">{label}</span>{" "}
                     is a live-sensitive operation.
@@ -161,7 +168,7 @@ export function StepUpDialog() {
                         )}
                     </form>
                 )}
-            </div>
-        </div>
+            </DialogContent>
+        </Dialog>
     );
 }

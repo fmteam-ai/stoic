@@ -31,6 +31,7 @@ const SENTIMENT_STYLE = {
     neutral:      { fg: "text-[#A1A1AA]", Icon: Minus,        label: "NEUTRAL" },
     bearish:      { fg: "text-[#FF3B30]", Icon: TrendingDown, label: "BEARISH" },
     very_bearish: { fg: "text-[#FF3B30]", Icon: TrendingDown, label: "VERY BEARISH" },
+    unavailable:  { fg: "text-[#52525B]", Icon: Minus,        label: "UNAVAILABLE" },
 };
 
 function EntropyBar({ entropy, threshold, marketClosed }) {
@@ -139,7 +140,7 @@ function SymbolCard({ s, cooldownMin }) {
                         <span className={`flex items-center gap-1.5 font-mono text-[10px] tracking-widest ${sentStyle.fg}`}>
                             <SentIcon className="w-3 h-3" />
                             {sentStyle.label}
-                            <span className="text-[#52525B]">({s.sentiment.score?.toFixed(2)})</span>
+                            {s.sentiment.score != null && <span className="text-[#52525B]">({s.sentiment.score.toFixed(2)})</span>}
                         </span>
                     </div>
                     {s.sentiment.summary && (
@@ -236,10 +237,17 @@ export default function BotWatching() {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState(null);
+    // v1.60.40 — per-account view: own cooldown + own last signal (was: default config + newest signal of any account)
+    const [configs, setConfigs] = useState([]);
+    const [accountId, setAccountId] = useState("");
+
+    useEffect(() => {
+        api.get("/bot/pulse").then((r) => setConfigs(r.data?.items || [])).catch(() => {});   // items carry account_id + label
+    }, []);
 
     const fetchStatus = useCallback(async () => {
         try {
-            const res = await api.get("/signals/watch-status");
+            const res = await api.get(`/signals/watch-status${accountId ? `?account_id=${accountId}` : ""}`);
             setData(res.data);
             setErr(null);
         } catch (e) {
@@ -247,7 +255,7 @@ export default function BotWatching() {
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [accountId]);
 
     useEffect(() => {
         fetchStatus();
@@ -287,6 +295,21 @@ export default function BotWatching() {
                         </div>
                     </div>
                 </div>
+                {configs.length > 1 && (
+                    <div className="flex flex-wrap gap-1 ml-auto mr-4" data-testid="watch-account-selector">
+                        {configs.map((c) => {
+                            const id = c.account_id || "";
+                            const on = id === accountId;
+                            return (
+                                <button key={c.config_id || id || "default"} onClick={() => setAccountId(id)}
+                                    data-testid={`watch-account-${id || "default"}`}
+                                    className={`font-mono text-[10px] tracking-widest px-2 py-0.5 border transition-colors ${on ? "border-[#00FF41] text-[#00FF41]" : "border-[#1F1F1F] text-[#52525B] hover:text-[#A1A1AA]"}`}>
+                                    {c.label || (id ? id.slice(0, 6) : "DEFAULT")}
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
                 <div className="text-right">
                     <div className="font-mono text-[10px] text-[#52525B] tracking-widest">HOLD STREAK</div>
                     <div className="font-mono text-lg mt-0.5" data-testid="watch-hold-streak">

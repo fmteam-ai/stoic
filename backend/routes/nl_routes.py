@@ -8,7 +8,7 @@ Plus a polling sweeper that reads `db.conditional_triggers` on each bot_runner
 tick and fires `then` actions when the condition is met.
 """
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from bson import ObjectId
 
 from auth import get_current_user
@@ -125,8 +125,14 @@ async def nl_strategy_targets(symbols: str = "", user=Depends(get_current_user))
 
 
 
+STYLE_PRESET = {"trend_following": "trend_rider", "mean_reversion": "mean_reversion", "scalping": "scalper",
+                "swing": "balanced"}
+VALID_RISK_LEVELS = {"low", "medium", "high", "extreme"}
+VALID_SESSIONS = {"london", "ny", "tokyo", "any"}
+
+
 @router.post("/strategy/apply")
-async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
+async def nl_strategy_apply(payload: dict, request: Request = None, user=Depends(get_current_user)):
     """Persist a compiled strategy into the user's bot_config(s).
 
     Body: {compiled: dict, target: str (default 'matching')}
@@ -141,15 +147,42 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
     from research_agent.proposal_targeting import (
         resolve_target_configs, apply_to_bot_configs,
     )
+    # v1.60.48 (Strategy Generator audit):
+    #  (a) "max N trades a day" → trade_of_day_cap; max_concurrent_trades only when the prompt limited open positions
+    #  (b) session_preference / strategy_style are now READ by bot_runner (session gate) and the analyser (active_preset)
+    #  (c) auto_execute is only written when the prompt asked for it — a deploy never silently stops an autopilot bot
+    #  (d) the default target is ONE bot; "matching" / "all" need confirm_multi; every touched config gets an undo
+    #      snapshot (config_versions) and the response carries the per-field diff. preview=true returns the diff only.
+    def _enum(key, default):            # v1.60.52 — LLM output is case-loose ("Medium", "London"): normalise first
+        v = compiled.get(key)
+        return str(v).strip().lower() if isinstance(v, str) and v.strip() else default
     update_fields = {
-        "risk_level": compiled.get("risk_level", "medium"),
+        "risk_level": _enum("risk_level", "medium"),
         "symbols": [s.upper() for s in (compiled.get("symbols") or ["XAUUSD", "BTCUSD"])],
-        "max_concurrent_trades": int(compiled.get("max_concurrent_trades", 2)),
-        "auto_execute": bool(compiled.get("auto_execute", True)),
-        "session_preference": compiled.get("session_preference", "any"),
-        "strategy_style": compiled.get("strategy_style", "trend_following"),
+        "session_preference": _enum("session_preference", "any"),
+        "strategy_style": _enum("strategy_style", "trend_following"),
         "source": "nl_strategy_builder",
     }
+    update_fields["active_preset"] = STYLE_PRESET.get(update_fields["strategy_style"], "adaptive")
+    # v1.60.50 (PR #100 item 7) — validate enums like BotConfigUpdate does; reject instead of writing junk
+    if update_fields["risk_level"] not in VALID_RISK_LEVELS:
+        raise HTTPException(status_code=422, detail=f"risk_level must be one of {sorted(VALID_RISK_LEVELS)}")
+    if update_fields["session_preference"] not in VALID_SESSIONS:
+        raise HTTPException(status_code=422, detail=f"session_preference must be one of {sorted(VALID_SESSIONS)}")
+    if update_fields["strategy_style"] not in STYLE_PRESET:
+        raise HTTPException(status_code=422, detail=f"strategy_style must be one of {sorted(STYLE_PRESET)}")
+    if "auto_execute" in compiled and compiled["auto_execute"] is not None and not isinstance(compiled["auto_execute"], bool):
+        raise HTTPException(status_code=422, detail="auto_execute must be a boolean")
+    if compiled.get("max_concurrent_trades") is not None:
+        update_fields["max_concurrent_trades"] = max(1, min(10, int(compiled["max_concurrent_trades"])))
+    if compiled.get("max_trades_per_day") is not None:
+        update_fields["trade_of_day_cap"] = max(0, min(20, int(compiled["max_trades_per_day"])))
+    if "auto_execute" in compiled and compiled["auto_execute"] is not None:
+        update_fields["auto_execute"] = bool(compiled["auto_execute"])
+    if target in ("matching", "all") and not payload.get("confirm_multi"):
+        raise HTTPException(status_code=409, detail={
+            "code": "multi_target_confirm_required",
+            "message": "Deploy targets one bot by default — pick an account, or confirm the multi-bot deploy."})
     configs, resolved_mode = await resolve_target_configs(
         db, user["id"], update_fields["symbols"], target,
     )
@@ -159,6 +192,29 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
             detail=f"No matching bot configs for target='{target}'. "
                    "Try target='all' or pick a specific bot.",
         )
+    diff = [{"config_id": str(c["_id"]), "account_id": c.get("account_id"),
+             "changes": {k: {"from": c.get(k), "to": v} for k, v in update_fields.items()
+                         if k != "source" and c.get(k) != v}} for c in configs]
+    if payload.get("preview"):
+        return {"ok": True, "preview": True, "target_mode": resolved_mode, "diff": diff, "update_fields": update_fields}
+    # v1.60.50 (PR #100 item 7) — same rule as PUT /bot/config: a risk raise on a live-capable config needs step-up
+    from routes.bot_routes import _is_risk_raise, _live_context, _refuse_risk_above_policy_cap
+    from step_up import require_step_up, audit_event
+    for c in configs:
+        await _refuse_risk_above_policy_cap(db, c, update_fields)   # v1.60.52 — the policy cap applies here too (409)
+    for c in configs:
+        if _is_risk_raise(update_fields, c) and await _live_context(db, user["id"], c.get("account_id")):
+            await require_step_up(db, user, request, "risk_raise")
+            await audit_event(db, user["id"], "risk_raise",
+                              {"account_id": c.get("account_id"), "via": "nl_strategy_apply",
+                               "fields": sorted(k for k, v in update_fields.items() if c.get(k) != v)},
+                              request, step_up=True)
+            break
+    from change_governance import snapshot_config
+    undo = []
+    for c in configs:
+        vid = await snapshot_config(db, user["id"], c.get("account_id"), "pre-nl-strategy-deploy")
+        undo.append({"config_id": str(c["_id"]), "account_id": c.get("account_id"), "version_id": vid})
     audit = await apply_to_bot_configs(
         db, configs,
         update_fields=update_fields,
@@ -177,6 +233,8 @@ async def nl_strategy_apply(payload: dict, user=Depends(get_current_user)):
         "applied_count": len(audit),
         "target_mode": resolved_mode,
         "applied_to": audit,
+        "diff": diff,
+        "undo": undo,
     }
 
 

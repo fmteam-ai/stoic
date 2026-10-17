@@ -1,13 +1,22 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useSearchParams, useNavigate } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
+import { TrackRecord } from "@/components/TrackRecord";
 import { extractBlockerDetail } from "@/lib/fixShortcuts";
+import { diffSavedConfig, changedFields, fmtValue } from "@/lib/configDrift";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AiOptimizerSection from "@/components/AiOptimizerSection";
 import { OperationalModeCard } from "@/components/OperationalModeCard";
 import { ConfigVersionsCard } from "@/components/ConfigVersionsCard";
-import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass, ArrowRight } from "lucide-react";
+import { Play, Pause, Save as FloppyDisk, Plus, X, AlertTriangle, Shield, ShieldAlert, TrendingUp, Scissors, OctagonAlert, Gauge, Activity, Snowflake, CalendarClock, MoonStar, Timer, Megaphone, CheckCircle2, Flame, Crosshair, Zap, Rocket, Scale, Sparkles, Trash2, Bookmark, Layers, RotateCcw, Eye, Bitcoin, Target, Compass, ArrowRight } from "lucide-react";
+
+// #46 — mirrors backend models.BREAKEVEN_TRIGGER_R_DEFAULT (one shared break-even default)
+const BREAKEVEN_TRIGGER_R_DEFAULT = 1.0;
 import { toast } from "sonner";
+
+// v1.60.39 C8 — currencies whose HIGH-impact prints may freeze gold
+const GOLD_FREEZE_DEFAULT = ["USD", "EUR", "GBP", "JPY", "CNY"];
+const GOLD_FREEZE_CHOICES = ["USD", "EUR", "GBP", "JPY", "CNY", "CHF", "AUD", "CAD", "NZD"];
 
 const RISK_DESCRIPTIONS = {
     low: "Capital preservation. Smaller positions, tighter stops, only high-conviction setups.",
@@ -29,12 +38,33 @@ const PRESET_ICONS = {
     Crosshair, Zap, TrendingUp, Rocket, Activity, Flame, Scale, Compass,
 };
 
+// Cap-aware presets: server-computed fit of a preset against the active policy cap (null = no cap active)
+const capFitTitle = (fit) => fit && !fit.fits_cap
+    ? `Over the policy cap — this style would run ${fit.effective_risk_pct}% risk per trade, cap is ${fit.cap_pct}%. Lower the Risk Level or Adaptive Risk Cap first.`
+    : undefined;
+
+function CapFitPill({ fit, testId }) {
+    if (!fit) return null;
+    const ok = fit.fits_cap;
+    return (
+        <span data-testid={testId}
+            title={`This style would run ${fit.effective_risk_pct}% risk per trade · policy cap ${fit.cap_pct}%`}
+            className={`font-mono text-[9px] tracking-widest px-1.5 py-0.5 border whitespace-nowrap shrink-0 ${
+                ok ? "border-[#00FF41]/40 text-[#00FF41] bg-[#00FF41]/10" : "border-[#FF3B30]/50 text-[#FF3B30] bg-[#FF3B30]/10"
+            }`}>
+            {ok ? `FITS CAP ≤ ${fit.cap_pct}%` : `OVER CAP · ${fit.effective_risk_pct}% › ${fit.cap_pct}%`}
+        </span>
+    );
+}
+
+
 export default function BotConfig() {
     const [cfg, setCfg] = useState(null);
     const [profiles, setProfiles] = useState({});
     const [supported, setSupported] = useState([]);
     const [presets, setPresets] = useState([]);
     const [customPresets, setCustomPresets] = useState([]);
+    const [presetCap, setPresetCap] = useState(null);
     // Account selector — null = the user's default profile; otherwise a specific account_id
     const [accounts, setAccounts] = useState([]);
     const [selectedAccountId, setSelectedAccountId] = useState(null);
@@ -46,9 +76,11 @@ export default function BotConfig() {
     const [savingPreset, setSavingPreset] = useState(false);
     const [saving, setSaving] = useState(false);
     const [err, setErr] = useState("");
+    const [botTab, setBotTab] = useState("config");   // Spec A — Track record tab
     const [errFix, setErrFix] = useState(null);
     const [msg, setMsg] = useState("");
     const [saveMsg, setSaveMsg] = useState("");
+    const [drift, setDrift] = useState([]);          // v1.60.40 — fields the server did not echo back after SAVE
     const [newSym, setNewSym] = useState("");
 
     const accountQuery = selectedAccountId ? `?account_id=${selectedAccountId}` : "";
@@ -66,6 +98,8 @@ export default function BotConfig() {
     const [scrollOptimizer, setScrollOptimizer] = useState(false);
     const deepLinkAppliedRef = useRef(false);
     const presetsAnchorRef = useRef(null);
+    const baselineRef = useRef(null);     // v1.60.48 — server state as loaded / last saved (PATCH diff base)
+    const presetTouchedRef = useRef(new Set());   // v1.60.50 — fields a preset changed since the last save
     const optimizerAnchorRef = useRef(null);
 
     useEffect(() => {
@@ -115,6 +149,15 @@ export default function BotConfig() {
         friday_flat_enabled: d?.friday_flat_enabled ?? true,
         friday_flat_mode: d?.friday_flat_mode || "close",
         friday_flat_minutes_before: d?.friday_flat_minutes_before ?? 60,
+        gold_off_hours_enabled: d?.gold_off_hours_enabled ?? true,
+        gold_off_hours_start_utc: d?.gold_off_hours_start_utc || "21:00",
+        gold_off_hours_end_utc: d?.gold_off_hours_end_utc || "06:00",
+        macro_freeze_before_min: d?.macro_freeze_before_min ?? 15,
+        macro_freeze_after_min: d?.macro_freeze_after_min ?? 10,
+        macro_freeze_medium_usd_enabled: d?.macro_freeze_medium_usd_enabled ?? true,
+        macro_freeze_medium_min: d?.macro_freeze_medium_min ?? 5,
+        macro_freeze_avalanche_after_min: d?.macro_freeze_avalanche_after_min ?? 20,
+        gold_freeze_currencies: Array.isArray(d?.gold_freeze_currencies) && d.gold_freeze_currencies.length ? d.gold_freeze_currencies : GOLD_FREEZE_DEFAULT,
     });
 
     const load = useCallback(async () => {
@@ -123,13 +166,15 @@ export default function BotConfig() {
                 api.get(`/bot/config${accountQuery}`),
                 api.get("/market/risk-profiles"),
                 api.get("/market/symbols"),
-                api.get("/bot/presets"),
+                api.get(`/bot/presets${accountQuery}`),
                 api.get("/accounts"),
                 api.get("/bot/configs"),
             ]);
-            setCfg(withFlatDefaults(c.data)); setProfiles(p.data.profiles); setSupported(s.data.symbols);
+            setCfg(withFlatDefaults(c.data)); baselineRef.current = withFlatDefaults(c.data);
+            setProfiles(p.data.profiles); setSupported(s.data.symbols);
             setPresets(pr.data.presets || []);
             setCustomPresets(pr.data.custom || []);
+            setPresetCap(pr.data.policy_risk_cap_pct ?? null);
             setAccounts(ac.data || []);
             setAllConfigs(cfgs.data || []);
         } catch (e) { setErr(formatApiError(e)); }
@@ -148,6 +193,11 @@ export default function BotConfig() {
         setApplyingPreset(key); setErr("");
         try {
             const { data } = await api.post(`/bot/preset/${key}${accountQuery}`);
+            // v1.60.50 — the preset's fields are now DIRTY relative to the server: keep the baseline as the server state
+            // (so every preset-touched field is sent on SAVE) but remember which fields the preset touched so a user
+            // reverting one of them still sends it (otherwise the server would keep the preset value).
+            // v1.60.52 — only the fields the preset actually changed stay dirty (not the whole returned config)
+            presetTouchedRef.current = new Set([...(presetTouchedRef.current || []), ...(data.preset_fields || [])]);
             setCfg(withFlatDefaults(data.config));
             toast.success(`Preset applied · ${label}`, {
                 description: "Behaviour knobs updated. Click SAVE CONFIGURATION to persist.",
@@ -192,23 +242,16 @@ export default function BotConfig() {
     };
 
     const save = async () => {
-        setSaving(true); setErr(""); setErrFix(null); setSaveMsg("");
+        setSaving(true); setErr(""); setErrFix(null); setSaveMsg(""); setDrift([]);
         try {
-            const { data } = await api.put(`/bot/config${accountQuery}`, {
+            const fullPayload = {
                 risk_level: cfg.risk_level,
                 symbols: cfg.symbols,
                 active: cfg.active,
                 max_concurrent_trades: cfg.max_concurrent_trades,
+                signal_cooldown_minutes: cfg.signal_cooldown_minutes,
                 max_lot_size: cfg.max_lot_size || 0,
                 auto_execute: cfg.auto_execute,
-                breakeven_enabled: cfg.breakeven_enabled,
-                breakeven_trigger_r: cfg.breakeven_trigger_r,
-                partial_close_enabled: cfg.partial_close_enabled,
-                partial_close_trigger_r: cfg.partial_close_trigger_r,
-                partial_close_fraction: cfg.partial_close_fraction,
-                trailing_enabled: cfg.trailing_enabled,
-                trailing_start_r: cfg.trailing_start_r,
-                trailing_distance_r: cfg.trailing_distance_r,
                 daily_drawdown_pct: cfg.daily_drawdown_pct,
                 daily_drawdown_enabled: cfg.daily_drawdown_enabled,
                 daily_profit_target_r: cfg.daily_profit_target_r ?? 0,
@@ -226,7 +269,6 @@ export default function BotConfig() {
                 anti_tilt_consecutive_losses: cfg.anti_tilt_consecutive_losses,
                 anti_tilt_freeze_hours: cfg.anti_tilt_freeze_hours,
                 trade_of_day_cap: cfg.trade_of_day_cap,
-                asia_session_skip_xau: cfg.asia_session_skip_xau,
                 sl_cooldown_enabled: cfg.sl_cooldown_enabled,
                 sl_cooldown_minutes: cfg.sl_cooldown_minutes,
                 loss_cooldown_enabled: cfg.loss_cooldown_enabled ?? true,
@@ -239,17 +281,69 @@ export default function BotConfig() {
                 friday_flat_enabled: cfg.friday_flat_enabled ?? true,
                 friday_flat_mode: cfg.friday_flat_mode || "close",
                 friday_flat_minutes_before: cfg.friday_flat_minutes_before ?? 60,
+                gold_off_hours_enabled: cfg.gold_off_hours_enabled ?? true,
+                gold_off_hours_start_utc: cfg.gold_off_hours_start_utc || "21:00",
+                gold_off_hours_end_utc: cfg.gold_off_hours_end_utc || "06:00",
+                asia_session_skip_xau: cfg.asia_session_skip_xau !== false,
+                user_direction_cap: cfg.user_direction_cap ?? 1,
+                require_h1_alignment: cfg.require_h1_alignment ?? false,
+                geo_risk_gate_enabled: cfg.geo_risk_gate_enabled ?? false,
+                macro_freeze_before_min: cfg.macro_freeze_before_min ?? 15,
+                macro_freeze_after_min: cfg.macro_freeze_after_min ?? 10,
+                macro_freeze_medium_usd_enabled: cfg.macro_freeze_medium_usd_enabled ?? true,
+                macro_freeze_medium_min: cfg.macro_freeze_medium_min ?? 5,
+                macro_freeze_avalanche_after_min: cfg.macro_freeze_avalanche_after_min ?? 20,
+                gold_freeze_currencies: cfg.gold_freeze_currencies?.length ? cfg.gold_freeze_currencies : GOLD_FREEZE_DEFAULT,
                 min_confidence_override: cfg.min_confidence_override,
                 paper_shadow_mode: cfg.paper_shadow_mode,
                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
-                soft_stop_enabled: cfg.soft_stop_enabled ?? false,
-                soft_stop_loss_fraction: cfg.soft_stop_loss_fraction ?? 0.6,
-                soft_stop_min_minutes: cfg.soft_stop_min_minutes ?? 10,
                 let_winners_run: cfg.let_winners_run ?? false,
-            });
-            setCfg(withFlatDefaults(data)); setSaveMsg("Configuration saved.");
-            // refresh allConfigs index so the selector reflects new state
-            try { const c = await api.get("/bot/configs"); setAllConfigs(c.data || []); } catch (_e) { /* non-fatal */ }
+                breakeven_enabled: cfg.breakeven_enabled ?? true,
+                breakeven_trigger_r: cfg.breakeven_trigger_r ?? BREAKEVEN_TRIGGER_R_DEFAULT,
+                gold_trend_pulse_enabled: cfg.gold_trend_pulse_enabled ?? false,
+                gold_trend_pulse_mode: cfg.gold_trend_pulse_mode ?? "shadow",
+                gold_trend_pulse_layering_enabled: cfg.gold_trend_pulse_layering_enabled ?? false,
+                gold_trend_pulse_sweep_runner_enabled: cfg.gold_trend_pulse_sweep_runner_enabled ?? true,
+                gold_trend_pulse_news_mode_enabled: cfg.gold_trend_pulse_news_mode_enabled ?? true,
+                gold_trend_pulse_news_pre_action: cfg.gold_trend_pulse_news_pre_action ?? "protect",
+                gold_trend_pulse_news_release_min: cfg.gold_trend_pulse_news_release_min ?? 5,
+                gold_trend_pulse_news_events: cfg.gold_trend_pulse_news_events ?? null,
+                engine_live_features_enabled: cfg.engine_live_features_enabled ?? false,
+                gold_bias_gtp_direction_enabled: cfg.gold_bias_gtp_direction_enabled ?? false,
+                gold_bias_block_counter_enabled: cfg.gold_bias_block_counter_enabled ?? false,
+                trend_day_pullback_enabled: cfg.trend_day_pullback_enabled ?? false,
+                ack_loosen_close_enabled: cfg.ack_loosen_close_enabled ?? false,
+                spread_gate_mode: cfg.spread_gate_mode || "shadow",
+                spread_gate_mult: cfg.spread_gate_mult ?? 1.5,
+                max_cost_pct_of_tp: cfg.max_cost_pct_of_tp ?? 12,
+                exit_policy: cfg.exit_policy ?? "fixed_tp",
+                tp1_close_fraction: cfg.tp1_close_fraction ?? 0.5,
+                be_plus_offset_price: cfg.be_plus_offset_price ?? 1.0,
+                tp2_multiple: cfg.tp2_multiple ?? 2.0,
+            };
+            // v1.60.48 — send only what changed since load/last save (PATCH), never the whole form
+            const payload = changedFields(fullPayload, baselineRef.current);
+            for (const f of presetTouchedRef.current) if (f in fullPayload && !(f in payload)) payload[f] = fullPayload[f];
+            if (!Object.keys(payload).length) { setSaveMsg("No changes to save."); setSaving(false); return; }
+            const { data } = await api.put(`/bot/config${accountQuery}`, payload);
+            setCfg(withFlatDefaults(data)); baselineRef.current = withFlatDefaults(data); presetTouchedRef.current = new Set();
+            // v1.60.40 — Config Drift Check: every field we sent must come back unchanged
+            const drifted = diffSavedConfig(payload, data);
+            setDrift(drifted);
+            if (drifted.length) {
+                // v1.60.40 — Drift Telemetry: server-side count on Bot Health (best-effort, never blocks the save)
+                api.post("/bot/config/drift", { fields: drifted, account_id: selectedAccountId || null }).catch(() => {});
+            }
+            setSaveMsg(drifted.length ? "" : data.cooldown_clamped_to_plan_floor
+                ? `Configuration saved. Minutes between signals raised to your plan floor (${data.cooldown_clamped_to_plan_floor} min).`
+                : "Configuration saved.");
+            // refresh allConfigs index + preset cap-fit so the selector/presets reflect the saved risk settings
+            try {
+                const [c, pr] = await Promise.all([api.get("/bot/configs"), api.get(`/bot/presets${accountQuery}`)]);
+                setAllConfigs(c.data || []);
+                setPresets(pr.data.presets || []); setCustomPresets(pr.data.custom || []);
+                setPresetCap(pr.data.policy_risk_cap_pct ?? null);
+            } catch (_e) { /* non-fatal */ }
         } catch (e) {
             const structured = extractBlockerDetail(e, selectedAccountId);
             if (structured) setErrFix(structured); else setErr(formatApiError(e));
@@ -341,6 +435,14 @@ export default function BotConfig() {
             />
 
             <div className="p-4 md:p-8 space-y-6 max-w-4xl">
+                <div className="flex items-center gap-1 border-b border-[#1F1F1F]" data-testid="bot-tabs">
+                    {[["config", "CONFIG"], ["track", "TRACK RECORD"]].map(([k, l]) => (
+                        <button key={k} onClick={() => setBotTab(k)} data-testid={`bot-tab-${k}`}
+                            className={`px-3 py-2 text-[11px] font-mono tracking-widest border-b-2 -mb-px ${botTab === k ? "border-[#FFD700] text-white" : "border-transparent text-[#71717A] hover:text-white"}`}>{l}</button>
+                    ))}
+                </div>
+                {botTab === "track" && <TrackRecord symbols={cfg?.symbols || []} />}
+                <div className={botTab === "track" ? "hidden" : "space-y-6"} data-testid="bot-config-tab">
                 {err && <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-2 text-xs text-[#FF3B30] font-mono">{err}</div>}
                 {errFix && (
                     <div className="border border-[#FF3B30]/30 bg-[#FF3B30]/10 px-4 py-3 space-y-2"
@@ -395,34 +497,47 @@ export default function BotConfig() {
                             <div className="font-display font-bold text-lg tracking-tight">Pick a personality for the bot</div>
                         </div>
                     </div>
+                    {presetCap != null && (
+                        <div className="px-5 py-2 border-b border-[#1F1F1F] font-mono text-[10px] tracking-widest text-[#A1A1AA] flex items-center gap-2"
+                             data-testid="presets-policy-cap-banner">
+                            <Shield className="w-3 h-3 text-[#FFD700]" />
+                            POLICY CAP · RISK PER TRADE ≤ {presetCap}% — styles are checked against your current risk settings; over-cap styles can't be applied
+                        </div>
+                    )}
                     <div className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3" data-testid="presets-grid">
                         {presets.map(p => {
                             const Icon = PRESET_ICONS[p.icon] || Sparkles;
                             const active = cfg.active_preset === p.key;
                             const isApplying = applyingPreset === p.key;
                             const isHighlighted = highlightPreset === p.key;
+                            const overCap = !!(p.cap_fit && !p.cap_fit.fits_cap);
                             return (
                                 <button key={p.key} onClick={() => applyPreset(p.key, p.label)}
-                                    disabled={isApplying}
+                                    disabled={isApplying || overCap}
+                                    aria-disabled={overCap || undefined}
+                                    title={capFitTitle(p.cap_fit)}
                                     data-testid={`preset-card-${p.key}`}
-                                    className={`text-left p-4 border transition-colors duration-150 disabled:opacity-50 ${
-                                        active ? "border-[#FFD700] bg-[#FFD700]/5" : "border-[#1F1F1F] hover:border-[#FFD700]/40"
+                                    className={`text-left p-4 border transition-colors duration-150 disabled:cursor-not-allowed ${overCap ? "disabled:opacity-80" : "disabled:opacity-50"} ${
+                                        active ? "border-[#FFD700] bg-[#FFD700]/5" : overCap ? "border-[#FF3B30]/30" : "border-[#1F1F1F] hover:border-[#FFD700]/40"
                                     } ${isHighlighted ? "ring-2 ring-[#00FF41] animate-pulse" : ""}`}>
-                                    <div className="flex items-center justify-between mb-2">
-                                        <div className="flex items-center gap-2">
-                                            <Icon className="w-4 h-4" style={{ color: p.color }} />
+                                    <div className="flex items-start justify-between gap-2 mb-2 flex-wrap">
+                                        <div className="flex items-center gap-2 min-w-0">
+                                            <Icon className="w-4 h-4 shrink-0" style={{ color: p.color }} />
                                             <span className="font-display font-bold text-sm tracking-tight">{p.label}</span>
                                         </div>
-                                        {active && (
-                                            <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700] bg-[#FFD700]/10">
-                                                ACTIVE
-                                            </span>
-                                        )}
+                                        <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                                            <CapFitPill fit={p.cap_fit} testId={`preset-cap-fit-${p.key}`} />
+                                            {active && (
+                                                <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#FFD700]/40 text-[#FFD700] bg-[#FFD700]/10">
+                                                    ACTIVE
+                                                </span>
+                                            )}
+                                        </div>
                                     </div>
                                     <div className="font-mono text-[10px] text-[#A1A1AA] tracking-wide mb-2">{p.tagline}</div>
                                     <p className="text-xs text-[#52525B] leading-relaxed line-clamp-3">{p.description}</p>
-                                    <div className="mt-3 font-mono text-[9px] text-[#52525B] tracking-widest">
-                                        {isApplying ? "APPLYING…" : "TAP TO APPLY →"}
+                                    <div className={`mt-3 font-mono text-[9px] tracking-widest ${overCap ? "text-[#FF3B30]" : "text-[#52525B]"}`}>
+                                        {isApplying ? "APPLYING…" : overCap ? "BLOCKED BY POLICY CAP — LOWER RISK FIRST" : "TAP TO APPLY →"}
                                     </div>
                                 </button>
                             );
@@ -450,18 +565,21 @@ export default function BotConfig() {
                                     const active = cfg.active_preset === customKey;
                                     const isApplying = applyingPreset === customKey;
                                     const isHighlighted = highlightPreset === customKey;
+                                    const overCap = !!(p.cap_fit && !p.cap_fit.fits_cap);
                                     return (
                                         <div key={p.id}
                                             data-testid={`custom-preset-${p.id}`}
+                                            title={capFitTitle(p.cap_fit)}
                                             className={`text-left p-4 border transition-colors duration-150 group ${
-                                                active ? "border-[#9B59B6] bg-[#9B59B6]/5" : "border-[#1F1F1F] hover:border-[#9B59B6]/40"
+                                                active ? "border-[#9B59B6] bg-[#9B59B6]/5" : overCap ? "border-[#FF3B30]/30" : "border-[#1F1F1F] hover:border-[#9B59B6]/40"
                                             } ${isHighlighted ? "ring-2 ring-[#00FF41] animate-pulse" : ""}`}>
-                                            <div className="flex items-center justify-between mb-2">
+                                            <div className="flex items-start justify-between gap-2 mb-2 flex-wrap">
                                                 <div className="flex items-center gap-2 min-w-0">
                                                     <Bookmark className="w-4 h-4 text-[#9B59B6] shrink-0" />
                                                     <span className="font-display font-bold text-sm tracking-tight truncate">{p.name}</span>
                                                 </div>
                                                 <div className="flex items-center gap-1.5">
+                                                    <CapFitPill fit={p.cap_fit} testId={`custom-preset-cap-fit-${p.id}`} />
                                                     {active && (
                                                         <span className="font-mono text-[9px] tracking-widest px-1.5 py-0.5 border border-[#9B59B6]/40 text-[#9B59B6] bg-[#9B59B6]/10">
                                                             ACTIVE
@@ -479,10 +597,10 @@ export default function BotConfig() {
                                                 {p.description || <span className="text-[#52525B]">No description.</span>}
                                             </p>
                                             <button onClick={() => applyPreset(customKey, p.name)}
-                                                disabled={isApplying}
+                                                disabled={isApplying || overCap}
                                                 data-testid={`apply-custom-${p.id}`}
-                                                className="font-mono text-[9px] text-[#52525B] tracking-widest hover:text-[#9B59B6] disabled:opacity-50">
-                                                {isApplying ? "APPLYING…" : "TAP TO APPLY →"}
+                                                className={`font-mono text-[9px] tracking-widest disabled:opacity-50 disabled:cursor-not-allowed ${overCap ? "text-[#FF3B30]" : "text-[#52525B] hover:text-[#9B59B6]"}`}>
+                                                {isApplying ? "APPLYING…" : overCap ? "BLOCKED BY POLICY CAP — LOWER RISK FIRST" : "TAP TO APPLY →"}
                                             </button>
                                         </div>
                                     );
@@ -554,15 +672,23 @@ export default function BotConfig() {
                         <div className="font-mono text-[10px] text-[#52525B] tracking-widest">SECTION 01</div>
                         <div className="font-display font-bold text-lg tracking-tight">Risk Management Profile</div>
                     </div>
+                    {cfg.policy_risk_cap_pct != null && (
+                        <div className="px-5 pt-3 font-mono text-[10px] tracking-widest text-[#FFB000]" data-testid="policy-risk-cap">
+                            POLICY CAP · RISK PER TRADE ≤ {cfg.policy_risk_cap_pct}% — levels above the cap cannot be saved
+                        </div>
+                    )}
                     <div className="p-5 grid grid-cols-1 md:grid-cols-2 gap-3" data-testid="risk-grid">
                         {Object.entries(profiles).map(([key, p]) => {
                             const selected = cfg.risk_level === key;
+                            const overCap = cfg.policy_risk_cap_pct != null && Number(p.risk_pct) > Number(cfg.policy_risk_cap_pct);
                             return (
-                                <button key={key} onClick={() => setCfg({ ...cfg, risk_level: key })}
+                                <button key={key} onClick={() => !overCap && setCfg({ ...cfg, risk_level: key })}
                                     data-testid={`risk-option-${key}`}
+                                    disabled={overCap}
+                                    title={overCap ? `Above the policy cap of ${cfg.policy_risk_cap_pct}% — cannot be saved` : undefined}
                                     className={`text-left p-4 border transition-colors duration-150 ${
                                         selected ? "border-[#00FF41] bg-[#00FF41]/5" : "border-[#1F1F1F] hover:border-[#333333]"
-                                    }`}>
+                                    } ${overCap ? "opacity-40 cursor-not-allowed" : ""}`}>
                                     <div className="flex items-center justify-between mb-2">
                                         <div className="flex items-center gap-2">
                                             <div className="font-display font-bold tracking-tight">{p.label}</div>
@@ -575,7 +701,7 @@ export default function BotConfig() {
                                     </div>
                                     <p className="text-xs text-[#A1A1AA] mb-3 leading-relaxed">{RISK_DESCRIPTIONS[key]}</p>
                                     <div className="grid grid-cols-2 gap-1.5 font-mono text-[10px]">
-                                        <div><span className="text-[#52525B]">RISK</span> <span className="text-white">{p.risk_pct}%</span></div>
+                                        <div><span className="text-[#52525B]">RISK</span> <span className={overCap ? "text-[#FF3B30]" : "text-white"}>{p.risk_pct}%</span>{overCap && <span className="ml-1 text-[#FF3B30]" data-testid={`risk-over-cap-${key}`}>› CAP {cfg.policy_risk_cap_pct}%</span>}</div>
                                         <div><span className="text-[#52525B]">CONF≥</span> <span className="text-white">{p.min_confidence}%</span></div>
                                         <div><span className="text-[#52525B]">MAX POS</span> <span className="text-white">{p.max_concurrent}</span></div>
                                         <div><span className="text-[#52525B]">LEV ≤</span> <span className="text-white">{p.leverage_cap}x</span></div>
@@ -649,6 +775,32 @@ export default function BotConfig() {
                                 {cfg.auto_execute ? "● ENABLED" : "○ DISABLED"}
                             </button>
                         </div>
+                        {/* v1.60.39 — per-account signal cooldown, floored by the plan */}
+                        <div className="md:col-span-2" data-testid="signal-cooldown-field">
+                            <label htmlFor="signal-cooldown-input" className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2 flex items-center gap-2">
+                                <Timer className="w-3 h-3 text-[#FFD700]" />
+                                MINUTES BETWEEN SIGNALS
+                                <span className="font-mono text-[9px] text-[#52525B] normal-case tracking-normal ml-auto">
+                                    per symbol · plan floor <span className="text-[#FFD700]" data-testid="signal-cooldown-floor">{cfg.plan_min_signal_cooldown_minutes ?? 1} min</span>
+                                </span>
+                            </label>
+                            <div className="flex items-center gap-3">
+                                <input type="number" min={cfg.plan_min_signal_cooldown_minutes ?? 1} max="1440" step="1"
+                                    value={cfg.signal_cooldown_minutes ?? 5}
+                                    onChange={e => setCfg({ ...cfg, signal_cooldown_minutes: Math.max(1, parseInt(e.target.value) || 1) })}
+                                    onBlur={() => {
+                                        const floor = cfg.plan_min_signal_cooldown_minutes ?? 1;
+                                        if ((cfg.signal_cooldown_minutes ?? 5) < floor) setCfg({ ...cfg, signal_cooldown_minutes: floor });
+                                    }}
+                                    data-testid="signal-cooldown-input" id="signal-cooldown-input" name="signal_cooldown_minutes"
+                                    className="w-40 bg-[#050505] border border-[#1F1F1F] focus:border-[#00FF41] px-3 py-2 text-sm font-mono outline-none" />
+                                <span className="font-mono text-[11px] text-[#52525B]">
+                                    {(cfg.signal_cooldown_minutes ?? 5) < (cfg.plan_min_signal_cooldown_minutes ?? 1)
+                                        ? <span className="text-[#FFB000]" data-testid="signal-cooldown-floor-warning">below your plan floor — will be saved as {cfg.plan_min_signal_cooldown_minutes} min</span>
+                                        : <>the bot waits this long after a signal before it re-evaluates the same symbol</>}
+                                </span>
+                            </div>
+                        </div>
                         <div className="md:col-span-2">
                             <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-2 flex items-center gap-2">
                                 <Layers className="w-3 h-3 text-[#FFD700]" />
@@ -692,6 +844,22 @@ export default function BotConfig() {
                 <OperationalModeCard cfg={cfg} setCfg={setCfg} accountQuery={accountQuery} />
                 <ConfigVersionsCard accountQuery={accountQuery} />
 
+                {drift.length > 0 && (
+                    <div className="border border-[#FF3B30]/50 bg-[#FF3B30]/10 p-4" data-testid="config-drift-warning" role="alert">
+                        <div className="flex items-center gap-2 font-mono text-[10px] text-[#FF3B30] tracking-widest mb-2">
+                            <AlertTriangle className="w-3.5 h-3.5" /> CONFIG DRIFT · {drift.length} FIELD{drift.length > 1 ? "S" : ""} CAME BACK DIFFERENT FROM WHAT YOU SAVED
+                        </div>
+                        <ul className="space-y-1 font-mono text-[11px]">
+                            {drift.map((d) => (
+                                <li key={d.field} data-testid={`config-drift-${d.field}`} className="text-[#E4E4E7]">
+                                    <span className="text-[#FF3B30]">{d.field}</span>: saved <span className="text-[#FFD700]">{fmtValue(d.sent)}</span>, server has <span className="text-[#FFD700]">{fmtValue(d.server)}</span>
+                                </li>
+                            ))}
+                        </ul>
+                        <p className="text-[11px] text-[#A1A1AA] mt-2">The form now shows the server's values. A plan floor or policy cap can legitimately change a value; anything else is a bug — please report it.</p>
+                    </div>
+                )}
+
                 <div className="flex items-center justify-end gap-3 flex-wrap" data-testid="bot-save-row">
                     {saveMsg && (
                         <div className="flex items-center gap-2 border border-[#00FF41]/30 bg-[#00FF41]/10 px-3 py-2 text-xs text-[#00FF41] font-mono"
@@ -704,6 +872,7 @@ export default function BotConfig() {
                         className="bg-[#00FF41] hover:bg-[#00E53A] disabled:opacity-50 text-black font-medium px-6 py-2.5 text-xs tracking-widest flex items-center gap-2 transition-colors">
                         <FloppyDisk className="w-3.5 h-3.5" /> {saving ? "SAVING…" : "SAVE CONFIGURATION"}
                     </button>
+                </div>
                 </div>
             </div>
         </AppLayout>
@@ -748,10 +917,52 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     </div>
                 </div>
 
-                {/* Asia-session skip XAU */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="asia_session_skip_xau" label="Skip Asia-Session Gold (XAU)" icon={MoonStar} color="#FFD700"
-                        desc="XAUUSD chops sideways during the Asia session (00:00–07:00 UTC) with razor-thin moves and wide spreads. Toggle ON to skip new XAU entries during this window." />
+                {/* v1.60.50 — Asia gold skip (second window, independent of the off-hours window above) */}
+                <div className="flex items-start justify-between gap-4 p-3 border border-[#1F1F1F] bg-[#0D0D0D]" data-testid="asia-gold-skip-row">
+                    <div>
+                        <div className="text-xs font-mono text-[#E4E4E7]">ASIA GOLD SKIP (00:00–07:00 UTC)</div>
+                        <div className="text-[10px] text-white/40 mt-1">New XAUUSD entries are paused during the Asian session in addition to the off-hours window. On by default; turn off only with shadow data that justifies it.</div>
+                    </div>
+                    <button type="button" data-testid="asia-gold-skip-toggle"
+                        onClick={() => setCfg({ ...cfg, asia_session_skip_xau: cfg.asia_session_skip_xau === false })}
+                        className={`px-3 py-1 text-[10px] font-mono tracking-widest border ${cfg.asia_session_skip_xau !== false ? "border-[#00FF41] text-[#00FF41]" : "border-[#52525B] text-[#52525B]"}`}>
+                        {cfg.asia_session_skip_xau !== false ? "ON" : "OFF"}
+                    </button>
+                </div>
+                {/* v1.60.52 — optional H1 alignment gate for the HF scalp engines (default OFF) */}
+                <div className="flex items-start justify-between gap-4 p-3 border border-[#1F1F1F] bg-[#0D0D0D]" data-testid="require-h1-alignment-row">
+                    <div>
+                        <div className="text-xs font-mono text-[#E4E4E7]">REQUIRE H1 ALIGNMENT (HF SCALP)</div>
+                        <div className="text-[10px] text-white/40 mt-1">hf_scalp / hf_scalp_fast entries are skipped when the dominant H1 bias is against the trade ("H1 against trade — skipped"). Off by default — enable per account from your own evidence.</div>
+                    </div>
+                    <button type="button" data-testid="require-h1-alignment-toggle"
+                        onClick={() => setCfg({ ...cfg, require_h1_alignment: !cfg.require_h1_alignment })}
+                        className={`px-3 py-1 text-[10px] font-mono tracking-widest border ${cfg.require_h1_alignment ? "border-[#00FF41] text-[#00FF41]" : "border-[#52525B] text-[#52525B]"}`}>
+                        {cfg.require_h1_alignment ? "ON" : "OFF"}
+                    </button>
+                </div>
+                {/* v1.60.53 (B4) — plumbing only: the risk-off advisory is SHADOW until approved after the review */}
+                <div className="flex items-start justify-between gap-4 p-3 border border-[#1F1F1F] bg-[#0D0D0D]" data-testid="geo-risk-gate-row">
+                    <div>
+                        <div className="text-xs font-mono text-[#E4E4E7]">GEO / RISK-OFF GATE <span className="text-[#FFB000]">· SHADOW</span></div>
+                        <div className="text-[10px] text-white/40 mt-1">The geopolitical / central-bank / GVZ-VIX risk score is logged and stamped on every decision but never blocks, sizes or closes a trade. Kept OFF until the 2–3 week shadow review is approved — the switch has no trading effect yet.</div>
+                    </div>
+                    <button type="button" data-testid="geo-risk-gate-toggle"
+                        onClick={() => setCfg({ ...cfg, geo_risk_gate_enabled: !cfg.geo_risk_gate_enabled })}
+                        className={`px-3 py-1 text-[10px] font-mono tracking-widest border ${cfg.geo_risk_gate_enabled ? "border-[#FFB000] text-[#FFB000]" : "border-[#52525B] text-[#52525B]"}`}>
+                        {cfg.geo_risk_gate_enabled ? "ON (NO EFFECT YET)" : "OFF"}
+                    </button>
+                </div>
+                {/* v1.60.50 — per-user cross-account cap (item 7 of the 15 Oct audit) */}
+                <div className="flex items-start justify-between gap-4 p-3 border border-[#1F1F1F] bg-[#0D0D0D]" data-testid="user-direction-cap-row">
+                    <div>
+                        <div className="text-xs font-mono text-[#E4E4E7]">CROSS-ACCOUNT CAP (PER DIRECTION)</div>
+                        <div className="text-[10px] text-white/40 mt-1">Max open automated positions per symbol + direction across ALL your accounts. 1 = the same signal is never doubled on two accounts; 0 = off.</div>
+                    </div>
+                    <input type="number" min={0} max={10} step={1} data-testid="user-direction-cap-input"
+                        value={cfg.user_direction_cap ?? 1}
+                        onChange={(e) => setCfg({ ...cfg, user_direction_cap: Math.max(0, Math.min(10, parseInt(e.target.value || "0", 10))) })}
+                        className="w-16 bg-black border border-[#1F1F1F] px-2 py-1 text-xs font-mono text-[#E4E4E7]" />
                 </div>
 
                 {/* SL Cooldown */}
@@ -849,6 +1060,66 @@ function CapitalGuardsSection({ cfg, setCfg }) {
                     )}
                 </div>
 
+                {/* v1.60.38 — XAUUSD off-hours defer window (per account, UTC) */}
+                <div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="gold_off_hours_enabled" label="Gold Off-Hours Window (UTC)" icon={CalendarClock} color="#FFD700"
+                        desc="New XAUUSD entries are deferred inside this UTC window (default 21:00–06:00 = daily rollover; the separate Asia gold skip below pauses 00:00–07:00). Weekends are always blocked; the 2.5× median spread guard still applies outside the window. Deferred signals get a shadow outcome (TP or SL first?) in the Strategy Report — re-enable Asian hours here (end 00:30) once that data justifies it." />
+                    {(cfg.gold_off_hours_enabled ?? true) && (
+                        <div className="grid grid-cols-2 gap-3 mt-3" data-testid="gold-off-hours-window">
+                            {[["gold_off_hours_start_utc", "START (UTC)", "gold-off-hours-start"], ["gold_off_hours_end_utc", "END (UTC)", "gold-off-hours-end"]].map(([field, label, tid]) => (
+                                <div key={field}>
+                                    <label htmlFor={tid} className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">{label}</label>
+                                    <input type="time" id={tid} name={field} value={cfg[field] || ""} step={60}
+                                        onChange={(e) => setCfg({ ...cfg, [field]: e.target.value })}
+                                        data-testid={tid}
+                                        className="w-full bg-[#0A0A0A] border border-[#1F1F1F] focus:border-[#FFD700] px-3 py-2 text-sm font-mono outline-none" />
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+
+                {/* v1.60.39 C8–C10 — macro freeze windows (per account) */}
+                <div className="border border-[#1F1F1F] p-4 bg-[#050505] space-y-3" data-testid="macro-freeze-config">
+                    <div className="flex items-center gap-2">
+                        <ShieldAlert className="w-4 h-4 text-[#FF3B30]" />
+                        <span className="font-display font-bold text-sm">Macro Freeze Windows</span>
+                    </div>
+                    <p className="text-xs text-[#A1A1AA] leading-relaxed">
+                        No new entries around scheduled prints. HIGH-impact events freeze before/after; a “macro avalanche” (2+ USD HIGH-impact prints within 5 min, e.g. PPI + Retail Sales) extends the after-window; USD medium-impact prints (Jobless Claims, ISM, Philly Fed) get a short freeze when they are not already inside a HIGH window.
+                    </p>
+                    <div className="grid grid-cols-3 gap-3">
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="macro_freeze_before_min" label="HIGH · BEFORE" suffix="min" step={1} min={0} max={120} fallback={15} />
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="macro_freeze_after_min" label="HIGH · AFTER" suffix="min" step={1} min={0} max={120} fallback={10} />
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="macro_freeze_avalanche_after_min" label="AVALANCHE · AFTER" suffix="min" step={1} min={0} max={120} fallback={20} />
+                    </div>
+                    <PPToggle cfg={cfg} setCfg={setCfg} field="macro_freeze_medium_usd_enabled" label="USD Medium-Impact Short Freeze" icon={CalendarClock} color="#FFB000"
+                        desc="±N minutes around USD medium-impact prints (default 5) — only when the print is not already inside a HIGH-impact window." />
+                    {(cfg.macro_freeze_medium_usd_enabled ?? true) && (
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="macro_freeze_medium_min" label="MEDIUM · BEFORE & AFTER" suffix="min" step={1} min={0} max={60} fallback={5} />
+                    )}
+                    <div>
+                        <div className="font-mono text-[10px] text-[#52525B] tracking-widest mb-1.5">CURRENCIES THAT FREEZE GOLD (HIGH-IMPACT)</div>
+                        <div className="flex flex-wrap gap-2" data-testid="gold-freeze-currencies">
+                            {GOLD_FREEZE_CHOICES.map((c) => {
+                                const on = (cfg.gold_freeze_currencies || GOLD_FREEZE_DEFAULT).includes(c);
+                                return (
+                                    <button key={c} type="button" data-testid={`gold-freeze-currency-${c}`}
+                                        onClick={() => {
+                                            const cur = cfg.gold_freeze_currencies || GOLD_FREEZE_DEFAULT;
+                                            const next = on ? cur.filter((x) => x !== c) : [...cur, c];
+                                            if (next.length) setCfg({ ...cfg, gold_freeze_currencies: next });
+                                        }}
+                                        className={`font-mono text-[11px] px-2.5 py-1 border transition-colors ${on ? "border-[#FFD700]/50 text-[#FFD700] bg-[#FFD700]/10" : "border-[#1F1F1F] text-[#52525B] hover:text-[#A1A1AA]"}`}>
+                                        {c}
+                                    </button>
+                                );
+                            })}
+                        </div>
+                        <p className="text-[11px] text-[#52525B] mt-1.5">Default USD · EUR · GBP · JPY · CNY. Previously every country's HIGH-impact print froze gold (15 Oct: UK GDP froze XAUUSD 05:45–06:10).</p>
+                    </div>
+                </div>
+
                 {/* iter-39 — Paper-Shadow Mode */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="paper_shadow_mode" label="Paper Shadow Mode" icon={Eye} color="#06B6D4"
@@ -943,57 +1214,130 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                 </div>
             </div>
             <div className="p-5 space-y-4">
-                {/* Break-even */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="breakeven_enabled" label="Break-Even Auto-Shift" icon={Shield}
-                        desc="Once a trade moves +1R in your favor, automatically shift Stop-Loss to entry price. Result: planned price risk on the remainder is removed (gaps, slippage, swap and commissions can still cost)." />
-                    {cfg.breakeven_enabled && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="breakeven_trigger_r" label="TRIGGER (R-multiple)" suffix="R" step={0.1} min={0.5} max={5} />
-                        </div>
-                    )}
+                {/* #43 (#8 widened) — breakeven_trigger_r is a REAL knob again: read by trade_manager for every non-scalp engine */}
+                <div data-testid="breakeven-trigger-r">
+                    <div className="flex items-center gap-2 mb-1">
+                        <TrendingUp className="w-3.5 h-3.5 text-[#FFD700]" />
+                        <span className="font-mono text-[10px] text-white tracking-widest">BREAK-EVEN TRIGGER (NON-SCALP ENGINES)</span>
+                    </div>
+                    <div className="text-[11px] text-white/60 mb-2">Stop moves to entry + round-trip costs (spread + commission) once the trade is this many R in profit — independent of TP1 (breakout signals have TP1 = TP, so the TP1 break-even never fired). Scalp engines keep their fixed +0.5R rule. Default {BREAKEVEN_TRIGGER_R_DEFAULT}R · 0 = TP1-only.</div>
+                    <div className="grid grid-cols-2 gap-3 items-end">
+                        <PPNumInput cfg={cfg} setCfg={setCfg} field="breakeven_trigger_r" label="BREAK-EVEN AT" suffix="× R" step={0.1} min={0} max={5} fallback={BREAKEVEN_TRIGGER_R_DEFAULT} />
+                        <label className="flex items-center gap-2 font-mono text-[10px] text-white/80 cursor-pointer" data-testid="breakeven-enabled-toggle">
+                            <input type="checkbox" checked={cfg.breakeven_enabled ?? true} onChange={(e) => setCfg({ ...cfg, breakeven_enabled: e.target.checked })} />
+                            BREAK-EVEN RULE {(cfg.breakeven_enabled ?? true) ? "ON" : "OFF"}
+                        </label>
+                    </div>
                 </div>
 
-                {/* Partial close */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="partial_close_enabled" label="Partial Close at TP1" icon={Scissors} color="#00FF41"
-                        desc="Take 50% of the position off at the first target (1R), let the runner go for the bigger target. Locks in profit and reduces stress." />
-                    {cfg.partial_close_enabled && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="partial_close_trigger_r" label="TRIGGER (R-multiple)" suffix="R" step={0.1} min={0.5} max={5} />
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="partial_close_fraction" label="CLOSE FRACTION" suffix="0-1" step={0.05} min={0.1} max={0.9} />
+                <div className="rounded-lg border border-[#F5C542]/30 p-4 mt-4" data-testid="gold-trend-pulse-config">
+                    <div className="font-mono text-xs text-[#F5C542] mb-1">GOLD TREND PULSE (XAUUSD) — shadow first</div>
+                    <div className="text-[11px] text-white/60 mb-2">Trend-following M5 pullback scalper on gold only (20–45 pips, 0.25 % risk, 45-min time-stop, auto RANGE mode). OFF by default. demo_live sends orders only after its own live gate (≥ 100 labeled shadow trades, positive expectancy after costs, PF &gt; 1.2, max DD &lt; 5R) — until then it runs SHADOW and the Scalp card says why.</div>
+                    <div className="flex flex-wrap gap-4 items-center font-mono text-[10px] text-white/80">
+                        <label className="flex items-center gap-2 cursor-pointer" data-testid="gtp-enabled-toggle">
+                            <input type="checkbox" checked={cfg.gold_trend_pulse_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_enabled: e.target.checked })} />
+                            GOLD TREND PULSE {(cfg.gold_trend_pulse_enabled ?? false) ? "ON" : "OFF"}
+                        </label>
+                        <span className="text-[10px] text-[#F5C542]/90 basis-full" data-testid="gtp-replaces-engine-warning">
+                            ⚠ Enabling GTP on this account <b>replaces its preset engine for XAUUSD</b>: gold is evaluated by the trend-pulse rules only. In shadow mode every gold cycle returns HOLD (decisions are logged, no XAUUSD orders) until demo_live passes its gate. Other symbols keep the preset engine.
+                        </span>
+                        <label className="flex items-center gap-2" data-testid="gtp-mode-select">MODE
+                            <select className="bg-black/40 border border-white/10 rounded px-2 py-1" value={cfg.gold_trend_pulse_mode ?? "shadow"} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_mode: e.target.value })}>
+                                <option value="shadow">shadow</option><option value="demo_live">demo_live (after gate)</option>
+                            </select>
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer" data-testid="gtp-layering-toggle">
+                            <input type="checkbox" checked={cfg.gold_trend_pulse_layering_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_layering_enabled: e.target.checked })} />
+                            LAYERED PULLBACK ENTRIES (3 legs, 1 shared stop, ≤ 0.75 %) {(cfg.gold_trend_pulse_layering_enabled ?? false) ? "ON" : "OFF"}
+                        </label>
+                        <label className="flex items-center gap-2 cursor-pointer" data-testid="gtp-sweep-runner-toggle">
+                            <input type="checkbox" checked={cfg.gold_trend_pulse_sweep_runner_enabled ?? true} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_sweep_runner_enabled: e.target.checked })} />
+                            SWEEP &amp; RECLAIM RUNNER LEG (½ size → pre-drop high, BE at scalp TP) {(cfg.gold_trend_pulse_sweep_runner_enabled ?? true) ? "ON" : "OFF"}
+                        </label>
+                    </div>
+                    <div className="flex flex-wrap gap-4 items-center font-mono text-[10px] text-white/80 mt-3" data-testid="gtp-news-config">
+                        <label className="flex items-center gap-2 cursor-pointer" data-testid="gtp-news-toggle">
+                            <input type="checkbox" checked={cfg.gold_trend_pulse_news_mode_enabled ?? true} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_news_mode_enabled: e.target.checked })} />
+                            NEWS MODE (CPI / NFP / FOMC …) {(cfg.gold_trend_pulse_news_mode_enabled ?? true) ? "ON" : "OFF"}
+                        </label>
+                        <label className="flex items-center gap-2" data-testid="gtp-news-pre-action">PRE (T−15)
+                            <select className="bg-black/40 border border-white/10 rounded px-2 py-1" value={cfg.gold_trend_pulse_news_pre_action ?? "protect"} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_news_pre_action: e.target.value })}>
+                                <option value="protect">protect (BE if ≥ +0.5R, else keep)</option><option value="close">close (BE if ≥ +0.5R, else close)</option><option value="tighten">tighten (BE if ≥ +0.5R, else SL → −0.5R)</option>
+                            </select>
+                        </label>
+                        <label className="flex items-center gap-2" data-testid="gtp-news-release-min">RELEASE window (min)
+                            <input type="number" min={1} max={30} className="bg-black/40 border border-white/10 rounded px-2 py-1 w-16" value={cfg.gold_trend_pulse_news_release_min ?? 5}
+                                onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_news_release_min: Math.max(1, Math.min(30, parseInt(e.target.value || "5", 10))) })} />
+                        </label>
+                        <label className="flex items-center gap-2 flex-1 min-w-[260px]" data-testid="gtp-news-events">EVENTS
+                            <input type="text" className="bg-black/40 border border-white/10 rounded px-2 py-1 flex-1" placeholder="default: CPI, Core CPI, Nonfarm Payrolls, FOMC, Fed Interest Rate Decision, Fed Chair, PCE, GDP, Retail Sales, PPI, ISM"
+                                value={(cfg.gold_trend_pulse_news_events || []).join(", ")}
+                                onChange={(e) => { const v = e.target.value.split(",").map((x) => x.trim()).filter(Boolean); setCfg({ ...cfg, gold_trend_pulse_news_events: v.length ? v : null }); }} />
+                        </label>
+                    </div>
+                    <div className="text-[10px] text-white/40 mt-1">News mode: T−15 → T no entries + open gold positions protected per the PRE policy; T → T+release no entries; T+release → T+90 trades the confirmed surprise bias only (first pullback or sweep &amp; reclaim, TP 30–80 pips, SL ≤ 1.3×TP, 60-min time-stop, max 2 per event, 0.25 % risk). FOMC / Fed Chair: direction from the first 15-min candle.</div>
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-3" data-testid="engine-live-features-toggle">
+                        <input type="checkbox" checked={cfg.engine_live_features_enabled ?? false} onChange={(e) => setCfg({ ...cfg, engine_live_features_enabled: e.target.checked })} />
+                        ENGINE LIVE FEATURES (#55) {(cfg.engine_live_features_enabled ?? false) ? "ON" : "OFF — shadow compare only"}
+                    </label>
+                    <div className="text-[10px] text-white/40 mt-1">hf_scalp / hf_scalp_fast / breakout_m15 read the LIVE broker price for price features, add a 1 h slope and a momentum-continuation entry, and never sell a breakdown whose live price is back inside the channel. OFF = both engine outputs are recorded side by side (engine_shadow_compare) for a week before switching.</div>
+                    {/* v1.60.60 #71 — Gold Daily Bias gates (shadow first, both OFF) */}
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-3" data-testid="gold-bias-gtp-direction-toggle">
+                        <input type="checkbox" checked={cfg.gold_bias_gtp_direction_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_bias_gtp_direction_enabled: e.target.checked })} />
+                        GOLD BIAS → GTP DIRECTION ONLY (#71) {(cfg.gold_bias_gtp_direction_enabled ?? false) ? "ON" : "OFF — shadow"}
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-2" data-testid="gold-bias-block-counter-toggle">
+                        <input type="checkbox" checked={cfg.gold_bias_block_counter_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_bias_block_counter_enabled: e.target.checked })} />
+                        GOLD BIAS → BLOCK COUNTER-BIAS SCALPS (|score| ≥ 60) (#71) {(cfg.gold_bias_block_counter_enabled ?? false) ? "ON" : "OFF — shadow"}
+                    </label>
+                    <div className="text-[10px] text-white/40 mt-1">Gold Daily Bias (−100…+100, every 15 min from D1/H4 trend, DXY, real yields, news, Fed tone, risk regime, COT, calendar surprise) is logged against every gold signal for two weeks first. With both gates OFF it has no trading effect.</div>
+                    {/* #75 — trend-day pullback (shadow first) */}
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-3" data-testid="trend-day-pullback-toggle">
+                        <input type="checkbox" checked={cfg.trend_day_pullback_enabled ?? false} onChange={(e) => setCfg({ ...cfg, trend_day_pullback_enabled: e.target.checked })} />
+                        TREND DAY → ENTER ONLY AFTER PULLBACK TO EMA20 / VWAP (#75) {(cfg.trend_day_pullback_enabled ?? false) ? "ON" : "OFF — shadow (verdict shown in signal notes)"}
+                    </label>
+                    {/* v1.60.62 #84 — broker stop looser than requested */}
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-3" data-testid="ack-loosen-close-toggle">
+                        <input type="checkbox" checked={cfg.ack_loosen_close_enabled ?? false} onChange={(e) => setCfg({ ...cfg, ack_loosen_close_enabled: e.target.checked })} />
+                        BROKER STOP WIDER THAN PLANNED → CLOSE WHEN &gt; 0.25 R AFTER THE CORRECTION (#84) {(cfg.ack_loosen_close_enabled ?? false) ? "ON" : "OFF — correct once, then alert only"}
+                    </label>
+                    <div className="text-[10px] text-white/40 mt-1">When the broker confirms a stop looser than the one requested (beyond its stops-level tolerance), the bot sends one corrective stop move; if the broker still keeps it wider, an ops WARNING is raised. With this ON, a position whose extra risk exceeds 0.25 R after that correction is closed.</div>
+                    {/* v1.60.60 #72 — exit policy */}
+                    <div className="font-mono text-[10px] text-white/60 mt-4 tracking-widest">EXIT POLICY (#72) — hf_scalp · hf_scalp_fast · breakout_m15 · gold_trend_pulse</div>
+                    <select className="bg-black border border-white/20 text-white text-xs p-2 mt-1 w-full" value={cfg.exit_policy ?? "fixed_tp"} data-testid="exit-policy-select"
+                            onChange={(e) => setCfg({ ...cfg, exit_policy: e.target.value })}>
+                        <option value="fixed_tp">fixed_tp — broker TP closes the full position (default)</option>
+                        <option value="tp1_bank_runner">tp1_bank_runner — bank 50 % at TP1, SL → entry + $1, runner trails to TP2</option>
+                    </select>
+                    {(cfg.exit_policy === "tp1_bank_runner") && (
+                        <div className="grid grid-cols-3 gap-2 mt-2">
+                            <label className="font-mono text-[10px] text-white/60">TP1 close fraction
+                                <input type="number" step="0.05" min="0.1" max="0.9" className="bg-black border border-white/20 text-white text-xs p-1 w-full" data-testid="tp1-close-fraction-input"
+                                       value={cfg.tp1_close_fraction ?? 0.5} onChange={(e) => setCfg({ ...cfg, tp1_close_fraction: parseFloat(e.target.value) })} /></label>
+                            <label className="font-mono text-[10px] text-white/60">SL offset ($ from entry)
+                                <input type="number" step="0.1" min="0" max="20" className="bg-black border border-white/20 text-white text-xs p-1 w-full" data-testid="be-plus-offset-input"
+                                       value={cfg.be_plus_offset_price ?? 1.0} onChange={(e) => setCfg({ ...cfg, be_plus_offset_price: parseFloat(e.target.value) })} /></label>
+                            <label className="font-mono text-[10px] text-white/60">TP2 multiple (× TP1 distance)
+                                <input type="number" step="0.1" min="1.1" max="5" className="bg-black border border-white/20 text-white text-xs p-1 w-full" data-testid="tp2-multiple-input"
+                                       value={cfg.tp2_multiple ?? 2.0} onChange={(e) => setCfg({ ...cfg, tp2_multiple: parseFloat(e.target.value) })} /></label>
                         </div>
                     )}
+                    <div className="text-[10px] text-white/40 mt-1">TP1 = the engine&apos;s original TP (never moves). At TP1: close the fraction (floored to the lot step; SL-only when the volume can&apos;t split), SL → entry ± offset (broker min stop respected), broker TP → TP2. Runner trails behind the last M5 swing or 1.0×ATR(M5), profit direction only. Partial fails twice → full close at TP1. Shadow first: compare last week&apos;s trades before enabling on one demo account.</div>
                 </div>
 
-                {/* Soft-Stop — iter-41 payoff-ratio repair */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="soft_stop_enabled" label="Soft-Stop — Cut Losers Early" icon={Scissors} color="#FF3B30"
-                        desc="Close a losing trade once it reaches a fraction of the stop distance (e.g. 60%) instead of riding to the full SL. Shrinks average loss — the fix for high win rate but flat profit." />
-                    {cfg.soft_stop_enabled && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="soft_stop_loss_fraction" label="CUT AT FRACTION OF SL" suffix="0.3-0.9" step={0.05} min={0.3} max={0.9} />
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="soft_stop_min_minutes" label="MIN TRADE AGE" suffix="minutes" step={1} min={1} max={120} />
-                        </div>
-                    )}
+                {/* v1.60.48 (audit item 8) — the exit tiers are ENGINE RULES, not knobs: the old partial_close_* /
+                    soft_stop_* / trailing_* fields were saved but never read by trade_manager. */}
+                <div data-testid="engine-exit-rules" className="rounded-md border border-[#FFD700]/30 bg-[#FFD700]/5 p-4 space-y-2">
+                    <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">ENGINE EXIT RULES · READ-ONLY</div>
+                    <div className="text-xs text-white/80"><span className="text-[#10F2C5] font-mono">SCALP (hf_scalp / hf_scalp_fast)</span> — single TP · stop to entry (+ round-trip costs) at <b>+0.5R</b> · a trade that has not reached +0.5R within <b>90 min</b> is closed · once break-even is armed the trade is risk-free and is left to run to its TP (no second time-stop).</div>
+                    <div className="text-xs text-white/80"><span className="text-[#FFD700] font-mono">LEGACY TIERS</span> — stop to entry at <b>Break-even trigger × R</b> (above) · TP1 <b>100 pips</b> / TP2 <b>200 pips</b> · 50% banked at TP1 and SL moved to entry (or Let Winners Run below) · a break-even the broker would clamp below entry is skipped and retried (be_clamped).</div>
+                    <div className="text-[10px] text-white/40">Trailing stops are not part of either engine; the exit ladder is approved by Monte Carlo at entry and may only be re-scaled ×0.65–×1.2 by the adaptive exit engine.</div>
                 </div>
 
                 {/* Let Winners Run — iter-41 payoff-ratio repair */}
                 <div>
                     <PPToggle cfg={cfg} setCfg={setCfg} field="let_winners_run" label="Let Winners Run" icon={TrendingUp} color="#10F2C5"
                         desc="At TP1, move SL to break-even WITHOUT banking 50% — the full position keeps running toward TP2/TP3 (half banked at TP2). Raises average win at zero added risk once break-even is set." />
-                </div>
-
-                {/* Trailing */}
-                <div>
-                    <PPToggle cfg={cfg} setCfg={setCfg} field="trailing_enabled" label="Trailing Stop-Loss" icon={TrendingUp} color="#00FF41"
-                        desc="After the trade moves +1.5R, SL trails behind price at 0.7R distance. Captures larger trends while locking in gains as they grow." />
-                    {cfg.trailing_enabled && (
-                        <div className="grid grid-cols-2 gap-3 mt-3">
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="trailing_start_r" label="START TRAILING AT" suffix="R" step={0.1} min={1.0} max={10} />
-                            <PPNumInput cfg={cfg} setCfg={setCfg} field="trailing_distance_r" label="TRAIL DISTANCE" suffix="R" step={0.1} min={0.2} max={5} />
-                        </div>
-                    )}
                 </div>
 
                 {/* Daily drawdown */}
@@ -1113,6 +1457,10 @@ function ProfitProtectionSection({ cfg, setCfg }) {
     );
 }
 
+// #85 — pip → price for the $ label on the static spread cap (1 pip of spread on 1 unit of the instrument)
+const PIP_USD = { XAUUSD: 0.10, XAGUSD: 0.01, EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, BTCUSD: 1.0, US30: 1.0, NAS100: 1.0, SPX500: 0.1, GER40: 1.0 };
+const PIP_UNIT = { XAUUSD: "oz", XAGUSD: "oz", BTCUSD: "BTC", US30: "contract", NAS100: "contract", SPX500: "contract", GER40: "contract" };
+
 function TradingIntelligenceSection({ cfg, setCfg }) {
     const spreadMap = cfg.max_spread_pips || {};
     const setSpread = (sym, val) => {
@@ -1156,10 +1504,44 @@ function TradingIntelligenceSection({ cfg, setCfg }) {
                                             className="flex-1 bg-transparent px-3 py-2 text-sm font-mono outline-none" />
                                         <span className="font-mono text-[10px] text-[#52525B] tracking-widest px-2">PIPS</span>
                                     </div>
+                                    {/* v1.60.63 #85 — the static cap in $ too: XAUUSD 50 pips = $5.00, wider than any $2–4.50 target */}
+                                    {spreadMap[sym] > 0 && PIP_USD[sym] && (
+                                        <div className="font-mono text-[10px] text-[#71717A] mt-1" data-testid={`spread-cap-usd-${sym}`}>
+                                            {spreadMap[sym]} pips = ${(spreadMap[sym] * PIP_USD[sym]).toFixed(2)} per {PIP_UNIT[sym] || "lot"}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
                     )}
+                    {/* v1.60.63 #85 — smart spread gate (per account, per symbol, per UTC hour). SHADOW by default. */}
+                    <div className="mt-4 border border-[#F5C542]/30 p-3" data-testid="spread-gate-section">
+                        <div className="font-mono text-[10px] text-[#F5C542] tracking-widest mb-2">SMART SPREAD GATE (#85) · per broker · per symbol · per UTC hour</div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">MODE</label>
+                                <select value={cfg.spread_gate_mode || "shadow"} onChange={(e) => setCfg({ ...cfg, spread_gate_mode: e.target.value })}
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] px-3 py-2 text-sm font-mono" data-testid="spread-gate-mode-select">
+                                    <option value="off">OFF</option>
+                                    <option value="shadow">SHADOW — stamp &amp; count, never blocks (default)</option>
+                                    <option value="enforce">ENFORCE — skip with pulse</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">SPREAD &gt; MULT × HOUR MEDIAN</label>
+                                <input type="number" step="0.1" min="1" value={cfg.spread_gate_mult ?? 1.5} onChange={(e) => setCfg({ ...cfg, spread_gate_mult: parseFloat(e.target.value) || 1.5 })}
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] px-3 py-2 text-sm font-mono" data-testid="spread-gate-mult-input" />
+                            </div>
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">MAX ROUND-TRIP COST (% OF TP)</label>
+                                <input type="number" step="1" min="1" max="100" value={cfg.max_cost_pct_of_tp ?? 12} onChange={(e) => setCfg({ ...cfg, max_cost_pct_of_tp: parseFloat(e.target.value) || 12 })}
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] px-3 py-2 text-sm font-mono" data-testid="spread-gate-cost-pct-input" />
+                            </div>
+                        </div>
+                        <div className="font-mono text-[10px] text-[#52525B] mt-2">
+                            Blocks when the live spread exceeds {cfg.spread_gate_mult ?? 1.5}× this account's median spread for the current UTC hour (needs 30 samples from the last 14 days, else the static cap above), or when spread + median entry slippage + commission exceeds {cfg.max_cost_pct_of_tp ?? 12}% of the planned TP. In SHADOW the verdict is only stamped on the signal — see Bot Health → Trading costs for the scoreboard before enforcing.
+                        </div>
+                    </div>
                 </div>
 
                 {/* Slippage Veto */}
@@ -1300,6 +1682,7 @@ function PositionSizingPreview({ accountId, cfg }) {
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState("");
+    const [botTab, setBotTab] = useState("config");   // Spec A — Track record tab
 
     // Recompute whenever the user changes the symbol, risk level, max_lot_size,
     // or switches to a different account scope.

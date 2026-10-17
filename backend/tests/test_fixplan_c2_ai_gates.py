@@ -47,34 +47,32 @@ def test_a2_send_with_timeout_raises_and_all_loop_calls_use_it(monkeypatch):
     monkeypatch.setenv("AI_CALL_TIMEOUT_SEC", "0.5")
     assert ai_timeout_sec() == 2.0                                     # floor
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for mod in ("ai_signals", "news", "news_understanding", "fed_tone", "ai_optimizer", "loss_postmortem", "loss_advisor", "self_evaluation", "bot_doctor"):
+    for mod in ("ai_signals", "news_understanding", "fed_tone", "ai_optimizer", "loss_postmortem", "loss_advisor", "self_evaluation", "bot_doctor"):
         src = open(os.path.join(root, f"{mod}.py")).read()
-        assert "await chat.send_message(" not in src and "send_with_timeout(" in src, mod
+        # v1.60.59 — every call goes through llm_client.complete(), which runs under the same hard timeout
+        assert "await chat.send_message(" not in src and "llm_client.complete(" in src, mod
 
 
-def test_a2_news_sentiment_falls_back_to_neutral_on_timeout(monkeypatch):
+def test_a2_news_sentiment_reports_unavailable_when_no_source(monkeypatch):
+    """v1.60.39 — news.score_sentiment is routed to news_understanding (RSS + AI). No source → unavailable
+    (score None), never a fake neutral 0; a live snapshot maps net -3..+3 onto score -1..+1 with source count."""
     import news
-    news._CACHE.clear() if hasattr(news, "_CACHE") else None
+    import news_understanding
 
-    async def heads(sym, limit=8):
-        return [{"title": "Gold rallies", "source": "Reuters"}, {"title": "Dollar slides", "source": "FT"}]
+    async def none(base):
+        return None
+    monkeypatch.setattr(news_understanding, "get_news_understanding", none)
+    out = run(news.score_sentiment("XAUUSD.fx"))
+    assert out["score"] is None and out["label"] == "unavailable" and out["available"] is False
 
-    class Chat:
-        def with_model(self, *a):
-            return self
-
-        async def send_message(self, m):
-            await asyncio.sleep(2)
-            return "{}"
-    monkeypatch.setattr(news, "fetch_headlines", heads)
-    monkeypatch.setenv("AI_CALL_TIMEOUT_SEC", "2")
-    monkeypatch.setenv("EMERGENT_LLM_KEY", "test")
-    import llm_timeout
-    monkeypatch.setattr(llm_timeout, "ai_timeout_sec", lambda: 0.05)
-    import emergentintegrations.llm.chat as ec
-    monkeypatch.setattr(ec, "LlmChat", lambda **kw: Chat())
-    out = run(news.score_sentiment("XAUUSD-TIMEOUT-TEST"))
-    assert out["score"] == 0.0 and out["label"] == "neutral" and out["distinct_sources"] == 2
+    async def snap(base):
+        assert base == "XAUUSD"
+        return {"net": -2.1, "label": "strongly_bearish", "headlines": 7, "distinct_sources": 3,
+                "drivers": [{"title": "Dollar surges", "source": "BBC", "score": -3, "why": "USD strength"}]}
+    monkeypatch.setattr(news_understanding, "get_news_understanding", snap)
+    out = run(news.score_sentiment("XAUUSD.fx"))
+    assert out["score"] == -0.7 and out["label"] == "very_bearish" and out["distinct_sources"] == 3
+    assert out["available"] is True and out["source"] == "rss_ai" and out["article_count"] == 7
 
 
 def test_a4_a5_sentiment_sanitised_and_veto_needs_two_sources():

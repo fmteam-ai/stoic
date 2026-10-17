@@ -15,6 +15,9 @@ x-app-common: &app-common
   env_file:
     - backend/.env
   environment: &app-env
+    # hf_xet 1.5.x native downloader aborts the whole uvicorn worker (Fatal Python error) on a cold Chronos
+    # model fetch → every route 502. Plain HTTP download is used instead (found by the v1.60.29 smoke test).
+    HF_HUB_DISABLE_XET: "1"
     MONGO_URL_FILE: /run/secrets/mongo_url
     JWT_SECRET_FILE: /run/secrets/jwt_secret
     KEY_VAULT_MASTER_FILE: /run/secrets/key_vault_master
@@ -37,8 +40,12 @@ x-app-common: &app-common
     # A19-P1-04 — signed host profile refreshed daily by the host timer (deploy/host-profile-refresh.sh);
     # read on every readiness check, never cached in env, expires after 24 h
     STOIC_HOST_PROFILE_FILE: /app/state/host_profile.json
+    # audit 14 Oct (release-gate packaging) — the gate must read the ADOPTED signed lock (deploy/lib.sh
+    # adopt_release_lock writes ./release/rc_lock.json), not the developer snapshot baked into the image.
+    RC_LOCK_PATH: /app/release/rc_lock.json
   volumes:
     - ./deploy/state:/app/state:ro
+    - ./release/rc_lock.json:/app/release/rc_lock.json:ro
   secrets:
     - mongo_url
     - jwt_secret
@@ -138,6 +145,12 @@ services:
       # Dedicated worker services below own the loops — the API must NOT
       # double-run them.
       BACKGROUND_WORKERS_IN_PROCESS: "false"
+      STOIC_BACKUP_DIR: /backups
+    volumes:
+      - ./deploy/state:/app/state:ro
+      - ./release/rc_lock.json:/app/release/rc_lock.json:ro
+      # Infrastructure → Backups panel lists the server's own Mongo backups (names/ages only), READ-ONLY
+      - ${BACKUP_DIR:-./backups}:/backups:ro
     ports:
       # loopback-only: clients must go through the frontend/ingress proxy
       # (security headers, normalized X-Forwarded-*, TLS) — never direct.
@@ -169,6 +182,10 @@ services:
     environment:
       <<: *app-env
       SECURITY_AGENT_TELEGRAM_BOT_TOKEN_FILE: /run/secrets/security_telegram_token
+      STOIC_BACKUP_DIR: /backups
+    volumes:
+      # daily report I1 — backup age is checked from the host's backup folder, mounted READ-ONLY
+      - ${BACKUP_DIR:-./backups}:/backups:ro
     secrets:
       - mongo_url
       - jwt_secret

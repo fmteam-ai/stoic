@@ -25,6 +25,7 @@ EVALUATOR_KINDS = (
     "worker_loop_stalled", "outbox_backlog", "outbox_failed",
     "unprotected_positions", "reconciliation_stuck", "pairing_no_heartbeat", "policy_expiring", "policy_expired", "demo_account_reports_real",
     "vps_terminal_restart_loop",   # Phase 2 VPS Agent: restart budget exhausted without a fresh EA heartbeat
+    "authority_degraded", "authority_fleet_close_only",   # v1.60.43 — enabled account not FULL > 15 min / whole fleet CLOSE_ONLY
     "vps_agent_degraded",          # P2-01: the agent cannot persist its restart ledger — automatic restarts suspended
     "host_profile_refresh_overdue", "host_profile_unverified",   # A20-P1-03: signed host profile >12 h old / expired
     "key_rotation_due",            # M120-2: release/runtime key > 180 d, Origin CA cert < 30 d
@@ -364,6 +365,19 @@ async def evaluate_ops_alerts(db) -> int:
         except Exception as e2:  # noqa: BLE001
             logger.warning("vps agent keep-open failed: %s", type(e2).__name__)
 
+    # 5c · v1.60.43 — trading authority: on 15 Oct all 4 accounts sat in CLOSE_ONLY for 1 h 35 min and nothing fired.
+    # Any enabled (non-paper) account below FULL for > AUTHORITY_DEGRADED_S → critical; every enabled account below
+    # FULL at the same time (≥ 2 accounts) → critical immediately.
+    try:
+        raised += await _authority_alerts(db, now, active)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("authority alert evaluation failed: %s", type(e).__name__)
+        try:
+            active |= {a["dedup_key"] async for a in db.ops_alerts.find(
+                {"kind": {"$in": ["authority_degraded", "authority_fleet_close_only"]}, "acked_at": None}, {"dedup_key": 1}) if a.get("dedup_key")}
+        except Exception as e2:  # noqa: BLE001
+            logger.warning("authority keep-open failed: %s", type(e2).__name__)
+
     # 6 · AUTO-RESOLVE — evaluator-managed alerts whose condition no longer
     # holds are closed automatically (acked_by system:auto-resolved) so a
     # transient blip (terminal reconnects, backlog drains, stop confirmed)
@@ -378,6 +392,52 @@ async def evaluate_ops_alerts(db) -> int:
         logger.info("auto-resolved %d ops alert(s) — condition cleared",
                     res.modified_count)
 
+    return raised
+
+
+AUTHORITY_DEGRADED_S = int(os.environ.get("AUTHORITY_DEGRADED_ALERT_SEC", "900"))
+
+
+async def _authority_alerts(db, now, active: set) -> int:
+    from trading_authority import compute_authority
+    raised = 0
+    rows = []
+    async for acc in db.accounts.find({"trading_enabled": True, "mode": {"$ne": "paper"}}):
+        snap = await compute_authority(db, acc)
+        level = snap.get("level")
+        aid = str(acc["_id"])
+        if level == "FULL":
+            await db.authority_watch.delete_one({"_id": aid})
+            continue
+        w = await db.authority_watch.find_one({"_id": aid})
+        since = _parse_ts((w or {}).get("since")) if w else None
+        if since is None:
+            since = now
+            await db.authority_watch.update_one({"_id": aid}, {"$set": {"since": now, "level": level}}, upsert=True)
+        else:
+            await db.authority_watch.update_one({"_id": aid}, {"$set": {"level": level}})
+        rows.append((acc, level, since, snap))
+    n_enabled = await db.accounts.count_documents({"trading_enabled": True, "mode": {"$ne": "paper"}})
+    for acc, level, since, snap in rows:
+        dur = (now - since).total_seconds()
+        if dur >= AUTHORITY_DEGRADED_S:
+            key = f"authority:{acc['_id']}"
+            active.add(key)
+            reasons = "; ".join(f"{k}: {v.get('reason')}" for k, v in (snap.get("domains") or {}).items() if v.get("level") != "FULL")[:400]
+            if await raise_alert(db, "authority_degraded", "critical",
+                                 f"Account {acc.get('label') or acc.get('account_number')} has been {level} (not FULL) for "
+                                 f"{int(dur // 60)} min — {reasons or 'see Bot Health'}",
+                                 dedup_key=key, meta={"account_id": str(acc["_id"]), "level": level, "since": since.isoformat(),
+                                                      "restricted_domains": snap.get("restricted_domains")}):
+                raised += 1
+    if n_enabled >= 2 and len(rows) == n_enabled:
+        active.add("authority:fleet")
+        levels = sorted({lvl for _, lvl, _, _ in rows})
+        if await raise_alert(db, "authority_fleet_close_only", "critical",
+                             f"ALL {n_enabled} enabled accounts have left FULL at the same time ({', '.join(levels)}) — platform-wide "
+                             "cause likely (release/EA acceptance, broker, infrastructure). Check Bot Health → authority.",
+                             dedup_key="authority:fleet", meta={"accounts": [str(a["_id"]) for a, _, _, _ in rows], "levels": levels}):
+            raised += 1
     return raised
 
 

@@ -18,9 +18,11 @@ from bson import ObjectId
 
 from database import get_db
 from close_commands import request_close
-from market import get_quote
+from command_fence import stamp_pending_modification
+from market import get_quote  # noqa: F401 — kept for paper/analysis callers (live mgmt uses broker_price)
 from ws_manager import manager as ws_manager
 from pip_utils import price_to_pips
+from strategy_engines import SCALP_ENGINES
 from notifier import notify_circuit_breaker
 
 logger = logging.getLogger("trade-manager")
@@ -36,7 +38,330 @@ def _free_slot_filter(trade_id) -> dict:
 # user policy (2026-07-16): TP1 100 / TP2 200, bank half at TP1, rest at TP2
 DEFAULT_SL_PIPS = 120
 DEFAULT_TP_PIPS = (100, 200, 200)   # (TP1, TP2, TP3) — tp3<=tp2 → 2-tier
+
+# v1.60.32 C8/C9 — hf_scalp / hf_scalp_fast exit rules (owner request, demo engines). Before the single-TP change
+# the breakeven rode on TP1 = 0.4 × 2R = 0.8R; a trade reached +0.72R and then took the full stop. Now: stop to
+# entry (+ round-trip costs) at +0.5R, and a trade that has not reached +0.5R within 90 minutes is closed — the
+# momentum burst has failed (all three losses so far were held 1–3 h after a failed burst).
+SCALP_BE_TRIGGER_R = float(os.environ.get("SCALP_BE_TRIGGER_R", "0.5"))
+SCALP_TIME_STOP_MIN = int(os.environ.get("SCALP_TIME_STOP_MIN", "90"))
+SCALP_DEFAULT_COST_PIPS = {"XAUUSD": 2.5, "XAGUSD": 3.0, "USDJPY": 1.2}   # pip_utils convention (gold pip = 0.1)
+SCALP_DEFAULT_COST_PIPS_FX = 1.5
+
+
+def tightened_sl(trade: dict, new_sl: float):
+    """Never loosen a stop (14 Oct 15:13 incident: the legacy TP1 path moved two SELL stops from entry−costs back up
+    to raw entry). Returns `new_sl` only when it is strictly tighter than the current stop — BUY: higher, SELL: lower —
+    or when the trade has no stop yet; otherwise None."""
+    cur = float(trade.get("stop_loss") or 0)
+    if cur <= 0:
+        return new_sl
+    if trade.get("action") == "BUY":
+        return new_sl if new_sl > cur else None
+    return new_sl if new_sl < cur else None
+
+
+def be_clamp(trade: dict, new_sl: float, current: float, min_stop_distance_px) -> dict | None:
+    """v1.60.42 — the EA clamps a MODIFY_SL to the broker's stops level measured from the CURRENT price; on a fast
+    spike back toward entry the clamped breakeven lands on the LOSING side of entry (OnEquity #46719148: SL clamped
+    below entry, −0.92). Pure: returns the clamp detail when the requested stop would be clamped past entry, else None."""
+    try:
+        dist = float(min_stop_distance_px or 0)
+    except (TypeError, ValueError):
+        return None
+    if dist <= 0 or not current or current <= 0:
+        return None
+    entry = float(trade.get("entry_price") or 0)
+    if trade.get("action") == "BUY":
+        clamped = min(float(new_sl), current - dist)
+        losing = clamped < entry
+    else:
+        clamped = max(float(new_sl), current + dist)
+        losing = clamped > entry
+    if not losing:
+        return None
+    return {"requested_sl": round(float(new_sl), 5), "clamped_to": round(clamped, 5), "entry": entry, "current": current,
+            "min_stop_distance_px": dist, "action": trade.get("action")}
+
+
+async def be_clamped_skip(db, trade: dict, new_sl: float, current: float, source: str) -> dict | None:
+    """Skip (and log `be_clamped`) a breakeven MODIFY_SL that the EA would clamp below entry. Needs fresh broker
+    symbol specs on the account (protection_guard.broker_stop_constraints); without them the request goes out as before."""
+    from protection_guard import broker_stop_constraints, find_account
+    acc, _ = await find_account(db, str(trade.get("account_id") or ""))
+    cons = broker_stop_constraints(acc, trade.get("symbol")) if acc else None
+    clamp = be_clamp(trade, new_sl, current, (cons or {}).get("min_stop_distance_px"))
+    if clamp is None:
+        return None
+    clamp.update({"source": source, "at": datetime.now(timezone.utc).isoformat(), "decision": "skip"})
+    logger.warning("be_clamped: %s %s #%s stop %.5f would be clamped to %.5f (entry %.5f, stops level %.5f) — not sent (%s)",
+                   trade.get("symbol"), trade.get("action"), trade.get("mt5_ticket"), clamp["requested_sl"], clamp["clamped_to"],
+                   clamp["entry"], clamp["min_stop_distance_px"], source)
+    last = (trade.get("be_clamped") or [None])[-1]
+    if last and last.get("source") == source and last.get("requested_sl") == clamp["requested_sl"]:
+        try:
+            if (datetime.now(timezone.utc) - datetime.fromisoformat(str(last.get("at")))).total_seconds() < 300:
+                return clamp                        # same clamp re-evaluated within 5 min: evidence already on the trade
+        except (TypeError, ValueError):
+            pass
+    await db.trades.update_one({"_id": trade["_id"]}, {"$push": {"be_clamped": clamp}, "$inc": {"be_clamped_count": 1},
+                                                       "$set": {"be_clamped_last_at": clamp["at"]}})
+    await ws_manager.broadcast(trade["user_id"], "trade_management", {
+        "trade_id": str(trade["_id"]), "action": "BE_CLAMPED", "requested_sl": clamp["requested_sl"],
+        "clamped_to": clamp["clamped_to"], "source": source})
+    return clamp
+
+
+async def record_sl_loosen_refusal(trade: dict, requested_sl: float, source: str) -> bool:
+    """Stop audit trail (v1.60.35): persist each REFUSED stop-loosen on the trade — once per trade + requested SL +
+    source (the manager re-evaluates every cycle; the first refusal is the evidence, repeats are noise). Returns True
+    when a new entry was written."""
+    req = round(float(requested_sl), 5)
+    for r in trade.get("sl_loosen_refusals") or []:
+        if r.get("source") == source and round(float(r.get("requested_sl") or 0), 5) == req:
+            return False
+    entry = {"source": source, "requested_sl": req, "current_sl": float(trade.get("stop_loss") or 0),
+             "action": trade.get("action"), "at": datetime.now(timezone.utc).isoformat()}
+    await get_db().trades.update_one({"_id": trade["_id"]}, {"$push": {"sl_loosen_refusals": entry}})
+    lst = trade.setdefault("sl_loosen_refusals", [])
+    if entry not in lst:
+        lst.append(entry)
+    logger.warning("stop-loosen REFUSED trade=%s %s %s: requested %s vs current %s", trade["_id"], trade.get("symbol"),
+                   source, req, entry["current_sl"])
+    return True
+
+
+def is_scalp_engine_trade(trade: dict) -> bool:
+    """Bot trades carry the engine in `scope` ("hf_scalp" / "hf_scalp_fast"); `engine` is usually None on real rows
+    (review of v1.60.32 on live tickets) — honour either."""
+    return (trade.get("engine") or trade.get("scope")) in SCALP_ENGINES
+
+
+def scalp_cost_pips(trade: dict) -> float:
+    """Round-trip cost in pips: the spread recorded at entry when known, a conservative per-symbol default otherwise."""
+    from pip_utils import base_symbol
+    spread = trade.get("spread_pips") or trade.get("entry_spread_pips") or trade.get("spread_at_entry_pips")
+    try:
+        spread = float(spread or 0)
+    except (TypeError, ValueError):
+        spread = 0.0
+    if spread <= 0 and (trade.get("gold_trend_pulse") or {}).get("spread_at_entry") is not None:
+        spread = float(trade["gold_trend_pulse"]["spread_at_entry"]) / 0.10      # #69 — GTP decision spread (price units, 1 pip = 0.10)
+    if spread <= 0:
+        spread = SCALP_DEFAULT_COST_PIPS.get(base_symbol(trade.get("symbol")), SCALP_DEFAULT_COST_PIPS_FX)
+    return spread + float(trade.get("commission_pips") or 0)
+
+
+def scalp_breakeven_sl(trade: dict) -> float:
+    """Entry plus costs, on the profitable side — the trade can never close negative after this stop is live."""
+    from pip_utils import pips_to_price
+    entry = float(trade["entry_price"])
+    off = pips_to_price(trade["symbol"], scalp_cost_pips(trade))
+    return round(entry + off if trade.get("action") == "BUY" else entry - off, 5)
+
+
+def scalp_time_stop_due(trade: dict, now=None) -> bool:
+    """True when the trade is older than SCALP_TIME_STOP_MIN and never armed the +0.5R breakeven.
+    Intended (audit item 9, decided 16 Oct): once the breakeven is armed the trade is risk-free (stop at entry +
+    round-trip costs) and is LEFT TO RUN to its TP — no second time-stop. A scratch close is the broker stop doing
+    its job, not a timeout."""
+    if trade.get("breakeven_set") or trade.get("be_target_sl") or trade.get("tp1_closed"):
+        return False
+    opened = trade.get("opened_at") or trade.get("created_at")
+    try:
+        dt = datetime.fromisoformat(str(opened).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    return ((now or datetime.now(timezone.utc)) - dt).total_seconds() >= SCALP_TIME_STOP_MIN * 60
+
+
+async def _tp1_bank_runner_exits(db, trade: dict, cfg: dict, current: float) -> bool:
+    """v1.60.60 #72 — TP1 bank (partial + SL → entry ± offset + broker TP → TP2) then protected runner trail.
+    Returns True when it owns the trade this cycle (the engine's own BE/time-stop branches still run when False)."""
+    import exit_policy_tp1 as X
+    from protection_guard import broker_stop_constraints, find_account
+    from pip_utils import lot_spec
+    trade_id, action, entry = trade["_id"], trade["action"], float(trade["entry_price"])
+    plan = trade.get("tp_plan")
+    if not plan:                                                     # stamp once at first management pass: TP1 = engine TP (immutable)
+        tp1 = trade.get("original_take_profit") or trade.get("take_profit")
+        if not tp1 or not trade.get("stop_loss"):
+            return False
+        plan = X.plan_targets(entry, float(trade["stop_loss"]), float(tp1), action, float(cfg.get("tp2_multiple") or X.DEFAULTS["tp2_multiple"]))
+        await db.trades.update_one(_free_slot_filter(trade_id), {"$set": {"tp_plan": plan, "exit_policy": "tp1_bank_runner"}})
+        trade["tp_plan"] = plan
+    acc, _ = await find_account(db, str(trade.get("account_id") or ""))
+    cons = (broker_stop_constraints(acc, trade.get("symbol")) if acc else None) or {}
+    min_lot, lot_step = lot_spec(acc, trade.get("symbol")) if acc else (0.01, 0.01)
+    bank = trade.get("tp1_bank")
+    if not bank:
+        if not X.tp1_reached(action, current, plan["tp1"], buffer=float(cfg.get("tp1_trigger_buffer_price") or 0.0)):
+            return False
+        pend_err = (trade.get("pending_modification") or {}).get("last_error")
+        attempts = int(trade.get("tp1_bank_attempts") or 0)
+        if attempts >= 2 or (attempts == 1 and pend_err):           # partial failed twice → close the full position at TP1
+            from close_commands import mandatory_close
+            await mandatory_close(db, trade, reason="tp1_bank_failed", actor="trade_manager", account=acc)
+            await db.trades.update_one({"_id": trade_id}, {"$set": {"tp1_bank_failed": True, "scalp_exit_rule": "tp1_bank_failed_full_close"}})
+            return True
+        bp = X.bank_plan(trade, current, lot_step=lot_step, min_lot=min_lot, min_stop_distance_px=cons.get("min_stop_distance_px"),
+                         close_fraction=float(cfg.get("tp1_close_fraction") or X.DEFAULTS["tp1_close_fraction"]),
+                         offset_price=float(cfg.get("be_plus_offset_price") or X.DEFAULTS["be_plus_offset_price"]), tp2=plan["tp2"])
+        pend = ({"type": "MODIFY_SL", "new_sl": bp["new_sl"], "new_tp": bp["new_tp"], "reason": "tp1_bank"} if bp["sl_only"]
+                else {"type": "PARTIAL_CLOSE", "new_volume": bp["keep_volume"], "new_sl": bp["new_sl"], "new_tp": bp["new_tp"], "reason": "tp1_bank"})
+        rec = X.bank_record(bp, current, attempts + 1)
+        stamped = await stamp_pending_modification(db, _free_slot_filter(trade_id), pend,
+                                                   {"tp1_bank": rec, "tp1_bank_attempts": attempts + 1, "tp1_closed": not bp["sl_only"],
+                                                    "be_target_sl": bp["new_sl"], "take_profit_tp2": bp["new_tp"], "scalp_exit_rule": "tp1_bank"})
+        if stamped is None:
+            return True
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {"trade_id": str(trade_id), "action": "TP1_BANK", **{k: v for k, v in rec.items() if k != "pnl"}})
+        logger.info("tp1_bank %s %s #%s %s", trade.get("symbol"), action, trade.get("mt5_ticket"), bp["note"])
+        return True
+    # runner: trail behind last M5 swing / 1.0×ATR(M5), profit direction only
+    try:
+        from pip_utils import base_symbol as _bs
+        doc = await db.intraday_candles.find_one({"user_id": trade["user_id"], "symbol": _bs(trade.get("symbol")), "timeframe": "M5"}, {"bars": 1})
+        bars = ((doc or {}).get("bars") or [])
+        if not bars:                                                 # resample the M1 stream when no M5 feed is stored
+            from bars_util import m5_from_m1
+            d1 = await db.intraday_candles.find_one({"user_id": trade["user_id"], "symbol": _bs(trade.get("symbol")), "timeframe": "M1"}, {"bars": 1})
+            bars = m5_from_m1(((d1 or {}).get("bars") or [])[-150:])
+        bars = list(bars)[-20:-1]                                    # completed bars only
+    except Exception:  # noqa: BLE001
+        bars = []
+    cur_sl = trade.get("be_target_sl") or trade.get("stop_loss")
+    if cur_sl is None or trade.get("pending_modification"):
+        return True
+    new_sl = X.trail_sl(action, float(cur_sl), current, bars, min_stop_distance_px=cons.get("min_stop_distance_px"))
+    if new_sl is None or tightened_sl(trade, new_sl) is None:
+        return True
+    stamped = await stamp_pending_modification(db, _free_slot_filter(trade_id), {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "tp1_runner_trail"},
+                                               {"be_target_sl": new_sl, "scalp_exit_rule": "tp1_runner_trail"})
+    if stamped is not None:
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {"trade_id": str(trade_id), "action": "TP1_RUNNER_TRAIL", "new_sl": new_sl})
+    return True
+
+
+async def _scalp_engine_exits(db, trade: dict, cfg: dict, current: float, pips_up: float) -> bool:
+    """C8 breakeven at +0.5R (stop → entry + costs) and C9 90-min time-stop. Returns True when it acted."""
+    sl_pips, *_ = _trade_targets(trade)
+    trade_id = trade["_id"]
+    if sl_pips > 0 and pips_up >= SCALP_BE_TRIGGER_R * sl_pips \
+            and not trade.get("breakeven_set") and not trade.get("be_target_sl"):
+        new_sl = scalp_breakeven_sl(trade)
+        if tightened_sl(trade, new_sl) is None:
+            await record_sl_loosen_refusal(trade, new_sl, "scalp_breakeven_0_5r")
+        elif await be_clamped_skip(db, trade, new_sl, current, "scalp_breakeven_0_5r"):
+            return True                             # v1.60.42 — retried next cycle once price clears the stops level
+        else:
+            stamped = await stamp_pending_modification(
+                db, _free_slot_filter(trade_id),
+                {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "scalp_breakeven_0_5r"},
+                {"be_target_sl": new_sl, "scalp_exit_rule": "breakeven_0_5r",
+                 "scalp_be_armed_at": datetime.now(timezone.utc).isoformat(),
+                 "scalp_be_armed_pips": round(pips_up, 1)})
+            if stamped is None:
+                return True
+            await ws_manager.broadcast(trade["user_id"], "trade_management", {
+                "trade_id": str(trade_id), "action": "SCALP_BE_0_5R", "new_sl": new_sl,
+                "from_lot": float(trade.get("lot_size") or 0), "to_lot": float(trade.get("lot_size") or 0),
+                "pips": round(pips_up, 1)})
+            return True
+    if scalp_time_stop_due(trade):
+        await request_close(db, {"_id": trade_id}, reason="time_stop", actor="trade_manager", stamp={
+            "time_stop_minutes": SCALP_TIME_STOP_MIN, "scalp_exit_rule": "time_stop_90m",
+            "scalp_time_stop_pips": round(pips_up, 1),
+            "pending_modification": {"type": "FULL_CLOSE", "reason": "scalp_time_stop",
+                                     "requested_at": datetime.now(timezone.utc).isoformat()}})
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {
+            "trade_id": str(trade_id), "action": "SCALP_TIME_STOP", "pips": round(pips_up, 1),
+            "from_lot": float(trade.get("lot_size") or 0), "to_lot": 0.0})
+        return True
+    return False
+async def _gold_trend_pulse_exits(db, trade: dict, current: float, pips_up: float) -> bool:
+    """gold_trend_pulse (v1.60.57): BE once 60 % of the TP distance is reached — stop → entry ± (spread + commission),
+    BUY above / SELL below entry — and a time-stop (45 min TREND, 20 min RANGE) at the broker price. Returns True when it acted."""
+    from gold_trend_pulse import rules as R
+    meta = trade.get("gold_trend_pulse") or {}
+    entry, action = float(trade["entry_price"]), trade.get("action")
+    _, tp1_pips, *_ = _trade_targets(trade)
+    from pip_utils import pips_to_price
+    tp_dist = pips_to_price(trade["symbol"], tp1_pips)
+    be_px = meta.get("be_trigger_price")          # item 13 runner leg: BE once the scalp TP is hit; else 60 % of TP
+    be_due = ((current >= float(be_px)) if action == "BUY" else (current <= float(be_px))) if be_px else \
+        (tp_dist > 0 and R.breakeven_due(action, entry, tp_dist, current))
+    if be_due and not trade.get("breakeven_set") and not trade.get("be_target_sl"):
+        new_sl = scalp_breakeven_sl(trade)          # entry ± (spread_at_entry + commission) in price units, sign by direction
+        if tightened_sl(trade, new_sl) is None:
+            await record_sl_loosen_refusal(trade, new_sl, "gtp_breakeven_60pct")
+        elif await be_clamped_skip(db, trade, new_sl, current, "gtp_breakeven_60pct"):
+            return True
+        else:
+            stamped = await stamp_pending_modification(
+                db, _free_slot_filter(trade["_id"]), {"type": "MODIFY_SL", "new_sl": new_sl, "reason": "gtp_breakeven_60pct"},
+                {"be_target_sl": new_sl, "scalp_exit_rule": "gtp_breakeven_60pct", "scalp_be_armed_at": datetime.now(timezone.utc).isoformat(),
+                 "be_cost_pips": round(scalp_cost_pips(trade), 2)})
+            if stamped is not None:
+                await ws_manager.broadcast(trade["user_id"], "trade_management", {
+                    "trade_id": str(trade["_id"]), "action": "GTP_BE_60PCT", "new_sl": new_sl, "pips": round(pips_up, 1),
+                    "from_lot": float(trade.get("lot_size") or 0), "to_lot": float(trade.get("lot_size") or 0)})
+            return True
+    ts_min = int(meta.get("time_stop_min") or (R.RANGE_TIME_STOP_MIN if meta.get("regime") == "RANGE" else R.TIME_STOP_MIN))
+    opened = trade.get("opened_at") or trade.get("created_at")
+    try:
+        dt = datetime.fromisoformat(str(opened).replace("Z", "+00:00"))
+        dt = dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return False
+    if (datetime.now(timezone.utc) - dt).total_seconds() >= ts_min * 60:
+        await request_close(db, {"_id": trade["_id"]}, reason="time_stop", actor="trade_manager", stamp={
+            "time_stop_minutes": ts_min, "scalp_exit_rule": f"gtp_time_stop_{ts_min}m",
+            "pending_modification": {"type": "FULL_CLOSE", "reason": "gtp_time_stop", "requested_at": datetime.now(timezone.utc).isoformat()}})
+        await ws_manager.broadcast(trade["user_id"], "trade_management", {
+            "trade_id": str(trade["_id"]), "action": "GTP_TIME_STOP", "pips": round(pips_up, 1),
+            "from_lot": float(trade.get("lot_size") or 0), "to_lot": 0.0})
+        return True
+    return False
+
+
 DEFAULT_BE_TRIGGER_PIPS = 100        # move SL to entry at +100 pips
+
+
+async def _breakeven_trigger_r(db, trade: dict, cfg: dict, current: float, pips_up: float) -> bool:
+    """Stop to entry + round-trip costs once pips_up ≥ breakeven_trigger_r × sl_pips. #46: the trigger comes from
+    models.effective_breakeven_trigger_r (shared default 1.0R, breakeven_enabled honoured, 0 = disabled) and the stop
+    sits on the profitable side of entry by spread + commission (scalp_breakeven_sl) so a BE fill nets ≥ 0.
+    Returns True when it acted or deliberately deferred (clamp) — the tiers run next cycle. Never loosens, never re-arms."""
+    from models import effective_breakeven_trigger_r
+    trigger_r = effective_breakeven_trigger_r(cfg)
+    if trigger_r <= 0 or trade.get("breakeven_set") or trade.get("be_target_sl") or trade.get("tp1_closed"):
+        return False
+    sl_pips, *_ = _trade_targets(trade)
+    if sl_pips <= 0 or pips_up < trigger_r * sl_pips:
+        return False
+    entry = scalp_breakeven_sl(trade)          # entry ± (spread + commission) on the profitable side
+    if pips_up <= scalp_cost_pips(trade):
+        return False                           # not yet past costs — a BE stop here would still be a loss
+    be_sl = tightened_sl(trade, entry)
+    if be_sl is None:
+        return False          # stop already at/beyond entry — nothing to tighten (not a refusal worth recording)
+    if await be_clamped_skip(db, trade, be_sl, current, "breakeven_trigger_r"):
+        return True
+    stamped = await stamp_pending_modification(
+        db, _free_slot_filter(trade["_id"]),
+        {"type": "MODIFY_SL", "new_sl": be_sl, "reason": "breakeven_trigger_r"},
+        {"be_target_sl": be_sl, "be_rule": f"breakeven_trigger_r:{trigger_r:g}", "be_cost_pips": round(scalp_cost_pips(trade), 2),
+         "be_armed_at": datetime.now(timezone.utc).isoformat(), "be_armed_pips": round(pips_up, 1)})
+    if stamped is None:
+        return True
+    await ws_manager.broadcast(trade["user_id"], "trade_management", {
+        "trade_id": str(trade["_id"]), "action": "BE_TRIGGER_R", "new_sl": be_sl, "trigger_r": trigger_r,
+        "from_lot": float(trade.get("lot_size") or 0), "to_lot": float(trade.get("lot_size") or 0),
+        "pips": round(pips_up, 1)})
+    return True
 
 
 def _interval() -> int:
@@ -63,25 +388,54 @@ def _trade_targets(trade: dict) -> tuple:
     return float(sl_pips), float(tp1), float(tp2), float(tp3)
 
 
-def _soft_stop_should_fire(cfg: dict, pips_up: float, sl_pips: float, opened_at) -> bool:
-    """iter-41 · Soft-Stop — should this losing trade be cut early?
-
-    Fires when the adverse move reaches `soft_stop_loss_fraction` of the SL
-    distance AND the trade is older than `soft_stop_min_minutes` (so normal
-    entry noise doesn't insta-close fresh trades)."""
-    if not cfg.get("soft_stop_enabled") or pips_up >= 0 or sl_pips <= 0:
-        return False
-    frac = min(max(float(cfg.get("soft_stop_loss_fraction") or 0.6), 0.3), 0.9)
-    min_age_min = int(cfg.get("soft_stop_min_minutes") or 10)
+async def _broker_snapshot(trade: dict) -> dict:
+    """broker_price.for_trade with the scalp tick fallback — the single price seam for live tier management."""
+    import broker_price as _bp
+    ea_version = None
     try:
-        dt = datetime.fromisoformat(str(opened_at).replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        if (datetime.now(timezone.utc) - dt).total_seconds() < min_age_min * 60:
-            return False
-    except Exception:
-        pass  # unknown age — don't block the loss guard
-    return (-pips_up) >= sl_pips * frac
+        from protection_guard import find_account
+        acc, _ = await find_account(get_db(), str(trade.get("account_id") or ""))
+        ea_version = (acc or {}).get("ea_version")
+    except Exception:  # noqa: BLE001 — unknown EA version → strict (live_price_at required)
+        pass
+    return _bp.for_trade(trade, await _scalp_tick_for(trade), ea_version=ea_version)
+
+
+async def _scalp_tick_for(trade: dict) -> dict | None:
+    """Latest scalp tick for the trade's account+symbol (in-memory runner), if any."""
+    try:
+        from scalp.engine import runners_for_account
+        for r in runners_for_account(str(trade.get("account_id") or "")):
+            if r.symbol == (trade.get("symbol") or "").upper() and r.state.last_tick:
+                t = r.state.last_tick
+                return {"bid": t.bid, "ask": t.ask, "ts_ms": t.received_time_ms}
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+_skip_pulse_at: dict = {}
+
+
+async def _management_skipped_pulse(db, trade: dict, cfg: dict, snap: dict) -> None:
+    """One pulse per trade per 5 min: 'broker price stale — management skipped'."""
+    import time as _t
+    tid = str(trade.get("_id"))
+    now_t = _t.time()
+    if now_t - _skip_pulse_at.get(tid, 0) < 300:
+        return
+    _skip_pulse_at[tid] = now_t
+    if len(_skip_pulse_at) > 500:                       # #47 — prune: closed trades never come back
+        for k in [k for k, v in _skip_pulse_at.items() if now_t - v > 3600]:
+            _skip_pulse_at.pop(k, None)
+    age = snap.get("age_ms")
+    try:
+        from bot_runner import _record_pulse
+        await _record_pulse(db, cfg, symbol=trade.get("symbol"), action="SKIP", level="warn",
+                            reason=(f"broker price stale — management skipped (trade {tid[-6:]}, "
+                                    f"{'no price' if age is None else f'{age / 1000:.0f}s old'}; {snap.get('note') or snap.get('source')})"))
+    except Exception as e:  # noqa: BLE001
+        logger.debug("skip pulse failed: %s", e)
 
 
 async def _manage_one_trade(trade: dict, cfg: dict) -> None:
@@ -110,17 +464,38 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
     if not trade.get("mt5_ticket"):
         return  # still pending, EA hasn't filled yet
 
-    try:
-        quote = await get_quote(symbol)
-        current = float(quote.get("price") or 0)
-    except Exception as e:
-        logger.warning("price fetch failed for %s: %s", symbol, e)
+    # v1.60.53 (D) — LIVE trades are managed on the BROKER price the EA reports per position (bid for BUY, ask for
+    # SELL), with the scalp tick stream as the only fallback. Never a web quote: stale/missing → skip this cycle.
+    snap = await _broker_snapshot(trade)
+    if not snap.get("fresh"):
+        await _management_skipped_pulse(db, trade, cfg, snap)
         return
+    current = float(snap["price"] or 0)
     if current <= 0:
         return
 
     _, tp1_pips, tp2_pips, tp3_pips = _trade_targets(trade)
     pips_up = _pips_in_profit(entry, current, action, symbol)
+
+    # v1.60.57 — gold_trend_pulse: BE at 60 % of TP (stop → entry ± spread+commission), 45-min (TREND) / 20-min (RANGE)
+    # time-stop, broker TP does the exit. No tiers, no breakeven_trigger_r, no TP rescale / stretch / trend-ride.
+    # v1.60.60 #72 — per-account exit_policy "tp1_bank_runner" (default fixed_tp → the branches below run as before)
+    from exit_policy_tp1 import applies as _tp1_applies
+    if _tp1_applies(trade, cfg):
+        if await _tp1_bank_runner_exits(db, trade, cfg, current):
+            return
+    if (trade.get("scope") or trade.get("engine")) == "gold_trend_pulse":
+        await _gold_trend_pulse_exits(db, trade, current, pips_up)
+        return
+    # v1.60.32 C8/C9 — hf_scalp / hf_scalp_fast exits (demo engines): breakeven at +0.5R, 90-minute time-stop.
+    if is_scalp_engine_trade(trade):
+        if await _scalp_engine_exits(db, trade, cfg, current, pips_up):
+            return
+
+    # #43 (#8 widened) — configurable breakeven for every NON-scalp engine: stop → entry at +breakeven_trigger_r × R.
+    # Breakout signals carry TP1 = TP, so the TP1 breakeven below never fired for them (600007662145: +2.45R → +0.02R).
+    if not is_scalp_engine_trade(trade) and await _breakeven_trigger_r(db, trade, cfg, current, pips_up):
+        return
 
     # Tier 3 — close remaining at +tp3 pips
     if (not trade.get("tp3_closed")
@@ -173,18 +548,11 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
         tier2_frac = 0.5 if cfg.get("let_winners_run") else 0.25
         new_lot = round(original_lot * tier2_frac, 2)
         if new_lot >= 0.01:
-            res = await db.trades.update_one(
-                _free_slot_filter(trade_id),
-                {"$set": {
-                    "pending_modification": {
-                        "type": "PARTIAL_CLOSE",
-                        "new_volume": new_lot,
-                        "requested_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    "tp2_target_lot": new_lot,
-                }},
-            )
-            if not res.matched_count:
+            stamped = await stamp_pending_modification(
+                db, _free_slot_filter(trade_id),
+                {"type": "PARTIAL_CLOSE", "new_volume": new_lot},
+                {"tp2_target_lot": new_lot})
+            if stamped is None:
                 return  # close in flight / slot taken — never overwrite it
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
@@ -196,57 +564,70 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
             # NOTE: no Telegram here — fires from modification_ack on EA confirm.
             return
 
+    # v1.60.42 — a TP1 breakeven deferred by be_clamped (partial banked, stop left alone): retry once the price has
+    # cleared the broker's stops level, so the trade still gets its breakeven instead of riding the full stop.
+    if (trade.get("tp1_closed") and trade.get("be_clamped") and not trade.get("be_target_sl")
+            and not trade.get("breakeven_set")):
+        be_sl = tightened_sl(trade, round(entry, 5))
+        if be_sl is not None and not await be_clamped_skip(db, trade, be_sl, current, "tp1_be_retry"):
+            stamped = await stamp_pending_modification(
+                db, _free_slot_filter(trade_id),
+                {"type": "MODIFY_SL", "new_sl": be_sl, "reason": "tp1_be_retry"},
+                {"be_target_sl": be_sl})
+            if stamped is not None:
+                await ws_manager.broadcast(trade["user_id"], "trade_management", {
+                    "trade_id": str(trade_id), "action": "BE_RETRY_AFTER_CLAMP", "new_sl": be_sl,
+                    "from_lot": current_lot, "to_lot": current_lot, "pips": round(pips_up, 1)})
+                return
+
     # Tier 1 — close 50% AND move SL to entry at +tp1 pips.
     # let_winners_run (iter-41): move SL to break-even ONLY — keep full size
     # running toward TP2/TP3 to raise the average win.
     if not trade.get("tp1_closed") and pips_up >= tp1_pips:
+        be_sl = tightened_sl(trade, round(entry, 5))   # None → the stop is already at/beyond entry: leave it alone
+        if be_sl is None:
+            await record_sl_loosen_refusal(trade, round(entry, 5),
+                                           "tp1_let_winners_run" if cfg.get("let_winners_run") else "tp1_partial_close")
+        elif await be_clamped_skip(db, trade, be_sl, current,
+                                   "tp1_let_winners_run" if cfg.get("let_winners_run") else "tp1_partial_close"):
+            if cfg.get("let_winners_run"):
+                return                              # v1.60.42 — BE-only step: nothing sent, retried next cycle
+            be_sl = None                            # the partial still banks; the BE is retried above once clear
         if cfg.get("let_winners_run"):
-            res = await db.trades.update_one(
-                _free_slot_filter(trade_id),
-                {"$set": {
-                    "tp1_closed": True,
-                    "pending_modification": {
-                        "type": "MODIFY_SL",
-                        "new_sl": round(entry, 5),
-                        "requested_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    "be_target_sl": round(entry, 5),
-                }},
-            )
-            if not res.matched_count:
+            if be_sl is None:
+                await db.trades.update_one(_free_slot_filter(trade_id), {"$set": {"tp1_closed": True}})
+                return
+            stamped = await stamp_pending_modification(
+                db, _free_slot_filter(trade_id),
+                {"type": "MODIFY_SL", "new_sl": be_sl},
+                {"tp1_closed": True, "be_target_sl": be_sl})
+            if stamped is None:
                 return
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
                 "action": "BE_ONLY_TP1_WINNERS_RUN",
                 "from_lot": current_lot,
                 "to_lot": current_lot,
-                "new_sl": round(entry, 5),
+                "new_sl": be_sl,
                 "pips": round(pips_up, 1),
             })
             return
         new_lot = round(original_lot * 0.5, 2)
         if new_lot >= 0.01:
-            res = await db.trades.update_one(
-                _free_slot_filter(trade_id),
-                {"$set": {
-                    "pending_modification": {
-                        "type": "PARTIAL_CLOSE",
-                        "new_volume": new_lot,
-                        "new_sl": round(entry, 5),  # also move SL to entry on the EA modification
-                        "requested_at": datetime.now(timezone.utc).isoformat(),
-                    },
-                    "tp1_target_lot": new_lot,
-                    "be_target_sl": round(entry, 5),
-                }},
-            )
-            if not res.matched_count:
+            pend = {"type": "PARTIAL_CLOSE", "new_volume": new_lot}
+            extra = {"tp1_target_lot": new_lot}
+            if be_sl is not None:
+                pend["new_sl"] = be_sl           # also move SL to entry on the EA modification — only if it tightens
+                extra["be_target_sl"] = be_sl
+            stamped = await stamp_pending_modification(db, _free_slot_filter(trade_id), pend, extra)
+            if stamped is None:
                 return
             await ws_manager.broadcast(trade["user_id"], "trade_management", {
                 "trade_id": str(trade_id),
                 "action": "PARTIAL_CLOSE_TP1_AND_BE",
                 "from_lot": current_lot,
                 "to_lot": new_lot,
-                "new_sl": round(entry, 5),
+                "new_sl": be_sl,
                 "pips": round(pips_up, 1),
             })
             # NOTE: no Telegram here — both partial-close and break-even
@@ -265,79 +646,8 @@ async def _manage_one_trade(trade: dict, cfg: dict) -> None:
                        trade_id, e)
 
 
-async def _check_daily_drawdown(cfg: dict) -> None:
-    """If today's realised P&L falls below -daily_drawdown_pct of starting equity,
-    auto-stop the bot for this cfg and trip the circuit breaker.
-
-    Multi-account isolation: when `cfg.account_id` is set the check is scoped
-    to that single account — losses on a different broker won't trip this
-    cfg. Only the matching cfg is disabled (not all of the user's cfgs).
-    """
-    if not cfg.get("daily_drawdown_enabled", True):
-        return
-    if not cfg.get("active"):
-        return
-    db = get_db()
-    user_id = cfg["user_id"]
-    cfg_account_id = cfg.get("account_id")
-
-    today_utc = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
-    today_iso = today_utc.isoformat()
-
-    # Sum today's realised P&L — account-scoped if cfg is per-account.
-    trade_q: dict = {
-        "user_id": user_id,
-        "status": "closed",
-        "closed_at": {"$gte": today_iso},
-    }
-    if cfg_account_id:
-        trade_q["account_id"] = cfg_account_id
-    closed = await db.trades.find(trade_q).to_list(length=500)
-    today_pnl = sum(float(t.get("pnl") or 0) for t in closed)
-
-    # Starting equity — account-scoped if cfg is per-account, else user-wide.
-    acct_q: dict = {"user_id": user_id}
-    if cfg_account_id:
-        from bson import ObjectId
-        try:
-            acct_q["_id"] = ObjectId(cfg_account_id)
-        except Exception:
-            return
-    accts = await db.accounts.find(acct_q).to_list(length=20)
-    equity = sum(float(a.get("balance") or a.get("initial_balance") or 0) for a in accts) or 0
-    if equity <= 0:
-        return
-
-    limit_pct = float(cfg.get("daily_drawdown_pct", 3.0))
-    drawdown_pct = (today_pnl / equity) * 100.0
-    if drawdown_pct <= -limit_pct:
-        # Trip — disable only THIS cfg (not every active cfg user-wide).
-        reason = f"Daily drawdown {drawdown_pct:.2f}% breached -{limit_pct:.2f}% limit"
-        await db.bot_configs.update_one(
-            {"_id": cfg["_id"]},
-            {"$set": {
-                "active": False,
-                "circuit_breaker_tripped_at": datetime.now(timezone.utc).isoformat(),
-                "circuit_breaker_reason": reason,
-            }},
-        )
-        await ws_manager.broadcast(user_id, "circuit_breaker_tripped", {
-            "reason": reason,
-            "today_pnl": round(today_pnl, 2),
-            "equity": round(equity, 2),
-            "account_id": cfg_account_id,
-        })
-        try:
-            await notify_circuit_breaker(
-                user_id, reason, round(today_pnl, 2), round(equity, 2),
-                account_id=cfg_account_id,
-            )
-        except Exception:
-            pass
-        logger.warning(
-            "circuit breaker tripped user=%s acct=%s drawdown=%.2f%%",
-            user_id, cfg_account_id or "default", drawdown_pct,
-        )
+# v1.60.48 (audit item 13) — _check_daily_drawdown REMOVED: circuit_breakers.py is the single daily-drawdown breaker
+# (auto trades, equity-based, policy-capped). This one judged ALL trades against balance with no policy cap.
 
 
 async def _tick() -> None:
@@ -349,30 +659,31 @@ async def _tick() -> None:
         "mt5_ticket": {"$ne": None},
     }).to_list(length=200)
 
-    # Daily drawdown check — iterate over EACH active bot_config so that
-    # per-account configs get their checks scoped to that single account.
     active_cfgs = await db.bot_configs.find({"active": True}).to_list(length=200)
-    for cfg in active_cfgs:
-        try:
-            await _check_daily_drawdown(cfg)
-        except Exception as e:
-            logger.exception(
-                "daily drawdown check failed cfg=%s acct=%s: %s",
-                cfg.get("_id"), cfg.get("account_id") or "default", e,
-            )
 
     # Per-trade management — pick the cfg matching the trade's account_id
     # (or the default cfg) so trade management honours per-account settings.
     cfgs_by_user_acct: dict = {}
     for c in active_cfgs:
         cfgs_by_user_acct[(c["user_id"], c.get("account_id"))] = c
-    # Also fetch inactive default cfgs for users who have one (still want
-    # trade-management even if the bot is paused after a manual stop).
-    extra_users = {t["user_id"] for t in open_trades} - {c["user_id"] for c in active_cfgs}
-    for uid in extra_users:
-        c = await db.bot_configs.find_one({"user_id": uid})
+    # v1.60.48 (audit item 16) — a trade whose per-account config is PAUSED (active=False) used to fall back to the
+    # user's default config (different tiers / breakers). Load the trade's own account config whenever it exists;
+    # the default config is only the fallback for accounts without one.
+    for t in open_trades:
+        key = (t["user_id"], t.get("account_id"))
+        if key not in cfgs_by_user_acct and t.get("account_id"):
+            c = await db.bot_configs.find_one({"user_id": t["user_id"], "account_id": t["account_id"]})
+            cfgs_by_user_acct[key] = c          # None is cached too → falls back to the default below
+    # Also fetch default cfgs (active or paused) for every user with open trades: the default manages accounts
+    # without their own config, and keeps managing after a manual stop.
+    for uid in {t["user_id"] for t in open_trades}:
+        if (uid, None) in cfgs_by_user_acct:
+            continue
+        c = await db.bot_configs.find_one(
+            {"user_id": uid, "$or": [{"account_id": None}, {"account_id": {"$exists": False}}]}) \
+            or await db.bot_configs.find_one({"user_id": uid})
         if c:
-            cfgs_by_user_acct[(uid, c.get("account_id"))] = c
+            cfgs_by_user_acct.setdefault((uid, c.get("account_id")), c)
 
     for t in open_trades:
         acct_id = t.get("account_id")
@@ -388,7 +699,6 @@ async def _tick() -> None:
 
 async def run_loop() -> None:
     """Forever loop — started from server.py startup."""
-    from datetime import datetime, timezone
     while True:
         started = datetime.now(timezone.utc)
         try:
@@ -396,7 +706,6 @@ async def run_loop() -> None:
         except Exception as e:
             logger.exception("trade_manager tick crashed: %s", e)
         try:
-            from database import get_db
             from workers.base import persist_progress, record_progress
             record_progress("trade_manager.run_loop", processed=1,
                             started_at=started, interval_sec=_interval())

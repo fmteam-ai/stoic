@@ -167,6 +167,21 @@ def _tier_gate(action: str, mtf_tiers: dict) -> dict:
     }
 
 
+def h1_alignment(signal: dict) -> dict:
+    """v1.60.52 — `require_h1_alignment` (hf_scalp / hf_scalp_fast): aligned False when the dominant higher-TF
+    bias opposes the entry. Reads mtf_gate.aligned when the gate ran, otherwise mtf_tiers.alignment.dominant —
+    the same derivation entry_context.mtf stamps on every trade. checked False = no higher-TF view (fail-open)."""
+    action = signal.get("action")
+    gate = signal.get("mtf_gate") or {}
+    if gate.get("checked") and gate.get("aligned") is not None:
+        return {"checked": True, "aligned": bool(gate["aligned"]), "dominant": gate.get("htf_trend"), "source": "mtf_gate"}
+    dominant = ((signal.get("mtf_tiers") or {}).get("alignment") or {}).get("dominant")
+    if action in ("BUY", "SELL") and dominant in ("UP", "DOWN"):
+        return {"checked": True, "aligned": (dominant == "UP") == (action == "BUY"), "dominant": dominant,
+                "source": "mtf_tiers"}
+    return {"checked": False, "aligned": None, "dominant": dominant, "source": None}
+
+
 def multi_timeframe_gate(action: str, history: list, indicators: dict,
                          mtf_tiers: Optional[dict] = None) -> dict:
     """Return MTF gate decision. Prefer tiered analysis when available.

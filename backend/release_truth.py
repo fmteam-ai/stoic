@@ -57,6 +57,23 @@ def release_attestation_check(production: bool) -> dict:
     return out
 
 
+def release_signed_verdict(ea: dict | None, att: dict | None) -> dict:
+    """P1-02 (main131) — the Go-Live "Release signed" row. Pure. GREEN only when the EA record is VERIFIED and
+    ENFORCED (never `ok`, which is True whenever enforcement is off), the release attestation is valid
+    (promotion APPROVED, signature verified by the deploy) and the deployed build is the attested commit."""
+    ea, att = ea or {}, att or {}
+    verified, enforced = bool(ea.get("verified")), bool(ea.get("enforced"))
+    att_valid = bool(att.get("attestation_present")) and att.get("promotion_decision") == "APPROVED"
+    build_match = bool(att.get("sha_matches_running"))
+    ok = verified and enforced and att_valid and build_match
+    missing = [k for k, v in (("EA record verified", verified), ("EA proof enforced", enforced),
+                              ("release attestation valid", att_valid), ("deployed build == release commit", build_match)) if not v]
+    detail = (f"{att.get('tag') or 'release'} @ {str(att.get('commit') or '')[:12]} · EA verified + enforced" if ok
+              else "missing: " + ", ".join(missing))
+    return {"ok": ok, "detail": detail, "checks": {"ea_verified": verified, "ea_enforced": enforced,
+                                                  "attestation_valid": att_valid, "build_matches_release": build_match}}
+
+
 LOCK_PATHS = (os.path.join(STATE_DIR, "release", "rc_lock.json"),
               "release/rc_lock.json", "../release/rc_lock.json", "/stoic/release/rc_lock.json")
 
@@ -143,6 +160,57 @@ def _deploy_source() -> dict | None:
     except Exception:  # noqa: BLE001
         return None
     return d if isinstance(d, dict) else None
+
+
+def release_id(*, policy_version: str | None = None) -> dict:
+    """P2-04 (main131) — ONE release identity for /api/health and the UI footer: tag + commit (from the verified
+    release attestation when present, else the running build), EA version, rules-policy version and the model
+    manifest version/digest. Every field is read from an artifact — nothing is hand-typed."""
+    att, _ = _load()
+    att = att or {}
+    try:
+        from modules.pamm.strategy_guard import GIT_COMMIT
+    except Exception:  # noqa: BLE001
+        GIT_COMMIT = None
+    running = GIT_COMMIT if GIT_COMMIT and GIT_COMMIT != "unknown" else None
+    try:
+        from ea_capabilities import shipped_ea_version
+        ea_version = shipped_ea_version()
+    except Exception:  # noqa: BLE001
+        ea_version = None
+    mm = {"version": None, "code_commit": None, "sha256": None}
+    try:
+        from model_manifest import MANIFEST
+        doc = json.loads(MANIFEST.read_text())
+        mm = {"version": (doc.get("body") or {}).get("version"), "code_commit": str((doc.get("body") or {}).get("code_commit") or "")[:12] or None,
+              "sha256": str(doc.get("body_sha256") or "")[:12] or None}
+    except Exception:  # noqa: BLE001
+        pass
+    commit = att.get("commit") or running
+    out = {"tag": att.get("tag") or os.environ.get("STOIC_RELEASE_TAG") or None, "commit": commit, "short_commit": commit[:12] if commit else None,
+           "attested": bool(att) and att.get("promotion_decision") == "APPROVED" and att.get("commit") == running,
+           "ea_version": ea_version, "policy_version": policy_version, "model_manifest": mm}
+    # v1.60.43 — a HELD update (UPDATE_HOLD_ON_FAILURE) leaves the NEW release running: show it as such instead of the
+    # previous release (deploy/update.sh record_held_live → deploy/state/release/deployment_state.json).
+    held = deployment_state()
+    out["deployment_state"] = (held or {}).get("deployment_state")
+    out["held"] = (held or {}).get("held") if (held or {}).get("deployment_state") == "held_live" else None
+    out["id"] = " · ".join(x for x in (out["tag"], out["short_commit"], f"EA {ea_version}" if ea_version else None,
+                                        f"policy {policy_version}" if policy_version else None,
+                                        f"models v{mm['version']}@{mm['sha256']}" if mm.get("version") else None,
+                                        "HELD-LIVE (verification failed — kept running for inspection)" if out["held"] else None) if x)
+    return out
+
+
+def deployment_state() -> dict | None:
+    """deploy/update.sh's deployment_state.json as published to the ro state mount (None when absent)."""
+    for p in (os.path.join(STATE_DIR, "release", "deployment_state.json"),
+              os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "deploy", "releases", "deployment_state.json")):
+        try:
+            return json.load(open(p))
+        except Exception:  # noqa: BLE001
+            continue
+    return None
 
 
 def public_release_identity() -> dict:

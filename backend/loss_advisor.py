@@ -17,10 +17,8 @@ Collections:
   • `loss_reviews` — one doc per review run (auto or manual)
   • `auto_guards`  — evidence-gated live guards (apply / revert audit trail)
 """
-import os
 import json
 import logging
-import uuid
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -29,7 +27,6 @@ from bson import ObjectId
 from pip_utils import base_symbol
 from regime_adapter import velocity_veto
 from ws_manager import manager as ws_manager
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger("loss-advisor")
 
@@ -41,6 +38,7 @@ COOLDOWN_HOURS = 24      # min gap between auto reviews per user
 # iter-55 · Daily Auto-Learning — evidence-gated auto-apply (user-consented).
 AUTO_APPLY_MIN_NET = 100.0   # $ net effect over the shadow window
 AUTO_APPLY_RATIO = 2.0       # losses_avoided must be ≥ 2× wins_missed
+AUTO_APPLY_MIN_SIGNALS = 20  # v1.60.36 — ≥ this many DISTINCT signals in the segment before a measure may auto-apply
 GATE_TYPES = {"min_confidence", "velocity_veto", "session_block", "symbol_pause"}
 MAX_ACTIVE_GUARDS = 5
 
@@ -136,17 +134,38 @@ def _crossed_weekend(t: dict) -> bool:
     return False
 
 
+def _decisions(ds: dict) -> list:
+    """v1.60.36/37 — mirrored trades of the SAME decision across accounts are ONE decision. Each account writes its
+    own signal doc, so grouping is symbol + direction + entry within ±2 min (`decision_groups`). One representative
+    row per cluster (first trade), `pnl` = per-account AVERAGE, `mirrored_accounts` = rows collapsed."""
+    if "_decisions" in ds:
+        return ds["_decisions"]
+    from decision_groups import decision_key, group_decisions
+    out = []
+    for rows in group_decisions(ds["trades"]):
+        pnls = [float(r.get("pnl") or 0) for r in rows]
+        rep = dict(rows[0])
+        rep["pnl"] = round(sum(pnls) / len(pnls), 2)
+        rep["mirrored_accounts"] = len(rows)
+        rep["decision_key"] = decision_key(rows)
+        out.append(rep)
+    ds["_decisions"] = out
+    return out
+
+
 def _aggregates(ds: dict) -> dict:
     segs: dict = defaultdict(lambda: {"n": 0, "wins": 0, "pnl": 0.0})
     reasons: dict = defaultdict(lambda: {"n": 0, "pnl": 0.0})
     weekend_losses = 0.0
-    for t in ds["trades"]:
+    decisions = _decisions(ds)
+    loss_decisions = [d for d in decisions if d["pnl"] < 0 and (d.get("closed_at") or "") >= ds["since_loss"]]
+    for t in decisions:
         pnl = float(t.get("pnl") or 0)
         key = "|".join(_seg(t, ds))
         segs[key]["n"] += 1
         segs[key]["wins"] += pnl > 0
         segs[key]["pnl"] += pnl
-    for t in ds["losses"]:
+    for t in loss_decisions:
         pnl = float(t.get("pnl") or 0)
         r = (t.get("close_reason") or "unknown").split("+")[0]
         reasons[r]["n"] += 1
@@ -165,12 +184,15 @@ def _aggregates(ds: dict) -> dict:
         "window_days": WINDOW_DAYS,
         "shadow_days": SHADOW_DAYS,
         "trades": len(ds["trades"]),
+        "decisions": len(decisions),
         "losses": len(ds["losses"]),
+        "loss_decisions": len(loss_decisions),
         "total_pnl": total_pnl,
         "loss_pnl": loss_pnl,
         "segments_worst_first": seg_rows[:12],
         "loss_reasons": {k: {"n": v["n"], "pnl": round(v["pnl"], 2)} for k, v in reasons.items()},
         "weekend_gap_loss_pnl": round(weekend_losses, 2),
+        "dedupe": "one decision per symbol + direction + entry within ±2 min across mirrored accounts; $ per decision = per-account average",
     }
 
 
@@ -230,7 +252,7 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
         return None
     blocked = 0
     losses_avoided = wins_missed = 0.0
-    for t in ds["trades"]:
+    for t in _decisions(ds):                      # v1.60.36 — one decision per signal, not per mirrored account
         try:
             if not pred(t, _sig_of(t, ds)):
                 continue
@@ -246,6 +268,8 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
         "testable": True,
         "shadow_days": SHADOW_DAYS,
         "trades_blocked": blocked,
+        "distinct_signals": blocked,
+        "min_signals_required": AUTO_APPLY_MIN_SIGNALS,
         "losses_avoided": round(losses_avoided, 2),
         "wins_missed": round(wins_missed, 2),
         "net_effect": round(losses_avoided - wins_missed, 2),
@@ -255,14 +279,8 @@ def _shadow_test(measure: dict, ds: dict) -> dict | None:
 # -------------------------------------------------------------------- LLM
 async def _claude_measures(payload: dict) -> dict:
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"loss-review-{uuid.uuid4().hex[:8]}",
-            system_message=_ADVISOR_SYSTEM,
-        ).with_model(PROVIDER, model_for("analysis"))
-        from llm_timeout import send_with_timeout
-        raw = str(await send_with_timeout(chat, UserMessage(text=json.dumps(payload, default=str)), label="loss_advisor", seconds=30)).strip()
+        import llm_client
+        raw = str(await llm_client.complete("analysis", _ADVISOR_SYSTEM, json.dumps(payload, default=str), feature="loss_advisor", seconds=30)).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw.lower().startswith("json"):
@@ -285,6 +303,9 @@ def _qualifies(m: dict) -> bool:
     net = float(ev.get("net_effect") or 0)
     saved = float(ev.get("losses_avoided") or 0)
     missed = float(ev.get("wins_missed") or 0)
+    sample = int(ev.get("distinct_signals") if ev.get("distinct_signals") is not None else ev.get("trades_blocked") or 0)
+    if sample < AUTO_APPLY_MIN_SIGNALS:
+        return False
     return net >= AUTO_APPLY_MIN_NET and saved >= AUTO_APPLY_RATIO * missed
 
 
@@ -363,9 +384,24 @@ async def _auto_apply(db, user_id: str, review_doc: dict) -> list:
                     upd["friday_flat_minutes_before"] = mins
             except (TypeError, ValueError):
                 pass
-            r = await db.bot_configs.update_many({"user_id": user_id}, {"$set": upd})
+            # v1.60.48 — scoped to the accounts that produced the reviewed losses (was: every config of the user)
+            # and never overriding a field the user set themselves (config_promotion.field_sources).
+            from config_promotion import apply_config_change, user_set
+            acct_ids = review_doc.get("loss_account_ids") or []
+            cfg_q = {"user_id": user_id}
+            if acct_ids:
+                cfg_q["account_id"] = {"$in": acct_ids}
+            touched = 0
+            async for c in db.bot_configs.find(cfg_q):
+                mine = {k: v for k, v in upd.items() if not user_set(c, k) and c.get(k) != v}
+                if not mine:
+                    continue
+                await apply_config_change(db, user_id, c.get("account_id"), mine,
+                                          label="loss-advisor friday_flat", source="loss_advisor",
+                                          audit_detail={"measure": m.get("title")})
+                touched += 1
             applied.append({"kind": "config", "measure": m,
-                            "updated_configs": r.modified_count, "applied_at": now_iso})
+                            "updated_configs": touched, "accounts": acct_ids, "applied_at": now_iso})
             try:
                 from change_governance import record_auto_applied
                 await record_auto_applied(
@@ -510,6 +546,7 @@ async def run_loss_review(db, user_id: str, trigger: str = "auto") -> dict | Non
         "market_context": verdict.get("market_context"),
         "measures": measures,
         "llm_failed": bool(verdict.get("_llm_failed")),
+        "loss_account_ids": sorted({str(t.get("account_id")) for t in ds["losses"] if t.get("account_id")}),
     }
     res = await db.loss_reviews.insert_one(doc)
     doc["_id"] = res.inserted_id

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
-import { Compass, RefreshCw, LineChart, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle, Dices, MessageSquareText, ClipboardCheck, ShieldAlert } from "lucide-react";
+import { Compass, RefreshCw, LineChart, Shapes, Globe, Newspaper, Cpu, ShieldCheck, TrendingUp, Layers, CalendarClock, Network, GitBranch, Shuffle, Dices, MessageSquareText, ClipboardCheck, ShieldAlert } from "lucide-react";
 
 const DIR_COLOR = { UP: "#00FF41", DOWN: "#FF3B30", FLAT: "#A1A1AA" };
 
@@ -114,6 +114,27 @@ export default function MarketPosture() {
                                 {s.structure.acc_dist ? ` · ${s.structure.acc_dist.phase.toLowerCase()}` : ""}
                                 {(s.structure.unfilled_fvg || []).length > 0 ? ` · ${s.structure.unfilled_fvg.length} open FVG` : ""}</>
                             : <span className="text-[#52525B]">{s.structure?.reason || "waiting for M15 candles (EA v1.42)"}</span>}
+                    </AgentRow>
+
+                    <AgentRow icon={Shapes} color="#FFD700" label="CHART PATTERNS" testid={`posture-patterns-${sym}`}>
+                        {(() => {
+                            const cp = s.chart_patterns;
+                            if (!cp) return <span className="text-[#52525B]">pattern layer unavailable</span>;
+                            if (!cp.ready) return <span className="text-[#52525B]">{cp.reason || "waiting for M15 candles"}</span>;
+                            const zs = cp.zones || [];
+                            const sup = [...zs].filter((z) => z.kind === "support").pop();
+                            const res = zs.find((z) => z.kind === "resistance");
+                            const fmt = (v) => (v == null ? "—" : Number(v).toFixed(2));
+                            const odds = (m) => (m ? `${m.win}/${m.samples}${m.sufficient ? "" : " · insufficient"}` : "no history");
+                            return (<>
+                                <span className={`inline-block border px-1 mr-1 text-[9px] ${cp.enforced ? "border-[#FF3B30]/50 text-[#FF3B30]" : "border-[#FFB000]/50 text-[#FFB000]"}`} data-testid={`posture-patterns-mode-${sym}`}>{cp.enforced ? "ENFORCED" : "OBSERVE ONLY"}</span>
+                                {sup ? `S ${fmt(sup.low)}–${fmt(sup.high)} (${sup.touches}t)` : "no support zone"} · {res ? `R ${fmt(res.low)}–${fmt(res.high)} (${res.touches}t)` : "no resistance zone"}
+                                {cp.trendlines?.resistance ? ` · falling line @${fmt(cp.trendlines.resistance.value_now)}` : ""}{cp.trendlines?.support ? ` · rising line @${fmt(cp.trendlines.support.value_now)}` : ""}
+                                {(cp.patterns || []).map((p, i) => <span key={i} className="block text-[#A1A1AA]">{p.name.replace(/_/g, " ")} · {odds(p.measured)}{p.confirmed ? ` · confirmed ${p.age_bars}b ago` : " · forming"}</span>)}
+                                {(cp.candles || []).map((c, i) => <span key={`c${i}`} className="block text-[#A1A1AA]">{c.name.replace(/_/g, " ")} · {odds(c.measured)}</span>)}
+                                {cp.would_veto && (cp.would_veto.BUY || cp.would_veto.SELL) ? <span className="block text-[#FFB000]" data-testid={`posture-patterns-veto-${sym}`}>{cp.would_veto.BUY ? `Would block BUY — ${cp.would_veto.BUY}` : ""}{cp.would_veto.BUY && cp.would_veto.SELL ? " " : ""}{cp.would_veto.SELL ? `Would block SELL — ${cp.would_veto.SELL}` : ""}</span> : <span className="block text-[#52525B]">would block: nothing</span>}
+                            </>);
+                        })()}
                     </AgentRow>
 
                     <AgentRow icon={Layers} color="#E879F9" label="LIQUIDITY" testid={`posture-liquidity-${sym}`}>

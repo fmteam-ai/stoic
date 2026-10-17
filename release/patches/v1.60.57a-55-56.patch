@@ -1,0 +1,1078 @@
+From e95c78b632033708e0bfd81d08ed407e50edba1a Mon Sep 17 00:00:00 2001
+From: E1 <e1@emergent.sh>
+Date: Fri, 16 Oct 2026 16:33:12 +0000
+Subject: [PATCH] =?UTF-8?q?v1.60.57a=20=E2=80=94=20#55=20live-feature=20en?=
+ =?UTF-8?q?gines=20(engine=5Flive=5Ffeatures=5Fenabled,=20OFF,=201-week=20?=
+ =?UTF-8?q?shadow=20compare)=20+=20#56=20cross-account=20loss=20cooldown?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+#55: compute_intraday_features(live_price, m5_bars) — live broker price for price features, closed bars for EMAs/ATR;
+fast 1 h slope; hf_scalp/hf_scalp_fast momentum-continuation override; breakout_m15 live-price confirmation (no stale
+BREAK_DOWN sell); stale_feature_entry losses excluded from anti-tilt; engine_shadow_compare recorded on every decision.
+#56: loss_cooldown_block scans all user accounts — a < −0.1R bot loss on any account pauses symbol+direction on all
+accounts for the evaluating account's loss_cooldown_minutes; pulse + counter.
+New shared helper backend/bars_util.py. Tests: 7 + 4. Unit lane 1892 ✓. Protected paths untouched.
+---
+ backend/ai_signals.py                         |  21 ++-
+ backend/bars_util.py                          |  86 ++++++++++++
+ backend/bot_runner.py                         |   5 +-
+ backend/execution.py                          |   2 +
+ backend/intraday_features.py                  |  63 +++++++--
+ backend/loss_cooldown.py                      |  80 +++++++++---
+ backend/models.py                             |   1 +
+ .../scripts/engine_live_features_replay.py    | 123 ++++++++++++++++++
+ backend/strategy_engines.py                   |  24 ++++
+ backend/streak_losses.py                      |   2 +
+ ...st_v1_60_57_cross_account_loss_cooldown.py | 110 ++++++++++++++++
+ .../test_v1_60_57_engine_live_features.py     | 118 +++++++++++++++++
+ docs/PR_v1.60.57a.md                          |  20 +++
+ docs/RELEASE_NOTES_v1.60.57a.md               |  55 ++++++++
+ docs/RELEASE_SUMMARY.md                       |  10 +-
+ docs/TEST_MANIFEST.md                         |   6 +-
+ frontend/src/pages/BotConfig.jsx              |   8 ++
+ release/rc_lock.json                          |   8 +-
+ 18 files changed, 696 insertions(+), 46 deletions(-)
+ create mode 100644 backend/bars_util.py
+ create mode 100644 backend/scripts/engine_live_features_replay.py
+ create mode 100644 backend/tests/unit/test_v1_60_57_cross_account_loss_cooldown.py
+ create mode 100644 backend/tests/unit/test_v1_60_57_engine_live_features.py
+ create mode 100644 docs/PR_v1.60.57a.md
+ create mode 100644 docs/RELEASE_NOTES_v1.60.57a.md
+
+diff --git a/backend/ai_signals.py b/backend/ai_signals.py
+index 5be41971..6314bc96 100644
+--- a/backend/ai_signals.py
++++ b/backend/ai_signals.py
+@@ -179,7 +179,13 @@ async def analyze_symbol(symbol: str, risk_level: str,
+     if not entropy.get("tradeable", True):
+         entropy = await _intraday_entropy_override(symbol, entropy, user_id)
+     # iter-120 · Intraday M15 feature pack — the USER's live EA stream (fix plan A1).
+-    intraday_pack = await fetch_intraday_pack(symbol, user_id)
++    # #55 — live-feature pack (broker price for price-dependent features) vs the closed-bar pack. The flag decides which
++    # one the engine TRADES on; the other is always evaluated for the one-week shadow compare (engine_shadow_compare).
++    _live_on = bool((freeze_cfg or {}).get("engine_live_features_enabled"))
++    _pack_closed = await fetch_intraday_pack(symbol, user_id)
++    _pack_live = await fetch_intraday_pack(symbol, user_id, live_price=broker_px) if (broker_px and _pack_closed) else None
++    intraday_pack = (_pack_live or _pack_closed) if _live_on else _pack_closed
++    _pack_other = _pack_closed if _live_on else _pack_live
+     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
+     compressed_features = compress_history(history)
+ 
+@@ -316,6 +322,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
+     # ------------------------------------------------------------------------
+     engine = resolve_engine(strategy)
+     engine_label = ENGINE_LABELS.get(engine, engine)
++    _cmp = None
+     # Regime-adaptive dispatch — ADAPTIVE routes this evaluation to the
+     # engine matching the LIVE regime (trend → MTF cascade, range → fade,
+     # chop/unknown → stand down) instead of holding for days.
+@@ -416,8 +423,16 @@ async def analyze_symbol(symbol: str, risk_level: str,
+             return _hold(f"{engine_label}: no fresh M15 stream from the EA (bridge "
+                          f"must be online and streaming candles) — standing by.")
+         sig, note = run_engine(engine, intraday_pack, params=eng_params)
++        if _pack_other is not None:
++            _o_sig, _o_note = run_engine(engine, _pack_other, params=eng_params)
++            _cmp = {"live_features_traded": _live_on, "traded": {"action": sig, "note": note[:160]},
++                    "other": {"action": _o_sig, "note": (_o_note or "")[:160]},
++                    "feature_price_gap": (_pack_live or {}).get("feature_price_gap"), "stale_feature": (_pack_live or {}).get("stale_feature"),
++                    "trend_live": (_pack_live or {}).get("trend"), "trend_closed": (_pack_closed or {}).get("trend"), "differs": _o_sig != sig}
+         if not sig:
+-            return _hold(f"{engine_label}: {note} — standing by.")
++            h = _hold(f"{engine_label}: {note} — standing by.")
++            h["engine_shadow_compare"] = _cmp
++            return h
+         action = sig
+         engine_note = note
+     # fade-style entries bet against recent drift — tagged so drift-based
+@@ -626,6 +641,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
+         "min_confidence_required": adapted_profile["min_confidence"],
+         "veto_applied": bool(veto_reason) or bool(rr_veto),
+         "engine_params": eng_params,
++        "engine_shadow_compare": _cmp,                                   # #55 — old vs new engine output, 1-week compare
++        "stale_feature_entry": bool((_pack_live or {}).get("stale_feature")),   # #55(5) — anti-tilt ignores losses on these
+         "setup_score": _ss,
+         "confidence_basis": _ss["basis"],
+         "engine_geometry": None if is_hold else {
+diff --git a/backend/bars_util.py b/backend/bars_util.py
+new file mode 100644
+index 00000000..f0448adb
+--- /dev/null
++++ b/backend/bars_util.py
+@@ -0,0 +1,86 @@
++"""Shared M1/M5 bar helpers — resample, MT5 History-export loader, synthetic generator. Used by the #55 live-feature
++engines / replay and by gold_trend_pulse. Pure functions, no I/O beyond reading the CSV path given."""
++from __future__ import annotations
++
++import math
++import random
++from datetime import datetime, timedelta, timezone
++
++
++def resample(bars: list, seconds: int) -> list:
++    """OHLC bars [{t,o,h,l,c,(v)}] (any lower TF, UTC epoch t) → bars of `seconds`."""
++    out: dict = {}
++    for b in bars:
++        key = int(b["t"]) // seconds * seconds
++        g = out.get(key)
++        if g is None:
++            out[key] = {"t": key, "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"], "v": b.get("v") or b.get("n") or 0}
++        else:
++            g["h"] = max(g["h"], b["h"]); g["l"] = min(g["l"], b["l"]); g["c"] = b["c"]; g["v"] += b.get("v") or b.get("n") or 0
++    return [out[k] for k in sorted(out)]
++
++
++def m5_from_m1(m1: list) -> list:
++    return resample(m1, 300)
++
++
++def load_csv(path: str) -> list:
++    """XAUUSD M1 bars from (a) an MT5 History export — tab- or comma-separated, header `<DATE> <TIME> <OPEN> <HIGH> <LOW>
++    <CLOSE> <TICKVOL> <VOL> <SPREAD>` (header skipped, `2026.10.16` or `2026-10-16` dates, `13:15` / `13:15:00`) — or (b)
++    `iso_ts,o,h,l,c[,v]`. Times are taken verbatim (broker clock) — shift with replay(broker_offset_sec=…) /
++    `--tz-offset`. Spread (points) is kept as `s` when the column exists."""
++    bars = []
++    with open(path, newline="", encoding="utf-8-sig") as f:
++        for line in f:
++            line = line.rstrip("\r\n")
++            if not line or not line[:1].isdigit():
++                continue
++            row = line.split("\t") if "\t" in line else [x.strip() for x in line.split(",")]
++            try:
++                if len(row) >= 6 and ":" in row[1]:
++                    ts = datetime.strptime(f"{row[0].replace('-', '.')} {row[1]}", "%Y.%m.%d %H:%M:%S" if row[1].count(":") == 2 else "%Y.%m.%d %H:%M")
++                    o, h, l, c = map(float, row[2:6])
++                    v = float(row[6] or 0) if len(row) > 6 else 0.0
++                    s = float(row[8]) if len(row) > 8 and row[8] else None
++                else:
++                    ts = datetime.fromisoformat(row[0]); o, h, l, c = map(float, row[1:5]); v = float(row[5] or 0) if len(row) > 5 else 0.0; s = None
++            except (ValueError, IndexError):
++                continue
++            if ts.tzinfo is None:
++                ts = ts.replace(tzinfo=timezone.utc)
++            b = {"t": int(ts.timestamp()), "o": o, "h": h, "l": l, "c": c, "v": v}
++            if s is not None:
++                b["s"] = s
++            bars.append(b)
++    return bars
++
++
++def synthetic_m1(days: int = 30, seed: int = 7, start_price: float = 4000.0) -> list:
++    rnd = random.Random(seed)
++    bars = []
++    px = start_price
++    t0 = datetime(2026, 9, 1, 0, 0, tzinfo=timezone.utc)
++    for d in range(days):
++        day = t0 + timedelta(days=d)
++        if day.weekday() >= 5:
++            continue
++        mode = ["up", "down", "range"][d % 3]
++        drift = {"up": 0.012, "down": -0.012, "range": 0.0}[mode]
++        center = px
++        for m in range(1440):
++            t = day + timedelta(minutes=m)
++            hour = t.hour + t.minute / 60
++            vol = 0.18 if 7 <= hour < 20 else 0.06
++            if mode == "range":
++                pull = (center - px) * 0.02
++                step = pull + rnd.gauss(0, vol) + 0.6 * math.sin(m / 23.0) * vol
++            else:
++                wave = 0.9 * math.sin(m / 37.0) * vol            # pullbacks inside the trend
++                step = drift + wave + rnd.gauss(0, vol)
++            o = px
++            c = px + step
++            h = max(o, c) + abs(rnd.gauss(0, vol * 0.6))
++            l = min(o, c) - abs(rnd.gauss(0, vol * 0.6))
++            bars.append({"t": int(t.timestamp()), "o": round(o, 2), "h": round(h, 2), "l": round(l, 2), "c": round(c, 2), "v": 1 + rnd.randint(0, 9)})
++            px = c
++    return bars
+diff --git a/backend/bot_runner.py b/backend/bot_runner.py
+index 2436e034..f0cbb94b 100644
+--- a/backend/bot_runner.py
++++ b/backend/bot_runner.py
+@@ -1022,12 +1022,13 @@ async def _process_user_account_locked(db, cfg: dict):
+         # re-entries are paused for 30min on THAT account (iter-122b:
+         # per-account — each account has its own equity and settings).
+         if signal.get("action") in ("BUY", "SELL"):
+-            from loss_cooldown import loss_cooldown_block
++            from loss_cooldown import CROSS_ACCOUNT_PREFIX, loss_cooldown_block
+             lc = await loss_cooldown_block(db, user_id, sym, signal["action"], cfg)
+             if lc:
++                cross = lc.startswith(CROSS_ACCOUNT_PREFIX)        # #56 — a real loss (< −0.1R) on ANY account pauses every account
+                 await _record_pulse(db, cfg, symbol=sym,
+                     action="SKIP", level="warn", reason=lc)
+-                await inc_intel_counter(user_id, "loss_cooldown_block")
++                await inc_intel_counter(user_id, "cross_account_loss_cooldown_block" if cross else "loss_cooldown_block")
+                 continue
+ 
+         # v1.60.52 — optional per-account H1 alignment gate for the HF scalp engines (default OFF)
+diff --git a/backend/execution.py b/backend/execution.py
+index c7ace183..89d0eabb 100644
+--- a/backend/execution.py
++++ b/backend/execution.py
+@@ -442,6 +442,8 @@ class MT5BridgeEngine(ExecutionEngine):
+             "origin": signal.get("origin", "manual"),
+             "engine": engine_for_signal(signal),      # N99-1 / v1.60.32 — persisted at open (scope fallback), never None for a known engine
+             "scope": signal.get("scope"),
++            "stale_feature_entry": bool(signal.get("stale_feature_entry")),   # #55(5) — live price was > 0.5×ATR15 from the closed-bar features
++            "engine_shadow_compare": signal.get("engine_shadow_compare"),
+             "strategy_class": signal.get("strategy_class"),
+             "market_regime": signal.get("market_regime"),
+             "risk_pct": (signal.get("risk_pct")
+diff --git a/backend/intraday_features.py b/backend/intraday_features.py
+index 49ca4e5b..a182ffb6 100644
+--- a/backend/intraday_features.py
++++ b/backend/intraday_features.py
+@@ -34,26 +34,43 @@ def _atr(bars: list, period: int = 14) -> float:
+     return sum(trs[-period:]) / period
+ 
+ 
+-def compute_intraday_features(bars: list) -> dict | None:
+-    """Pure computation on M15 bars (dicts with t/o/h/l/c/v)."""
++STALE_FEATURE_ATR_FRAC = 0.5      # #55(5) — live price further than this × ATR15 from the closed-bar last → stale-feature entry
++FAST_SLOPE_MIN_PCT = 0.05         # #55(4) — EMA20 slope over 1 h that confirms a trend on its own
++
++
++def compute_intraday_features(bars: list, live_price: float | None = None, m5_bars: list | None = None,
++                              as_of: float | None = None) -> dict | None:
++    """Pure computation on M15 bars (dicts with t/o/h/l/c/v).
++    #55 (v1.60.57, `engine_live_features_enabled`): with `live_price` the price-dependent features (last_price,
++    vwap_dist, donchian, range_pos) use the LIVE broker price while EMAs/ATR stay on CLOSED bars; a 1 h EMA20 slope
++    and the last 3 M5 closes are added so a fast move can confirm a trend the 2 h slope still calls FLAT."""
+     if not bars or len(bars) < MIN_BARS:
+         return None
+     closes = [float(b["c"]) for b in bars]
+-    last = closes[-1]
+-
++    closed_last = closes[-1]
++    last = float(live_price) if live_price else closed_last
+     ema20 = _ema(closes[-40:], 20)
+     ema50 = _ema(closes, 50) if len(closes) >= 50 else _ema(closes, 20)
+     atr15 = _atr(bars[-30:], 14)
+-
+-    # Trend state from EMA stack + slope of EMA20 over last 8 bars (2h)
+     ema20_prev = _ema(closes[-48:-8], 20) if len(closes) >= 48 else ema20
+     slope_pct = (ema20 - ema20_prev) / ema20_prev * 100 if ema20_prev else 0.0
++    ema20_1h = _ema(closes[-44:-4], 20) if len(closes) >= 44 else ema20
++    slope_1h_pct = (ema20 - ema20_1h) / ema20_1h * 100 if ema20_1h else 0.0
++    m5c = [float(b["c"]) for b in (m5_bars or [])][-3:]
++    m5_rising = len(m5c) == 3 and m5c[0] < m5c[1] < m5c[2]
++    m5_falling = len(m5c) == 3 and m5c[0] > m5c[1] > m5c[2]
+     if last > ema20 > ema50 and slope_pct > 0.05:
+-        trend = "UP"
++        trend_slow = "UP"
+     elif last < ema20 < ema50 and slope_pct < -0.05:
+-        trend = "DOWN"
++        trend_slow = "DOWN"
+     else:
+-        trend = "FLAT"
++        trend_slow = "FLAT"
++    trend = trend_slow
++    if live_price and trend_slow == "FLAT":
++        if last > ema20 and slope_1h_pct >= FAST_SLOPE_MIN_PCT:
++            trend = "UP"
++        elif last < ema20 and slope_1h_pct <= -FAST_SLOPE_MIN_PCT:
++            trend = "DOWN"
+ 
+     # 3-hour momentum (12 bars)
+     mom_3h_pct = (last - closes[-13]) / closes[-13] * 100 if len(closes) >= 13 else 0.0
+@@ -83,7 +100,7 @@ def compute_intraday_features(bars: list) -> dict | None:
+                 recent_break = "DOWN"
+ 
+     # Session VWAP — today's UTC bars, volume-weighted typical price
+-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
++    today = (datetime.fromtimestamp(as_of, tz=timezone.utc) if as_of else datetime.now(timezone.utc)).strftime("%Y-%m-%d")   # as_of: replay
+     pv = vol = 0.0
+     for b in bars:
+         if datetime.fromtimestamp(b["t"], tz=timezone.utc).strftime("%Y-%m-%d") != today:
+@@ -138,10 +155,21 @@ def compute_intraday_features(bars: list) -> dict | None:
+                else (ranges[mid - 1] + ranges[mid]) / 2)
+         typical_day_range_pct = round(med, 2)
+ 
++    gap = last - closed_last
+     return {
+         "timeframe": "M15",
+         "last_price": round(last, 2),
++        "closed_last_price": round(closed_last, 2),
++        "live_price_used": bool(live_price),
++        "feature_price_gap": round(gap, 2),
++        "stale_feature": bool(atr15 > 0 and abs(gap) > STALE_FEATURE_ATR_FRAC * atr15),
+         "trend": trend,
++        "trend_slow": trend_slow,
++        "ema20_slope_pct_1h": round(slope_1h_pct, 3),
++        "m5_closes_rising": m5_rising,
++        "m5_closes_falling": m5_falling,
++        "donchian_hi20": round(hi20, 2),
++        "donchian_lo20": round(lo20, 2),
+         "ema20": round(ema20, 2),
+         "ema50": round(ema50, 2),
+         "ema20_slope_pct_2h": round(slope_pct, 3),
+@@ -242,13 +270,22 @@ async def preflight_price(symbol: str, user_id: str | None, signal: dict | None
+ 
+ 
+ 
+-async def fetch_intraday_pack(symbol: str, user_id: str | None = None, timeframe: str = "M15") -> dict | None:
+-    """Latest fresh M15 features for the symbol from the USER's EA candle stream."""
++async def fetch_intraday_pack(symbol: str, user_id: str | None = None, timeframe: str = "M15",
++                              live_price: float | None = None) -> dict | None:
++    """Latest fresh M15 features for the symbol from the USER's EA candle stream (#55: optional live broker price +
++    M1-derived M5 closes)."""
+     try:
+         doc = await load_user_candles(symbol, user_id, timeframe, last_n=120)
+         if not doc:
+             return None
+-        return compute_intraday_features(doc.get("bars") or [])
++        m5 = None
++        if live_price:
++            m1doc = await load_user_candles(symbol, user_id, "M1", last_n=20, max_age_min=10)
++            m1 = (m1doc or {}).get("bars") or []
++            if m1:
++                from bars_util import m5_from_m1
++                m5 = m5_from_m1(m1)
++        return compute_intraday_features(doc.get("bars") or [], live_price=live_price, m5_bars=m5)
+     except Exception as e:  # noqa: BLE001
+         logger.debug("intraday pack failed for %s: %s", symbol, e)
+         return None
+diff --git a/backend/loss_cooldown.py b/backend/loss_cooldown.py
+index 8a3facfa..4678e8ab 100644
+--- a/backend/loss_cooldown.py
++++ b/backend/loss_cooldown.py
+@@ -1,25 +1,61 @@
+-"""iter-58 · Loss Cooldown guardrail (iter-122b: per-account).
++"""iter-58 · Loss Cooldown guardrail (iter-122b: per-account; #56: cross-account).
+ 
+-After a BOT trade closes at a loss, block NEW trades in the same
+-symbol+direction for `loss_cooldown_minutes` (default 30) on THAT account.
+-Each account has its own equity and settings, so a loss on one broker must
+-not pause the others."""
++After a BOT trade closes at a loss, block NEW trades in the same symbol+direction for `loss_cooldown_minutes`
++(default 30) on THAT account. #56 (16 Oct): RoboForex hit SL on XAUUSD BUY at 15:14:55 (−1R), user_direction_cap
++released the slot and OnEquity opened the same XAUUSD BUY 43 s later — so a REAL loss (< −0.1R) on ANY account of the
++user now pauses that symbol+direction on ALL the user's accounts for the evaluating account's cooldown duration.
++Scratch / break-even closes (≥ −0.1R) do not trigger the cross-account rule."""
+ from datetime import datetime, timedelta, timezone
+ 
+ from pip_utils import base_symbol
+ 
+ DEFAULT_LOSS_COOLDOWN_MIN = 30
++CROSS_ACCOUNT_MIN_LOSS_R = -0.1
++CROSS_ACCOUNT_PREFIX = "Cross-account loss cooldown"
+ 
+ 
+-async def loss_cooldown_block(db, user_id: str, symbol: str, action: str,
+-                              cfg: dict) -> str | None:
+-    if not cfg.get("loss_cooldown_enabled", True):
+-        return None
++def _minutes(cfg: dict) -> float:
+     try:
+         raw = cfg.get("loss_cooldown_minutes")
+-        minutes = DEFAULT_LOSS_COOLDOWN_MIN if raw is None else float(raw)
++        return DEFAULT_LOSS_COOLDOWN_MIN if raw is None else float(raw)
+     except (TypeError, ValueError):
+-        minutes = DEFAULT_LOSS_COOLDOWN_MIN
++        return DEFAULT_LOSS_COOLDOWN_MIN
++
++
++def trade_r_multiple(t: dict) -> float | None:
++    """r_multiple when recorded, else (exit − entry) / |entry − stop| signed by direction; None when not derivable."""
++    r = t.get("r_multiple")
++    if r is not None:
++        try:
++            return float(r)
++        except (TypeError, ValueError):
++            return None
++    try:
++        entry, stop = float(t.get("entry_price")), float(t.get("stop_loss") or t.get("initial_stop_loss"))
++        exit_px = float(t.get("exit_price") or t.get("close_price"))
++    except (TypeError, ValueError):
++        return None
++    risk = abs(entry - stop)
++    if risk <= 0:
++        return None
++    return (exit_px - entry) / risk * (1 if str(t.get("action")).upper() == "BUY" else -1)
++
++
++def is_real_loss(t: dict) -> bool:
++    """#56 — a loss worse than −0.1R (R unknown → any negative P&L counts, conservative)."""
++    r = trade_r_multiple(t)
++    if r is not None:
++        return r < CROSS_ACCOUNT_MIN_LOSS_R
++    try:
++        return float(t.get("pnl") or 0) < 0
++    except (TypeError, ValueError):
++        return False
++
++
++async def loss_cooldown_block(db, user_id: str, symbol: str, action: str, cfg: dict) -> str | None:
++    if not cfg.get("loss_cooldown_enabled", True):
++        return None
++    minutes = _minutes(cfg)
+     if minutes <= 0:
+         return None
+     now = datetime.now(timezone.utc)
+@@ -31,20 +67,28 @@ async def loss_cooldown_block(db, user_id: str, symbol: str, action: str,
+         "stats_excluded": {"$ne": True},   # late fills of expired/PANIC orders are not strategy outcomes
+     }
+     account_id = cfg.get("account_id")
+-    if account_id:
+-        q["account_id"] = account_id
+-    rows = await db.trades.find(q).sort("closed_at", -1).limit(25).to_list(length=25)
++    rows = await db.trades.find(q).sort("closed_at", -1).limit(50).to_list(length=50)   # every account of the user
+     base = base_symbol(symbol)
+     for r in rows:
+         if base_symbol(r.get("symbol")) != base:
+             continue
++        own = not account_id or str(r.get("account_id")) == str(account_id)
++        if not own and not is_real_loss(r):
++            continue                      # another account's scratch / BE close does not pause this one
+         try:
+             closed = datetime.fromisoformat(str(r.get("closed_at")))
+             left = minutes - (now - closed).total_seconds() / 60.0
+         except (ValueError, TypeError):
+             left = minutes
+-        return (f"Loss cooldown: a bot {action} on {base} closed at a loss "
+-                f"(${float(r.get('pnl') or 0):.2f}) {minutes - left:.0f}min ago — "
+-                f"same-direction re-entries paused on this account for "
+-                f"{max(left, 0):.0f} more min.")
++        if own:
++            return (f"Loss cooldown: a bot {action} on {base} closed at a loss "
++                    f"(${float(r.get('pnl') or 0):.2f}) {minutes - left:.0f}min ago — "
++                    f"same-direction re-entries paused on this account for "
++                    f"{max(left, 0):.0f} more min.")
++        rr = trade_r_multiple(r)
++        return (f"{CROSS_ACCOUNT_PREFIX}: a bot {action} on {base} closed at a loss on account "
++                f"…{str(r.get('account_id') or '')[-6:]} ({rr:+.2f}R, ${float(r.get('pnl') or 0):.2f}) {minutes - left:.0f}min ago — "
++                f"same-direction re-entries paused on ALL accounts for {max(left, 0):.0f} more min.") if rr is not None else (
++                f"{CROSS_ACCOUNT_PREFIX}: a bot {action} on {base} closed at a loss on account …{str(r.get('account_id') or '')[-6:]} "
++                f"(${float(r.get('pnl') or 0):.2f}) {minutes - left:.0f}min ago — same-direction re-entries paused on ALL accounts for {max(left, 0):.0f} more min.")
+     return None
+diff --git a/backend/models.py b/backend/models.py
+index 9a0693d5..fcbe3476 100644
+--- a/backend/models.py
++++ b/backend/models.py
+@@ -207,6 +207,7 @@ class BotConfigUpdate(BaseModel):
+     # trade is +N×R (breakout signals have TP1 = TP, so the TP1 breakeven never fired). 0 = TP1-only (old behaviour).
+     # #46 — ONE shared default (BREAKEVEN_TRIGGER_R_DEFAULT) for runtime AND UI; breakeven_enabled is honoured.
+     breakeven_enabled: bool = True
++    engine_live_features_enabled: bool = False       # #55 — engines read the LIVE broker price (+ fast slope / momentum override); OFF = shadow compare only
+     breakeven_trigger_r: float = Field(default=BREAKEVEN_TRIGGER_R_DEFAULT, ge=0.0, le=5.0)
+     daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)
+     daily_drawdown_enabled: bool = True
+diff --git a/backend/scripts/engine_live_features_replay.py b/backend/scripts/engine_live_features_replay.py
+new file mode 100644
+index 00000000..abb5bb68
+--- /dev/null
++++ b/backend/scripts/engine_live_features_replay.py
+@@ -0,0 +1,123 @@
++"""#55 — engine replay: old (closed-bar) vs new (live-feature) engine output on XAUUSD M1.
++
++  python scripts/engine_live_features_replay.py --csv XAUUSD_M1.csv --from 2026-10-16T13:00 --to 2026-10-16T14:30
++  python scripts/engine_live_features_replay.py --csv XAUUSD_M1.csv --days 30
++Per M1 bar: M15 bars closed so far + the bar close as the LIVE price → hf_scalp / hf_scalp_fast / breakout_m15 signals
++from both feature packs. Outcomes use the engines' own geometry (scalp SL 0.8×ATR15 min 20 pips, TP 2×SL; breakout
++SL 1.0×ATR15 min 25 pips, TP 2×SL) with spread 0.25 + commission, so choppy-day losses are visible."""
++from __future__ import annotations
++
++import argparse
++import os
++import sys
++from collections import defaultdict
++from datetime import datetime, timezone
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++ENGINES = ("hf_scalp", "hf_scalp_fast", "breakout_m15")
++PIP = 0.10
++
++
++def replay_engines(m1: list, *, spread: float = 0.25, commission_price: float = 0.07, start: float | None = None, end: float | None = None,
++                   max_hold_min: int = 90) -> dict:
++    from bars_util import resample
++    from intraday_features import compute_intraday_features
++    from strategy_engines import run_engine
++    m15_all = resample(m1, 900)
++    signals = {"old": [], "new": []}
++    open_pos = {"old": {}, "new": {}}
++    for i, bar in enumerate(m1):
++        t = int(bar["t"]) + 60
++        now = datetime.fromtimestamp(t, tz=timezone.utc)
++        closed15 = [b for b in m15_all if b["t"] + 900 <= t][-120:]
++        if len(closed15) < 60:
++            continue
++        # manage open positions (one per engine per arm)
++        for arm in ("old", "new"):
++            for eng, pos in list(open_pos[arm].items()):
++                sgn = 1 if pos["action"] == "BUY" else -1
++                hit_sl = (bar["l"] <= pos["sl"]) if sgn > 0 else (bar["h"] >= pos["sl"])
++                hit_tp = (bar["h"] >= pos["tp"]) if sgn > 0 else (bar["l"] <= pos["tp"])
++                px = pos["sl"] if hit_sl else pos["tp"] if hit_tp else (bar["c"] if (t - pos["t"]) >= max_hold_min * 60 else None)
++                if px is not None:
++                    net = (px - pos["entry"]) * sgn - spread - commission_price
++                    pos.update({"exit": px, "net": round(net, 2), "r": round(net / pos["sl_dist"], 3), "exit_at": now.isoformat()})
++                    del open_pos[arm][eng]
++        if start and t < start or end and t > end:
++            continue
++        if now.weekday() >= 5 or not (7 <= now.hour < 20):
++            continue
++        m5 = resample([b for b in m1[max(0, i - 20):i + 1]], 300)
++        packs = {"old": compute_intraday_features(closed15, as_of=t), "new": compute_intraday_features(closed15, live_price=bar["c"], m5_bars=m5, as_of=t)}
++        for arm, feats in packs.items():
++            if not feats:
++                continue
++            for eng in ENGINES:
++                if eng in open_pos[arm]:
++                    continue
++                sig, note = run_engine(eng, feats)
++                if not sig:
++                    continue
++                atr = float(feats["atr15"])
++                sl_dist = max(0.8 * atr, 2.0) if eng != "breakout_m15" else max(1.0 * atr, 2.5)
++                sgn = 1 if sig == "BUY" else -1
++                pos = {"engine": eng, "action": sig, "note": note[:120], "t": t, "at": now.isoformat(), "entry": bar["c"], "sl_dist": round(sl_dist, 2),
++                       "sl": round(bar["c"] - sgn * sl_dist, 2), "tp": round(bar["c"] + sgn * 2 * sl_dist, 2), "trend": feats.get("trend"),
++                       "gap": feats.get("feature_price_gap"), "stale": feats.get("stale_feature")}
++                open_pos[arm][eng] = pos
++                signals[arm].append(pos)
++    return summarize(signals)
++
++
++def summarize(signals: dict) -> dict:
++    out = {}
++    for arm, rows in signals.items():
++        done = [r for r in rows if "r" in r]
++        by_eng = defaultdict(list)
++        for r in done:
++            by_eng[r["engine"]].append(r)
++
++        def _st(xs):
++            rs = [x["r"] for x in xs]
++            w = [r for r in rs if r > 0]; l = [r for r in rs if r <= 0]
++            return {"n": len(rs), "win_rate": round(len(w) / len(rs), 3) if rs else None,
++                    "pf": round(sum(w) / -sum(l), 2) if l and sum(l) < 0 else None, "exp_r": round(sum(rs) / len(rs), 3) if rs else None,
++                    "net_r": round(sum(rs), 2)}
++        out[arm] = {"signals": len(rows), "buy": sum(1 for r in rows if r["action"] == "BUY"), "sell": sum(1 for r in rows if r["action"] == "SELL"),
++                    "closed": _st(done), "by_engine": {k: _st(v) for k, v in sorted(by_eng.items())},
++                    "stale_entries": sum(1 for r in rows if r.get("stale")), "list": rows}
++    return out
++
++
++def markdown(rep: dict, title: str) -> str:
++    rows = [f"### {title}", "", "| arm | signals | BUY | SELL | closed n | win rate | PF | exp R | net R | stale entries |", "|---|---|---|---|---|---|---|---|---|---|"]
++    for arm in ("old", "new"):
++        a = rep[arm]; c = a["closed"]
++        rows.append(f"| {arm} | {a['signals']} | {a['buy']} | {a['sell']} | {c['n']} | {c['win_rate']} | {c['pf']} | {c['exp_r']} | {c['net_r']} | {a['stale_entries']} |")
++    rows += ["", "| arm | engine | n | win rate | PF | exp R |", "|---|---|---|---|---|---|"]
++    for arm in ("old", "new"):
++        for eng, st in rep[arm]["by_engine"].items():
++            rows.append(f"| {arm} | {eng} | {st['n']} | {st['win_rate']} | {st['pf']} | {st['exp_r']} |")
++    rows += ["", "signals (new arm):"] + [f"- {r['at']} {r['engine']} {r['action']} @ {r['entry']} trend={r['trend']} gap={r['gap']} — {r['note']}" for r in rep["new"]["list"][:40]]
++    return "\n".join(rows)
++
++
++def main() -> int:
++    ap = argparse.ArgumentParser()
++    ap.add_argument("--csv", required=True); ap.add_argument("--from", dest="start"); ap.add_argument("--to", dest="end")
++    ap.add_argument("--days", type=int, default=0); ap.add_argument("--spread", type=float, default=0.25); ap.add_argument("--commission", type=float, default=0.07)
++    a = ap.parse_args()
++    from bars_util import load_csv
++    bars = load_csv(a.csv)
++    if a.days:
++        bars = [b for b in bars if b["t"] >= bars[-1]["t"] - a.days * 86400]
++    s = datetime.fromisoformat(a.start).replace(tzinfo=timezone.utc).timestamp() if a.start else None
++    e = datetime.fromisoformat(a.end).replace(tzinfo=timezone.utc).timestamp() if a.end else None
++    rep = replay_engines(bars, spread=a.spread, commission_price=a.commission, start=s, end=e)
++    print(markdown(rep, f"#55 engine replay {a.start or ''}–{a.end or ''} ({len(bars)} M1 bars)"))
++    return 0
++
++
++if __name__ == "__main__":
++    sys.exit(main())
+diff --git a/backend/strategy_engines.py b/backend/strategy_engines.py
+index 4b6e4fb6..51fe2a9e 100644
+--- a/backend/strategy_engines.py
++++ b/backend/strategy_engines.py
+@@ -153,6 +153,21 @@ def hf_scalp_signal(feats: dict, fast: bool = False,
+                 return f"price at {pos}% of a {day_rng}% up-day — no fading strength"
+         return None
+ 
++    # #55(3) — FLAT-but-strong-momentum continuation (live features only): above VWAP by ≥ 0.5×ATR15 with 3 h momentum,
++    # the last 3 M5 closes rising and no LH_LL structure → treat as UP for entries (mirror for DOWN).
++    override = None
++    if feats.get("live_price_used") and trend == "FLAT" and feats.get("session_vwap"):
++        atr = float(feats.get("atr15") or 0)
++        vgap = last - float(feats["session_vwap"])
++        struct = feats.get("swing_structure")
++        if vgap >= 0.5 * atr and mom >= mom_min and feats.get("m5_closes_rising") and struct != "LH_LL":
++            trend, override = "UP", f"momentum override: +{vgap:.2f} above VWAP (≥0.5×ATR15), 3h mom +{mom}%, M5 closes rising"
++        elif vgap <= -0.5 * atr and mom <= -mom_min and feats.get("m5_closes_falling") and struct != "HH_HL":
++            trend, override = "DOWN", f"momentum override: {vgap:.2f} below VWAP (≥0.5×ATR15), 3h mom {mom}%, M5 closes falling"
++    if override:
++        if ema20 > 0 and abs(last - ema20) / ema20 * 100 <= 0.15:
++            return ("BUY" if trend == "UP" else "SELL"), f"{override} — pullback to EMA20"
++        return ("BUY" if trend == "UP" else "SELL"), f"{override} — micro-breakout continuation"
+     if trend == "UP":
+         if pos is not None and float(pos) > 95 and dch == "INSIDE":
+             return None, f"uptrend but price at {pos}% of session range without a breakout — no chase"
+@@ -283,6 +298,15 @@ def breakout_signal(feats: dict, params: dict | None = None) -> tuple:
+     day_rng = float(feats.get("day_range_pct") or 0)
+     if day_rng < float(p["min_day_rng"]):
+         return None, f"day range {day_rng}% too quiet for a breakout play"
++    # #55(2) — with live features the LIVE price must still be beyond the broken level by ≥ 0.2×ATR15: a BREAK_DOWN whose
++    # live price is back inside the channel is never sold (mirror for BUY).
++    if feats.get("live_price_used"):
++        last, atr = float(feats.get("last_price") or 0), float(feats.get("atr15") or 0)
++        hi20, lo20 = feats.get("donchian_hi20"), feats.get("donchian_lo20")
++        if dch == "BREAK_UP" and hi20 is not None and last < float(hi20) + 0.2 * atr:
++            return None, f"BREAK_UP but live price {last} not ≥0.2×ATR15 beyond {hi20} — no chase of a fading break"
++        if dch == "BREAK_DOWN" and lo20 is not None and last > float(lo20) - 0.2 * atr:
++            return None, f"BREAK_DOWN but live price {last} back inside / not ≥0.2×ATR15 below {lo20} — no stale sell"
+     if dch == "BREAK_UP":
+         if mom < 0:
+             return None, f"Donchian BREAK_UP but 3h momentum negative ({mom}%) — likely fake-out"
+diff --git a/backend/streak_losses.py b/backend/streak_losses.py
+index 1d9d8b8c..722394e2 100644
+--- a/backend/streak_losses.py
++++ b/backend/streak_losses.py
+@@ -24,6 +24,8 @@ def classify_loss(trade: dict, account: dict | None = None) -> dict:
+     pnl = float(trade.get("pnl") or 0)
+     if pnl >= 0:
+         return {"counts": False, "r": None, "why": "pnl ≥ 0 — not a loss"}
++    if trade.get("stale_feature_entry"):
++        return {"counts": False, "r": None, "why": "stale-feature entry (#55: live price > 0.5×ATR15 from the closed-bar features) — not a tilt loss"}
+     # a scratch is a stop the EA CONFIRMED moved to break-even (`breakeven_set`), not merely a requested BE rule
+     if trade.get("scalp_exit_rule") in BREAKEVEN_EXIT_RULES and trade.get("breakeven_set"):
+         return {"counts": False, "r": None, "why": "breakeven scratch (EA confirmed BE stop) — not a loss"}
+diff --git a/backend/tests/unit/test_v1_60_57_cross_account_loss_cooldown.py b/backend/tests/unit/test_v1_60_57_cross_account_loss_cooldown.py
+new file mode 100644
+index 00000000..5c45e572
+--- /dev/null
++++ b/backend/tests/unit/test_v1_60_57_cross_account_loss_cooldown.py
+@@ -0,0 +1,110 @@
++"""#56 — cross-account loss cooldown (16 Oct: RoboForex XAUUSD BUY hit SL −1R 15:14:55, OnEquity opened the same BUY 43 s later)."""
++import asyncio
++import os
++import sys
++from datetime import datetime, timedelta, timezone
++
++import pytest
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
++pytestmark = pytest.mark.unit
++BACKEND = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++from loss_cooldown import CROSS_ACCOUNT_PREFIX, is_real_loss, loss_cooldown_block, trade_r_multiple  # noqa: E402
++
++
++def _run(c):
++    return asyncio.new_event_loop().run_until_complete(c)
++
++
++class _Cursor:
++    def __init__(self, rows):
++        self.rows = rows
++
++    def sort(self, *a, **k):
++        return self
++
++    def limit(self, n):
++        self.rows = self.rows[:n]
++        return self
++
++    async def to_list(self, length=None):
++        return list(self.rows)
++
++
++class _DB:
++    def __init__(self, rows):
++        self.rows = rows
++        self.trades = self
++
++    def find(self, q):
++        out = []
++        for r in self.rows:
++            if r.get("status") != q["status"] or r.get("action") != q["action"] or r.get("origin") != q["origin"]:
++                continue
++            if not (float(r.get("pnl") or 0) < 0) or r.get("closed_at") < q["closed_at"]["$gte"] or r.get("stats_excluded") is True:
++                continue
++            if "account_id" in q and r.get("account_id") != q["account_id"]:
++                continue
++            out.append(r)
++        self.last_query = q
++        return _Cursor(out)
++
++
++def _trade(acc, action="BUY", pnl=-25.0, r=None, mins_ago=1, symbol="XAUUSD+", **kw):
++    return {"user_id": "u1", "account_id": acc, "symbol": symbol, "action": action, "status": "closed", "origin": "auto", "pnl": pnl,
++            "closed_at": (datetime.now(timezone.utc) - timedelta(minutes=mins_ago)).isoformat(), "r_multiple": r, **kw}
++
++
++def test_r_multiple_and_real_loss_classification():
++    assert trade_r_multiple({"r_multiple": -1.0}) == -1.0
++    assert trade_r_multiple({"entry_price": 4160.0, "stop_loss": 4156.0, "exit_price": 4156.0, "action": "BUY"}) == pytest.approx(-1.0)
++    assert trade_r_multiple({"entry_price": 4160.0, "stop_loss": 4164.0, "exit_price": 4162.0, "action": "SELL"}) == pytest.approx(-0.5)
++    assert trade_r_multiple({"entry_price": 4160.0}) is None
++    assert is_real_loss({"r_multiple": -1.0}) and is_real_loss({"r_multiple": -0.11})
++    assert not is_real_loss({"r_multiple": -0.05, "pnl": -0.8})            # BE / scratch close is not a loss for #56
++    assert is_real_loss({"pnl": -3.0}) and not is_real_loss({"pnl": 0.0})   # R unknown → negative P&L counts (conservative)
++
++
++def test_cross_account_loss_pauses_the_other_account_same_symbol_direction():
++    """16 Oct replay: RoboForex loses XAUUSD BUY at −1R → OnEquity's XAUUSD BUY 43 s later is blocked."""
++    db = _DB([_trade("robo", r=-1.0, symbol="XAUUSD.crp")])
++    msg = _run(loss_cooldown_block(db, "u1", "XAUUSD+", "BUY", {"account_id": "onequity", "loss_cooldown_minutes": 30}))
++    assert msg and msg.startswith(CROSS_ACCOUNT_PREFIX) and "ALL accounts" in msg and "-1.00R" in msg and "robo" in msg
++    assert "account_id" not in db.last_query                                  # every account of the user is scanned
++    # own-account loss keeps the original (per-account) message
++    own = _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "robo"}))
++    assert own and own.startswith("Loss cooldown:") and "this account" in own
++    # other direction / other symbol / disabled / zero minutes → not blocked
++    assert _run(loss_cooldown_block(db, "u1", "XAUUSD", "SELL", {"account_id": "onequity"})) is None
++    assert _run(loss_cooldown_block(db, "u1", "EURUSD", "BUY", {"account_id": "onequity"})) is None
++    assert _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "onequity", "loss_cooldown_enabled": False})) is None
++    assert _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "onequity", "loss_cooldown_minutes": 0})) is None
++
++
++def test_cross_account_rule_ignores_scratch_closes_manual_trades_and_uses_the_evaluating_accounts_duration():
++    # another account's break-even close (−0.05R) must not pause this account
++    db = _DB([_trade("robo", r=-0.05, pnl=-0.9)])
++    assert _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "onequity"})) is None
++    # … but the SAME account's small loss still counts for its own per-account cooldown (unchanged behaviour)
++    assert _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "robo"})).startswith("Loss cooldown:")
++    # manual losses never freeze the bot; stats-excluded late fills neither
++    db = _DB([_trade("robo", r=-1.0, origin="manual"), _trade("robo", r=-1.0, stats_excluded=True)])
++    assert _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "onequity"})) is None
++    # duration = the evaluating account's loss_cooldown_minutes (default 30): a 20-min-old loss blocks at 30 but not at 15
++    db = _DB([_trade("robo", r=-1.0, mins_ago=20)])
++    assert _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "onequity"})) is not None
++    assert _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "onequity", "loss_cooldown_minutes": 15})) is None
++    # R derived from prices when r_multiple is missing
++    db = _DB([_trade("robo", r=None, entry_price=4160.0, stop_loss=4156.0, exit_price=4156.0)])
++    assert "-1.00R" in _run(loss_cooldown_block(db, "u1", "XAUUSD", "BUY", {"account_id": "onequity"}))
++
++
++def test_bot_runner_pulses_cross_account_loss_cooldown_and_counts_it():
++    br = open(os.path.join(BACKEND, "bot_runner.py")).read()
++    assert "CROSS_ACCOUNT_PREFIX" in br and '"cross_account_loss_cooldown_block" if cross else "loss_cooldown_block"' in br
++    i = br.index("lc = await loss_cooldown_block(")
++    assert "_record_pulse(" in br[i:i + 600] and 'action="SKIP"' in br[i:i + 600]
++    from models import BotConfigUpdate
++    cfg = BotConfigUpdate().model_dump()
++    assert cfg["loss_cooldown_enabled"] is True and cfg["loss_cooldown_minutes"] == 30
+diff --git a/backend/tests/unit/test_v1_60_57_engine_live_features.py b/backend/tests/unit/test_v1_60_57_engine_live_features.py
+new file mode 100644
+index 00000000..6b11f8a7
+--- /dev/null
++++ b/backend/tests/unit/test_v1_60_57_engine_live_features.py
+@@ -0,0 +1,118 @@
++"""#55 — engines blind to fast gold moves: live-price features, breakout live check, momentum override, fast slope,
++stale-feature anti-tilt exemption, shadow compare; all behind engine_live_features_enabled (default OFF)."""
++import os
++import sys
++
++import pytest
++
++sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
++pytestmark = pytest.mark.unit
++BACKEND = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
++
++from intraday_features import compute_intraday_features  # noqa: E402
++from strategy_engines import run_engine  # noqa: E402
++
++
++def _m15(closes, t0=1_760_000_000, rng=0.6):
++    import time
++    # bars dated "today" (wall clock) so VWAP / range_pos are populated
++    day = int(time.time()) // 86400 * 86400 + 7 * 3600
++    out = []
++    for i, c in enumerate(closes):
++        o = closes[i - 1] if i else c
++        out.append({"t": day + i * 900, "o": o, "h": max(o, c) + rng, "l": min(o, c) - rng, "c": c, "v": 10})
++    return out
++
++
++def _rally_then_flat():
++    """Mirror of 16 Oct: long slow drift down (2 h slope negative), then a fast rally in the LAST bars."""
++    closes = [4200 - 0.6 * i for i in range(60)]                       # 4200 → 4164.6 over 15 h
++    closes += [4164 + 4.0 * i for i in range(1, 7)]                     # +24 in 1.5 h — last closed bar 4188
++    return _m15(closes)
++
++
++def test_live_price_drives_price_features_but_emas_stay_on_closed_bars():
++    bars = _rally_then_flat()
++    old = compute_intraday_features(bars)
++    new = compute_intraday_features(bars, live_price=bars[-1]["c"] + 11.5)
++    assert old["last_price"] == bars[-1]["c"] and not old["live_price_used"] and old["feature_price_gap"] == 0
++    assert new["last_price"] == round(bars[-1]["c"] + 11.5, 2) and new["live_price_used"] and new["feature_price_gap"] == 11.5
++    assert new["ema20"] == old["ema20"] and new["ema50"] == old["ema50"] and new["atr15"] == old["atr15"]   # closed-bar indicators
++    assert new["vwap_dist_pct"] > old["vwap_dist_pct"] and new["range_pos_pct"] >= old["range_pos_pct"]
++    assert new["donchian20"] == "BREAK_UP" and new["donchian_hi20"] == old["donchian_hi20"]
++    assert new["stale_feature"] is True and compute_intraday_features(bars, live_price=bars[-1]["c"] + 0.1)["stale_feature"] is False
++
++
++def test_fast_slope_confirms_trend_the_2h_slope_still_calls_flat():
++    bars = _rally_then_flat()
++    old = compute_intraday_features(bars)
++    new = compute_intraday_features(bars, live_price=bars[-1]["c"] + 2.0)
++    assert old["trend"] == "FLAT"                                                 # the 16 Oct blindness: slow stack never confirms
++    assert new["ema20_slope_pct_1h"] > old["ema20_slope_pct_2h"] and new["trend_slow"] == "FLAT"
++    assert new["trend"] == "UP"                                                   # fast slope + live price above EMA20
++
++
++def test_momentum_override_buys_flat_but_strong_up_move_only_with_live_features():
++    bars = _rally_then_flat()
++    m5 = [{"c": 4186.0}, {"c": 4188.0}, {"c": 4190.0}]
++    live = compute_intraday_features(bars, live_price=4190.5, m5_bars=m5)
++    live["trend"] = "FLAT"                                                        # isolate rule (3) from rule (4)
++    live["swing_structure"] = "MIXED"
++    sig, note = run_engine("hf_scalp_fast", live)
++    assert sig == "BUY" and "momentum override" in note
++    assert live["m5_closes_rising"] and live["last_price"] - live["session_vwap"] >= 0.5 * live["atr15"]
++    closed = compute_intraday_features(bars)
++    sig_old, _ = run_engine("hf_scalp_fast", closed)
++    assert sig_old != "BUY" or "momentum override" not in _                      # old pack: no override path
++    live["swing_structure"] = "LH_LL"
++    assert "momentum override" not in run_engine("hf_scalp_fast", live)[1]        # structure veto
++    live["swing_structure"] = "MIXED"; live["m5_closes_rising"] = False
++    assert "momentum override" not in run_engine("hf_scalp_fast", live)[1]        # needs 3 rising M5 closes
++
++
++def test_breakout_requires_live_price_still_beyond_level():
++    bars = _m15([4200 - 0.8 * i for i in range(70)])                                # steady slide → BREAK_DOWN on closed bars
++    closed = compute_intraday_features(bars)
++    assert closed["donchian20"] == "BREAK_DOWN" and run_engine("breakout_m15", closed)[0] == "SELL"
++    rebounded = compute_intraday_features(bars, live_price=closed["donchian_lo20"] + 1.0)    # live price back inside
++    sig, note = run_engine("breakout_m15", rebounded)
++    assert sig is None and ("back inside" in note or "inside the Donchian" in note)
++    shallow = compute_intraday_features(bars, live_price=closed["donchian_lo20"] - 0.05)      # beyond, but < 0.2×ATR15
++    sig, note = run_engine("breakout_m15", shallow)
++    assert sig is None and "0.2×ATR15" in note
++    deep = compute_intraday_features(bars, live_price=closed["donchian_lo20"] - 0.2 * closed["atr15"] - 0.1)
++    assert run_engine("breakout_m15", deep)[0] == "SELL"
++
++
++def test_stale_feature_loss_does_not_count_for_anti_tilt():
++    from streak_losses import classify_loss
++    t = {"pnl": -40.0, "entry_price": 4160.2, "stop_loss": 4156.0, "lot_size": 0.1, "symbol": "XAUUSD", "action": "SELL"}
++    assert classify_loss(dict(t))["counts"] is True
++    c = classify_loss({**t, "stale_feature_entry": True})
++    assert c["counts"] is False and "stale-feature" in c["why"]
++
++
++def test_flag_default_off_and_shadow_compare_wiring():
++    from models import BotConfigUpdate
++    assert BotConfigUpdate().model_dump()["engine_live_features_enabled"] is False
++    src = open(os.path.join(BACKEND, "ai_signals.py")).read()
++    assert 'bool((freeze_cfg or {}).get("engine_live_features_enabled"))' in src
++    assert "intraday_pack = (_pack_live or _pack_closed) if _live_on else _pack_closed" in src       # OFF → old features trade
++    assert '"engine_shadow_compare": _cmp' in src and '"stale_feature_entry": bool((_pack_live or {}).get("stale_feature"))' in src
++    ex = open(os.path.join(BACKEND, "execution.py")).read()
++    assert '"stale_feature_entry": bool(signal.get("stale_feature_entry"))' in ex and '"engine_shadow_compare": signal.get("engine_shadow_compare")' in ex
++    # legacy packs (no live price) must behave exactly as before: no override, no live breakout check
++    bars = _rally_then_flat()
++    closed = compute_intraday_features(bars)
++    assert closed["live_price_used"] is False and closed["trend"] == closed["trend_slow"]
++    for eng in ("hf_scalp", "hf_scalp_fast", "breakout_m15"):
++        _, note = run_engine(eng, closed)
++        assert "momentum override" not in note and "live price" not in note
++
++
++def test_engine_replay_reports_old_vs_new_on_a_rally_window():
++    from bars_util import synthetic_m1
++    from scripts.engine_live_features_replay import markdown, replay_engines
++    bars = synthetic_m1(days=6, seed=11)
++    rep = replay_engines(bars)
++    assert set(rep) == {"old", "new"} and "signals" in rep["new"] and "| arm | signals |" in markdown(rep, "t")
+diff --git a/docs/PR_v1.60.57a.md b/docs/PR_v1.60.57a.md
+new file mode 100644
+index 00000000..55282821
+--- /dev/null
++++ b/docs/PR_v1.60.57a.md
+@@ -0,0 +1,20 @@
++# PR: v1.60.57a — #55 live-feature engines (flag OFF, 1-week shadow compare) + #56 cross-account loss cooldown
++
++Base: GitHub `main` @ `347f421` (v1.60.55) — this branch also carries the already-approved **v1.60.56** follow-ups
++(#49–#54, no flags). Small review-first PR for the Sunday deploy; the gold_trend_pulse engine (items 1–14) follows as
++v1.60.57b on top of it. Protected paths untouched. Not tagged. Notes: `docs/RELEASE_NOTES_v1.60.57a.md`.
++
++| item | what | default behaviour |
++|---|---|---|
++| **#55** | `compute_intraday_features(bars, live_price, m5_bars)`: last_price / vwap_dist / Donchian / range_pos on the LIVE broker price (EMAs, ATR on closed bars); fast 1 h EMA20 slope; hf_scalp / hf_scalp_fast momentum-continuation override (FLAT but ≥ 0.5×ATR15 above VWAP, 3 h momentum, M5 closes rising, no LH_LL); breakout_m15 requires the live price ≥ 0.2×ATR15 beyond the broken level — a BREAK_DOWN whose live price is back inside is never sold; `stale_feature_entry` losses excluded from the anti-tilt streak; both arms recorded as `engine_shadow_compare` on every decision | `engine_live_features_enabled=false` → engines trade on closed-bar features exactly as before; shadow compare only |
++| **#56** | `loss_cooldown_block` scans every account of the user: a bot close < −0.1R on ANY account pauses that symbol+direction on ALL accounts for the evaluating account's `loss_cooldown_minutes` (30); scratch/BE closes of other accounts don't trigger; pulse "Cross-account loss cooldown …", counter `cross_account_loss_cooldown_block` (16 Oct RoboForex → OnEquity 43 s re-entry reproduced in test) | always on — blocks only |
++
++Files: `backend/bars_util.py` (new, shared helpers), `intraday_features.py`, `strategy_engines.py`, `ai_signals.py`,
++`execution.py`, `streak_losses.py`, `models.py`, `bot_runner.py`, `loss_cooldown.py`, `scripts/engine_live_features_replay.py`,
++`frontend/src/pages/BotConfig.jsx` (one toggle), tests (11), docs. Guards untouched (authority/CLOSE_ONLY, panic, Friday
++flat, EOD, anti-tilt, daily loss, macro freeze, direction cap, pip-value, close_watchdog, broker-price management).
++
++**Validation**: unit lane green on this branch (see PR checks); `scripts/engine_live_features_replay.py` is read-only and
++needs an MT5 M1 export for the 16 Oct 13:00–14:30 window and the 30-day old-vs-new table — to be run on the VPS and
++pasted here before the flag is switched ON (synthetic smoke only in this sandbox: the new arm signals MORE often on
++noise, which is exactly why it ships OFF with the one-week shadow compare).
+diff --git a/docs/RELEASE_NOTES_v1.60.57a.md b/docs/RELEASE_NOTES_v1.60.57a.md
+new file mode 100644
+index 00000000..08437538
+--- /dev/null
++++ b/docs/RELEASE_NOTES_v1.60.57a.md
+@@ -0,0 +1,55 @@
++# STOIC v1.60.57a — #55 live-feature engines (flag, shadow compare) + #56 cross-account loss cooldown
++
++Small, review-first PR ahead of the gold_trend_pulse PR (v1.60.57b). Protected paths untouched (EX5, policies/*,
++release/ea_release.json, RELEASE_HASHES ea entry). Existing engine parameters are byte-identical (`DEFAULT_PARAMS`
++asserted by test).
++
++## New config fields (Bot Config, per account)
++| field | default | effect |
++|---|---|---|
++| `engine_live_features_enabled` | `false` | #55 — hf_scalp / hf_scalp_fast / breakout_m15 trade on LIVE-price features; OFF = both engine outputs recorded side by side (`engine_shadow_compare`) |
++
++No new environment variables. **With the default (`false`) the engines trade exactly as before** — the only always-on
++change is #56, which BLOCKS re-entries (never opens / sizes / re-targets). New shared helper `backend/bars_util.py`
++(resample / MT5 CSV loader / synthetic generator — pure functions).
++
++## #56 — cross-account loss cooldown (always on; uses the existing `loss_cooldown_*` settings)
++16 Oct: RoboForex 600007817961 XAUUSD BUY hit SL at 15:14:55 (−1R); `user_direction_cap` released the slot and OnEquity
++opened the same XAUUSD BUY 43 s later (46732353, 15:15:38) — the loss cooldown was per account (iter-122b).
++`loss_cooldown.loss_cooldown_block` now scans every account of the user: a bot close at a REAL loss (< −0.1R;
++`r_multiple`, else derived from entry / stop / exit; R unknown → any negative P&L) on ANY account pauses that
++symbol+direction (base symbol, so `XAUUSD.crp` ↔ `XAUUSD+`) on ALL accounts for the evaluating account's
++`loss_cooldown_minutes` (default 30). Scratch / break-even closes of OTHER accounts (≥ −0.1R) do not trigger it; the
++own-account rule is unchanged (any negative bot P&L). Manual trades and `stats_excluded` late fills never count.
++Pulse "Cross-account loss cooldown: … paused on ALL accounts for N more min", counter
++`cross_account_loss_cooldown_block`. Switching `loss_cooldown_enabled` off on an account disables both rules for it.
++Tests: `tests/unit/test_v1_60_57_cross_account_loss_cooldown.py` (4).
++
++## #55 — engines blind to fast gold moves (flag `engine_live_features_enabled`, default OFF)
++1. `compute_intraday_features(bars, live_price, m5_bars)`: last_price / vwap_dist / donchian / range_pos use the LIVE
++   broker price; EMAs and ATR stay on closed bars. New fields: `closed_last_price`, `feature_price_gap`,
++   `stale_feature` (gap > 0.5×ATR15), `trend_slow`, `ema20_slope_pct_1h`, `m5_closes_rising/falling`, `donchian_hi20/lo20`.
++2. breakout_m15: with live features the live price must still be ≥ 0.2×ATR15 beyond the broken level; a BREAK_DOWN
++   whose live price is back inside is never sold (mirror for BUY).
++3. hf_scalp / hf_scalp_fast momentum override: FLAT but live price ≥ VWAP + 0.5×ATR15, mom_3h ≥ mom_min, last 3 M5
++   closes rising, structure ≠ LH_LL → treated as UP (BUY pullback to EMA20 or micro-breakout continuation); mirror DOWN.
++4. Trend = slow stack OR fast confirmation (EMA20 slope over 1 h ≥ 0.05 % with live price on the right side of EMA20).
++5. Anti-tilt: a loss on a `stale_feature_entry` (live price > 0.5×ATR15 from the closed-bar features at entry) no
++   longer counts toward the streak (`streak_losses.classify_loss`).
++6. Shadow compare: whichever pack the flag selects is traded; the OTHER pack is evaluated too and both outputs land on
++   the signal/trade as `engine_shadow_compare` (actions, notes, trends, price gap, `differs`). Review one week before
++   switching the flag ON. `scripts/engine_live_features_replay.py --csv … --from 2026-10-16T13:00 --to 2026-10-16T14:30`
++   prints old vs new signals and 30-day win rate / PF after costs.
++
++
++### One-week shadow comparison (do this BEFORE switching the flag ON)
++Deploy with the flag OFF. Every engine decision (HOLD or signal) carries `engine_shadow_compare = {live_features_traded,
++traded: {action, note}, other: {action, note}, feature_price_gap, stale_feature, trend_live, trend_closed, differs}` on
++the signal / trade document; after a week compare how the `other` (live-feature) arm would have acted on the rows where
++`differs` is true (`scripts/engine_live_features_replay.py --csv XAUUSD_M1.csv --days 30` gives the same old-vs-new table
++from an MT5 M1 export, read-only). Only then set `engine_live_features_enabled=true` per account.
++
++## Tests
++`tests/unit/test_v1_60_57_engine_live_features.py` (7: live-price features vs closed, fast slope, momentum override and
++its guards, breakout live-price confirmation / no stale SELL, stale-feature anti-tilt exemption, flag-OFF identity,
++replay old-vs-new) and `tests/unit/test_v1_60_57_cross_account_loss_cooldown.py` (4).
+diff --git a/docs/RELEASE_SUMMARY.md b/docs/RELEASE_SUMMARY.md
+index 8e9096b0..e530ab5d 100644
+--- a/docs/RELEASE_SUMMARY.md
++++ b/docs/RELEASE_SUMMARY.md
+@@ -1,11 +1,11 @@
+ # Release summary (GENERATED — do not edit; `python scripts/generate_release_summary.py`)
+ 
+-- Source commit: `b1a85a13af08f9837768944e28f138014a1757af`
+-- rc_lock: `b1a85a13af08f9837768944e28f138014a1757af` authoritative=False
++- Source commit: `c2eabc54c35fd13f5b3f3122473a29f3bfb11807`
++- rc_lock: `c2eabc54c35fd13f5b3f3122473a29f3bfb11807` authoritative=False
+ - Model manifest sha256: `f04d8e4799590c3c80e2f346295e966b2876b49c8803eb04fe1e88a0cf535cb4`
+-- Test manifest sha256: `df89d5a03032c3ee894295efbc3da87578a4817b86c0833958ae5ee35d833c0e`
++- Test manifest sha256: `bcdea7f03fd991679b058d6c64134ff7e7e14ab4e251bc9542d27b0dd928531f`
+ - Uvicorn keepalive (container): 75s (application cap 300s)
+-- Test manifest: 6158 tests (docs/TEST_MANIFEST.md)
++- Test manifest: 6169 tests (docs/TEST_MANIFEST.md)
+ - Readiness verdict: **NOT RELEASABLE**
+ 
+ ## Open findings (docs/open_findings.json)
+@@ -44,4 +44,4 @@
+ - OPS-r24-turnstile-hostnames [P3] TURNSTILE_EXPECTED_HOSTNAMES in Secrets includes the preview host so the shared .env works in both environments
+ - tighten to the production hosts only in the Secrets tab. — owner: operator
+ 
+-_generated 2026-10-16T13:24:39.477385+00:00 — regenerate on every release commit_
++_generated 2026-10-16T16:33:05.544671+00:00 — regenerate on every release commit_
+diff --git a/docs/TEST_MANIFEST.md b/docs/TEST_MANIFEST.md
+index d4820952..4efc7d1d 100644
+--- a/docs/TEST_MANIFEST.md
++++ b/docs/TEST_MANIFEST.md
+@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
+ 
+ | class | meaning | runs in | count |
+ |-------|---------|---------|-------|
+-| unit | pure logic, no external I/O | every CI job | 1698 |
++| unit | pure logic, no external I/O | every CI job | 1709 |
+ | integration | real MongoDB service container | CI `backend-integration` | 267 |
+ | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4176 |
+ | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
+ 
+-**Total: 6158 tests across 667 files.**
++**Total: 6169 tests across 669 files.**
+ 
+ | file | class | tests |
+ |------|-------|-------|
+@@ -680,5 +680,7 @@ fails when this file drifts from the tree.
+ | `backend/tests/unit/test_v1_60_54_var_deleverage_breakeven.py` | unit | 10 |
+ | `backend/tests/unit/test_v1_60_55_review_items.py` | unit | 15 |
+ | `backend/tests/unit/test_v1_60_56_followups.py` | unit | 14 |
++| `backend/tests/unit/test_v1_60_57_cross_account_loss_cooldown.py` | unit | 4 |
++| `backend/tests/unit/test_v1_60_57_engine_live_features.py` | unit | 7 |
+ | `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 8 |
+ | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |
+diff --git a/frontend/src/pages/BotConfig.jsx b/frontend/src/pages/BotConfig.jsx
+index a346fdeb..293ecc0f 100644
+--- a/frontend/src/pages/BotConfig.jsx
++++ b/frontend/src/pages/BotConfig.jsx
+@@ -299,6 +299,7 @@ export default function BotConfig() {
+                 crypto_risk_pct_per_trade: cfg.crypto_risk_pct_per_trade,
+                 let_winners_run: cfg.let_winners_run ?? false,
+                 breakeven_enabled: cfg.breakeven_enabled ?? true,
++                engine_live_features_enabled: cfg.engine_live_features_enabled ?? false,
+                 breakeven_trigger_r: cfg.breakeven_trigger_r ?? BREAKEVEN_TRIGGER_R_DEFAULT,
+             };
+             // v1.60.48 — send only what changed since load/last save (PATCH), never the whole form
+@@ -1212,6 +1213,13 @@ function ProfitProtectionSection({ cfg, setCfg }) {
+ 
+                 {/* v1.60.48 (audit item 8) — the exit tiers are ENGINE RULES, not knobs: the old partial_close_* /
+                     soft_stop_* / trailing_* fields were saved but never read by trade_manager. */}
++                <div className="rounded-lg border border-[#F5C542]/30 p-4 mt-4" data-testid="engine-live-features-config">
++                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80" data-testid="engine-live-features-toggle">
++                        <input type="checkbox" checked={cfg.engine_live_features_enabled ?? false} onChange={(e) => setCfg({ ...cfg, engine_live_features_enabled: e.target.checked })} />
++                        ENGINE LIVE FEATURES (#55) {(cfg.engine_live_features_enabled ?? false) ? "ON" : "OFF — shadow compare only"}
++                    </label>
++                    <div className="text-[10px] text-white/40 mt-1">hf_scalp / hf_scalp_fast / breakout_m15 read the LIVE broker price for price features, add a 1 h slope and a momentum-continuation entry, and never sell a breakdown whose live price is back inside the channel. OFF = both engine outputs are recorded side by side (engine_shadow_compare) for a week before switching.</div>
++                </div>
+                 <div data-testid="engine-exit-rules" className="rounded-md border border-[#FFD700]/30 bg-[#FFD700]/5 p-4 space-y-2">
+                     <div className="font-mono text-[10px] text-[#FFD700] tracking-widest">ENGINE EXIT RULES · READ-ONLY</div>
+                     <div className="text-xs text-white/80"><span className="text-[#10F2C5] font-mono">SCALP (hf_scalp / hf_scalp_fast)</span> — single TP · stop to entry (+ round-trip costs) at <b>+0.5R</b> · a trade that has not reached +0.5R within <b>90 min</b> is closed · once break-even is armed the trade is risk-free and is left to run to its TP (no second time-stop).</div>
+diff --git a/release/rc_lock.json b/release/rc_lock.json
+index 63b6f3ca..cca11644 100644
+--- a/release/rc_lock.json
++++ b/release/rc_lock.json
+@@ -1,7 +1,7 @@
+ {
+-  "captured_at": "2026-10-16T13:24:39.088961+00:00",
+-  "git_commit": "b1a85a13af08f9837768944e28f138014a1757af",
+-  "source_sha": "b1a85a13af08f9837768944e28f138014a1757af",
++  "captured_at": "2026-10-16T16:33:05.302854+00:00",
++  "git_commit": "c2eabc54c35fd13f5b3f3122473a29f3bfb11807",
++  "source_sha": "c2eabc54c35fd13f5b3f3122473a29f3bfb11807",
+   "images": {
+     "backend": null,
+     "frontend": null
+@@ -12,7 +12,7 @@
+   "signer_key_id": "stoic-release-ed25519-v2",
+   "migrations_sha256": "9d5e137fa0fd8bfa5658435dff724140e6ed8b022067d5e001d4d3741415b94a",
+   "frontend_asset_digest": null,
+-  "test_manifest_sha256": "df89d5a03032c3ee894295efbc3da87578a4817b86c0833958ae5ee35d833c0e",
++  "test_manifest_sha256": "bcdea7f03fd991679b058d6c64134ff7e7e14ab4e251bc9542d27b0dd928531f",
+   "model_manifest_sha256": "f04d8e4799590c3c80e2f346295e966b2876b49c8803eb04fe1e88a0cf535cb4",
+   "python": {
+     "version": "3.11.17",
+-- 
+2.39.5
+

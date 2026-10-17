@@ -3,7 +3,8 @@ from live_target import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: E402,F401 — env-p
 health, benchmark harness."""
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import requests
 
@@ -90,11 +91,14 @@ def test_canary_channel_and_promote_rollback_cycle():
             # neither disk nor stable — re-set then read raw state instead
             st = await db.platform_state.find_one({"_id": STATE_ID})
             assert st["canary_agents"] == ["canary-1"]
-            # promote the synthetic candidate
+            # promote the synthetic candidate — v1.60.35: promote() enforces the readiness gate (soak elapsed,
+            # unpinned, no corroborated failures, signed EX5 record), so backdate the candidate and stub the record
             await db.platform_state.update_one(
-                {"_id": STATE_ID}, {"$set": {"candidate": fake_cand}})
+                {"_id": STATE_ID}, {"$set": {"candidate": fake_cand,
+                                             "candidate_since": (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()}})
             prev_stable = st.get("stable")
-            promoted = await promote(db, actor="pytest")
+            with patch("ea_capabilities._signed_release_record", return_value={"version": "1.64", "ex5_sha256": "a" * 64}):
+                promoted = await promote(db, actor="pytest")
             assert promoted["stable"] == fake_cand
             assert promoted["previous_stable"] == prev_stable
             # rollback restores previous stable and PINS

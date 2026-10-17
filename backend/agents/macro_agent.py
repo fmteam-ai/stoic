@@ -20,7 +20,7 @@ Output:
 """
 import logging
 
-from economic_calendar import macro_freeze_check, upcoming_for
+from economic_calendar import macro_freeze_check, released_surprises, upcoming_for
 from macro.cot import get_gold_positioning
 from macro.tips import get_real_yield
 from macro.dxy import get_dxy_snapshot
@@ -33,10 +33,14 @@ logger = logging.getLogger("agent.macro")
 class MacroAnalysisAgent:
     name = "macro"
 
-    async def analyze(self, symbol: str) -> dict:
+    async def analyze(self, symbol: str, cfg: dict | None = None) -> dict:
         sym = symbol.upper()
-        macro_freeze = await macro_freeze_check(sym)
-        upcoming = await upcoming_for(sym, hours=24)
+        macro_freeze = await macro_freeze_check(sym, cfg)         # v1.60.48 — per-account freeze currencies
+        upcoming = await upcoming_for(sym, hours=24, cfg=cfg)
+        try:
+            surprises = await released_surprises(sym, hours=6, cfg=cfg)   # v1.60.53 — advisory context only
+        except Exception:  # noqa: BLE001
+            surprises = []
 
         cot = tips = dxy = None
         if sym == "XAUUSD":
@@ -95,6 +99,7 @@ class MacroAnalysisAgent:
             "symbol": sym,
             "macro_freeze": macro_freeze,
             "upcoming_events": upcoming[:5],
+            "released_surprises": surprises[:5],      # v1.60.53 (A4) advisory — not a gate input
             "fred": fred,
             "real_yield_10y": tips,
             "dxy": dxy,

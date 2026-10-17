@@ -1,7 +1,7 @@
 {
-  "captured_at": "2026-10-12T06:47:36.029768+00:00",
-  "git_commit": "9c0e217a5cf39b2a8aa3a101d9cf64d800bfd3b3",
-  "source_sha": "9c0e217a5cf39b2a8aa3a101d9cf64d800bfd3b3",
+  "captured_at": "2026-10-17T17:13:53.289489+00:00",
+  "git_commit": "99cc4e91f3ccd769670c2aa2c391c9145a72e6ed",
+  "source_sha": "99cc4e91f3ccd769670c2aa2c391c9145a72e6ed",
   "images": {
     "backend": null,
     "frontend": null
@@ -12,8 +12,8 @@
   "signer_key_id": "stoic-release-ed25519-v2",
   "migrations_sha256": "9d5e137fa0fd8bfa5658435dff724140e6ed8b022067d5e001d4d3741415b94a",
   "frontend_asset_digest": null,
-  "test_manifest_sha256": "cc13fb8516527d8e3385d984c6cf9961f1ce46c8f6b9aeaf507c6791e2533d70",
-  "model_manifest_sha256": "7e1c621d9df39e1a9d3f6d2a0f6f5c9cb63c3585418f8041d0f05d01fdbe1373",
+  "test_manifest_sha256": "1ee62e111d98eb96f09ef3650829dc52b2f9f538888ceacef4d8f32361b01c67",
+  "model_manifest_sha256": "f04d8e4799590c3c80e2f346295e966b2876b49c8803eb04fe1e88a0cf535cb4",
   "python": {
     "version": "3.11.17",
     "packages": [
@@ -32,6 +32,7 @@
       "altair==6.2.2",
       "annotated-doc==0.0.4",
       "annotated-types==0.7.0",
+      "anthropic==1.15.0",
       "anyio==4.14.2",
       "ast_serialize==0.5.0",
       "attrs==26.1.0",
@@ -56,6 +57,7 @@
       "defusedxml==0.7.1",
       "distro==1.9.0",
       "dnspython==2.8.0",
+      "docstring_parser==0.18.0",
       "einops==0.8.2",
       "elevenlabs==2.54.0",
       "email-validator==2.3.0",
@@ -81,8 +83,10 @@
       "grpcio==1.81.1",
       "h11==0.16.0",
       "hf-xet==1.5.1",
+      "httpcore2==2.13.1",
       "httpcore==1.0.9",
       "httplib2==0.32.0",
+      "httpx2==2.13.1",
       "httpx==0.28.1",
       "huggingface_hub==1.20.1",
       "idna==3.18",
@@ -117,6 +121,7 @@
       "nvidia-nccl-cu12==2.30.7",
       "oauthlib==4.0.0",
       "openai==2.47.0",
+      "opentelemetry-api==1.45.1",
       "packageurl-python==0.17.6",
       "packaging==26.2",
       "pandas==3.0.3",
@@ -188,6 +193,7 @@
       "torch==2.12.1+cpu",
       "tqdm==4.68.3",
       "transformers==5.13.0",
+      "truststore==0.10.5",
       "typer==0.25.1",
       "typing-inspection==0.4.2",
       "typing_extensions==4.15.0",
@@ -202,8 +208,8 @@
       "yarl==1.24.2",
       "zipp==4.1.0"
     ],
-    "packages_sha256": "f22027c8870709a48c10dca0cc18540bb6c4db4afbd5cbab49456b156d84d2c9",
-    "requirements_txt_sha256": "1cb844c8a2d83c2ef9657fbb527b7a9a3b5f06aeb679d8c661ee39ce4dea8220"
+    "packages_sha256": "b1a573ad045e0508d446ce7e1e2d1687cbccbb16419c1c74e14ac6542e8f8d50",
+    "requirements_txt_sha256": "ca945bd0d131c6ff637ad3e05a2c68ae169a52d19dae76ed34fe9bb8c9396acc"
   },
   "node": {
     "version": "v20.20.2",
@@ -220,6 +226,6 @@
     "windows_build": "10.0.26100",
     "metaeditor_version": null,
     "mt5_build": null,
-    "attested_at": "2026-10-11T23:09:38.354871+00:00"
+    "attested_at": "2026-10-17T13:31:50.310706+00:00"
   }
 }

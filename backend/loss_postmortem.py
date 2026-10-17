@@ -21,15 +21,11 @@ Stored in:
   • `guardrail_adjustments`    — audit trail of auto-tightens
   • `users.postmortem_settings = {auto_tighten_enabled: bool}` — opt-in
 """
-import os
 import json
 import logging
-import uuid
 from datetime import datetime, timezone, timedelta
 from bson import ObjectId
 
-from database import get_db
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger("loss-postmortem")
 
@@ -51,7 +47,10 @@ Be terse. Do NOT use markdown. Do NOT prefix the JSON. Only output the JSON obje
 
 
 def _pattern_key(trade: dict, signal: dict) -> str:
-    """Stable cluster key per loss-pattern. Lets us count recurrences."""
+    """Stable cluster key per loss-pattern. Lets us count recurrences.
+    v1.60.32 A4 — the symbol is the CANONICAL one (GOLD# / XAUUSD.fx / XAUUSD-ECN → XAUUSD): broker tickers used
+    to split one pattern into several keys, so recurrence (and the ≥3 auto-tighten) under-counted."""
+    from pip_utils import base_symbol
     regime = (signal.get("regime") or {})
     if isinstance(regime, dict):
         regime_label = regime.get("regime") or "UNKNOWN"
@@ -62,7 +61,29 @@ def _pattern_key(trade: dict, signal: dict) -> str:
         session_label = (session.get("primary") or "off").upper()
     else:
         session_label = str(session).upper() or "OFF"
-    return f"{trade.get('symbol','?')}|{regime_label}|{session_label}|{trade.get('action','?')}"
+    raw = trade.get("symbol") or "?"
+    return f"{base_symbol(raw) or raw}|{regime_label}|{session_label}|{trade.get('action','?')}"
+
+
+def normalize_pattern_key(key: str | None) -> str | None:
+    """Legacy key → canonical key (first segment through base_symbol); None/odd shapes pass through."""
+    if not key or "|" not in key:
+        return key
+    from pip_utils import base_symbol
+    sym, rest = key.split("|", 1)
+    return f"{base_symbol(sym) or sym}|{rest}"
+
+
+async def ensure_pattern_keys_canonical(db) -> int:
+    """One-shot startup backfill of broker-ticker pattern keys in loss_postmortems / guardrail_adjustments."""
+    changed = 0
+    for coll in (db.loss_postmortems, db.guardrail_adjustments):
+        async for d in coll.find({"pattern_key": {"$regex": r"^[^|]+\|"}}, {"pattern_key": 1}):
+            canon = normalize_pattern_key(d.get("pattern_key"))
+            if canon and canon != d.get("pattern_key"):
+                await coll.update_one({"_id": d["_id"]}, {"$set": {"pattern_key": canon, "pattern_key_legacy": d["pattern_key"]}})
+                changed += 1
+    return changed
 
 
 async def _is_postmortem_eligible(db, trade: dict) -> tuple[bool, str]:
@@ -99,13 +120,52 @@ async def _is_postmortem_eligible(db, trade: dict) -> tuple[bool, str]:
     return True, "loss"
 
 
-def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict) -> dict:
+def _entry_sentiment(signal: dict) -> tuple:
+    """v1.60.39 — (value, source). news_ai.net (RSS + AI, -3..+3) first; legacy sentiment.score (-1..+1) fallback.
+    Only the sign is compared with "now", so the scales may differ."""
+    na = signal.get("news_ai") or {}
+    if isinstance(na, dict) and na.get("net") is not None:
+        return float(na["net"]), "news_ai"
+    sc = (signal.get("sentiment") or {}).get("score") if isinstance(signal.get("sentiment"), dict) else None
+    return (float(sc), "sentiment") if sc is not None else (None, None)
+
+
+def _entry_dxy(signal: dict):
+    """v1.60.39 — stored signal dxy (dict or number) / entry_context.dxy / legacy macro.dxy."""
+    ec = signal.get("entry_context") or {}
+    if ec.get("dxy") is not None:
+        return ec["dxy"]
+    dxy = signal.get("dxy")
+    if isinstance(dxy, dict):
+        return dxy.get("current_price")
+    if isinstance(dxy, (int, float)):
+        return dxy
+    em = (signal.get("macro") or {}).get("dxy")
+    return em.get("value") if isinstance(em, dict) else None
+
+
+def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict,
+                       current_news: dict | None = None) -> dict:
     """Side-by-side entry vs now snapshot. No LLM — pure numeric diff."""
     entry_macro = signal.get("macro") or {}
     entry_session = signal.get("session") or {}
-    entry_sentiment = (signal.get("sentiment") or {}).get("score")
-    cur_sentiment = (current_macro.get("sentiment") or {}).get("score")
+    entry_sentiment, sentiment_source = _entry_sentiment(signal)
+    if current_news and current_news.get("net") is not None:
+        cur_sentiment = float(current_news["net"])
+    else:
+        cur_sentiment = (current_macro.get("sentiment") or {}).get("score")
     cur_summary = current_macro.get("summary") or {}
+    # v1.60.36 — entry-time context stamped on the signal/trade (scalp engines included); legacy fallbacks after
+    ec = signal.get("entry_context") or {}
+    ec_mtf = ec.get("mtf") or {}
+    ec_aplus = ec.get("aplus") or {}
+    dxy_entry = _entry_dxy(signal)
+    mtf_entry = ec_mtf.get("aligned")
+    if mtf_entry is None:
+        mtf_entry = (signal.get("mtf_gate") or {}).get("aligned")
+    aplus_entry = ec_aplus.get("passed")
+    if aplus_entry is None:
+        aplus_entry = (signal.get("aplus_confluence") or {}).get("passed")
     return {
         "regime_at_entry": (signal.get("regime") or {}).get("regime") if isinstance(signal.get("regime"), dict) else signal.get("regime"),
         "session_at_entry": (entry_session.get("primary") if isinstance(entry_session, dict) else None) or "off",
@@ -113,17 +173,24 @@ def _quantitative_diff(signal: dict, current_macro: dict, current_session: dict)
         "macro_freeze_at_entry": bool(entry_macro.get("frozen")),
         "macro_gate_open_now": cur_summary.get("gate_open"),
         "sentiment_at_entry": entry_sentiment,
+        "sentiment_source_at_entry": sentiment_source,
         "sentiment_now": cur_sentiment,
         "sentiment_flipped": (
             entry_sentiment is not None and cur_sentiment is not None
             and ((entry_sentiment > 0) != (cur_sentiment > 0))
         ),
-        "dxy_at_entry": (entry_macro.get("dxy") or {}).get("value") if isinstance(entry_macro.get("dxy"), dict) else None,
+        "dxy_at_entry": dxy_entry,
         "dxy_now": cur_summary.get("dxy"),
+        "vix_at_entry": ec.get("vix"),
         "vix_now": cur_summary.get("vix"),
+        "y10y_at_entry": ec.get("y10y"),
+        "real_yield_10y_at_entry": ec.get("real_yield_10y"),
         "y10y_now": cur_summary.get("y10y"),
-        "mtf_aligned_at_entry": (signal.get("mtf_gate") or {}).get("aligned"),
-        "aplus_passed_at_entry": (signal.get("aplus_confluence") or {}).get("passed"),
+        "mtf_aligned_at_entry": mtf_entry,
+        "mtf_dominant_at_entry": ec_mtf.get("dominant"),
+        "aplus_passed_at_entry": aplus_entry,
+        "aplus_evaluated_at_entry": bool(ec_aplus.get("evaluated")),
+        "setup_score_at_entry": ec_aplus.get("setup_score"),
         "confidence_at_entry": signal.get("confidence"),
     }
 
@@ -149,14 +216,8 @@ async def _claude_narrative(trade: dict, signal: dict, diff: dict) -> dict:
     }, default=str)
 
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"postmortem-{trade.get('symbol','?')}-{uuid.uuid4().hex[:8]}",
-            system_message=_POSTMORTEM_SYSTEM,
-        ).with_model(PROVIDER, model_for("analysis"))
-        from llm_timeout import send_with_timeout
-        response = await send_with_timeout(chat, UserMessage(text=user_text), label="postmortem", seconds=30)
+        import llm_client
+        response = await llm_client.complete("analysis", _POSTMORTEM_SYSTEM, user_text, feature="postmortem", seconds=30)
         # Strip code fences / prefix garbage just in case
         raw = str(response).strip()
         if raw.startswith("```"):
@@ -188,6 +249,21 @@ async def _user_doc(db, user_id: str) -> dict | None:
         pass
     return (await db.users.find_one({"_id": user_id})
             or await db.users.find_one({"id": user_id}))
+
+
+async def backfill_postmortem_opened_at(db, user_id: str) -> int:
+    """v1.60.37 — legacy post-mortems carry no `opened_at`; copy it from the trade so decision grouping works."""
+    missing = await db.loss_postmortems.find({"user_id": user_id, "opened_at": {"$exists": False}},
+                                             {"trade_id": 1}).to_list(length=2000)
+    n = 0
+    for d in missing:
+        try:
+            t = await db.trades.find_one({"_id": ObjectId(str(d.get("trade_id")))}, {"opened_at": 1})
+        except Exception:  # noqa: BLE001
+            t = None
+        await db.loss_postmortems.update_one({"_id": d["_id"]}, {"$set": {"opened_at": (t or {}).get("opened_at")}})
+        n += 1
+    return n
 
 
 async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | None:
@@ -238,10 +314,16 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
             signal = await db.signals.find_one({"_id": ObjectId(sig_id)}) or {}
         except Exception:
             pass
+    # v1.60.39 — entry snapshots persisted on the trade (entry_context / dxy / news_ai / sentiment) fill any gap
+    # in the stored signal, so a post-mortem never shows null when the data existed at entry
+    for key in ("entry_context", "dxy", "news_ai", "sentiment"):
+        if signal.get(key) is None and trade.get(key) is not None:
+            signal = {**signal, key: trade[key]}
 
     # Current market snapshot — best effort, fall back to empty.
     cur_macro = {}
     cur_session = {}
+    cur_news = None
     try:
         from macro_feeds import get_macro_snapshot
         cur_macro = await get_macro_snapshot() or {}
@@ -252,8 +334,14 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
         cur_session = current_session()
     except Exception:
         pass
+    try:
+        from news_understanding import cached_news_ai
+        from pip_utils import base_symbol
+        cur_news = await cached_news_ai(base_symbol(trade.get("symbol")) or str(trade.get("symbol") or "").upper())
+    except Exception:
+        pass
 
-    diff = _quantitative_diff(signal, cur_macro, cur_session)
+    diff = _quantitative_diff(signal, cur_macro, cur_session, cur_news)
     narrative = await _claude_narrative(trade, signal, diff)
     # Always derive pattern_key ourselves — Claude's free-text version is
     # unreliable for clustering (varies in case + ordering). Overwrite any
@@ -271,6 +359,10 @@ async def maybe_record_postmortem(db, trade_id, force: bool = False) -> dict | N
         "account_id": trade.get("account_id"),
         "origin": trade.get("origin"),
         "pattern_key": pattern_key,
+        "signal_id": str(sig_id) if sig_id else None,
+        "opened_at": trade.get("opened_at"),            # v1.60.37 — decision grouping (symbol+direction+entry ±2 min)
+        "sl_loosen_refusals": trade.get("sl_loosen_refusals") or [],   # stop audit trail (v1.60.35)
+        "ack_loosen_events": trade.get("ack_loosen_events") or [],     # EA/broker loosened the stop (v1.60.37)
         "trigger": trigger,
         "diff": diff,
         "narrative": narrative,
@@ -337,12 +429,12 @@ async def _maybe_autotighten(db, trade: dict, signal: dict, pattern_key: str) ->
     new_min = min(95, max(50, (cur_min if cur_min > 0 else 65) + 5))
     if new_min <= cur_min:
         return None
-
-    await db.bot_configs.update_one(
-        {"_id": cfg["_id"]},
-        {"$set": {"min_confidence_override": new_min,
-                  "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
+    from config_promotion import apply_config_change, user_set
+    if user_set(cfg, "min_confidence_override"):
+        return None                                   # v1.60.48 — never override a value the user set
+    await apply_config_change(db, user_id, cfg.get("account_id"), {"min_confidence_override": new_min},
+                              label="loss-postmortem tighten", source="loss_postmortem",
+                              audit_detail={"pattern_key": pattern_key})
     adj_doc = {
         "user_id": user_id,
         "config_id": str(cfg["_id"]),
@@ -484,12 +576,11 @@ async def maybe_record_winner(db, trade_id) -> dict | None:
     new_min = max(50, cur_min - 3)
     if new_min >= cur_min:
         return None  # already at floor
-
-    await db.bot_configs.update_one(
-        {"_id": cfg["_id"]},
-        {"$set": {"min_confidence_override": new_min,
-                  "updated_at": datetime.now(timezone.utc).isoformat()}},
-    )
+    from config_promotion import apply_config_change, user_set
+    if user_set(cfg, "min_confidence_override"):
+        return None                                   # v1.60.48 — never loosen a floor the user set
+    await apply_config_change(db, user_id, cfg.get("account_id"), {"min_confidence_override": new_min},
+                              label="loss-postmortem loosen", source="loss_postmortem")
     adj_doc = {
         "user_id": user_id,
         "config_id": str(cfg["_id"]),

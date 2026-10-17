@@ -1,5 +1,6 @@
 """Infrastructure API — VPS providers, deployments, agent lifecycle,
 MT5 instances, pairing, health + shadow certification."""
+import os
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
@@ -319,7 +320,6 @@ async def bootstrap_installer(token: str = "", enrollment_code: str = ""):
             or _aware(doc["expires_at"]) < datetime.now(timezone.utc):
         raise HTTPException(status_code=401,
                             detail="invalid or expired bootstrap token")
-    import os
     base = os.environ.get("PUBLIC_BASE_URL") or ""
     script = BOOTSTRAP_PS1.format(
         base_url=base or "https://<your-stoic-host>", token=token)
@@ -999,7 +999,29 @@ async def infra_overview(user=Depends(get_current_user)):
                         "backup_id": b.get("backup_id"),
                         "at": str(b.get("at"))})
     return {"agents": agents, "mt5_instances": instances,
-            "backups": backups}
+            "backups": backups,
+            "server_backups": server_backups(now) if _admin_ok(user) else None}
+
+
+def server_backups(now: datetime, limit: int = 10) -> dict:
+    """The platform's own Mongo backups (`*.archive.gz` in STOIC_BACKUP_DIR, mounted read-only) — names, ages and
+    sizes only, newest first. Admin-only surface; a missing mount is reported as such, never as 'no backups'."""
+    bdir = os.environ.get("STOIC_BACKUP_DIR") or os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "backups")
+    try:
+        names = [n for n in os.listdir(bdir) if n.endswith((".archive.gz", ".archive.gz.enc"))]
+    except OSError:
+        return {"dir": bdir, "mounted": False, "files": [], "newest_age_h": None}
+    files = []
+    for n in names:
+        try:
+            st = os.stat(os.path.join(bdir, n))
+        except OSError:
+            continue
+        files.append({"name": n, "size_bytes": st.st_size,
+                      "at": datetime.fromtimestamp(st.st_mtime, tz=timezone.utc).isoformat()})
+    files.sort(key=lambda x: x["at"], reverse=True)
+    newest_age_h = (round((now - datetime.fromisoformat(files[0]["at"])).total_seconds() / 3600, 1) if files else None)
+    return {"dir": bdir, "mounted": True, "count": len(files), "files": files[:limit], "newest_age_h": newest_age_h}
 
 
 @router.get("/certification")
@@ -1040,13 +1062,29 @@ async def shadow_certification(user=Depends(get_current_user)):
             break
     checks["ea_heartbeat"] = hb_fresh
     checks["broker_reconciliation"] = bool(
-        await db.broker_deals.find_one({}))
-    agent = await db.vps_agents.find_one(
-        {"user_id": user["id"], "revoked": {"$ne": True}},
-        sort=[("registered_at", -1)])
-    off = ((agent or {}).get("last_metrics") or {}).get("clock_offset_ms")
-    checks["clock_synchronization"] = (off is not None
-                                       and abs(float(off)) < 1000)
+        await db.broker_deals.find_one({"user_id": user["id"]}))
+    # Clock synchronization — same source as the account certification badge (v1.60.26): the EA heartbeat's
+    # broker_time (server_gmt_offset_sec) or the offset learned from deals, via broker_offset_sec(). The VPS agent's
+    # clock_offset_ms is only a secondary source (fleet installs); accounts bridged from a user's own VPS have none.
+    from routes.bridge_routes import broker_offset_sec
+    clock_detail = {"source": "unknown", "offset_sec": None, "account": None}
+    async for a in db.accounts.find({"user_id": user["id"], "status": {"$ne": "deleted"}, "mode": {"$ne": "paper"}},
+                                    {"label": 1, "broker_time_info": 1, "broker_utc_offset_sec": 1, "last_heartbeat": 1}
+                                    ).sort("last_heartbeat", -1):           # freshest heartbeat decides
+        off_s, src = broker_offset_sec(a)
+        if src != "unknown":
+            clock_detail = {"source": src, "offset_sec": off_s, "account": a.get("label")}
+            break
+    if clock_detail["source"] == "unknown":
+        agent = await db.vps_agents.find_one(
+            {"user_id": user["id"], "revoked": {"$ne": True}},
+            sort=[("registered_at", -1)])
+        off = ((agent or {}).get("last_metrics") or {}).get("clock_offset_ms")
+        if off is not None:
+            clock_detail = {"source": "vps_agent", "offset_sec": round(float(off) / 1000, 3), "account": None,
+                            "within_threshold": abs(float(off)) < 1000}
+    checks["clock_synchronization"] = (clock_detail["source"] in ("ea_broker_time", "learned_from_deals")
+                                       or bool(clock_detail.get("within_threshold")))
     # duplicate-command prevention: broker_deals idempotency + EA fence
     checks["no_duplicate_commands"] = True
     lat = await db.broker_intel_scores.find_one(
@@ -1058,6 +1096,7 @@ async def shadow_certification(user=Depends(get_current_user)):
                                           or float(lcomp) >= 40)
     passed = sum(1 for v in checks.values() if v)
     return {"checks": checks, "passed": passed, "total": len(checks),
+            "details": {"clock_synchronization": clock_detail},
             "certified": passed == len(checks),
             "initial_mode": "shadow",
             "note": "provisioning never starts above shadow — promotion "

@@ -64,7 +64,6 @@ async def market_state(user=Depends(get_current_user)):
 async def trend_score_endpoint(symbol: str = "XAUUSD",
                                user=Depends(get_current_user)):
     """Autopilot #12 — composite trend-quality + exhaustion score."""
-    from pip_utils import base_symbol
     from trend_score import trend_report
     db = get_db()
     uid = str(user.get("id") or user.get("_id"))
@@ -116,14 +115,16 @@ async def market_posture(user=Depends(get_current_user)):
                           "bars_n": 0}
         except Exception as e:
             logger.debug("posture structure failed: %s", e)
-        patterns = None
+        chart_pat = None       # Spec B — observe-only snapshot + what the gate WOULD do (null on any error)
         try:
             from chart_patterns import pattern_snapshot, pattern_gate
-            patterns = pattern_snapshot((cdoc or {}).get("bars") or [])
-            if patterns.get("ready"):
-                patterns["would_veto"] = {a: pattern_gate(a, patterns) for a in ("BUY", "SELL")}
-        except Exception as e:
+            chart_pat = pattern_snapshot((cdoc or {}).get("bars") or [])
+            if chart_pat.get("ready"):
+                chart_pat = {**chart_pat, "would_veto": {a: pattern_gate(a, chart_pat) for a in ("BUY", "SELL")}}
+            chart_pat["enforced"] = any(bool(c.get("pattern_gate_enabled", False)) for c in cfgs)
+        except Exception as e:  # noqa: BLE001
             logger.debug("posture chart patterns failed: %s", e)
+            chart_pat = None
         lmap = None
         try:
             from liquidity_map import build_liquidity_map
@@ -198,7 +199,8 @@ async def market_posture(user=Depends(get_current_user)):
                       if isinstance(sig.get("regime"), dict) else sig.get("regime"),
             "tiers": _tier_line(sig.get("mtf_tiers")),
             "intraday_momentum": sig.get("intraday_momentum"),
-            "structure": struct or sig.get("market_structure")
+            "structure": struct or sig.get("market_structure"),
+            "chart_patterns": chart_pat
                          or {"ready": False, "reason": "no data", "bars_n": 0},
             "range_forecast": sig.get("range_forecast"),
             "liquidity": lmap,

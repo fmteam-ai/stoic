@@ -20,6 +20,14 @@ jobs:
           pip install pip-audit
           grep -vE '^--|^#|\+cpu|^emergentintegrations' backend/requirements.txt > /tmp/audit-reqs.txt
           pip-audit -r /tmp/audit-reqs.txt --no-deps --strict
+      - name: Publish Python dependency-scan result (daily report D1 — skipped when STOIC_PUBLISH_URL / STOIC_METRICS_TOKEN are unset)
+        if: always()
+        env:
+          STOIC_PUBLISH_URL: ${{ secrets.STOIC_PUBLISH_URL }}
+          STOIC_METRICS_TOKEN: ${{ secrets.STOIC_METRICS_TOKEN }}
+        run: |
+          pip-audit -r /tmp/audit-reqs.txt --no-deps -f json -o /tmp/pip-audit.json || true
+          python3 scripts/publish_dependency_audit.py --require --kind python --input /tmp/pip-audit.json
 
   frontend-yarn-audit:
     runs-on: ubuntu-latest
@@ -32,3 +40,11 @@ jobs:
         run: |
           cd frontend
           npx audit-ci@^7 --config audit-ci.jsonc
+      - name: Publish frontend dependency-scan result (daily report D2 — skipped when secrets are unset)
+        if: always()
+        env:
+          STOIC_PUBLISH_URL: ${{ secrets.STOIC_PUBLISH_URL }}
+          STOIC_METRICS_TOKEN: ${{ secrets.STOIC_METRICS_TOKEN }}
+        run: |
+          (cd frontend && npm audit --omit=dev --json > /tmp/npm-audit.json) || true
+          python3 scripts/publish_dependency_audit.py --require --kind frontend --input /tmp/npm-audit.json

@@ -39,6 +39,27 @@ async def _pamm_sweep_loop():
             logger.warning("pamm sweep failed: %s", e)
 
 
+async def _execution_intents_sweep_loop():
+    """prod v1.60.28 — the intent sweep (expire / settle-from-trade / UNKNOWN reconciliation) used to live only
+    inside the PAMM sweep, which runs ONLY in single-process mode; in external-workers mode (production) nothing
+    swept intents, so a cancelled pending trade's 'submitted' intent held the account in CLOSE_ONLY forever.
+    Runs in the reconciliation worker, independent of PAMM programs."""
+    INTERVAL = int(os.environ.get("INTENT_SWEEP_INTERVAL_SEC", "60"))
+    while True:
+        try:
+            await asyncio.sleep(INTERVAL)
+            t0 = datetime.now(timezone.utc)
+            from execution_intents import sweep_intents
+            res = await sweep_intents(get_db())
+            record_progress("_execution_intents_sweep_loop",
+                            processed=res.get("intents_settled_from_trades", 0) + res.get("intents_expired", 0),
+                            started_at=t0, interval_sec=INTERVAL)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.warning("execution intents sweep failed: %s", e)
+
+
 async def _nightly_tuning_loop():
     """iter-141 · Hourly check; each user is swept at most once per 24h
     (guard lives in nightly_tuner.sweep_user via quant_tuning_state)."""
@@ -144,6 +165,11 @@ async def _analytics_loop():
         try:
             await asyncio.sleep(min(INTERVAL, REPAIR_EVERY))
             import time as _t
+            try:                                           # v1.60.53 (B) — advisory risk regime (GDELT 15 min / CB 2 min)
+                from risk_regime import tick as _rr_tick
+                await _rr_tick(get_db())
+            except Exception as _e:  # noqa: BLE001
+                logger.debug("risk regime tick failed: %s", _e)
             if _t.time() - last_repair >= REPAIR_EVERY:
                 await run_health_repairs_all(get_db())
                 last_repair = _t.time()
@@ -155,6 +181,20 @@ async def _analytics_loop():
             _analytics_loop._last = _t.time()
             t0 = datetime.now(timezone.utc)
             await run_daily_aggregates(get_db())
+            # v1.60.37 — keep the FRED snapshot warm here so the SIGNAL path (entry_context) only ever reads cache
+            try:
+                from macro.fred import get_macro_snapshot as _warm_fred
+                await _warm_fred()
+            except Exception as _fe:  # noqa: BLE001
+                logger.debug("fred warm-up skipped: %s", _fe)
+            # v1.60.38 — label deferred signals (would TP or SL have hit first?) for the Strategy Report
+            try:
+                from deferred_shadow import sweep_deferred_shadows
+                await sweep_deferred_shadows(get_db())
+                from gold_trend_pulse.engine import label_pending as _gtp_label
+                await _gtp_label(get_db())
+            except Exception as _de:  # noqa: BLE001
+                logger.debug("deferred shadow sweep skipped: %s", _de)
             record_progress("_analytics_loop", processed=1,
                             started_at=t0, interval_sec=INTERVAL)
         except asyncio.CancelledError:
@@ -289,7 +329,7 @@ async def _stuck_open_sync_loop():
         try:
             await asyncio.sleep(INTERVAL)
             db = get_db()
-            from datetime import datetime, timezone, timedelta as _td
+            from datetime import timedelta as _td
             cutoff_iso = (datetime.now(timezone.utc) - _td(minutes=STALE_MINUTES)).isoformat()
             # Distinct users with a stuck-open trade
             user_ids = await db.trades.distinct("user_id", {
@@ -490,8 +530,10 @@ async def renewal_reminder_sweep(db, now=None):
                         u = None
                     if u and u.get("email"):
                         plan_label = (sub.get("current_plan_id") or "plan").replace("_", " ").title()
+                        from notification_settings import alert_email_for
+                        rcpt = await alert_email_for(db, str(sub["user_id"]), u["email"], category="renewal")
                         await email_sender.send_email(
-                            recipient=u["email"],
+                            recipient=rcpt,
                             subject=f"Your STOIC plan ends in {days} day{'s' if days > 1 else ''} — renew to keep trading",
                             html=_renewal_email_html(
                                 u.get("name") or "trader", plan_label,
@@ -514,10 +556,12 @@ async def _billing_loop():
     await asyncio.sleep(45)
     while True:
         try:
+            t0 = datetime.now(timezone.utc)
             db = get_db()
             from affiliate_service import process_affiliate_outbox
             await process_affiliate_outbox(db)
-            await renewal_reminder_sweep(db)
+            n = await renewal_reminder_sweep(db)
+            record_progress("_billing_loop", processed=1 + int(n or 0), started_at=t0, interval_sec=3600)   # v1.60.40
         except Exception:
             logger.exception("billing loop iteration failed")
         await asyncio.sleep(3600)

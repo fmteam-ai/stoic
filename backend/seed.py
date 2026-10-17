@@ -10,7 +10,6 @@ async def dependency_health_check() -> dict:
     the driver stack (bson/pymongo/motor), a live DB ping, and that the
     safety-critical unique indexes actually exist. Logs CRITICAL on any
     failure so a bad deploy is visible immediately."""
-    import logging
     log = logging.getLogger("startup-health")
     result = {"deps_ok": True, "db_ok": False, "indexes_ok": False,
               "missing_indexes": []}
@@ -270,7 +269,6 @@ async def _record_ticket_index_state(db, *, present: bool, stale: bool, key=None
                                      duplicates: int = 0) -> None:
     """A6/H12 — the boot verdict on the unique ticket index is kept in platform_state so
     release readiness and Admin Ops show it (a log line alone is not an operator surface)."""
-    from datetime import datetime, timezone
     doc = {"present": present, "stale": stale, "ok": present and not stale, "duplicates": duplicates,
            "checked_at": datetime.now(timezone.utc).isoformat()}
     if stale:
@@ -348,6 +346,11 @@ async def ensure_indexes():
     await db.order_authorizations.create_index("nonce", unique=True)
     await db.order_authorizations.create_index("issued_at")
     await db.audit_anchors.create_index("seq", unique=True)
+    await db.ea_feed_events.create_index("at", expireAfterSeconds=48 * 3600)   # v1.60.43 canary soak panel
+    await db.ea_feed_events.create_index([("account_id", 1), ("at", -1)])
+    # v1.60.41 — chained audit appends must not race to the same seq (15 Oct dup 77/78 → I3)
+    from audit_chain import ensure_seq_index
+    await ensure_seq_index(db)
     # iter-177 — WebAuthn: single-use challenges auto-expire via TTL;
     # credential ids unique per user.
     await db.webauthn_challenges.create_index("expires_at",
@@ -528,6 +531,18 @@ async def ensure_indexes():
         except Exception:
             pass
     try:
+        from user_direction_cap import ensure_indexes as _udc_idx   # v1.60.50 — unique slot + TTL
+        await _udc_idx(db)
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("seed").warning("user_direction_reservations indexes: %s", e)
+    try:                                                              # v1.60.53 — advisory risk regime stores
+        await db.geo_risk_history.create_index("expires_at", expireAfterSeconds=0)
+        await db.geo_risk_history.create_index([("region", 1), ("at", -1)])
+        await db.risk_regime_advisory.create_index([("at", -1)])
+        await db.central_bank_releases.create_index([("kind", 1), ("seen_at", -1)])
+    except Exception as e:  # noqa: BLE001
+        logging.getLogger("seed").warning("risk regime indexes: %s", e)
+    try:
         # auto-purge 7 days — matches the old timeseries expireAfterSeconds
         await db.price_ticks.create_index("ts", expireAfterSeconds=60 * 60 * 24 * 7)
         await db.price_ticks.create_index([("symbol", 1), ("ts", -1)])
@@ -542,6 +557,31 @@ async def ensure_indexes():
         # auto-purge 90 days
         await db.signal_history.create_index("ts", expireAfterSeconds=60 * 60 * 24 * 90)
         await db.signal_history.create_index([("user_symbol", 1), ("ts", -1)])
+    except Exception:
+        pass
+    try:
+        from trade_decisions import ensure_decision_indexes
+        await ensure_decision_indexes(db)
+    except Exception:
+        pass
+    try:
+        # v1.60.32 — one dedicated settings doc per user (kind: telegram_settings) + webhook lookup
+        await db.notifications.create_index([("user_id", 1), ("kind", 1)])
+        await db.notifications.create_index("webhook_secret", sparse=True)
+    except Exception:
+        pass
+    try:
+        from loss_postmortem import ensure_pattern_keys_canonical
+        n = await ensure_pattern_keys_canonical(db)
+        if n:
+            logging.getLogger("seed").info("loss post-mortem pattern keys canonicalised: %d", n)
+    except Exception:
+        pass
+    try:
+        from strategy_engines import backfill_trade_engines
+        n = await backfill_trade_engines(db)
+        if n:
+            logging.getLogger("seed").info("trade rows: engine persisted from scope on %d row(s)", n)
     except Exception:
         pass
 

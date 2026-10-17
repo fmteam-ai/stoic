@@ -33,7 +33,7 @@ def test_n108_1_workflow_installs_the_signer_dependencies():
 def test_n108_2_paper_rows_carry_engine_but_no_scope():
     ex = _read("backend/execution.py")
     paper = ex[ex.index("class PaperEngine"):]
-    assert '"engine": signal.get("engine")' in paper and '"scope": signal.get("scope")' not in paper
+    assert '"engine": engine_for_signal(signal)' in paper and '"scope": signal.get("scope")' not in paper
     assert '{"scope": "scalp_fast", "status": "open"}' in _read("backend/scalp/engine.py")   # the sweep this protects
 
 

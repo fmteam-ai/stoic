@@ -77,11 +77,9 @@ async def sweep_once(db) -> dict:
                     except Exception as e2:
                         logger.error("broker_uncertain escalation failed "
                                      "on %s: %s", p.get("program_id"), e2)
-    from execution_intents import (expire_stale, mark_unknown_stale,
-                                   reconcile_unknown_intents)
-    intents_expired = await expire_stale(db)
-    intents_unknown = await mark_unknown_stale(db)
-    unknown_recon = await reconcile_unknown_intents(db)
+    from execution_intents import sweep_intents
+    _isw = await sweep_intents(db)
+    intents_expired, intents_unknown, unknown_recon = _isw["intents_expired"], _isw["intents_unknown"], _isw["unknown_recon"]
     # outcome attribution backfill (v56 §12) — losses teach the right lesson
     try:
         from outcome_attribution import attribute_missing

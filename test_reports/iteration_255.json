@@ -1,0 +1,40 @@
+{
+  "summary": "v1.60.29 smoke test (mostly read-only: no risk, trading or account changes). Backend: 4 of 4 HTTP checks pass (safety-status, decision funnel, scalp status, accounts/certification). Frontend: /scoreboard, /accounts and /infrastructure render and the changed flows work. During testing the preview backend crashed twice (502 on every route). Cause: the Chronos forecast model download through hf_xet aborts the whole uvicorn worker. I fixed this by adding HF_HUB_DISABLE_XET=1 to backend/.env. The model then downloaded and loaded, and the backend has stayed up since.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "ALL (/api/*)", "issue": "The backend worker crashes with 'Fatal Python error: Aborted' about 1-2 minutes after startup on a fresh container, and every route then returns 502. Stack: forecast_agent._forecast_sync -> _load_model -> BaseChronosPipeline.from_pretrained -> huggingface_hub hf_hub_download -> xet_get (hf_xet 1.5.1 native code). The model cache held only 0-byte *.incomplete blobs. A native abort skips the `except Exception` in _load_model, and the uvicorn --reload parent does not respawn the dead worker. Reproduced twice. Workaround applied: HF_HUB_DISABLE_XET=1 in backend/.env, then deleted the stale .incomplete blobs and restarted the backend. After that the log shows 'Chronos forecast model loaded' and no abort.", "priority": "CRITICAL"}
+    ],
+    "minor": [
+      {"endpoint": "GET /api/bot/safety-status", "issue": "No paper-count field in the response. paper_count is computed but only used to derive deployment_mode (IDLE/PAPER/LIVE/MIXED). live_accounts == [] is correct for the admin. If the UI needs the count, add e.g. 'paper_accounts': paper_count."},
+      {"endpoint": "GET /api/trades/stats?days=30", "issue": "The review request names the wrong endpoint: the funnel is returned by /api/trades/scoreboard?days=30 (the one Scoreboard.jsx calls), and /trades/stats has no 'funnel' key. On /trades/scoreboard every row has stage, status, count and last_reason (1 row, status=rejected)."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Accounts certification poll", "issue": "The 30 s poll works (8 GETs of /api/accounts/certification by t=5 s, 12 by t=37 s), but the calls are redundant: Accounts.jsx load() and each <AccountCertification> instance (one per account row) all fetch the full list on their own. That is 4 identical calls per 30 s with 3 accounts, plus a duplicate burst on mount. Fetch it once in Accounts.jsx and pass the items down as props. Also, the .catch in AccountCertification reads `items` from a stale closure.", "affected_selectors": ["[data-testid^=certification-]"]}
+    ],
+    "design_issues": [
+      {"screen": "/infrastructure shadow certification", "issues": ["The cert-clock-detail line reads 'ea_broker_time · offset 10800s · Start Trader' while the tile shows PASS. A 3 h broker-timezone offset shown as a raw number of seconds next to PASS could confuse operators. Consider 'broker TZ UTC+3 (normalised)' or similar."]},
+      {"screen": "/accounts", "issues": ["Console noise: an expected 409 from the HEAD/GET probe of /api/ea-script.ex5 (not yet published), and a React hydration warning about <span> inside <option> in VpsAgentInstall. The span appears to come from the visual-editor instrumentation (x-excluded), not from app code."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_v16029_smoke_http.py", "/app/tests/ui_v16029_smoke.py", "/app/test_reports/pytest/v16029.xml"],
+  "action_items": [
+    "CRITICAL: make the Chronos load safe. Keep HF_HUB_DISABLE_XET=1 in the backend env (also for prod/docker), and/or pre-bake the amazon/chronos-bolt-tiny weights into the image, or run from_pretrained in a subprocess so a native abort cannot kill the API worker.",
+    "Optional: add a paper_accounts count to /api/bot/safety-status if the UI expects it.",
+    "Deduplicate the /accounts/certification polling: fetch once in Accounts.jsx and pass the items to AccountCertification.",
+    "Make the clock-sync detail text easier to read when the offset is a broker timezone."
+  ],
+  "critical_code_review_comments": [
+    "forecast_agent._load_model: `except Exception` cannot catch a native abort in hf_xet or torch, so loading a heavy model inside the API process is a single point of failure for the whole API.",
+    "status_line.py: the enable_bot fix ('Turn the bot on') fires when trading_enabled is True and the bot is inactive; Accounts.jsx enableBot sends PUT /bot/config {active:true}. The logic is correct, but no account on the preview is in that state, so I could only verify it by reading the code (and I was told not to click it anyway)."
+  ],
+  "updated_files": ["/app/backend/.env (added HF_HUB_DISABLE_XET=1)", "/app/backend/tests/test_v16029_smoke_http.py", "/app/tests/ui_v16029_smoke.py", "/app/tests/ui_v16029_debug.py"],
+  "success_rate": {"backend": "100% (4/4 endpoint checks, after correcting the funnel endpoint path)", "frontend": "100% of the requested render checks; the 'Turn the bot on' state could not be observed because no account is in it"},
+  "seed_data_creation": "none",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Admin login: read TEST_ADMIN_EMAIL/TEST_ADMIN_PASSWORD from backend/.env. Never print them. The login button stays disabled ('Preparing human verification…') until /api/auth/turnstile-config responds, so wait for button[type=submit]:not([disabled]). Local Playwright works with `python` (chromium in /pw-browsers). Do not create files under /app/backend during UI runs: WatchFiles reloads the backend. The preview ingress can return 429 for Vite module requests after repeated page loads; wait about 60 s. Accounts on the preview: 77001234 (Connecting), 2a884493 (Paper ready, START), 1610095364 (stale heartbeat, REPAIR).",
+  "rca of the issue": "Symptom: every request returns 502 and the login button is stuck on 'Preparing human verification…'. Root cause: on a freshly forked container the Chronos weights are not cached; the forecast agent's first run calls from_pretrained, huggingface_hub downloads through hf_xet (xet_get), and the native code aborts the process (SIGABRT), leaving 0-byte .incomplete blobs. Mitigation: HF_HUB_DISABLE_XET=1 makes the hub use a plain HTTP download. Verified: a 34.6 MB blob was written, 'Chronos forecast model loaded' was logged, and no further aborts occurred."
+}

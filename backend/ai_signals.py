@@ -2,14 +2,13 @@
 
 Three-tier verification (per 2026 best practice):
   Engine 1 (Quant)      : indicators + regime + entropy
-  Engine 2 (Semantic)   : Claude Sonnet 4.5 + news sentiment
+  Engine 2 (Semantic)   : Claude (`analysis` tier, llm_models.model_for) + news sentiment
   Engine 3 (Meta-Label) : binary classifier P(true_signal | engines)
 
 Plus dynamic Regime Swapping — SL/TP/Kelly mutate based on live regime.
 """
 import os
 import json
-import uuid
 import re
 import logging
 from datetime import datetime, timezone
@@ -35,7 +34,6 @@ from mtf_intraday import fetch_mtf_confluence
 from strategy_engines import (resolve_engine, run_engine, ENGINE_LABELS,
                               MTF_MODE_BY_ENGINE, SCALP_ENGINES, SCALP_RISK_PCT_CAP)
 from pip_utils import pips_to_price, price_to_pips
-from llm_models import PROVIDER, model_for
 
 # --- Execution geometry tunables ---
 ATR_SL_MULTIPLIER = float(os.environ.get("ATR_SL_MULTIPLIER", "1.5"))
@@ -82,6 +80,29 @@ def _parse_ai_json(text: str) -> dict:
     except Exception:
         return {"action": "HOLD", "confidence": 0,
                 "reasoning": "Failed to parse model response.", "key_factors": []}
+
+
+NEWS_VETO_INACTIVE_NOTE = "news veto inactive — LLM unavailable"
+
+
+def alignment_of(bias, action):
+    from gold_bias import alignment
+    return alignment(bias, action)
+
+
+def news_veto_state(sentiment: dict | None, mtf_mode: bool) -> dict:
+    """{active, mode, note} — the dual-AI news veto is only live when news_understanding returned a score."""
+    s = sentiment or {}
+    available = bool(s.get("available")) and s.get("score") is not None
+    mode = "hard" if mtf_mode else "advisory"
+    if available:
+        from news_understanding import news_cache_stale
+        stale, age_h = news_cache_stale(s.get("fetched_at") or s.get("scored_at")) if (s.get("fetched_at") or s.get("scored_at")) else (False, None)
+        if stale:   # #76
+            return {"active": False, "mode": mode, "note": "news veto inactive — news cache stale (> 6 h)", "why": f"last score {age_h} h old"}
+        return {"active": True, "mode": mode, "note": ""}
+    return {"active": False, "mode": mode, "note": NEWS_VETO_INACTIVE_NOTE,
+            "why": str(s.get("summary") or "no sentiment score")[:160]}
 
 
 def _apply_dual_veto(action: str, confidence: float, sentiment: dict) -> tuple:
@@ -134,13 +155,40 @@ async def _intraday_entropy_override(symbol: str, daily: dict, user_id: str | No
         return daily
 
 
+async def _gold_trend_pulse_signal(symbol: str, cfg: dict | None, user_id: str | None, management_only: bool = False) -> dict:
+    """gold_trend_pulse evaluation for the account behind `cfg` → {mode, note, summary, signal|None}."""
+    from database import get_db
+    from gold_trend_pulse import engine as gtp
+    db = get_db()
+    acc = None
+    if (cfg or {}).get("account_id"):
+        from bson import ObjectId
+        try:
+            acc = await db.accounts.find_one({"_id": ObjectId(str(cfg["account_id"]))})
+        except Exception:  # noqa: BLE001
+            acc = None
+    if acc is None:
+        acc = await db.accounts.find_one({"user_id": user_id, "status": "connected"}) or await db.accounts.find_one({"user_id": user_id})
+    if acc is None:
+        return {"mode": "shadow", "note": "no account", "summary": None, "signal": None}
+    res = await gtp.evaluate(db, cfg or {}, acc, management_only=management_only)
+    summary = {"bias": res["bias"], "reasons": res["reasons"], "mode": res["mode"], "note": res["note"], "live_gate": res["live_gate"]}
+    sig = None
+    if res.get("signal"):
+        sig = gtp.pipeline_signal(res["signal"], {"symbol": symbol, "price_source": "broker_tick", "risk_level": "gold_trend_pulse",
+                                                   "min_confidence_required": 0, "macro": None, "session": None})
+        sig["gold_trend_pulse_summary"] = summary
+    return {"mode": res["mode"], "note": res["note"], "summary": summary, "signal": sig}
+
+
 async def analyze_symbol(symbol: str, risk_level: str,
                          min_conf_override: int = 0,
                          strategy: str | None = None,
                          engine_params: dict | None = None,
-                         user_id: str | None = None) -> dict:
+                         user_id: str | None = None,
+                         freeze_cfg: dict | None = None) -> dict:
     profile = get_profile(risk_level)
-    quote = await get_quote(symbol)
+    quote = await get_quote(symbol, allow_stale=False)    # v1.60.50 — a stale quote skips this cycle (as before)
     history = await get_history(symbol)
     # Fix plan A10 — the user's broker tick (EA forming-bar close, ≤3 min old)
     # beats the public quote: gold history is futures vs spot, FX quotes are
@@ -166,8 +214,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
     session = current_session()
     session_bias = session_bias_for(symbol, session)
     regime = classify_regime(indicators)
-    macro = await macro_freeze_check(symbol)
-    upcoming_macro = await upcoming_for(symbol, hours=24)
+    macro = await macro_freeze_check(symbol, freeze_cfg)   # v1.60.39 C8–C10 — per-account freeze windows
+    upcoming_macro = await upcoming_for(symbol, hours=24, cfg=freeze_cfg)
     # Shannon entropy noise filter — closes used for distribution analysis
     entropy = classify_noise([c["close"] for c in history]) if history else {
         "entropy": 0, "label": "ORGANIZED", "traffic_light": "green", "tradeable": True, "threshold": 0.9
@@ -178,7 +226,13 @@ async def analyze_symbol(symbol: str, risk_level: str,
     if not entropy.get("tradeable", True):
         entropy = await _intraday_entropy_override(symbol, entropy, user_id)
     # iter-120 · Intraday M15 feature pack — the USER's live EA stream (fix plan A1).
-    intraday_pack = await fetch_intraday_pack(symbol, user_id)
+    # #55 — live-feature pack (broker price for price-dependent features) vs the closed-bar pack. The flag decides which
+    # one the engine TRADES on; the other is always evaluated for the one-week shadow compare (engine_shadow_compare).
+    _live_on = bool((freeze_cfg or {}).get("engine_live_features_enabled"))
+    _pack_closed = await fetch_intraday_pack(symbol, user_id)
+    _pack_live = await fetch_intraday_pack(symbol, user_id, live_price=broker_px) if (broker_px and _pack_closed) else None
+    intraday_pack = (_pack_live or _pack_closed) if _live_on else _pack_closed
+    _pack_other = _pack_closed if _live_on else _pack_live
     # O(N) feature compressor — Mamba/SSM substitute for long-sequence stats
     compressed_features = compress_history(history)
 
@@ -315,6 +369,7 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # ------------------------------------------------------------------------
     engine = resolve_engine(strategy)
     engine_label = ENGINE_LABELS.get(engine, engine)
+    _cmp = None
     # Regime-adaptive dispatch — ADAPTIVE routes this evaluation to the
     # engine matching the LIVE regime (trend → MTF cascade, range → fade,
     # chop/unknown → stand down) instead of holding for days.
@@ -396,9 +451,30 @@ async def analyze_symbol(symbol: str, risk_level: str,
             closure=market_closure,
         )
     if macro.get("frozen"):
+        # #66 — management ≠ entry: open gold_trend_pulse positions still get news PRE protection, basket invalidation
+        # and range-breakout closes during a freeze (no entries are produced on a management-only pass).
+        from gold_trend_pulse.engine import enabled_for as _gtp_on_m, SYMBOL as _GTP_SYM_M
+        from pip_utils import base_symbol as _bs_m
+        if _gtp_on_m(freeze_cfg) and _bs_m(symbol) == _GTP_SYM_M:
+            try:
+                await _gold_trend_pulse_signal(symbol, freeze_cfg, user_id, management_only=True)
+            except Exception as _ge:  # noqa: BLE001
+                logger.debug("gtp management pass skipped: %s", _ge)
         return _hold(f"Macro freeze in effect: {macro.get('reason') or 'high-impact event window'}")
     if regime_dispatch and not regime_dispatch["dispatched_engine"]:
         return _hold(f"ADAPTIVE · Regime Dispatch: {regime_dispatch['note']}")
+    # gold_trend_pulse (v1.60.57) — when enabled on this account, XAUUSD is evaluated by the trend-pulse rules INSTEAD of
+    # the preset engine (OFF by default). Shadow decisions are recorded and HOLD is returned; a demo_live decision
+    # (own live gate) becomes a deterministic signal and runs through every downstream guard like any other.
+    from gold_trend_pulse.engine import enabled_for as _gtp_on, SYMBOL as _GTP_SYMBOL
+    from pip_utils import base_symbol as _base_sym
+    if _gtp_on(freeze_cfg) and _base_sym(symbol) == _GTP_SYMBOL:
+        gtp = await _gold_trend_pulse_signal(symbol, freeze_cfg, user_id)
+        if gtp.get("signal"):
+            return gtp["signal"]
+        hold = _hold(f"GOLD TREND PULSE ({gtp.get('mode')}): {gtp.get('note')}")
+        hold.update({"scope": "gold_trend_pulse", "strategy_engine": "gold_trend_pulse", "gold_trend_pulse": gtp.get("summary")})
+        return hold
 
     action = None
     engine_note = ""
@@ -415,8 +491,16 @@ async def analyze_symbol(symbol: str, risk_level: str,
             return _hold(f"{engine_label}: no fresh M15 stream from the EA (bridge "
                          f"must be online and streaming candles) — standing by.")
         sig, note = run_engine(engine, intraday_pack, params=eng_params)
+        if _pack_other is not None:
+            _o_sig, _o_note = run_engine(engine, _pack_other, params=eng_params)
+            _cmp = {"live_features_traded": _live_on, "traded": {"action": sig, "note": note[:160]},
+                    "other": {"action": _o_sig, "note": (_o_note or "")[:160]},
+                    "feature_price_gap": (_pack_live or {}).get("feature_price_gap"), "stale_feature": (_pack_live or {}).get("stale_feature"),
+                    "trend_live": (_pack_live or {}).get("trend"), "trend_closed": (_pack_closed or {}).get("trend"), "differs": _o_sig != sig}
         if not sig:
-            return _hold(f"{engine_label}: {note} — standing by.")
+            h = _hold(f"{engine_label}: {note} — standing by.")
+            h["engine_shadow_compare"] = _cmp
+            return h
         action = sig
         engine_note = note
     # fade-style entries bet against recent drift — tagged so drift-based
@@ -443,17 +527,11 @@ async def analyze_symbol(symbol: str, risk_level: str,
             f"Live break of {mtf_conf.get('swing_level')}",
         ]
         try:
-            from emergentintegrations.llm.chat import LlmChat, UserMessage
-            chat = LlmChat(
-                api_key=os.environ["EMERGENT_LLM_KEY"],
-                session_id=f"signal-{symbol}-{uuid.uuid4().hex[:8]}",
-                system_message=NARRATOR_PROMPT,
-            ).with_model(PROVIDER, model_for("analysis"))
-            from llm_timeout import send_with_timeout
-            narration = await send_with_timeout(chat, UserMessage(text=json.dumps({
+            import llm_client
+            narration = await llm_client.complete("analysis", NARRATOR_PROMPT, json.dumps({
                 "confirmed_setup": {"direction": action, "cascade": mtf_conf},
                 "market_context": json.loads(user_text),
-            }, separators=(",", ":"))), label=f"narration:{symbol}")
+            }, separators=(",", ":")), feature="narration")
             parsed = _parse_ai_json(str(narration))
             if parsed.get("reasoning"):
                 reasoning = f"{reasoning}\n\n{parsed['reasoning']}"
@@ -469,6 +547,23 @@ async def analyze_symbol(symbol: str, risk_level: str,
     # a daily news bias shouldn't silence the whole persona.
     sentiment_note = ""
     _, veto_reason = _apply_dual_veto(action, confidence, sentiment)
+    # v1.60.59 — the veto can only fire when news_understanding (LLM) returned a score: say so when it did not
+    news_veto = news_veto_state(sentiment, mtf_mode)
+    # v1.60.60 #71 — Gold Daily Bias in every gold signal's notes (shadow: no trading effect)
+    gold_bias_snap = None
+    if "XAU" in str(symbol).upper():
+        try:
+            from gold_bias import latest as _gb_latest, alignment as _gb_align
+            from database import get_db as _gb_db
+            gold_bias_snap = await _gb_latest(_gb_db())
+            if gold_bias_snap:
+                _al = _gb_align(gold_bias_snap, action)
+                key_factors = [*key_factors, f"gold bias {gold_bias_snap.get('bias')} {gold_bias_snap.get('score'):+.0f}"
+                               + (f" — {action} {_al} bias" if _al != "n/a" else "")]
+        except Exception:  # noqa: BLE001 — advisory only
+            gold_bias_snap = None
+    if not news_veto["active"]:
+        key_factors = [*key_factors, news_veto["note"]]
     if veto_reason and not mtf_mode:
         sentiment_note = veto_reason
         veto_reason = ""
@@ -503,13 +598,21 @@ async def analyze_symbol(symbol: str, risk_level: str,
         tp_dist_price = tp_mult_of_sl * sl_dist_price
     elif tp_dist_price <= 0:
         tp_dist_price = sl_dist_price * 2.5
-    tp1_dist = tp_dist_price * 0.4
-    tp2_dist = tp_dist_price * 0.7
-    tp3_dist = tp_dist_price * 1.0
-    # user policy (2026-07-16): hard TP pip caps (TP1 ≤ 100, TP2/TP3 ≤ 200)
-    tp1_dist = min(tp1_dist, pips_to_price(symbol, MTF_TP1_MAX_PIPS))
-    tp2_dist = min(tp2_dist, pips_to_price(symbol, MTF_TP2_MAX_PIPS))
-    tp3_dist = min(tp3_dist, pips_to_price(symbol, MTF_TP3_MAX_PIPS))
+    if engine in SCALP_ENGINES:
+        # v1.60.29 item 2 — scalp engines use a SINGLE TP: the 0.4/0.7/1.0 split (50/25/25) reshaped the designed
+        # TP = 2×SL into a blended R:R of 1.25, so the Monte Carlo gate saw P(TP first) ≈ 44 % and −0.1R EV and
+        # blocked every scalp. All three legs sit on the full target → rr_ratio 2.0, no reshaping downstream.
+        tp1_dist = tp2_dist = tp3_dist = tp_dist_price
+    else:
+        tp1_dist = tp_dist_price * 0.4
+        tp2_dist = tp_dist_price * 0.7
+        tp3_dist = tp_dist_price * 1.0
+    # user policy (2026-07-16): hard TP pip caps (TP1 ≤ 100, TP2/TP3 ≤ 200). NOT for scalp engines: capping tp1 alone
+    # re-split the designed single TP (tp1 100 / tp3 200) and re-armed the legacy TP1 partial path on scalp trades.
+    if engine not in SCALP_ENGINES:
+        tp1_dist = min(tp1_dist, pips_to_price(symbol, MTF_TP1_MAX_PIPS))
+        tp2_dist = min(tp2_dist, pips_to_price(symbol, MTF_TP2_MAX_PIPS))
+        tp3_dist = min(tp3_dist, pips_to_price(symbol, MTF_TP3_MAX_PIPS))
     tp2_dist = max(tp2_dist, tp1_dist)
     tp3_dist = max(tp3_dist, tp2_dist)
     if action == "BUY":
@@ -589,6 +692,9 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "mtf_confluence_applied": engine_note if mtf_mode else None,
         "indicators": indicators,
         "sentiment": sentiment,
+        "news_veto": news_veto,
+        "gold_bias": gold_bias_snap and {"bias": gold_bias_snap.get("bias"), "score": gold_bias_snap.get("score"),
+                                         "alignment": alignment_of(gold_bias_snap, action), "reasons": gold_bias_snap.get("reasons")},
         "session": session,
         "session_bias": session_bias,
         "regime": regime,
@@ -617,6 +723,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "min_confidence_required": adapted_profile["min_confidence"],
         "veto_applied": bool(veto_reason) or bool(rr_veto),
         "engine_params": eng_params,
+        "engine_shadow_compare": _cmp,                                   # #55 — old vs new engine output, 1-week compare
+        "stale_feature_entry": bool(_live_on and (_pack_live or {}).get("stale_feature")),   # #55(5)/#58 — only when the flag is ON
         "setup_score": _ss,
         "confidence_basis": _ss["basis"],
         "engine_geometry": None if is_hold else {

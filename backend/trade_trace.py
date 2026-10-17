@@ -230,7 +230,7 @@ async def assemble_trace(db, trace_id: str) -> dict | None:
             if tid else [])
     daily = None
     if decision:
-        from datetime import datetime, timezone
+        from datetime import timezone
         day = datetime.fromtimestamp((decision.get("ts_ms") or 0) / 1000,
                                      tz=timezone.utc).strftime("%Y-%m-%d")
         daily = await db.scalp_daily_stats.find_one(

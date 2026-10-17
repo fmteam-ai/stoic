@@ -7,6 +7,7 @@ States, dominance order:  EMERGENCY > BLOCKED > CLOSE_ONLY > DEGRADED > READY
 Level mapping:  FULL→READY · REDUCED→DEGRADED · CLOSE_ONLY→CLOSE_ONLY ·
                 PAUSED/LOCKED→BLOCKED · EMERGENCY→EMERGENCY
 """
+import copy
 import hashlib
 import os
 import uuid
@@ -94,18 +95,111 @@ def from_snapshot(snap: dict) -> dict:
     }
 
 
-async def decide_account(db, account: dict) -> dict:
+async def decide_account(db, account: dict, *, fresh: bool = False) -> dict:
+    """Per-account decision, cached a few seconds under key `acct:<id>` (v1.60.29 Decision Cache). Execution
+    choke points keep calling compute_authority directly — this cache serves status pages and the public probe."""
     from trading_authority import compute_authority
-    return from_snapshot(await compute_authority(db, account))
+
+    async def _compute():
+        return from_snapshot(await compute_authority(db, account))
+    ver = await authority_version(db)
+    return await _cached_decision(db, f"acct:{account['_id']}", ver, await account_fingerprint(db, account), _compute, fresh=fresh)
 
 
-async def decide_platform(db) -> dict:
+async def decide_platform(db, *, fresh: bool = False) -> dict:
+    """Platform-scope decision, cached a few seconds (v1.60.29 Decision Cache) under the same version /
+    fingerprint / TTL discipline as decide_user — any input change bumps the authority version first."""
     from trading_authority import compute_authority
-    return from_snapshot(await compute_authority(db, None))
+
+    async def _compute():
+        return from_snapshot(await compute_authority(db, None))
+    ver = await authority_version(db)
+    return await _cached_decision(db, "platform", ver, await platform_fingerprint(db), _compute, fresh=fresh)
 
 
 _SNAPSHOT_TTL_S = 5.0
 VERSION_ID = "authority_version"
+
+
+async def _cached_decision(db, key: str, ver: int, fp: str, compute, *, fresh: bool = False) -> dict:
+    """Persisted single-flight snapshot cache (db.canonical_decisions): a hit is served only while the input
+    version and fingerprint still match and it is younger than _SNAPSHOT_TTL_S; concurrent cold-cache
+    computations race, but only ONE decision is persisted per (version, fingerprint) window — losers return the
+    winner (round 13 P2-01)."""
+    if not fresh:
+        hit = await db.canonical_decisions.find_one({"_id": key})
+        if hit and hit.get("input_version") == ver and hit.get("inventory_fingerprint") == fp:
+            try:
+                age = (datetime.now(timezone.utc) - datetime.fromisoformat(hit["cached_at"])).total_seconds()
+            except (KeyError, ValueError, TypeError):
+                age = _SNAPSHOT_TTL_S
+            if 0 <= age < _SNAPSHOT_TTL_S:
+                return copy.deepcopy(hit["decision"])
+    out = await compute()
+    out["input_version"] = ver
+    out["input_hash"] = hashlib.sha256(f"{ver}:{fp}".encode()).hexdigest()[:16]
+    now = datetime.now(timezone.utc)
+    stale_cutoff = (now - timedelta(seconds=_SNAPSHOT_TTL_S)).isoformat()
+    snap = {"input_version": ver, "inventory_fingerprint": fp, "decision": copy.deepcopy(out), "cached_at": now.isoformat()}
+    if fresh:
+        # forced recomputation wins outright: overwrite the snapshot and return what was just computed
+        await db.canonical_decisions.replace_one({"_id": key}, {"_id": key, **snap}, upsert=True)
+        return out
+    try:
+        res = await db.canonical_decisions.update_one(
+            {"_id": key, "$or": [{"input_version": {"$ne": ver}}, {"inventory_fingerprint": {"$ne": fp}},
+                                 {"cached_at": {"$lt": stale_cutoff}}]},
+            {"$set": snap}, upsert=True)
+        if res.matched_count == 0 and res.upserted_id is None:
+            raise DuplicateKeyError("snapshot exists")
+    except DuplicateKeyError:
+        hit = await db.canonical_decisions.find_one({"_id": key})
+        if hit and hit.get("input_version") == ver and hit.get("inventory_fingerprint") == fp:
+            return copy.deepcopy(hit["decision"])
+    return out
+
+
+_PLATFORM_STATE_IDS = ["trading_authority", "turnstile_break_glass", "inventory_expectation", "inventory_hash_pending"]
+
+
+def _platform_rows(docs) -> list:
+    return [["p", str(p["_id"]), str(p.get("level") or ""), bool(p.get("active")), str(p.get("set_at") or p.get("until") or "")]
+            for p in docs]
+
+
+async def platform_fingerprint(db) -> str:
+    """Platform switches + the global inventory shape (enabled accounts, active bots, fresh terminals) — three
+    cheap counts, so an account enabled / bot started / EA (dis)connected anywhere invalidates within the request."""
+    import json
+    rows = _platform_rows([p async for p in db.platform_state.find({"_id": {"$in": _PLATFORM_STATE_IDS}})])
+    fresh_cutoff = (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat()
+    rows.append(["g", await db.accounts.count_documents({"trading_enabled": True}),
+                 await db.bot_configs.count_documents({"active": True}),
+                 await db.accounts.count_documents({"last_heartbeat": {"$gte": fresh_cutoff}})])
+    rows.sort()
+    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
+
+
+def _account_row(a: dict) -> list:
+    hb = str(a.get("last_heartbeat") or "")
+    return ["a", str(a["_id"]), a.get("trading_enabled") is True, str(a.get("mode") or ""), bool(a.get("verified_identity")),
+            str(a.get("status") or ""), int(a.get("reconciliation_seq") or 0), str(a.get("last_reconciled_at") or ""),
+            str(a.get("position_truth") or ""), str(a.get("execution_authority") or ""),
+            # r20 P2-04: EA capability inputs + heartbeat freshness bucket (fresh ≤180 s / stale)
+            str(a.get("ea_version") or ""), str(a.get("ea_binary_sha256") or ""),
+            "fresh" if hb and hb >= (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat() else "stale"]
+
+
+async def account_fingerprint(db, account: dict) -> str:
+    """Digest of ONE account's decision inputs (the account row, its bots, the platform switches) — two cheap
+    queries instead of the ~12 of compute_authority."""
+    import json
+    rows = [_account_row(account)]
+    async for b in db.bot_configs.find({"account_id": str(account["_id"])}, {"account_id": 1, "active": 1}):
+        rows.append(["b", str(b.get("account_id")), bool(b.get("active"))])
+    rows.extend(_platform_rows([p async for p in db.platform_state.find({"_id": {"$in": _PLATFORM_STATE_IDS}})]))
+    rows.sort()
+    return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
 
 
 async def authority_version(db) -> int:
@@ -130,25 +224,16 @@ async def inventory_fingerprint(db, user_id: str) -> str:
     """Cheap digest of the user's account/bot inventory inputs (ids, enabled,
     mode, bot active) — any add/remove/toggle invalidates the snapshot even when
     the writer did not call bump_authority_version()."""
-    import hashlib
     import json
     rows = []
     async for a in db.accounts.find({"user_id": user_id}, {"_id": 1, "trading_enabled": 1, "mode": 1, "verified_identity": 1,
                                                           "status": 1, "reconciliation_seq": 1, "last_reconciled_at": 1,
                                                           "position_truth": 1, "execution_authority": 1,
                                                           "ea_version": 1, "ea_binary_sha256": 1, "last_heartbeat": 1}):
-        hb = str(a.get("last_heartbeat") or "")
-        rows.append(["a", str(a["_id"]), a.get("trading_enabled") is True, str(a.get("mode") or ""), bool(a.get("verified_identity")),
-                     str(a.get("status") or ""), int(a.get("reconciliation_seq") or 0), str(a.get("last_reconciled_at") or ""),
-                     str(a.get("position_truth") or ""), str(a.get("execution_authority") or ""),
-                     # r20 P2-04: EA capability inputs + heartbeat freshness bucket (fresh ≤180 s / stale)
-                     str(a.get("ea_version") or ""), str(a.get("ea_binary_sha256") or ""),
-                     "fresh" if hb and hb >= (datetime.now(timezone.utc) - timedelta(seconds=180)).isoformat() else "stale"])
+        rows.append(_account_row(a))
     async for b in db.bot_configs.find({"user_id": user_id}, {"account_id": 1, "active": 1}):
         rows.append(["b", str(b.get("account_id")), bool(b.get("active"))])
-    async for p in db.platform_state.find({"_id": {"$in": ["trading_authority", "turnstile_break_glass", "inventory_expectation",
-                                                            "inventory_hash_pending"]}}):
-        rows.append(["p", str(p["_id"]), str(p.get("level") or ""), bool(p.get("active")), str(p.get("set_at") or p.get("until") or "")])
+    rows.extend(_platform_rows([p async for p in db.platform_state.find({"_id": {"$in": _PLATFORM_STATE_IDS}})]))
     rows.sort()
     return hashlib.sha256(json.dumps(rows, separators=(",", ":")).encode()).hexdigest()
 
@@ -161,44 +246,40 @@ async def decide_user(db, user_id: str, *, fresh: bool = False) -> dict:
     it before the next response; fresh=True forces recomputation."""
     ver = await authority_version(db)
     fp = await inventory_fingerprint(db, user_id)
-    if not fresh:
-        hit = await db.canonical_decisions.find_one({"_id": user_id})
-        if hit and hit.get("input_version") == ver and hit.get("inventory_fingerprint") == fp:
-            try:
-                age = (datetime.now(timezone.utc) - datetime.fromisoformat(hit["cached_at"])).total_seconds()
-            except (KeyError, ValueError, TypeError):
-                age = _SNAPSHOT_TTL_S
-            if 0 <= age < _SNAPSHOT_TTL_S:
-                return hit["decision"]
-    out = await _decide_user_uncached(db, user_id)
-    out["input_version"] = ver
-    out["input_hash"] = hashlib.sha256(f"{ver}:{fp}".encode()).hexdigest()[:16]
-    now = datetime.now(timezone.utc)
-    stale_cutoff = (now - timedelta(seconds=_SNAPSHOT_TTL_S)).isoformat()
-    snap = {"input_version": ver, "inventory_fingerprint": fp, "decision": out, "cached_at": now.isoformat()}
-    # single-flight (round 13 P2-01): concurrent cold-cache computations race, but only
-    # ONE decision is persisted per (version, fingerprint) window — losers return the winner.
-    try:
-        res = await db.canonical_decisions.update_one(
-            {"_id": user_id, "$or": [{"input_version": {"$ne": ver}}, {"inventory_fingerprint": {"$ne": fp}},
-                                     {"cached_at": {"$lt": stale_cutoff}}]},
-            {"$set": snap}, upsert=True)
-        if res.matched_count == 0 and res.upserted_id is None:
-            raise DuplicateKeyError("snapshot exists")
-    except DuplicateKeyError:
-        hit = await db.canonical_decisions.find_one({"_id": user_id})
-        if hit and hit.get("input_version") == ver and hit.get("inventory_fingerprint") == fp:
-            return hit["decision"]
-    return out
+    return await _cached_decision(db, user_id, ver, fp, lambda: _decide_user_uncached(db, user_id), fresh=fresh)
+
+
+async def account_has_exposure(db, acc: dict) -> bool:
+    """Open positions locally OR as last reported by the broker — exposure is never invisible."""
+    if int(acc.get("open_positions") or 0) > 0:
+        return True
+    return await db.trades.count_documents({"account_id": str(acc["_id"]), "status": "open"}) > 0
 
 
 async def _decide_user_uncached(db, user_id: str) -> dict:
     platform = await decide_platform(db)
     per_account = []
     async for acc in db.accounts.find({"user_id": user_id}):
+        enabled = acc.get("trading_enabled") is True
+        label = acc.get("label") or acc.get("account_login")
+        env = acc.get("mode") or "demo"
+        # prod v1.60.24 — an account switched OFF on purpose is not a blocker for the user's other accounts: it is
+        # listed (OFF · not counted) but never dominates the user decision. Only while it still carries exposure
+        # (open positions) do its position-truth / safety blockers keep counting — never the OFF state itself.
+        if not enabled and not await account_has_exposure(db, acc):
+            per_account.append({"account_id": str(acc["_id"]), "label": label, "environment": env, "enabled": False,
+                                "counted": False, "state": "OFF", "reason_codes": [], "blockers": [], "dominant_code": "OFF"})
+            continue
         d = await decide_account(db, acc)
-        d["label"] = acc.get("label") or acc.get("account_login")
-        d["environment"] = acc.get("mode") or "demo"
+        if not enabled:
+            d["blockers"] = [b for b in d["blockers"] if b["code"] != "ACCOUNT_DISABLED"]
+            d["reason_codes"] = [b["code"] for b in d["blockers"]]
+            d["state"] = dominant("READY", *(b["state"] for b in d["blockers"]))
+            d["dominant_code"] = d["blockers"][0]["code"] if d["blockers"] else "READY"
+        d["label"] = label
+        d["environment"] = env
+        d["enabled"] = enabled
+        d["counted"] = True
         per_account.append(d)
     # ONE flattened blocker list, sorted by severity (round 10 P1-03): state,
     # dominant_code, reason_codes and top-level blockers all derive from it.
@@ -207,7 +288,7 @@ async def _decide_user_uncached(db, user_id: str) -> dict:
         flat += [{**b, "account_id": d["account_id"], "account_label": d.get("label"), "scope": "account"}
                  for b in d["blockers"]]
     flat.sort(key=lambda b: -severity(b["state"]))
-    state = dominant(platform["state"], *(d["state"] for d in per_account))
+    state = dominant(platform["state"], *(d["state"] for d in per_account if d.get("counted", True)))
     codes = list(dict.fromkeys(b["code"] for b in flat))
     return {**platform, "decision_id": f"dec_{uuid.uuid4().hex[:12]}", "scope": "user",
             "state": state, "new_exposure_allowed": state in NEW_EXPOSURE_ALLOWED,

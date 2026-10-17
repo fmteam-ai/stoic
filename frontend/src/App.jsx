@@ -47,10 +47,24 @@ import VerifyEmail from "@/pages/VerifyEmail";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 
+const CHUNK_ERR_RE = /Loading chunk|dynamically imported module|Importing a module script failed/i;
+const RELOADED_KEY = "stoic:chunk-reload";
+
 const lazyImport = (imp) => lazy(() =>
     // review P0-7 — one automatic retry for a failed lazy chunk (transient
     // network / rate-limit) before the RouteErrorBoundary takes over.
-    imp().catch(() => new Promise((r) => setTimeout(r, 1500)).then(imp)));
+    imp().catch(() => new Promise((r) => setTimeout(r, 1500)).then(imp))
+        .then((m) => { sessionStorage.removeItem(RELOADED_KEY); return m; })
+        .catch((err) => {
+            // v1.60.33 item 9 — after a deploy an open tab asks for chunk hashes that no longer exist. Reload ONCE
+            // per URL to pick up the new build; if that also fails, the boundary shows "New version available".
+            if (CHUNK_ERR_RE.test(String(err?.message || "")) && sessionStorage.getItem(RELOADED_KEY) !== window.location.href) {
+                sessionStorage.setItem(RELOADED_KEY, window.location.href);
+                window.location.reload();
+                return new Promise(() => {});   // never settles — the page is reloading
+            }
+            throw err;
+        }));
 
 // Route-level code splitting — heavy/rarely-visited surfaces load on demand
 const Research = lazyImport(() => import("@/pages/Research"));

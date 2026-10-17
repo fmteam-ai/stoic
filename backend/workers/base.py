@@ -100,6 +100,20 @@ async def persist_progress(db, loop_name: str) -> None:
         {"_id": loop_name}, {"$set": dict(st)}, upsert=True)
 
 
+async def publish_swallow_counters(db, process: str) -> None:
+    """v1.60.43 — P5 reads security_signals{kind: swallow_counters} from EVERY process; a row with empty counters means
+    'published, nothing swallowed' (before, only the API published and only when non-empty → P5 'no_data')."""
+    try:
+        from silent_failures import swallow_counters
+        counters = {str(k)[:80]: int(v) for k, v in (swallow_counters() or {}).items()}
+        now = datetime.now(timezone.utc)
+        await db.security_signals.update_one(
+            {"kind": "swallow_counters", "process": process},
+            {"$set": {"at": now.isoformat(), "counters": counters, "expires_at": now + timedelta(hours=2)}}, upsert=True)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("swallow counters publish skipped: %s", e)
+
+
 def _vault_key_id() -> str | None:
     try:
         from integrations_settings import master_key_id
@@ -159,6 +173,12 @@ async def _lease_keeper(name: str, lost: asyncio.Event, loop_tasks=(),
                 {"_id": name, "holder": HOLDER},
                 {"$set": {"loops_running": running, "loops_total": total,
                           "loops": merged}})
+            # v1.60.43 — /api/ops/loops + stale-loop monitoring read `loop_progress`; only loops that called
+            # persist_progress() themselves were visible (ops_outbox, billing, deploy_watch never were). Persist every
+            # loop this worker runs, every renew.
+            for k, v in LOOP_PROGRESS.items():
+                await db.loop_progress.update_one({"_id": k}, {"$set": dict(v, worker=name, host=HOLDER)}, upsert=True)
+            await publish_swallow_counters(db, name)
             if running < total:
                 logger.error("worker %s: %d/%d loops running — a loop died",
                              name, running, total)

@@ -27,10 +27,13 @@ export function CloseOnlyBanner({ refreshKey = 0 }) {
             </div>
             {open && (
                 <ul className="mt-2 ml-5 space-y-0.5 text-[#A1A1AA]" data-testid="close-only-banner-reasons">
-                    {notice.reasons.map((r, i) => <li key={i}>· {r}</li>)}
+                    {(notice.accounts || []).length
+                        ? notice.accounts.map((a) => a.reasons.map((r, i) => (
+                            <li key={`${a.account_id}-${i}`} data-testid={`close-only-banner-account-${a.account_id}`}>· <span className="text-white">{a.label}</span>: {r}</li>)))
+                        : notice.reasons.map((r, i) => <li key={i}>· {r}</li>)}
                 </ul>
             )}
-            <div className="mt-1 ml-5 text-[10px] text-[#52525B]">Open positions are still managed; only new entries are held until this is fixed{notice.policy_version ? ` · rules policy ${notice.policy_version}` : ""}.</div>
+            <div className="mt-1 ml-5 text-[10px] text-[#52525B]">Open positions are still managed; only new entries on the named account{(notice.accounts || []).length > 1 ? "s are" : " is"} held until this is fixed — your other accounts are not affected{notice.policy_version ? ` · rules policy ${notice.policy_version}` : ""}.</div>
         </div>
     );
 }

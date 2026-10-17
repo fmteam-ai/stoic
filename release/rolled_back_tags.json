@@ -1,0 +1,9 @@
+{
+  "_doc": "Release tags whose EX5 never went live (deploy rolled back / gate refused). scripts/check_ea_fleet_compat.py skips them when deriving the fleet's stable EX5 from the previous v* tag, so a recovery PR is gated against the release the terminals actually run. Append-only; never remove a tag that shipped.",
+  "tags": {
+    "v1.60.40": {
+      "reason": "deploy rolled back 2026-10-14: ea-release 41893f48 signed EA 1.65 with previous: null, stable 1.64 EX5 b05ed821 rejected on all 4 terminals (CLOSE_ONLY); never live",
+      "fleet_stable_after": "v1.60.39"
+    }
+  }
+}

@@ -36,6 +36,7 @@ import warmer
 from routes.admin_routes import router as admin_router
 from routes.migration_routes import router as migration_router
 from routes.setup_routes import router as setup_router
+from routes.wizard_routes import router as wizard_router
 from routes.auth_routes import router as auth_router
 from routes.webauthn_routes import router as webauthn_router
 from modules.pamm.api import router as pamm_router
@@ -86,6 +87,7 @@ from routes.integrity_routes import router as integrity_router
 from routes.diagnostic_routes import router as diagnostic_router
 from routes.safety_blocks_routes import router as safety_blocks_router
 from routes.macro_routes import router as macro_router
+from routes.market_intel_routes import router as market_intel_router
 from routes.strategies_routes import router as strategies_router
 from routes.portfolio_routes import router as portfolio_router
 from routes.performance_routes import router as performance_router, public_router as performance_public_router
@@ -97,6 +99,7 @@ from routes.data_freshness_routes import router as data_freshness_router
 from routes.shadow_routes import router as shadow_router
 from routes.quant_routes import router as quant_router
 from routes.scalp_routes import router as scalp_router
+from routes.gold_trend_pulse_routes import router as gold_trend_pulse_router
 from routes.enterprise_routes import mgmt_router as api_keys_router, public_router as enterprise_v1_router
 from routes.postmortem_routes import router as postmortem_router
 from routes.auto_heal_routes import router as auto_heal_router
@@ -173,7 +176,6 @@ async def csrf_middleware(request, call_next):
     """CSRF double-submit enforcement for cookie-authenticated mutations
     (SameSite=None cookies make cross-site sends possible; CORS alone is
     not a CSRF defense). Bearer/bridge/webhook callers are unaffected."""
-    from fastapi.responses import JSONResponse
     from security import csrf_check
     err = csrf_check(request)
     if err is not None:
@@ -188,7 +190,6 @@ async def csrf_middleware(request, call_next):
 @app.middleware("http")
 async def request_id_middleware(request, call_next):
     """Iter-152 · distributed request IDs + structured JSON access logs."""
-    import uuid
     import re as _re
     import time as _t
     import json as _json
@@ -250,15 +251,18 @@ async def health():
     # before their first login. HMAC(LEDGER_ANCHOR_KEY, "env|build").
     from environment_marker import sign_environment
     prov.update(sign_environment(prov["app_env"], prov["build_sha"]))
+    # P2-04 (main131) — ONE release identity (tag · commit · EA · policy · model manifest) for the UI footer
+    from release_truth import release_id
     try:
         await db.command("ping")
-        return {"status": "ok", "db": "connected", **prov}
+        _pol = await db.platform_state.find_one({"_id": "rules_policy"}, {"policy_version": 1})
+        return {"status": "ok", "db": "connected", **prov, "release": release_id(policy_version=(_pol or {}).get("policy_version"))}
     except Exception as e:
         # Never leak connection topology / driver internals publicly.
         cid = uuid.uuid4().hex[:12]
         logger.error("health degraded [cid=%s]: %s", cid, e)
         return {"status": "degraded", "db": "unavailable", "cid": cid,
-                **prov}
+                **prov, "release": release_id()}
 
 
 @api_router.get("/health/release")
@@ -287,7 +291,6 @@ async def health_ready():
     """Readiness: DB ping + critical unique indexes + submission-slot
     integrity. Degraded readiness returns 503 so orchestrators stop
     routing traffic without leaking internals."""
-    from fastapi.responses import JSONResponse
     checks = {}
     ok = True
     # audit r3 P0 · critical startup failures (indexes, dependency health)
@@ -503,6 +506,7 @@ async def installer_hash():
 api_router.include_router(admin_router)
 api_router.include_router(migration_router)
 api_router.include_router(setup_router)
+api_router.include_router(wizard_router)
 from routes.vps_terminal_routes import router as vps_terminal_router  # noqa: E402
 api_router.include_router(vps_terminal_router)
 api_router.include_router(auth_router)
@@ -561,6 +565,7 @@ api_router.include_router(integrity_router)
 api_router.include_router(diagnostic_router)
 api_router.include_router(safety_blocks_router)
 api_router.include_router(macro_router)
+api_router.include_router(market_intel_router)
 api_router.include_router(strategies_router)
 api_router.include_router(portfolio_router)
 api_router.include_router(performance_router)
@@ -573,6 +578,7 @@ api_router.include_router(data_freshness_router)
 api_router.include_router(shadow_router)
 api_router.include_router(quant_router)
 api_router.include_router(scalp_router)
+api_router.include_router(gold_trend_pulse_router)
 api_router.include_router(postmortem_router)
 api_router.include_router(auto_heal_router)
 api_router.include_router(preferences_router)
@@ -731,6 +737,34 @@ async def _close_txn_unavailable(_request: Request, exc: TransactionsUnavailable
         "reason": str(exc)[:300]}})
 
 
+# v1.60.52 — a trading path that refuses a stale quote (manual order, paper execute, NL trigger) answers a
+# deterministic 409 instead of a 500: nothing was sent to the broker.
+from market import StaleQuoteError
+
+
+@app.exception_handler(StaleQuoteError)
+async def _stale_quote_refused(_request: Request, exc: StaleQuoteError):
+    return JSONResponse(status_code=409, content={"detail": {
+        "code": "price_feed_stale",
+        "message": "Price feed stale — the order was not placed. Retry when live quotes resume.",
+        "reason": str(exc)[:200]}})
+
+
+# v1.60.32 — validation-error hygiene: FastAPI's default 422 echoes the offending request body back in
+# `input`, so a mistyped login / step-up / password-change payload returned the password to the caller (and to
+# anything logging the response). Keep loc / msg / type, drop the body.
+from fastapi.exceptions import RequestValidationError
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error_without_echo(_request: Request, exc: RequestValidationError):
+    errors = []
+    for e in exc.errors():
+        errors.append({"loc": list(e.get("loc") or []), "msg": str(e.get("msg") or ""), "type": str(e.get("type") or "")})
+    return JSONResponse(status_code=422, content={"detail": errors})
+
+
+
 # Security headers (iter-155) — defense-in-depth on every API response.
 # The browser-facing HTML gets its headers from the Cloudflare edge
 # (Transform Rules — see docs/CLOUDFLARE_EDGE.md); these cover direct API
@@ -769,7 +803,6 @@ async def _flush_denied_counts(force: bool = False) -> None:
 
 @app.middleware("http")
 async def _security_agent_middleware(request: Request, call_next):
-    from fastapi.responses import JSONResponse
     from security import client_ip, is_blocked
     ip = client_ip(request)
     if request.url.path.startswith("/api/"):
@@ -858,6 +891,18 @@ _scheduled_drills_task = None
 
 async def on_startup():
     global _bot_runner_task, _warmer_task, _trade_manager_task, _auto_heal_task, _stuck_sync_task, _optimizer_task, _nightly_tuner_task, _scalp_reconcile_task
+    # audit 14 Oct — the release gate must read the lock of THIS build (production mounts the adopted signed lock)
+    try:
+        from release_gate import lock_matches_build
+        _lb = lock_matches_build()
+        if _lb["ok"]:
+            logger.info("release lock bound to this build: commit %s authoritative=%s (%s)", _lb["lock_commit"], _lb["authoritative"], _lb["path"])
+        elif is_production():
+            logger.error("RELEASE LOCK MISMATCH: %s (lock=%s build=%s path=%s)", _lb["reason"], _lb["lock_commit"], _lb["build_sha"], _lb["path"])
+        else:
+            logger.info("release lock not bound to this build (%s) — expected outside production", _lb["reason"])
+    except Exception as _e:  # noqa: BLE001
+        logger.warning("release lock startup check skipped: %s", type(_e).__name__)
     # review item 5 / iter-182 — Origin enforcement is AUTOMATIC in
     # production (no CSRF_ENFORCE_ORIGIN secret needed) and localhost /
     # preview entries are filtered out of CORS_ORIGINS automatically.
@@ -955,6 +1000,12 @@ async def on_startup():
         if _ts_violation:
             raise RuntimeError(_ts_violation)
         await get_db().turnstile_consumed_tokens.create_index("expires_at", expireAfterSeconds=0)
+        from account_tombstones import ensure_indexes as _tomb_idx
+        await _tomb_idx(get_db())                                   # C3
+        from prediction_track import ensure_indexes as _pred_idx
+        await _pred_idx(get_db())                                   # Spec A
+        from trade_costs import ensure_indexes as _costs_idx
+        await _costs_idx(get_db())                                  # v1.60.63 #85 — spread_history TTL
         import device_attestation as _da
         await _da.ensure_indexes(get_db())   # r26 P1-02 nonce TTL + uniqueness
         from close_commands import ensure_indexes as _close_idx   # r25 P2-01: unique (trade_id, close_seq)

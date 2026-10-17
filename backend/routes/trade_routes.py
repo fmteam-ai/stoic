@@ -237,13 +237,13 @@ async def strategy_scoreboard(days: int = 30, user=Depends(get_current_user)):
     dq = {"user_id": user["id"]}
     if days > 0:
         dq["ts"] = {"$gte": since}
-    pipeline = [{"$match": dq},
+    pipeline = [{"$match": dq}, {"$sort": {"_id": 1}},
                 {"$group": {"_id": {"stage": "$stage", "status": "$status"},
-                            "n": {"$sum": 1}}}]
+                            "n": {"$sum": 1}, "last_reason": {"$last": "$reason"}}}]
     funnel = []
     async for g in db.trade_decisions.aggregate(pipeline):
         funnel.append({"stage": g["_id"]["stage"], "status": g["_id"]["status"],
-                       "count": g["n"]})
+                       "count": g["n"], "last_reason": g.get("last_reason")})
     funnel.sort(key=lambda x: -x["count"])
     return {"days": days, "engines": out, "funnel": funnel,
             "portfolio": portfolio,
@@ -697,7 +697,7 @@ async def execute_manual_trade(payload: ManualTradeRequest,
             detail=f"Rate limit: max {rl['limit']} orders/min reached. Retry in {rl['retry_in_s']}s.",
         )
 
-    quote = await get_quote(payload.symbol)
+    quote = await get_quote(payload.symbol, allow_stale=False)   # v1.60.52 — SL/TP never derived from a stale price (→ 409)
     price = quote.get("price")
     if not price or price <= 0:
         raise HTTPException(status_code=502, detail=f"Could not get live quote for {payload.symbol}")
@@ -1177,3 +1177,35 @@ async def bulk_clear_trades(
         "scope": scope,
         "older_than_days": older_than_days,
     }
+
+
+@router.get("/predictions")
+async def trade_predictions(request: Request, symbol: str = "XAUUSD", limit: int = 20, user=Depends(get_current_user)):
+    """Spec A — prediction track record for the caller's own decisions on one symbol: sync outcomes against the
+    stored M15 candles, then calibration over every stored row (cap 5000)."""
+    import re as _re
+    import prediction_track as pt
+    from pip_utils import base_symbol
+    if not _re.match(r"^[A-Za-z0-9._-]{2,20}$", symbol or ""):
+        raise HTTPException(status_code=422, detail="invalid symbol")
+    limit = max(1, min(int(limit or 20), 200))
+    db = get_db()
+    from security import rate_limit
+    await rate_limit(db, "trade_predictions", f"user:{user['id']}", 60, 60, "Too many track-record requests", request=request)   # SEC-022-3
+    sync = await pt.sync_outcomes(db, user["id"], symbol)
+    base = base_symbol(symbol)
+    rows = await db[pt.COLLECTION].find({"user_id": user["id"], "base": base}, {"_id": 0}).to_list(length=5000)
+    recent = sorted(rows + sync["pending"], key=lambda r: str(r.get("ts") or ""), reverse=True)[:limit]
+    for r in recent:
+        r.pop("_id", None)
+        r.pop("user_id", None)
+    cal = pt.calibration(rows)
+    # P2-02 (main131) — provenance: this is prediction calibration against M15 candles, NOT broker performance
+    excluded = sum(1 for r in rows if r.get("outcome") == "no_data")
+    expired = sum(1 for r in rows if r.get("outcome") == "expired")
+    return {"symbol": base, "horizon_bars": pt.HORIZON_BARS, "horizon_hours": pt.HORIZON_BARS * pt.BAR_SEC // 3600,
+            "recent": recent, "calibration": cal, "pending": len(sync["pending"]),
+            "provenance": {"label": "Prediction calibration — not broker performance", "source": "M15 candles (EA stream)",
+                           "as_of": sync.get("as_of"), "candles_t_basis": sync.get("t_basis"), "bars_available": sync.get("bars_n"),
+                           "same_bar_rule": "SL counted first when SL and TP fall inside one bar",
+                           "counts": {"decided": cal["decided"], "excluded_no_data": excluded, "expired": expired, "pending": len(sync["pending"])}}}

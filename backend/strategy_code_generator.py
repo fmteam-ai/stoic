@@ -34,12 +34,9 @@ Schema returned:
   "pseudocode": "..."        # Python-flavoured human-readable code block
 }
 """
-import os
 import json
 import re
-import uuid
 import logging
-from llm_models import PROVIDER, model_for
 
 
 logger = logging.getLogger("strategy-code-generator")
@@ -148,34 +145,13 @@ def _validate(dsl: dict) -> tuple[bool, str]:
     return True, "ok"
 
 
-# H7 lazy-loaded LLM SDK — module attrs stay patchable by tests
-LlmChat = None
-UserMessage = None
-
-
-def _ensure_llm():
-    global LlmChat, UserMessage
-    if LlmChat is None or UserMessage is None:
-        from emergentintegrations.llm.chat import LlmChat as _L, UserMessage as _U
-        if LlmChat is None:
-            LlmChat = _L
-        if UserMessage is None:
-            UserMessage = _U
-
-
 async def generate_code(compiled: dict) -> dict:
     """Expand a compiled NL strategy into the DSL + pseudocode."""
-    _ensure_llm()
-    chat = LlmChat(
-        api_key=os.environ["EMERGENT_LLM_KEY"],
-        session_id=f"strat-code-{uuid.uuid4().hex[:8]}",
-        system_message=SYSTEM_PROMPT,
-    ).with_model(PROVIDER, model_for("deep"))
-
+    import llm_client
     user_msg = ("Expand this compiled strategy into the full DSL + "
                 "pseudocode per the system schema:\n\n"
                 + json.dumps(compiled, indent=2))
-    response = await chat.send_message(UserMessage(text=user_msg))
+    response = await llm_client.complete("deep", SYSTEM_PROMPT, user_msg, feature="strategy_code", seconds=60)
     try:
         dsl = _parse_json(str(response))
     except Exception as e:

@@ -29,8 +29,21 @@ jobs:
           case "${GITHUB_REF}" in refs/tags/v*) echo "release ref ${GITHUB_REF_NAME}" ;;
             *) echo "::error::release.yml must run on a v* tag (got ${GITHUB_REF}) — pick the tag under 'Use workflow from'"; exit 1 ;; esac
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+        with:
+          fetch-depth: 0   # v1.60.41 — the fleet-compat gate needs the previous v* tag
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"
       - name: Release discipline — no tag while an un-waived P0/P1 review finding is open (M119-7)
         run: python3 scripts/check_open_findings.py
+      - name: EA fleet compatibility gate — the release must accept the stable EX5 of the previous tag (v1.60.41)
+        env:
+          RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
+          RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
+          EA_FLEET_STABLE_SHA: ${{ vars.EA_FLEET_STABLE_SHA }}   # optional operator override (recovery PRs): the EX5 the fleet actually runs
+        run: |
+          pip install -q cryptography==50.0.0
+          python3 scripts/check_ea_fleet_compat.py
 
   ci-gates:
     needs: tag-only
@@ -117,7 +130,7 @@ jobs:
           # dependency-confusion hardening) + sha256 pin of the exact wheel.
           EI_SHA256=1822c409e24817689541891784b8ec3ff4dfed845ce8cd09fd4feb91ba3a4bdd
           for i in 1 2 3 4 5; do
-            pip download --no-deps emergentintegrations==0.2.0 -d /tmp/ei \
+            timeout 120 pip download --no-deps --timeout 20 --retries 1 emergentintegrations==0.2.0 -d /tmp/ei \
               --index-url https://d33sy5i8bnduwe.cloudfront.net/simple/ \
               && break
             echo "emergentintegrations download attempt $i failed — retry in 15s"
@@ -200,7 +213,7 @@ jobs:
           # manifest for this commit in the exported tree, then verify it strictly against the build
           printf '%s\n' "${COMMIT_SHA}" > /tmp/verify/backend/BUILD_SHA
           if [ -f /tmp/verify/backend/models_store/MODEL_MANIFEST.json ]; then
-            pip install -q cryptography requests pymongo >/dev/null 2>&1 || true
+            pip install -q cryptography==50.0.0 requests==2.34.2 pymongo==4.18.2 >/dev/null 2>&1 || true
             (cd /tmp/verify/backend && APP_ENV=production RELEASE_SIGNER=external STOIC_BUILD_SHA="${COMMIT_SHA}" python -m model_manifest resign --commit "${COMMIT_SHA}")
             (cd /tmp/verify/backend && python -m model_manifest verify --build "${COMMIT_SHA}")
           fi
@@ -300,13 +313,16 @@ jobs:
           if (-not (Test-Path "backend\static\EmergentTradingBridge.ex5")) {
             throw "Compiled .ex5 not produced"
           }
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"   # same interpreter as ea-release (the Windows runner default is 3.9)
       - name: Reproducibility — the tagged tree must carry a SIGNED record whose EX5 hash equals this compile
         shell: pwsh
         env:
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
-          pip install -q cryptography
+          pip install -q cryptography==50.0.0
           if (-not (Test-Path "release\ea_release.json")) { throw "RELEASE BLOCKED: release/ea_release.json missing — run the ea-release workflow first" }
           $rec = Get-Content release\ea_release.json -Raw | ConvertFrom-Json
           # MetaEditor output is NOT byte-reproducible (per-build metadata): the shipped EX5 is the one the
@@ -332,6 +348,9 @@ jobs:
     needs: [ci-gates, suite-from-archive, hermetic-verify, install-from-archive, ea-compile]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6
+        with:
+          python-version: "3.11"   # v1.60.41 — pins below follow backend/requirements.txt (py3.11), not the runner default
       - name: Resolve release commit (peel annotated-tag object)
         run: |
           COMMIT_SHA=$(git rev-parse --verify --quiet "${GITHUB_SHA}^{commit}" \
@@ -402,7 +421,7 @@ jobs:
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
           STOIC_BUILD_SHA: ${{ env.COMMIT_SHA }}
         run: |
-          pip install -q -r backend/requirements.txt >/dev/null 2>&1 || pip install -q cryptography requests pymongo
+          pip install -q -r backend/requirements.txt >/dev/null 2>&1 || pip install -q cryptography==50.0.0 requests==2.34.2 pymongo==4.18.2
           if [ -f /tmp/pkg/backend/models_store/MODEL_MANIFEST.json ]; then
             # approvals + model digests carried over UNCHANGED (verified first); only code_commit is bound.
             # Everything downstream (hermetic tests, images, archive, lock) consumes THIS staged tree.
@@ -552,7 +571,7 @@ jobs:
           FRONTEND_DIGEST: ${{ steps.push.outputs.frontend_digest }}
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
         run: |
-          pip install -q -r backend/requirements.txt >/dev/null 2>&1 || pip install -q cryptography requests
+          pip install -q -r backend/requirements.txt >/dev/null 2>&1 || pip install -q cryptography==50.0.0 requests==2.34.2
           # r26 P1-01: the lock is frozen from the STAGED tree (/tmp/pkg) after its final test files are
           # present — the packaged test manifest and the locked digest are the same bytes by construction
           python3 scripts/generate_test_manifest.py --root /tmp/pkg --check \

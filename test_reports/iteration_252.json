@@ -1,0 +1,21 @@
+{
+  "summary": "Validated the three prod v1.60.23 fixes (checkpoint db7d758b). Dedicated unit suite tests/unit/test_prod_v1_60_23_three_bugs.py — 7/7 PASS. Full backend unit lane — 1399 passed, 4 skipped (no regressions). Preview UI smoke: admin login OK, Accounts page loads with 15 edit-account dialogs; EditAccountDialog opens as a Radix dialog; edit-account-type select is correctly conditional on account.mode !== 'paper' (hidden on seeded paper accounts — expected). The three fixes targeted: (1) StepUpDialog converted to nested Radix <Dialog> with data-testid='step-up-modal' and onPointerDownOutside preventDefault; (2) auto_attest + account_routes auto-declare broker-reported DEMO on signed+verified EA, EasyStartWizard asks demo vs real explicitly, EditAccountDialog step-up protected demo↔live reclassify; (3) inventory_projection/trading_authority scope CLOSE_ONLY to the offending account only (per-account blocks) instead of blocking the whole user/platform, and account_routes refuses turning trading_enabled on for an unadmitted account with code=not_admitted. No code changes made.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/unit/test_prod_v1_60_23_three_bugs.py"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "No TEST_ user with TOTP was created this run — the request included that option but the three fixes are fully validated by the deterministic unit suite (uses FakeDb + monkeypatched step_up/audit) plus a logged-in UI smoke against admin@stoicaibot.com. If an HTTP-live suite is wanted for these three bugs specifically, a follow-up run can mint a short-lived TEST_ user via /api/auth/signup and enroll TOTP via /api/auth/totp/setup; credentials would be written to /app/memory/test_credentials.md only (never committed).",
+    "On preview the only accounts visible are paper (INTERNAL_PAPER) — so bug 2c's edit-account-type select is correctly hidden (mode==='paper' branch). Bug 3's 'NOT ADMITTED' badge is also absent because every seeded account is admitted. These are 'absent because precondition isn't met', not UI regressions."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (1399/1399 unit; 7/7 three-bugs suite)", "frontend": "smoke-only (login + Accounts + Edit dialog open — no regressions)"},
+  "test_credentials": "Admin creds read at runtime from /app/memory/test_credentials.md (admin@stoicaibot.com). No TEST_ user minted this iteration.",
+  "seed_data_creation": "None.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Three prod v1.60.23 bugs are covered by backend/tests/unit/test_prod_v1_60_23_three_bugs.py (pytest -m unit, uses FakeDb). To add an HTTP-live layer against preview: create /app/backend/tests/test_prod_v1_60_23_http.py that (a) signs up a TEST_ user, enrolls TOTP, (b) creates a mock DEMO account via admin, injects ea_identity.trade_mode=demo + signed EA hash via DB fixture, triggers heartbeat, asserts GET /api/accounts shows broker_environment='DEMO', (c) attempts PATCH /api/accounts/{id} account_type change without step-up → 401 step_up_required, with X-Step-Up-Bypass → 200 and audit entry 'account_type_edited', (d) creates an unadmitted account, confirms /api/trading-authority/inventory returns CLOSE_ONLY for only that account, PATCH trading_enabled=true → 409 not_admitted. Password + TOTP secret should be written only to /app/memory/test_credentials.md, never into the test file or report.",
+  "rca of the issue": "n/a — fix verification only; all three regressions appear correctly fixed per unit tests and source assertions."
+}

@@ -41,6 +41,7 @@ resolve_file_secrets()
 FRESH_S = 600
 EXPECT_RE = re.compile(r"^\d{1,4}/\d{1,4}/\d{1,4}$")
 EXPECT_APPROVED = "approved"   # A20-P0-02 — counts/ids come from the SIGNED policy approved in Admin → Inventory, never a fixed 6/3/3
+EXPECT_RULES = "rules"         # A2 (Easy Start) — the active signed RULES policy is the expectation (caps · demo-only · all admitted)
 
 
 async def approved_policy_expectation(db, now=None) -> dict:
@@ -68,6 +69,17 @@ async def approved_policy_expectation(db, now=None) -> dict:
             "problems": problems}
 
 
+def per_user_cap_counts(accs: list) -> dict:
+    """M1 (main130) — accounts that count toward max_accounts_per_user, exactly like the platform
+    (rules_policy.cap_count_query / inventory projection): ENABLED non-paper only. A disabled extra account —
+    the wizard's own "Disable it" fix — must never make update.sh roll back."""
+    per_user: dict = {}
+    for x in accs:
+        if x.get("trading_enabled") is True and x.get("mode") != "paper":
+            per_user[x.get("user_id")] = per_user.get(x.get("user_id"), 0) + 1
+    return per_user
+
+
 def _age(hb, now):
     try:
         return (now - datetime.fromisoformat(str(hb).replace("Z", "+00:00"))).total_seconds()
@@ -79,8 +91,8 @@ def preflight(args, env: dict) -> list:
     """Pure gate evaluation (unit-testable): returns the list of violations."""
     strict = args.strict or env.get("APP_ENV", "").lower() == "production"
     problems = []
-    if args.expect and args.expect != EXPECT_APPROVED and not EXPECT_RE.match(args.expect):
-        problems.append(f"--expect '{args.expect}' malformed (want accounts/enabled/bots e.g. 2/2/2, or 'approved' = the signed policy)")
+    if args.expect and args.expect not in (EXPECT_APPROVED, EXPECT_RULES) and not EXPECT_RE.match(args.expect):
+        problems.append(f"--expect '{args.expect}' malformed (want accounts/enabled/bots e.g. 2/2/2, 'approved' = the signed id list, or 'rules' = the signed rules policy)")
     if strict:
         if not args.scope_user:
             problems.append("production scope required: --scope-user <tenant user id> (or RECONCILE_SCOPE_USER_ID)")
@@ -116,7 +128,22 @@ async def main() -> int:
     db = get_db()
     now = datetime.now(timezone.utc)
     policy = None
-    if a.expect == EXPECT_APPROVED:
+    rules = None
+    if a.expect == EXPECT_RULES:
+        # A2 (Easy Start) — under an active, unexpired RULES policy the deploy checks the RULES, not fixed counts:
+        # every enabled account admitted, DEMO-attested when demo-only, every user within the account cap.
+        import rules_policy as rp
+        rules = await rp.active(db)
+        rp_problems = []
+        if not rules:
+            rp_problems.append("no active rules policy — activate a signed policy (Admin → Policy → Load latest signed policy) or use --expect approved")
+        elif rules.get("expired"):
+            rp_problems.append(f"rules policy {rules.get('policy_version')} expired {str(rules.get('expires_at'))[:10]} — renew it first")
+        if rp_problems:
+            print(json.dumps({"report": "production-reconciliation", "result": "REFUSED", "problems": rp_problems}, indent=1, default=str))
+            print("RECONCILE REFUSED: " + " | ".join(rp_problems), file=sys.stderr)
+            return 2
+    elif a.expect == EXPECT_APPROVED:
         # A20-P0-02 (test #1) — the expected topology IS the approved signed policy: counts AND the exact id set
         policy = await approved_policy_expectation(db, now)
         if policy["problems"]:
@@ -173,11 +200,31 @@ async def main() -> int:
     body = {"report": "production-reconciliation", "read_only": True, "at": now.isoformat(),
             "build": os.environ.get("GIT_SHA") or "unknown", "strict": strict,
             "scope": {"user_id": a.scope_user} if a.scope_user else "all non-deleted accounts (NOT production-grade)",
-            "expected_source": "approved_signed_policy" if policy else "cli",
+            "expected_source": "rules_policy" if rules else ("approved_signed_policy" if policy else "cli"),
             "policy": ({k: policy.get(k) for k in ("policy_version", "demo_only", "expires_at", "approved_by", "set_at")} if policy else None),
+            "rules_policy": ({k: rules.get(k) for k in ("policy_version", "demo_only", "max_accounts_per_user", "allowed_brokers", "expires_at")} if rules else None),
             "excluded": excluded, "accounts": rows, "totals": totals}
     ok, fails = True, []
-    if a.expect:
+    if rules:
+        # A2 — rule checks instead of counts (every one must hold; nothing is inferred)
+        import rules_policy as rp
+        enabled_accs = [x for x in accs if x.get("trading_enabled") is True]
+        per_user = per_user_cap_counts(accs)
+        cap = int(rules.get("max_accounts_per_user") or 0)
+        checks = {"rules_policy_unexpired": not rules.get("expired"),
+                  "all_enabled_admitted": all((x.get("admission") or {}).get("state") == "admitted" for x in enabled_accs),
+                  "all_enabled_brokers_allowed": all(rp.broker_allowed(rules, x.get("broker")) for x in enabled_accs),
+                  "all_users_within_cap": all(n <= cap for n in per_user.values()),
+                  "no_bots_on_disabled_accounts": not totals["bots_on_disabled_accounts"],
+                  "all_flags_boolean": not totals["non_boolean_flags"], "sets_identical": totals["sets_identical"]}
+        if rules.get("demo_only"):
+            checks["enabled_environments_all_demo"] = all(e in ("DEMO", "PAPER") for e in totals["attested_environments_enabled"])
+        body["expected"], body["checks"] = EXPECT_RULES, checks
+        body["rules_detail"] = {"enabled": len(enabled_accs), "not_admitted": [str(x["_id"]) for x in enabled_accs if (x.get("admission") or {}).get("state") != "admitted"],
+                                "over_cap_users": [u for u, n in per_user.items() if n > cap]}
+        fails = [k for k, v in checks.items() if not v]
+        ok = not fails
+    elif a.expect:
         n_acc, n_en, n_bot = (int(x) for x in a.expect.split("/"))
         checks = {"accounts": totals["accounts"] == n_acc, "explicitly_enabled": totals["explicitly_enabled"] == n_en,
                   "bots_enabled_on_enabled_accounts": totals["bots_enabled_on_enabled_accounts"] == n_bot,

@@ -142,14 +142,38 @@ gate_refused() {
   restore_tracked_release_files
   git checkout --detach "${PREV}"
   restore_adopted_lock "${PREV}"
+  restore_release_truth "${PREV}"
   echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD) gate-refused ref=${REF}" >> deploy/releases.log
   exit 1
+}
+
+# v1.60.43 — after a HELD run the new release IS running, but deploy/releases/deployment_state.json and releases.log
+# still described the previous one (dashboard + readiness showed the wrong release). Record the truth.
+record_held_live() {
+  local why="$1" sha; sha=$(git rev-parse --short HEAD)
+  mkdir -p deploy/releases
+  HELD_WHY="${why}" HELD_SHA="${sha}" HELD_REF="${REF}" HELD_PREV="${PREV}" python3 - <<'PY' || echo "!! could not record held-live state"
+import json, os, datetime
+p = "deploy/releases/deployment_state.json"
+try:
+    d = json.load(open(p))
+except Exception:
+    d = {}
+d.update({"deployment_state": "held_live", "release_ready": False, "trading_posture": "CLOSE_ONLY",
+          "held": {"running_sha": os.environ["HELD_SHA"], "ref": os.environ["HELD_REF"], "previous_sha": os.environ["HELD_PREV"],
+                   "reason": os.environ["HELD_WHY"], "at": datetime.datetime.now(datetime.timezone.utc).isoformat()}})
+json.dump(d, open(p, "w"), sort_keys=True, indent=1)
+print("   deployment state: held_live · running " + os.environ["HELD_SHA"] + " (verification failed, kept for inspection)")
+PY
+  echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${sha} held-live ref=${REF} prev=${PREV} reason=$(printf '%s' "${why}" | tr ' ' '_')" >> deploy/releases.log
+  publish_release_truth 2>/dev/null || true
 }
 
 rollback() {
   if [ "${UPDATE_HOLD_ON_FAILURE:-0}" = "1" ]; then
     echo "!! verification failed — UPDATE_HOLD_ON_FAILURE=1: leaving $(git rev-parse --short HEAD) running for inspection"
     echo "   inspect: docker compose logs backend --tail 100 · deploy/doctor.sh · revert with deploy/rollback.sh"
+    record_held_live "${1:-verification failed}"
     exit 1
   fi
   echo "!! verification failed — rolling back to ${PREV}"
@@ -195,6 +219,11 @@ adopt_release_lock || gate_refused
 
 echo "-- release provenance gate (BUILD_SHA · rc_lock · model manifest · test manifest bind to one commit)"
 verify_release_provenance || gate_refused
+
+# v1.60.41 — the new release must accept the EX5 the fleet runs today (the PREV checkout's signed record):
+# a record without its signed `previous` would void every DEMO attestation and put all accounts CLOSE_ONLY.
+echo "-- EA fleet compatibility gate (new record accepts the stable EX5 of ${PREV:0:8})"
+ea_fleet_compat_gate "${PREV}" || gate_refused
 
 if [ "$(app_env)" = "production" ]; then
   if [ "${ONBOARDING}" = 1 ]; then
@@ -244,6 +273,16 @@ wait_api_health 30 || rollback
 echo "   API healthy"
 verify_running_sha || rollback
 verify_stack_images || rollback   # M121-5 — no mixed stack: every app container runs the provisioned image
+echo "-- verifying the release gate reads the adopted lock of THIS build (audit 14 Oct: RC_LOCK_PATH mount)"
+docker compose exec -T backend python -c 'import json,sys; from release_gate import lock_matches_build as f; r=f(); print("   lock binding:", json.dumps(r)); sys.exit(0 if r["ok"] and r["authoritative"] else 1)' || rollback
+# v1.60.34 — the FULL release gate (authoritative lock · locked digests · running digest == locked backend digest ·
+# signed EX5) must pass in production, or LIVE accounts come up CLOSE_ONLY (RELEASE_NOT_AUTHORITATIVE). Elsewhere: report only.
+echo "-- verifying release_gate.evaluate() on the running container"
+if [ "$(app_env)" = "production" ]; then
+  docker compose exec -T backend python -c 'import json,sys; from release_gate import evaluate; g=evaluate(); print("   release gate:", json.dumps({k: g[k] for k in ("ok","failures","image_digest","locked_backend_digest")})); sys.exit(0 if g["ok"] else 1)' || rollback
+else
+  docker compose exec -T backend python -c 'import json; from release_gate import evaluate; g=evaluate(); print("   release gate (non-production, informational):", json.dumps({k: g[k] for k in ("ok","failures")}))' || true
+fi
 
 echo "-- verifying frontend"
 wait_frontend 30 || rollback
@@ -278,9 +317,12 @@ if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 1 ]; then
   RECONCILE_EXPECT=""
 fi
 if [ "${APP_ENV_VAL}" = "production" ] && [ "${ONBOARDING}" = 0 ]; then
-  [ -n "${RECONCILE_EXPECT}" ] || { echo "!! production requires RECONCILE_EXPECT in .env — RECONCILE_EXPECT=approved takes the counts from the signed policy (approved policy: ${APPROVED_POLICY})"; rollback; }
-  echo "${RECONCILE_EXPECT}" | grep -Eq '^([0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}|approved)$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N) or 'approved'"; rollback; }
-  if [ "${RECONCILE_EXPECT}" != approved ]; then
+  # A2 (Easy Start) — RECONCILE_EXPECT=rules is the default: the active signed RULES policy is checked (caps · demo-only ·
+  # every enabled account admitted) instead of fixed N/N/N counts. production_reconcile.py REFUSES (rollback) when no
+  # unexpired rules policy is active — fail closed, so the default never weakens the gate.
+  RECONCILE_EXPECT="${RECONCILE_EXPECT:-rules}"
+  echo "${RECONCILE_EXPECT}" | grep -Eq '^([0-9]{1,4}/[0-9]{1,4}/[0-9]{1,4}|approved|rules)$' || { echo "!! RECONCILE_EXPECT='${RECONCILE_EXPECT}' malformed (want N/N/N, 'approved' or 'rules')"; rollback; }
+  if [ "${RECONCILE_EXPECT}" != approved ] && [ "${RECONCILE_EXPECT}" != rules ]; then
     [ "${RECONCILE_EXPECT}" = "${APPROVED_POLICY}" ] || { echo "!! RECONCILE_EXPECT=${RECONCILE_EXPECT} differs from the approved policy ${APPROVED_POLICY} (set RECONCILE_EXPECT=approved to use the signed policy itself)"; rollback; }
   fi
   [ -n "${RECONCILE_SCOPE}" ] || { echo "!! production requires RECONCILE_SCOPE_USER_ID (explicit tenant scope)"; rollback; }
@@ -313,7 +355,7 @@ PY
       PP="release/evidence/prepromotion-$(git rev-parse --short HEAD).json"
       if docker compose exec -T -e GIT_SHA="${GIT_SHA}" -e APP_ENV=production backend \
            python ops/prepromotion_evidence.py --expect "${RECONCILE_EXPECT}" --scope-user "${RECONCILE_SCOPE}" > "${PP}" 2>/dev/null; then
-        echo "   pre-promotion evidence: PASS, signed (${PP})"
+        echo "   pre-promotion evidence: PASS, signed (${PP})$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); l=d.get("evidence_label"); print(f" — {l}" if l and l != "live" else "")' "${PP}" 2>/dev/null || true)"
       else
         echo "!! pre-promotion evidence FAILED (see ${PP}: failed_gates) — refusing this release"; rollback
       fi

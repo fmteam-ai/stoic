@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """MQL5 release verification chain (audit item 45).
 
-    exact MQ5 → Windows MetaEditor → 0 errors → EX5 → SHA-256 →
-    Ed25519 signature → release manifest
+    exact MQ5 -> Windows MetaEditor -> 0 errors -> EX5 -> SHA-256 ->
+    Ed25519 signature -> release manifest
 
 Record mode (run AFTER compiling on the Windows box, from the repo root):
     python scripts/verify_ea_release.py \
@@ -29,6 +29,14 @@ from datetime import datetime, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, "backend"))
+# v1.60.61 hotfix - the Windows runner console is cp1252: every message is ASCII and, as a belt-and-braces guard, an
+# unencodable character can never raise (run 39030924128 crashed record() on a U+2192 arrow, then the EX5 was pushed
+# without its record because the pwsh step only honoured the last command's exit code).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors="backslashreplace")
+    except (AttributeError, ValueError):
+        pass
 HASHES = os.path.join(ROOT, "docs", "RELEASE_HASHES.json")
 MQ5 = os.path.join(ROOT, "backend", "static", "EmergentTradingBridge.mq5")
 EA_RELEASE = os.path.join(ROOT, "release", "ea_release.json")   # compact signed record shipped in the image
@@ -65,7 +73,7 @@ def sha256_file(p):
 
 def sha256_source(p):
     """MQ5 source hash independent of line endings (the Windows runner checks out CRLF,
-    Linux/preview LF — the recorded RC hash must match on both)."""
+    Linux/preview LF - the recorded RC hash must match on both)."""
     with open(p, "rb") as f:
         data = f.read()
     return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
@@ -75,54 +83,132 @@ def _canonical_payload(ea: dict, key_id: str | None = None) -> bytes:
     body = {k: ea.get(k) for k in
             ("version", "mq5_sha256", "ex5_sha256", "metaeditor_version",
              "windows_build", "mt5_build", "source_commit")}
-    body["key_id"] = key_id or (ea.get("signature") or {}).get("key_id")   # N102-5 — key id is signed
+    body["key_id"] = key_id or (ea.get("signature") or {}).get("key_id")   # N102-5 - key id is signed
     prev = ea.get("previous")
-    if prev:   # N104-6 — the previous release is bound to the current record (mirror of ea_capabilities._canonical_payload)
+    if prev:   # N104-6 - the previous release is bound to the current record (mirror of ea_capabilities._canonical_payload)
         body["previous"] = {"version": prev.get("version"), "ex5_sha256": prev.get("ex5_sha256")}
     return json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
 
 
 def _parse_compile_log(path):
-    """MetaEditor log → (errors, warnings). Refuses unparseable logs."""
+    """MetaEditor log -> (errors, warnings). Refuses unparseable logs."""
     text = _read_log(path)
     m = (re.search(r"[Rr]esult:?\s*(\d+)\s*errors?,?\s*(\d+)\s*warnings?", text)
          or re.search(r"(\d+)\s*error\(s\),\s*(\d+)\s*warning\(s\)", text))
     if not m:
         raise SystemExit("FAIL: cannot find the 'Result: N errors, M warnings' "
-                         f"line in {path} — is this a MetaEditor compile log?")
+                         f"line in {path} - is this a MetaEditor compile log?")
     return int(m.group(1)), int(m.group(2))
+
+
+def _signed(rec) -> bool:
+    return bool(rec and rec.get("version") and str(rec.get("ex5_sha256") or "") and (rec.get("signature") or {}).get("sig_hex"))
+
+
+def _prior_signature_failure(rec: dict) -> str | None:
+    """The record carried forward as `previous` must verify on its OWN signature (the server drops it otherwise)."""
+    try:
+        from release_signing import verify_hex, key_id_accepted, release_public_key_for
+        from ea_capabilities import _canonical_payload as _ec_payload
+    except Exception as e:  # noqa: BLE001
+        return f"signature verification unavailable: {e}"
+    kid = (rec.get("signature") or {}).get("key_id")
+    if not key_id_accepted(kid):
+        return f"signed by key id {kid!r} which is not accepted"
+    pub = release_public_key_for(kid)
+    sig = rec["signature"]["sig_hex"]
+    if verify_hex(_ec_payload(rec), sig, pub, purpose="ea-release") or verify_hex(_ec_payload(rec, legacy=True), sig, pub, purpose="ea-release"):
+        return None
+    return "Ed25519 signature does NOT verify"
+
+
+def _version_tuple(v) -> tuple:
+    try:
+        return tuple(int(x) for x in str(v).split("."))
+    except ValueError:
+        return (-1,)
+
+
+def resolve_previous(ea: dict, version: str, waiver: str | None = None):
+    """v1.60.41 - the signed release the fleet is still running, carried into the new record as `previous`.
+
+    Sources (any may hold it - a merge or a re-capture can wipe docs/RELEASE_HASHES.json#ea):
+      - release/ea_release.json (the compact signed record the server ships),
+      - docs/RELEASE_HASHES.json#ea itself, - #ea.previous (capture_release_hashes carries it forward).
+    Same version re-signed -> keep that record's own `previous` pointer. Version changed -> the newest signed
+    prior record (verified) becomes `previous`, with ITS previous reduced to a pointer (N105-1).
+    FAILS when the version changed and no signed prior record exists anywhere: writing `previous: null`
+    rejects every terminal still on the stable EX5 (14 Oct: 4 terminals -> CLOSE_ONLY)."""
+    candidates = []
+    if os.path.exists(EA_RELEASE):
+        try:
+            candidates.append(json.load(open(EA_RELEASE)))
+        except Exception:  # noqa: BLE001
+            pass
+    candidates.append(ea)
+    if isinstance(ea.get("previous"), dict):
+        candidates.append(ea["previous"])
+    same = [c for c in candidates if _signed(c) and str(c.get("version")) == str(version)]
+    prior = [c for c in candidates if _signed(c) and str(c.get("version")) != str(version)]
+    if same and (same[0].get("previous") or not prior):
+        return same[0].get("previous")
+    if prior:
+        best = max(prior, key=lambda c: _version_tuple(c.get("version")))
+        why = _prior_signature_failure(best)
+        if why:
+            raise SystemExit(f"FAIL: the signed prior EA release {best.get('version')} ({str(best.get('ex5_sha256'))[:16]}...) "
+                             f"cannot be carried forward as `previous` - {why}. Refusing to write previous: null.")
+        previous = {k: v for k, v in best.items() if k != "previous"}
+        pp = best.get("previous") or None
+        if pp:
+            previous["previous"] = {"version": pp.get("version"), "ex5_sha256": pp.get("ex5_sha256")}
+        return previous
+    prior_versions = sorted({str(c.get("version")) for c in candidates
+                             if c and c.get("version") and str(c.get("version")) != str(version)})
+    if not prior_versions:
+        return None                          # first release ever - nothing the fleet could be running
+    if waiver:
+        print(f"WARN: previous: null WAIVED - {waiver}")
+        return None
+    raise SystemExit(
+        f"FAIL: EA version changed to {version} (prior: {', '.join(prior_versions)}) but NO SIGNED prior release record "
+        "exists in release/ea_release.json or docs/RELEASE_HASHES.json#ea - the ea entry was hand-edited or overwritten by a "
+        "merge/re-capture. Writing previous: null would reject the stable EX5 on every terminal (CLOSE_ONLY).\n"
+        "  fix: restore the signed record from the last ea-release commit "
+        "(git checkout <commit> -- release/ea_release.json docs/RELEASE_HASHES.json), then re-run ea-release.\n"
+        "  only for a fleet that runs NO signed EA: --no-previous-reason \"<why>\" (recorded in the release).")
 
 
 def record(args):
     errors, warnings = _parse_compile_log(args.compile_log)
     if errors != 0:
-        raise SystemExit(f"FAIL: compile log reports {errors} error(s) — "
+        raise SystemExit(f"FAIL: compile log reports {errors} error(s) - "
                          "the chain requires 0 errors.")
     doc = json.load(open(HASHES))
     ea = doc.get("ea") or {}
     mq5_now = sha256_source(MQ5)
     if ea.get("mq5_sha256") and ea["mq5_sha256"] != mq5_now:
-        raise SystemExit(
-            "FAIL: backend/static/EmergentTradingBridge.mq5 does not match the "
-            "recorded RC source hash — you compiled a DIFFERENT MQ5.\n"
-            f"  recorded: {ea['mq5_sha256']}\n  on disk:  {mq5_now}")
+        # v1.60.61 (#81 release) - a human may no longer capture `#ea` (protected-paths, v1.60.47): the bot captures
+        # here. A MQ5 whose #property version moved FORWARD is the pending re-release; the signed prior record becomes
+        # `previous` via resolve_previous(). A changed MQ5 under the SAME (or an older) version is still refused.
+        if _version_tuple(mq5_property_version()) > _version_tuple(ea.get("version")):
+            print(f"OK: MQ5 version bumped {ea.get('version')} -> {mq5_property_version()} - capturing the new source "
+                  f"({mq5_now[:16]}...); the recorded release {ea.get('version')} is carried as `previous`")
+        else:
+            raise SystemExit(
+                "FAIL: backend/static/EmergentTradingBridge.mq5 does not match the "
+                "recorded RC source hash - you compiled a DIFFERENT MQ5 under the same version.\n"
+                f"  recorded: {ea['mq5_sha256']}\n  on disk:  {mq5_now}")
     tool = toolchain_from_log(args.compile_log)
     if args.metaeditor_version and tool["metaeditor_version"] and args.metaeditor_version != tool["metaeditor_version"]:
         raise SystemExit(f"FAIL: --metaeditor-version '{args.metaeditor_version}' != compile log "
-                         f"'{tool['metaeditor_version']}' — the log is the authority")
+                         f"'{tool['metaeditor_version']}' - the log is the authority")
     version = mq5_property_version()
     if not version:
         raise SystemExit("FAIL: cannot read #property version from the MQ5")
-    # N-R6 — keep the last SIGNED release as `previous` so terminals still on it stay
+    # N-R6 - keep the last SIGNED release as `previous` so terminals still on it stay
     # live-admissible during the rollout (the backend accepts current + previous).
-    previous = ea.get("previous")
-    if ea.get("ex5_sha256") and (ea.get("signature") or {}).get("sig_hex") and ea.get("version") != version:
-        # N105-1 — the copy must stay verifiable on its OWN signature, which (N104-6) covers ITS
-        # previous.{version, ex5_sha256}: keep that pointer (and nothing more) inside the copy.
-        previous = {k: v for k, v in ea.items() if k != "previous"}
-        pp = ea.get("previous") or None
-        if pp:
-            previous["previous"] = {"version": pp.get("version"), "ex5_sha256": pp.get("ex5_sha256")}
+    previous = resolve_previous(ea, version, waiver=getattr(args, "no_previous_reason", None))
     ea.update({
         "version": version,
         "mq5_sha256": mq5_now,
@@ -138,6 +224,10 @@ def record(args):
         "compiled_by": args.compiled_by or ("github-actions" if os.environ.get("GITHUB_ACTIONS") else "manual"),
         "verified_at": datetime.now(timezone.utc).isoformat(),
     })
+    if previous is None and getattr(args, "no_previous_reason", None):
+        ea["previous_waiver"] = {"reason": args.no_previous_reason, "at": ea["verified_at"]}
+    else:
+        ea.pop("previous_waiver", None)
     if args.sign:
         from release_signing import key_id as _kid, sign_hex
         kid = _kid(purpose="ea-release")
@@ -158,21 +248,21 @@ def record(args):
             "mt5_build": args.mt5_build,
             "attested_at": ea["verified_at"]}
         json.dump(lock, open(lock_path, "w"), indent=2)
-    print(f"OK: EX5 recorded — sha256 {ea['ex5_sha256'][:16]}… "
+    print(f"OK: EX5 recorded - sha256 {ea['ex5_sha256'][:16]}... "
           f"({errors} errors / {warnings} warnings)"
-          + (" · signed" if args.sign else " · UNSIGNED (rerun with --sign)"))
+          + (" - signed" if args.sign else " - UNSIGNED (rerun with --sign)"))
     return 0
 
 
 def check_entry(ea: dict) -> list:
-    """Shared verifier — returns a list of failures (empty = pass)."""
+    """Shared verifier - returns a list of failures (empty = pass)."""
     fails = []
     if not ea.get("ex5_sha256"):
-        fails.append("no EX5 hash recorded — MQL5 is externally UNVERIFIED "
+        fails.append("no EX5 hash recorded - MQL5 is externally UNVERIFIED "
                      "(compile on Windows, then scripts/verify_ea_release.py)")
     if os.path.exists(MQ5) and ea.get("mq5_sha256"):
         if sha256_source(MQ5) != ea["mq5_sha256"]:
-            fails.append("MQ5 source drifted since the recorded compile — "
+            fails.append("MQ5 source drifted since the recorded compile - "
                          "re-run the Windows compile chain for this exact RC")
     log = ea.get("compile_log") or {}
     if ea.get("ex5_sha256") and log.get("errors") not in (0,):
@@ -193,7 +283,7 @@ def check_entry(ea: dict) -> list:
                 fails.append(RELEASE_KEY_UNPINNED_MESSAGE)
             elif not key_id_accepted(kid):
                 fails.append(f"EX5 entry is signed by key id {kid!r} which is not accepted (revoked, unknown, or a rotation "
-                             "not yet reflected in RELEASE_SIGNER_KEY_ID / RELEASE_ACCEPTED_KEY_IDS — docs/RELEASE_KEY_ROTATION.md)")
+                             "not yet reflected in RELEASE_SIGNER_KEY_ID / RELEASE_ACCEPTED_KEY_IDS - docs/RELEASE_KEY_ROTATION.md)")
             elif not verify_hex(_canonical_payload(ea), sig["sig_hex"], release_public_key_for(kid), purpose="ea-release"):
                 fails.append("Ed25519 signature does NOT verify")
         except Exception as e:  # noqa: BLE001
@@ -204,7 +294,7 @@ def check_entry(ea: dict) -> list:
 FINGERPRINT_FILE = os.path.join(ROOT, "release", "release_key.fingerprint")
 
 def _default_key_id() -> str:
-    """S-1 — without RELEASE_SIGNER_KEY_ID the repo's `current` fingerprint line decides (never a hard-coded id)."""
+    """S-1 - without RELEASE_SIGNER_KEY_ID the repo's `current` fingerprint line decides (never a hard-coded id)."""
     try:
         for line in open(FINGERPRINT_FILE):
             parts = line.split()
@@ -217,7 +307,7 @@ def _default_key_id() -> str:
 
 
 def committed_fingerprint(key_id: str) -> str:
-    """P0-01 / M114-3 — the repo (not the network) says which CI key is trusted: `<key_id> SHA256:<hex>`."""
+    """P0-01 / M114-3 - the repo (not the network) says which CI key is trusted: `<key_id> SHA256:<hex>`."""
     try:
         for line in open(FINGERPRINT_FILE, encoding="utf-8"):
             parts = line.split()
@@ -238,7 +328,7 @@ def fingerprint_b64(pub_b64: str) -> str:
 
 
 def resolve_public_key(args) -> str | None:
-    """P0-01 — `--check` is OFFLINE: the key comes from RELEASE_PUBLIC_KEY_B64, or from --public-key whose
+    """P0-01 - `--check` is OFFLINE: the key comes from RELEASE_PUBLIC_KEY_B64, or from --public-key whose
     fingerprint must equal the committed release/release_key.fingerprint; otherwise it fails with the exact fix.
     Never the runtime/bundle key (release_signing refuses release purposes without the pin)."""
     key_id = os.environ.get("RELEASE_SIGNER_KEY_ID") or _default_key_id()
@@ -264,14 +354,47 @@ def resolve_public_key(args) -> str | None:
     return None
 
 
+def load_backend_env_pins(path=None, env=None) -> dict:
+    """Prod fix (12 Oct, v1.60.21): deploy/lib.sh runs `--check` in the HOST shell, which has none of the key pins
+    the API container gets from backend/.env - the record then fails as 'revoked-or-unknown'. Read ONLY the
+    three pin variables from backend/.env (never printed, never overriding an exported value)."""
+    env = env if env is not None else os.environ
+    path = path or env.get("STOIC_BACKEND_ENV_FILE") or os.path.join(ROOT, "backend", ".env")
+    loaded = {}
+    try:
+        lines = open(path, encoding="utf-8").read().splitlines()
+    except OSError:
+        return loaded
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        if k.startswith("export "):
+            k = k[7:].strip()
+        if k in PIN_KEYS and not (env.get(k) or "").strip():
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            if v:
+                env[k] = v
+                loaded[k] = v
+    return loaded
+
+
+PIN_KEYS = ("RELEASE_PUBLIC_KEY_B64", "RELEASE_SIGNER_KEY_ID", "RELEASE_SIGNER")
+
+
 def check(args):
     if not os.path.exists(HASHES):
-        raise SystemExit("FAIL: docs/RELEASE_HASHES.json missing — run "
+        raise SystemExit("FAIL: docs/RELEASE_HASHES.json missing - run "
                          "scripts/capture_release_hashes.py first")
+    load_backend_env_pins()
     from release_signing import _mode
     if resolve_public_key(args) is None and _mode(os.environ) != "local":
         exp = committed_fingerprint(os.environ.get("RELEASE_SIGNER_KEY_ID") or _default_key_id())
-        raise SystemExit("FAIL: no release public key for --check — set RELEASE_PUBLIC_KEY_B64 or pass "
+        raise SystemExit("FAIL: no release public key for --check - set RELEASE_PUBLIC_KEY_B64 or pass "
                          f"--public-key <b64> (its fingerprint must be {exp or 'the committed one'}; "
                          "release/release_key.fingerprint). The runtime/bundle key is never used for ea-release.")
     ea = json.load(open(HASHES)).get("ea") or {}
@@ -279,9 +402,9 @@ def check(args):
     if fails:
         print("FAIL: EA release verification chain incomplete:")
         for f in fails:
-            print(f"  · {f}")
+            print(f"  - {f}")
         return 1
-    print(f"OK: EX5 {ea['ex5_sha256'][:16]}… — 0 compile errors, "
+    print(f"OK: EX5 {ea['ex5_sha256'][:16]}... - 0 compile errors, "
           f"signature verified (key {ea['signature'].get('key_id')})")
     return 0
 
@@ -298,6 +421,8 @@ def main():
     ap.add_argument("--sign", action="store_true")
     ap.add_argument("--source-commit", help="release commit the EX5 is bound to (default $GITHUB_SHA)")
     ap.add_argument("--compiled-by", help="sanctioned job identity (CI sets github-actions)")
+    ap.add_argument("--no-previous-reason", help="ONLY for a fleet running no signed EA: record previous: null with this reason "
+                                                 "(otherwise a version change without a signed prior record FAILS)")
     args = ap.parse_args()
     if args.check:
         return check(args)

@@ -401,14 +401,12 @@ async def repair_unprotected_positions(db) -> dict:
                                                                 "requested_at": now_iso}})
             closes_queued += 1
             continue
-        await db.trades.update_one({"_id": tid}, {
-            "$set": {"protection_state": "EMERGENCY_STOP_PENDING",
-                     "requested_stop_loss": sl,
-                     "pending_modification": {
-                         "type": "MODIFY_SL", "new_sl": sl,
-                         "reason": "emergency_protection",
-                         "requested_at": now_iso}},
-            "$inc": {"protection_repair_attempts": 1}})
+        from command_fence import stamp_pending_modification
+        await db.trades.update_one({"_id": tid}, {"$inc": {"protection_repair_attempts": 1}})
+        await stamp_pending_modification(
+            db, {"_id": tid, "status": "open"},
+            {"type": "MODIFY_SL", "new_sl": sl, "reason": "emergency_protection", "requested_at": now_iso},
+            {"protection_state": "EMERGENCY_STOP_PENDING", "requested_stop_loss": sl})
         stops_queued += 1
         if tr.get("user_id"):
             await db.notifications.insert_one({

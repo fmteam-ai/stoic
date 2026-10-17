@@ -66,10 +66,11 @@ async def macro_gate_status(user=Depends(get_current_user)):
 
 
 @router.get("/freeze/{symbol}")
-async def macro_freeze(symbol: str, user=Depends(get_current_user)):
+async def macro_freeze(symbol: str, account_id: str | None = None, user=Depends(get_current_user)):
     """Alias for /api/calendar/freeze/{symbol} — frontend MacroClimate
     widget hits /api/macro/freeze/. Same response shape (NFP/FOMC/CPI
     proximity window check) so the dashboard "FROZEN" badge works.
     """
-    return await macro_freeze_check(symbol)
+    from routes.calendar_routes import user_freeze_cfg
+    return await macro_freeze_check(symbol, await user_freeze_cfg(user, account_id))
 

@@ -56,7 +56,10 @@ clear_deploy_jam_marker
 
 echo "-- verifying API health"
 wait_api_health 30 || { echo "!! API not healthy after the restart — docker compose logs backend --tail 100"; exit 1; }
-echo "   API healthy"
+echo "   API healthy (direct)"
+echo "-- verifying API health through the frontend proxy"
+wait_api_health_via_frontend 45 || { echo "!! users would still see 502 — the frontend's nginx did not pick up the new backend; run: docker compose restart frontend"; exit 1; }
+echo "   API healthy (via frontend)"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) $(git rev-parse --short HEAD 2>/dev/null || echo '?') restart$( [ "${ENV_CHANGED}" = 1 ] && echo ' --env-changed') ${SERVICES[*]:-all}" >> deploy/releases.log
 docker compose ps --format 'table {{.Name}}\t{{.Status}}'
 echo "== restart complete =="

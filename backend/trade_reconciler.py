@@ -236,7 +236,6 @@ async def reconcile_user(user_id: str, *, force: bool = False) -> dict:
         if t.get("account_id") not in valid_account_ids
     ]
     if deleted_account_orphans:
-        from ws_manager import manager as ws_manager
         now_iso = datetime.now(timezone.utc).isoformat()
         closed_ids = []
         for t in deleted_account_orphans:

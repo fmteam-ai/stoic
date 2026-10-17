@@ -7,7 +7,6 @@ import os
 import time
 
 import httpx
-from llm_models import PROVIDER, model_for
 
 logger = logging.getLogger(__name__)
 
@@ -54,14 +53,8 @@ async def get_fed_tone() -> dict | None:
         + "\n".join(f"- {h['title']} ({h['source']})" for h in heads[:8])
     )
     try:
-        from emergentintegrations.llm.chat import LlmChat, UserMessage
-        chat = LlmChat(
-            api_key=os.environ["EMERGENT_LLM_KEY"],
-            session_id=f"fed-tone-{int(now)}",
-            system_message="You are a monetary policy analyst. Respond only with JSON.",
-        ).with_model(PROVIDER, model_for("fast"))
-        from llm_timeout import send_with_timeout
-        raw = await send_with_timeout(chat, UserMessage(text=prompt), label="fed_tone")
+        import llm_client
+        raw = await llm_client.complete("fast", "You are a monetary policy analyst. Respond only with JSON.", prompt, feature="fed_tone")
         txt = str(raw).strip()
         if txt.startswith("```"):
             txt = txt.strip("`").replace("json", "", 1).strip()

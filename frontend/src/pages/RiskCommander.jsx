@@ -162,7 +162,7 @@ export default function RiskCommander() {
     const applyStrategy = async () => {
         if (!compiledPreview) return;
         try {
-            await api.post("/nl/strategy/apply", { compiled: compiledPreview });
+            await api.post("/nl/strategy/apply", { compiled: compiledPreview, target: "default" });   // v1.60.48 — one bot, never "matching"
             toast.success("Strategy applied to bot config");
             setCompiledPreview(null);
             setBacktest(null);

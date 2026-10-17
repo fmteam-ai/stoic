@@ -8,6 +8,24 @@ TradeStatus = Literal["pending", "open", "closed", "cancelled", "failed"]
 
 
 # ---------- Auth ----------
+
+# #46 — the ONE break-even default shared by trade_manager, the Bot Config API and the UI (BotConfig.jsx mirrors it)
+BREAKEVEN_TRIGGER_R_DEFAULT = 1.0
+
+
+def effective_breakeven_trigger_r(cfg: dict | None) -> float:
+    """0.0 = disabled. breakeven_enabled=False disables; a missing value means the shared default (never 0)."""
+    cfg = cfg or {}
+    if cfg.get("breakeven_enabled") is False:
+        return 0.0
+    v = cfg.get("breakeven_trigger_r")
+    if v is None:
+        return BREAKEVEN_TRIGGER_R_DEFAULT
+    try:
+        return max(0.0, float(v))
+    except (TypeError, ValueError):
+        return BREAKEVEN_TRIGGER_R_DEFAULT
+
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: str = Field(min_length=8)
@@ -174,20 +192,45 @@ class AccountOut(BaseModel):
 class BotConfigUpdate(BaseModel):
     # Conservative first-live defaults (audit C2/C3): low risk, one symbol,
     # one concurrent trade, spread filter ON. Users opt UP explicitly.
+    pattern_gate_enabled: bool = False     # Spec B — observe-only unless an admin flips it (audited)
     risk_level: RiskLevel = "low"
     symbols: List[str] = ["XAUUSD"]
     active: bool = False
     max_concurrent_trades: int = Field(default=1, ge=1, le=10)
+    # v1.60.39 — minutes between signals per symbol (per account). Was only reachable via API/presets (STARTRADER /
+    # VTMarkets ran 30 min invisibly). Clamped on save to the plan floor (features.min_signal_cooldown_minutes).
+    signal_cooldown_minutes: int = Field(default=5, ge=1, le=1440)
     auto_execute: bool = True
-    # Profit Protection Suite
-    breakeven_enabled: bool = True            # move SL to entry after +1R
-    breakeven_trigger_r: float = Field(default=1.0, ge=0.1, le=10.0)
-    partial_close_enabled: bool = True        # take 50% off at TP1
-    partial_close_trigger_r: float = Field(default=1.0, ge=0.1, le=10.0)
-    partial_close_fraction: float = Field(default=0.5, gt=0.0, lt=1.0)
-    trailing_enabled: bool = True             # trail SL after partial close
-    trailing_start_r: float = Field(default=1.5, ge=0.1, le=20.0)
-    trailing_distance_r: float = Field(default=0.7, gt=0.0, le=10.0)
+    # v1.60.48 (audit item 8) — partial_close_* / trailing_* / soft_stop_* REMOVED: they were saved but never read by
+    # trade_manager (fixed engine tiers: scalp BE +0.5R + 90-min time-stop; legacy TP1 100 / TP2 200).
+    # #43 (#8 widened) — breakeven_trigger_r IS read now: for every non-scalp engine the stop moves to entry once the
+    # trade is +N×R (breakout signals have TP1 = TP, so the TP1 breakeven never fired). 0 = TP1-only (old behaviour).
+    # #46 — ONE shared default (BREAKEVEN_TRIGGER_R_DEFAULT) for runtime AND UI; breakeven_enabled is honoured.
+    breakeven_enabled: bool = True
+    # gold_trend_pulse (v1.60.57) — XAUUSD-only M5 trend-pullback scalper. OFF by default; shadow until its own live gate passes.
+    gold_trend_pulse_enabled: bool = False
+    gold_trend_pulse_mode: Literal["shadow", "demo_live"] = "shadow"   # #64 — enum validated; demo_live only via POST /gold-trend-pulse/config confirm_live on an attested DEMO account
+    gold_trend_pulse_layering_enabled: bool = False  # item 11 — up to 3 staggered legs per pullback, one shared stop, ≤0.75 % basket risk
+    gold_trend_pulse_sweep_runner_enabled: bool = True   # item 13 — ½-size runner leg to the pre-drop high after a sweep & reclaim
+    gold_trend_pulse_news_mode_enabled: bool = True      # item 14 — PRE protect / RELEASE block / POST surprise-bias trades (engine itself is OFF)
+    gold_trend_pulse_news_pre_action: str = "protect"    # protect (BE if ≥ +0.5R, else keep) | close | tighten (SL to −0.5R)
+    gold_trend_pulse_news_release_min: int = Field(default=5, ge=1, le=30)
+    gold_trend_pulse_news_events: list[str] | None = None   # None → CPI, Core CPI, NFP, FOMC, rate decision, Fed Chair, PCE, GDP, Retail Sales, PPI, ISM
+    engine_live_features_enabled: bool = False       # #55 — engines read the LIVE broker price (+ fast slope / momentum override); OFF = shadow compare only
+    # v1.60.60 #71 — Gold Daily Bias gates (shadow first; both default OFF → bias has no trading effect)
+    gold_bias_gtp_direction_enabled: bool = False
+    gold_bias_block_counter_enabled: bool = False
+    trend_day_pullback_enabled: bool = False          # #75 — enforce the EMA20/VWAP pullback on trend days (shadow when OFF)
+    ack_loosen_close_enabled: bool = False            # #84 — FULL_CLOSE when the broker stop stays > 0.25 R wider than requested after the correction
+    spread_gate_mode: str = "shadow"                  # #85 — "off" | "shadow" (stamp + count, never blocks) | "enforce"
+    spread_gate_mult: float = 1.5                     # #85 — block when spread > mult × this account's median spread for the UTC hour
+    max_cost_pct_of_tp: float = 12.0                  # #85 — block when expected round-trip cost > this % of the planned TP distance
+    # v1.60.60 #72 — exit policy for hf_scalp / hf_scalp_fast / breakout_m15 / gold_trend_pulse (default = today's fixed TP)
+    exit_policy: Literal["fixed_tp", "tp1_bank_runner"] = "fixed_tp"
+    tp1_close_fraction: float = Field(default=0.5, ge=0.1, le=0.9)
+    be_plus_offset_price: float = Field(default=1.0, ge=0.0, le=20.0)
+    tp2_multiple: float = Field(default=2.0, ge=1.1, le=5.0)
+    breakeven_trigger_r: float = Field(default=BREAKEVEN_TRIGGER_R_DEFAULT, ge=0.0, le=5.0)
     daily_drawdown_pct: float = Field(default=3.0, gt=0.0, le=20.0)
     daily_drawdown_enabled: bool = True
     weekly_drawdown_pct: float = Field(default=7.0, gt=0.0, le=40.0)
@@ -200,6 +243,16 @@ class BotConfigUpdate(BaseModel):
     # `0` / `null` = disabled.
     daily_profit_target_r: float = Field(default=0.0, ge=0.0, le=20.0)
     daily_profit_target_action: Literal["lock", "stop"] = "lock"
+    # v1.60.48 (audit item 14) — sent by the UI and coerced by the route, but was missing here → silently dropped
+    daily_profit_target_escalate: bool = False
+    daily_profit_target_escalate_step_r: float = Field(default=1.0, ge=0.25, le=10.0)
+    # v1.60.48 (audit item 7) — open automated positions per (symbol, direction) across ALL accounts; 0 = off
+    user_direction_cap: int = Field(default=1, ge=0, le=10)
+    # v1.60.52 — optional H1 alignment gate for hf_scalp / hf_scalp_fast: skip when the dominant higher-TF bias
+    # opposes the entry (mtf_gate.aligned False). Default OFF — enabled per account from evidence (6/6, 16 Oct).
+    require_h1_alignment: bool = False
+    # v1.60.53 (B4) — plumbing ONLY: the geo/risk-off advisory never gates until George approves after shadow review
+    geo_risk_gate_enabled: bool = False
     # Spread Filter — ON by default (audit C3): spread is a first-order
     # execution cost; thresholds are per-symbol and broker-tunable.
     spread_filter_enabled: bool = True
@@ -213,6 +266,23 @@ class BotConfigUpdate(BaseModel):
     friday_flat_enabled: bool = True
     friday_flat_mode: str = "close"          # "close" | "tighten"
     friday_flat_minutes_before: int = 60
+    # v1.60.38 — XAUUSD off-hours defer window (UTC, per account). v1.60.39 hotfix: default 21:00–06:00 = rollover +
+    # Asian hours paused; re-enable Asian hours per account once the Strategy Report's shadow results justify it.
+    # Weekends stay blocked; the 2.5× median spread guard still applies outside the window.
+    gold_off_hours_enabled: bool = True
+    gold_off_hours_start_utc: str = "21:00"
+    gold_off_hours_end_utc: str = "06:00"
+    # v1.60.50 — Asia gold skip (XAUUSD paused 00:00–07:00 UTC) is its own window; missing/True = on, only False = off
+    asia_session_skip_xau: bool = True
+    # v1.60.39 C8–C10 — macro freeze windows (per account). Gold HIGH-impact freeze is explicit by currency
+    # (was every country: 15 Oct UK GDP froze gold); USD medium-impact prints get a short ±5 min freeze; ≥2 USD
+    # HIGH-impact prints within 5 min ("macro avalanche", e.g. PPI + Retail Sales) extend the after-window to 20 min.
+    macro_freeze_before_min: int = 15
+    macro_freeze_after_min: int = 10
+    macro_freeze_medium_usd_enabled: bool = True
+    macro_freeze_medium_min: int = 5
+    macro_freeze_avalanche_after_min: int = 20
+    gold_freeze_currencies: List[str] = Field(default_factory=lambda: ["USD", "EUR", "GBP", "JPY", "CNY"])
     # Auto-Tune — let the bot raise the min-confidence threshold based on
     # historical win-rates per (symbol, confidence-bucket).
     auto_tune_enabled: bool = True
@@ -284,7 +354,6 @@ class BotConfigUpdate(BaseModel):
     anti_tilt_consecutive_losses: int = 3
     anti_tilt_freeze_hours: int = 4
     trade_of_day_cap: int = 1   # max NEW trades per symbol per UTC day; 0 = unlimited
-    asia_session_skip_xau: bool = True
     # Per-symbol cooldown after a stop-loss hit — prevents revenge-regime re-entry
     sl_cooldown_enabled: bool = True
     sl_cooldown_minutes: int = 45
@@ -338,11 +407,6 @@ class BotConfigUpdate(BaseModel):
     # is bypassed only while auto is enabled.
     auto_preset_enabled: bool = False
     # ───── iter-41 · Payoff-ratio repair (high win rate / oversized losers) ─
-    # Soft-Stop: cut a losing trade early at a fraction of its SL distance
-    # instead of riding to the full stop. Directly shrinks the average loss.
-    soft_stop_enabled: bool = False
-    soft_stop_loss_fraction: float = 0.6   # close at 60% of the SL distance
-    soft_stop_min_minutes: int = 10        # min trade age before it may fire
     # Let Winners Run: at TP1 move SL to break-even WITHOUT banking 50% —
     # full size continues toward TP2/TP3. Raises the average win.
     let_winners_run: bool = False
@@ -351,9 +415,6 @@ class BotConfigUpdate(BaseModel):
     def validate_relationships(self):
         if self.adaptive_risk_floor_pct > self.adaptive_risk_cap_pct:
             raise ValueError("adaptive risk floor cannot exceed cap")
-        if (self.trailing_enabled and self.breakeven_enabled
-                and self.trailing_start_r < self.breakeven_trigger_r):
-            raise ValueError("trailing should start at or after breakeven")
         return self
 
 
@@ -425,6 +486,9 @@ class BridgePosition(BaseModel):
     # When present, the Trades UI overlays this onto the row INSTEAD of the
     # 5s-polled external-feed quote → display matches MT5 to the tick.
     current_price: Optional[float] = None
+    # v1.60.53 (D) — optional broker bid/ask per position (future EA release); BUY managed on bid, SELL on ask
+    bid: Optional[float] = None
+    ask: Optional[float] = None
 
 
 class BridgeSymbolSpec(BaseModel):
@@ -562,3 +626,11 @@ class QuoteOut(BaseModel):
     low: Optional[float] = None
     timestamp: datetime
     cached: bool = False
+
+
+# v1.60.48 (audit items 8 + 17) — config fields that no longer exist; stripped from presets / overlays / saves.
+DEAD_CONFIG_FIELDS = frozenset({
+    "partial_close_enabled", "partial_close_trigger_r",
+    "partial_close_fraction", "trailing_enabled", "trailing_start_r", "trailing_distance_r",
+    "soft_stop_enabled", "soft_stop_loss_fraction", "soft_stop_min_minutes",
+})

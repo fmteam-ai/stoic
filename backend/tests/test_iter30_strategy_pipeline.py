@@ -81,13 +81,9 @@ def test_validator_clamps_params():
 async def test_code_generator_returns_dsl(monkeypatch):
     fake_llm_response = '{"version":"1.0","name":"x","symbols":["XAUUSD"],"session_preference":"london","params":{"min_confidence":75,"rsi_oversold":30,"rsi_overbought":70,"atr_pct_max":1.5,"max_concurrent_trades":2},"entry_rules":[{"field":"rsi_14","op":"<","value_ref":"params.rsi_oversold","side":"BUY","description":"rsi oversold"}],"exit_rules":[{"kind":"take_profit_pct","value":1.0},{"kind":"stop_loss_pct","value":0.5}],"pseudocode":"if rsi_14 < params.rsi_oversold:\\n    buy(XAUUSD)"}'
 
-    class _FakeChat:
-        def __init__(self, *a, **kw): pass
-        def with_model(self, *_a): return self
-        async def send_message(self, msg): return fake_llm_response
+    async def _fake_complete(*a, **kw): return fake_llm_response
 
-    monkeypatch.setattr("strategy_code_generator.LlmChat", _FakeChat)
-    monkeypatch.setenv("EMERGENT_LLM_KEY", "test")
+    monkeypatch.setattr("llm_client.complete", _fake_complete)
 
     result = await scg.generate_code({"risk_level": "medium",
                                        "symbols": ["XAUUSD"]})
@@ -100,13 +96,9 @@ async def test_code_generator_returns_dsl(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_code_generator_handles_bad_llm_output(monkeypatch):
-    class _FakeChat:
-        def __init__(self, *a, **kw): pass
-        def with_model(self, *_a): return self
-        async def send_message(self, msg): return "not even json"
+    async def _fake_complete(*a, **kw): return "not even json"
 
-    monkeypatch.setattr("strategy_code_generator.LlmChat", _FakeChat)
-    monkeypatch.setenv("EMERGENT_LLM_KEY", "test")
+    monkeypatch.setattr("llm_client.complete", _fake_complete)
 
     result = await scg.generate_code({"symbols": ["XAUUSD"]})
     assert result.get("error")

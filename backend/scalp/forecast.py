@@ -29,15 +29,30 @@ def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
 
+# v1.60.31 item 3 — stop/target geometry per instrument scale (pips). EURUSD: stop 3–6, target ≥ 5. XAUUSD (pip 0.01,
+# spread 15–35, 5-min range 50–200): stop 40–120, target ≥ 60 — a 5-pip gold target would sit inside the spread.
+GEOMETRY = {
+    "default": {"stop_min": 3.0, "stop_max": 6.0, "target_min": 5.0, "rr": 1.6},
+    "XAUUSD": {"stop_min": 40.0, "stop_max": 120.0, "target_min": 60.0, "rr": 1.6},
+}
+
+
+def geometry_for(symbol: str | None) -> dict:
+    return GEOMETRY.get((symbol or "").upper(), GEOMETRY["default"])
+
+
 def make(feats: dict, candidate: dict, state, cfg,
          model_p: float | None = None,
          commission_pips: float = 0.0) -> ScalpForecast:
     spread = float(feats["spread_pips"])
     vol_short = max(float(feats["vol_short"]), 0.3)
 
-    # geometry — stop wide enough to breathe past spread noise
-    stop_pips = _clamp(max(2.0 * spread, 1.5 * vol_short), 1.0, 5.0)
-    target_pips = round(1.3 * stop_pips, 2)
+    # geometry — v1.60.29 A1: minutes not seconds. Stop sits past the broken range edge, target is a multiple of the
+    # round-trip cost instead of smaller than it (bounds per instrument, see GEOMETRY).
+    g = geometry_for(getattr(cfg, "symbol", None))
+    rng = float(feats.get("range_5m_pips") or 0)
+    stop_pips = _clamp(max(g["stop_min"], 0.6 * rng, 2.0 * spread), g["stop_min"], g["stop_max"])
+    target_pips = round(max(g["target_min"], g["rr"] * stop_pips), 2)
 
     # deterministic probability: conservative base + setup-quality bonuses
     p = 0.48
