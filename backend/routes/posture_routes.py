@@ -204,7 +204,6 @@ async def market_posture(user=Depends(get_current_user)):
                          or {"ready": False, "reason": "no data", "bars_n": 0},
             "range_forecast": sig.get("range_forecast"),
             "liquidity": lmap,
-            "chart_patterns": patterns,
             "news_ai": news_ai,
             "calendar_intel": cal_pred,
             "causal": causal,
