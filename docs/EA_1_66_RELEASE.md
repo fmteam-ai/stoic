@@ -68,3 +68,13 @@ Capability flags are derived from the heartbeat `ea_version` (`backend/ea_capabi
 - `intraday_candles {symbol: XAUUSD, timeframe: H4}` exists with ≥ 250 bars, `backfill_at` set, `t_basis: utc`.
 - `gtp_state.h4_bars ≥ 200`, `h4_source == "ea_h4+m15"`, bias reasons no longer start with "H4 warm-up".
 - Bot Health → Risk State → "GTP: H4 bars" is **pass**.
+
+## Hotfix after the #112 merge (ea-release run 39030924128 → commit 585d2ce9)
+`record()` crashed on a cp1252 console (U+2192 in the "version bumped" print), `--check` failed, pwsh honoured only the
+last exit code and the commit step pushed the new **unsigned** 1.66 EX5 with both records still at 1.65. Fixed in
+`docs/PR_v1.60.61_hotfix.md`: the record step now fails on any failing command (`$ErrorActionPreference='Stop'`,
+`$PSNativeCommandUseErrorActionPreference=$true`, `$LASTEXITCODE` checks), runs with `PYTHONUTF8=1` /
+`PYTHONIOENCODING=utf-8`, `verify_ea_release.py` prints ASCII only, and `scripts/check_ea_commit_consistency.py --staged`
+refuses to commit an EX5 whose records do not match it. **To produce the 1.66 record:** Actions → ea-release → Run workflow
+(ref `main`) — the hotfix does not touch the MQ5, so the push trigger will not fire. Tag `v1.60.61` only after that bot
+commit and a green `verify_ea_release.py --check` on `main`.

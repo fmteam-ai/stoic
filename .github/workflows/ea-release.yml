@@ -102,15 +102,25 @@ jobs:
           RELEASE_PUBLIC_KEY_B64: ${{ secrets.RELEASE_PUBLIC_KEY_B64 }}
           RELEASE_SIGNER_KEY_ID: ${{ secrets.RELEASE_SIGNER_KEY_ID }}
           EA_FLEET_STABLE_SHA: ${{ vars.EA_FLEET_STABLE_SHA }}   # optional: the EX5 the fleet runs when HEAD's record never shipped
+          PYTHONUTF8: "1"                 # v1.60.61 hotfix — cp1252 console must never crash a print (run 39030924128)
+          PYTHONIOENCODING: "utf-8"
         run: |
+          # v1.60.61 hotfix — pwsh only propagates the LAST native command's exit code; run 39030924128 pushed an EX5
+          # without its record because record() crashed, --check FAILED and the fleet gate (last) returned 0.
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
           pip install -q cryptography==50.0.0 requests==2.34.2
+          if ($LASTEXITCODE -ne 0) { throw "pip install failed ($LASTEXITCODE)" }
           $win = (Get-CimInstance Win32_OperatingSystem).Version
           python scripts/verify_ea_release.py --ex5 backend/static/EmergentTradingBridge.ex5 `
             --compile-log compile.log --windows-build $win `
             --source-commit $env:GITHUB_SHA --compiled-by github-actions --sign
+          if ($LASTEXITCODE -ne 0) { throw "verify_ea_release.py --sign failed ($LASTEXITCODE) — no record written, nothing will be committed" }
           python scripts/verify_ea_release.py --check
+          if ($LASTEXITCODE -ne 0) { throw "verify_ea_release.py --check failed ($LASTEXITCODE) — the record does not verify" }
           # v1.60.41 — the new record must still accept the EX5 the fleet runs (the committed record before this run)
           python scripts/check_ea_fleet_compat.py --stable-ref HEAD
+          if ($LASTEXITCODE -ne 0) { throw "check_ea_fleet_compat.py failed ($LASTEXITCODE)" }
       - name: Publish EX5 + record + log
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
@@ -123,10 +133,14 @@ jobs:
       - name: Commit the signed record back to the source branch
         shell: bash
         run: |
+          set -euo pipefail
           git config user.name "stoic-ea-release[bot]"
           git config user.email "ea-release@users.noreply.github.com"
           git add release/ea_release.json docs/RELEASE_HASHES.json release/rc_lock.json backend/static/EmergentTradingBridge.ex5
           if git diff --cached --quiet; then echo "record unchanged"; exit 0; fi
+          # v1.60.61 hotfix — never commit an EX5 without its signed record (585d2ce9 pushed a bare 1.66 EX5 while
+          # #ea / ea_release.json still said 1.65): the staged set must be consistent with the MQ5 this run compiled.
+          python scripts/check_ea_commit_consistency.py --staged
           git commit -m "ea-release: signed EX5 record for ${GITHUB_SHA} [skip ci]"
           git push origin HEAD:"${TARGET_REF}"
         env:
