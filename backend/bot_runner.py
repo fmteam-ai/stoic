@@ -2648,6 +2648,24 @@ async def _process_user_account_locked(db, cfg: dict):
             except Exception as e:  # noqa: BLE001
                 logger.warning("execution timing failed (fail-open): %s", e)
         from versioning import version_stamp
+        # v1.60.63 #85 — smart spread gate, AFTER every existing filter and right before dispatch (all engines incl.
+        # gold_trend_pulse). "shadow" (default) never blocks: the verdict is stamped on the signal and counted;
+        # "enforce" skips with a pulse; "off" does nothing. Fail-open on errors — never a new way to miss a trade.
+        _sg = None
+        try:
+            from trade_costs import evaluate_gate as _sg_eval, gate_mode as _sg_mode
+            if _sg_mode(cfg) != "off" and (target_account.get("connection_type") or "mt5") != "binance":
+                _sg = await _sg_eval(db, cfg, target_account, signal,
+                                     max_spread_pips.get(sym) if isinstance(max_spread_pips, dict) else None)
+                signal["spread_gate"] = _sg
+                await db.signals.update_one({"_id": result.inserted_id}, {"$set": {"spread_gate": _sg}})
+                if _sg.get("would_block"):
+                    await inc_intel_counter(user_id, "spread_gate_shadow" if _sg["mode"] == "shadow" else "spread_gate_block")
+                    if _sg["mode"] == "enforce":
+                        await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info", reason=_sg["reason"], signal=signal)
+                        continue
+        except Exception as e:  # noqa: BLE001
+            logger.warning("spread gate failed (fail-open): %s", e)
         # v1.60.48/50 — per-USER cross-account exposure cap, reserved atomically right before the order is sent
         user_dir_cap = int(cfg.get("user_direction_cap", USER_DIRECTION_CAP_DEFAULT) or 0)
         _udc_res = None
@@ -2742,6 +2760,11 @@ async def _process_user_account_locked(db, cfg: dict):
             await _udc_release(db, _udc_res)
         logger.info("Bot auto-execute user=%s acct=%s sym=%s trade=%s",
                     user_id, cfg_account_id or "default", sym, trade_doc.get("id"))
+        if _sg and trade_doc.get("id"):        # #85 — the gate verdict travels with the trade for the shadow scoreboard
+            try:
+                await db.trades.update_one({"_id": ObjectId(str(trade_doc["id"]))}, {"$set": {"spread_gate": _sg}})
+            except Exception:  # noqa: BLE001
+                pass
         await db.signals.update_one({"_id": ObjectId(signal_id)}, {"$set": {
             "consumed": True,
             **({"corr_kelly_trim": corr_kelly_info} if corr_kelly_info else {}),

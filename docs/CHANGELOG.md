@@ -2,6 +2,9 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.63 — #85 trade cost ledger + smart spread gate (SHADOW default; no order/exit change in shadow)
+- Exit slippage (signed vs SL/TP live at close) + `cost_summary` (pips/$/R vs original stop/% of original TP) stamped on every broker close; heartbeat spread history per account+symbol+UTC hour (14 d TTL); Bot Health "Trading costs · spread gate" card + `GET /api/diagnostic/trade-costs` + digest section. Gate: `spread_gate_mode` shadow|off|enforce, `spread_gate_mult` 1.5, `max_cost_pct_of_tp` 12 — spread > mult × hour median (n ≥ 30, else static cap) or expected cost > % of TP; shadow stamps + counts (scoreboard), enforce skips with pulse. Static cap shown in $ too. Docs: `docs/RELEASE_NOTES_v1.60.63.md`.
+
 ## v1.60.62 — display fixes (no trading logic)
 - **#82** GTP card news line shows weekday + date when the event is not today ("FOMC Wed 28 Oct 18:00 UTC — protect at 17:45 …"). **#83** Exit Rule Scoreboard classifies real broker SL/TP fills (`broker_confirmed`, `…+external_close`) by exit price vs stop/target (15 % of stop distance, ≥ 3 pips; gap-through = stop) instead of only by `close_reason` prefix. **#84** broker stop looser than requested beyond stops_level+1 point → the ack stays adopted as truth, ONE fenced corrective MODIFY_SL (`ack_loosen_correction`, never a loosen); still loose → ops warning `stop_wider_than_planned` (extra risk in R, no retry); new flag `ack_loosen_close_enabled` (OFF) → fenced FULL_CLOSE when > 0.25 R. Docs: `docs/RELEASE_NOTES_v1.60.62.md`.
 

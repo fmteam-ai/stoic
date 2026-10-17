@@ -313,6 +313,9 @@ export default function BotConfig() {
                 gold_bias_block_counter_enabled: cfg.gold_bias_block_counter_enabled ?? false,
                 trend_day_pullback_enabled: cfg.trend_day_pullback_enabled ?? false,
                 ack_loosen_close_enabled: cfg.ack_loosen_close_enabled ?? false,
+                spread_gate_mode: cfg.spread_gate_mode || "shadow",
+                spread_gate_mult: cfg.spread_gate_mult ?? 1.5,
+                max_cost_pct_of_tp: cfg.max_cost_pct_of_tp ?? 12,
                 exit_policy: cfg.exit_policy ?? "fixed_tp",
                 tp1_close_fraction: cfg.tp1_close_fraction ?? 0.5,
                 be_plus_offset_price: cfg.be_plus_offset_price ?? 1.0,
@@ -1454,6 +1457,10 @@ function ProfitProtectionSection({ cfg, setCfg }) {
     );
 }
 
+// #85 — pip → price for the $ label on the static spread cap (1 pip of spread on 1 unit of the instrument)
+const PIP_USD = { XAUUSD: 0.10, XAGUSD: 0.01, EURUSD: 0.0001, GBPUSD: 0.0001, USDJPY: 0.01, BTCUSD: 1.0, US30: 1.0, NAS100: 1.0, SPX500: 0.1, GER40: 1.0 };
+const PIP_UNIT = { XAUUSD: "oz", XAGUSD: "oz", BTCUSD: "BTC", US30: "contract", NAS100: "contract", SPX500: "contract", GER40: "contract" };
+
 function TradingIntelligenceSection({ cfg, setCfg }) {
     const spreadMap = cfg.max_spread_pips || {};
     const setSpread = (sym, val) => {
@@ -1497,10 +1504,44 @@ function TradingIntelligenceSection({ cfg, setCfg }) {
                                             className="flex-1 bg-transparent px-3 py-2 text-sm font-mono outline-none" />
                                         <span className="font-mono text-[10px] text-[#52525B] tracking-widest px-2">PIPS</span>
                                     </div>
+                                    {/* v1.60.63 #85 — the static cap in $ too: XAUUSD 50 pips = $5.00, wider than any $2–4.50 target */}
+                                    {spreadMap[sym] > 0 && PIP_USD[sym] && (
+                                        <div className="font-mono text-[10px] text-[#71717A] mt-1" data-testid={`spread-cap-usd-${sym}`}>
+                                            {spreadMap[sym]} pips = ${(spreadMap[sym] * PIP_USD[sym]).toFixed(2)} per {PIP_UNIT[sym] || "lot"}
+                                        </div>
+                                    )}
                                 </div>
                             ))}
                         </div>
                     )}
+                    {/* v1.60.63 #85 — smart spread gate (per account, per symbol, per UTC hour). SHADOW by default. */}
+                    <div className="mt-4 border border-[#F5C542]/30 p-3" data-testid="spread-gate-section">
+                        <div className="font-mono text-[10px] text-[#F5C542] tracking-widest mb-2">SMART SPREAD GATE (#85) · per broker · per symbol · per UTC hour</div>
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">MODE</label>
+                                <select value={cfg.spread_gate_mode || "shadow"} onChange={(e) => setCfg({ ...cfg, spread_gate_mode: e.target.value })}
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] px-3 py-2 text-sm font-mono" data-testid="spread-gate-mode-select">
+                                    <option value="off">OFF</option>
+                                    <option value="shadow">SHADOW — stamp &amp; count, never blocks (default)</option>
+                                    <option value="enforce">ENFORCE — skip with pulse</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">SPREAD &gt; MULT × HOUR MEDIAN</label>
+                                <input type="number" step="0.1" min="1" value={cfg.spread_gate_mult ?? 1.5} onChange={(e) => setCfg({ ...cfg, spread_gate_mult: parseFloat(e.target.value) || 1.5 })}
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] px-3 py-2 text-sm font-mono" data-testid="spread-gate-mult-input" />
+                            </div>
+                            <div>
+                                <label className="font-mono text-[10px] text-[#52525B] tracking-widest block mb-1.5">MAX ROUND-TRIP COST (% OF TP)</label>
+                                <input type="number" step="1" min="1" max="100" value={cfg.max_cost_pct_of_tp ?? 12} onChange={(e) => setCfg({ ...cfg, max_cost_pct_of_tp: parseFloat(e.target.value) || 12 })}
+                                    className="w-full bg-[#050505] border border-[#1F1F1F] px-3 py-2 text-sm font-mono" data-testid="spread-gate-cost-pct-input" />
+                            </div>
+                        </div>
+                        <div className="font-mono text-[10px] text-[#52525B] mt-2">
+                            Blocks when the live spread exceeds {cfg.spread_gate_mult ?? 1.5}× this account's median spread for the current UTC hour (needs 30 samples from the last 14 days, else the static cap above), or when spread + median entry slippage + commission exceeds {cfg.max_cost_pct_of_tp ?? 12}% of the planned TP. In SHADOW the verdict is only stamped on the signal — see Bot Health → Trading costs for the scoreboard before enforcing.
+                        </div>
+                    </div>
                 </div>
 
                 {/* Slippage Veto */}

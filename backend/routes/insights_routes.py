@@ -194,6 +194,11 @@ async def weekly_digest(days: int = 7, include_ai: bool = False,
         "suggested_action": _suggest_action(stats),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+    try:                                        # v1.60.63 #85 — trading costs section (per broker + shadow gate scoreboard)
+        from trade_costs import report as _costs_report
+        payload["trading_costs"] = await _costs_report(db, user["id"], days)
+    except Exception as _e:  # noqa: BLE001
+        payload["trading_costs"] = {"error": str(_e)[:200]}
     # iter-69 · Optional LLM-written reflection (Claude, `analysis` tier).
     # Frontend opts in via ?include_ai=true to avoid a slow LLM call on
     # every dashboard refresh.

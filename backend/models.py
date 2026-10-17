@@ -222,6 +222,9 @@ class BotConfigUpdate(BaseModel):
     gold_bias_block_counter_enabled: bool = False
     trend_day_pullback_enabled: bool = False          # #75 — enforce the EMA20/VWAP pullback on trend days (shadow when OFF)
     ack_loosen_close_enabled: bool = False            # #84 — FULL_CLOSE when the broker stop stays > 0.25 R wider than requested after the correction
+    spread_gate_mode: str = "shadow"                  # #85 — "off" | "shadow" (stamp + count, never blocks) | "enforce"
+    spread_gate_mult: float = 1.5                     # #85 — block when spread > mult × this account's median spread for the UTC hour
+    max_cost_pct_of_tp: float = 12.0                  # #85 — block when expected round-trip cost > this % of the planned TP distance
     # v1.60.60 #72 — exit policy for hf_scalp / hf_scalp_fast / breakout_m15 / gold_trend_pulse (default = today's fixed TP)
     exit_policy: Literal["fixed_tp", "tp1_bank_runner"] = "fixed_tp"
     tp1_close_fraction: float = Field(default=0.5, ge=0.1, le=0.9)
