@@ -91,7 +91,8 @@ def test_spread_history_samples_per_hour_and_median_fallback_below_30():
         _run(TC.record_spread_samples(db, "a1", {"XAUUSD.fx": 2.0 + i * 0.1, "EURUSD": 0.6}, now + timedelta(minutes=i)))
     assert len(db.spread_history.rows) == 2
     gold = next(r for r in db.spread_history.rows if r["symbol"] == "XAUUSD")
-    assert gold["day"] == "2026-10-20" and len(gold["hours"]["9"]) == 12 and gold["expires_at"] > now + timedelta(days=14)
+    # v1.60.64 #86 — one sample per UTC minute under minutes.<hour>.<mm> (was a pushed list of the newest 60)
+    assert gold["day"] == "2026-10-20" and len(gold["minutes"]["9"]) == 12 and gold["expires_at"] > now + timedelta(days=14)
     st = TC.hour_stats_from_docs([gold], 9)
     assert st["n"] == 12 and st["median"] == 2.55 and st["p90"] == 3.0
     assert TC.hour_stats_from_docs([gold], 10) == {"n": 0, "median": None, "p90": None}

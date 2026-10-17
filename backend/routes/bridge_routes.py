@@ -444,16 +444,21 @@ async def heartbeat(payload: BridgeHeartbeat):
             except Exception:
                 continue
         if clean:
+            # v1.60.64 #86 — EA 1.67 keys spreads by the BROKER name (GOLD#, XAUUSD+, XAUUSD.crp); add the base key
+            # (XAUUSD) so every current_spreads[<base>] reader finds it. Samplers get one value per base symbol.
+            from entry_costs import normalize_spread_keys, spreads_by_base
+            per_base = spreads_by_base(clean)
+            clean = normalize_spread_keys(clean)
             set_doc["current_spreads"] = clean
             set_doc["spreads_updated_at"] = now_iso
             try:
                 from execution_timing import record_spread
-                record_spread(str(acc["_id"]), clean)
+                record_spread(str(acc["_id"]), per_base)
             except Exception as _sw:  # noqa: BLE001
                 record_swallow("bridge", "heartbeat", _sw)
             try:                                              # v1.60.63 #85 — hour-of-day spread history (14 d, TTL)
                 from trade_costs import record_spread_samples
-                await record_spread_samples(db, str(acc["_id"]), clean)
+                await record_spread_samples(db, str(acc["_id"]), per_base)
             except Exception as _sw:  # noqa: BLE001
                 record_swallow("bridge", "heartbeat_spread_history", _sw)
     # EA v1.48+ — persist precise broker stop constraints per BASE symbol

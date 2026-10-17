@@ -34,12 +34,13 @@ def _body(name: str) -> str:
 
 
 def test_ea_version_is_current_and_structure_ok():
-    # v1.60.61 #81 — the shipped EA is 1.66 (1.65 + history backfill); the 1.65 scope guards below still hold
-    assert '#property version   "1.66"' in SRC and '#define EA_CLIENT_VERSION "1.66"' in SRC
+    # v1.60.61 #81 — 1.66 = 1.65 + history backfill; v1.60.64 #86 — 1.67 = 1.66 + resolved heartbeat spreads.
+    # The 1.65 scope guards below still hold.
+    assert '#property version   "1.67"' in SRC and '#define EA_CLIENT_VERSION "1.67"' in SRC
     for fe in ("pages/Accounts.jsx", "components/EaVersionStrip.jsx"):
-        assert 'LATEST_EA_VERSION = "1.66"' in open(os.path.join(ROOT, "..", "frontend", "src", fe), encoding="utf-8").read()
+        assert 'LATEST_EA_VERSION = "1.67"' in open(os.path.join(ROOT, "..", "frontend", "src", fe), encoding="utf-8").read()
     from ea_capabilities import latest_ea_version
-    assert latest_ea_version() == "1.66"
+    assert latest_ea_version() == "1.67"
 
 
 @pytest.mark.parametrize("name,digest", sorted(FROZEN_1_64.items()))

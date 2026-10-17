@@ -125,7 +125,7 @@ def test_n110_8_self_check_ageing_and_default_fallback():
     fn = mq5[mq5.index("string ResolveServerUrl()"):mq5.index("int OnInit()")]
     assert "if (fh == INVALID_HANDLE) return input_trim;" not in fn
     assert fn.count("return SERVER_URL_DEFAULT;") >= 3                         # no file / unreadable / non-https
-    assert '"1.66"' in mq5 and '#define EA_CLIENT_VERSION "1.66"' in mq5
+    assert '"1.67"' in mq5 and '#define EA_CLIENT_VERSION "1.67"' in mq5
 
 
 # ── N110-9 ────────────────────────────────────────────────────────────────────────────────────────

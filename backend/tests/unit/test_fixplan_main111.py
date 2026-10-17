@@ -156,7 +156,7 @@ def test_n111_5_spike_timestamp_pattern_and_backup_order():
 # ── N111-6 ────────────────────────────────────────────────────────────────────────────────────────
 def test_n111_6_latest_version_is_derived(monkeypatch, tmp_path):
     import ea_capabilities as ec
-    assert ec.latest_ea_version() == "1.66"
+    assert ec.latest_ea_version() == "1.67"
     assert '"ea_latest_version": latest_ea_version()' in _read("backend", "routes", "setup_routes.py")
     assert 'LATEST_EA = "' not in _read("backend", "routes", "bot_routes.py")
     assert 'LATEST_EA = "' not in _read("backend", "routes", "diagnostic_routes.py")

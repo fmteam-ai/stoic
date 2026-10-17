@@ -96,6 +96,29 @@ async def _check_connectivity(db, user_id: str) -> dict:
         else:
             checks.append(_mk("EA heartbeat fresh (<5min)", "pass",
                               f"{fresh}/{len(accs)} accounts heartbeating"))
+        # v1.60.64 #86 — the EA must report the spread of every TRADED symbol (cost ledger, spread gate, EV cost).
+        # Before EA 1.67 a broker-renamed gold symbol (GOLD#, XAUUSD+, XAUUSD.crp) silently reported none.
+        try:
+            from ea_capabilities import capabilities_for
+            from entry_costs import spread_coverage
+            cfgs = await db.bot_configs.find({"user_id": user_id}, {"account_id": 1, "symbols": 1}).to_list(length=20)
+            gaps = spread_coverage(accs, cfgs, now)
+            if gaps:
+                parts = []
+                old_ea = False
+                for g in gaps:
+                    why = "no spread update for > 10 min" if g["stale"] else "no spread reported"
+                    if "spreads_resolved_v1" not in capabilities_for(g.get("ea_version")):
+                        old_ea = True
+                        why += f" (EA {g.get('ea_version') or '?'} — update to {LATEST_EA})"
+                    parts.append(f"{g['label']}: {', '.join(g['missing'])} — {why}")
+                checks.append(_mk("Spread reported for traded symbols", "warn", "; ".join(parts),
+                                  fix_label=(f"Update the EA to {LATEST_EA}" if old_ea else "Restart MT5 + reattach STOIC EA")))
+            else:
+                checks.append(_mk("Spread reported for traded symbols", "pass",
+                                  "Every traded symbol reports its spread (or its market is closed)"))
+        except Exception as _spe:  # noqa: BLE001
+            checks.append(_mk("Spread reported for traded symbols", "warn", f"could not check spreads: {_spe}"))
     return {"id": "connectivity", "title": "Connectivity (MT5 + Broker)",
             "checks": checks, "status": _section_status(checks)}
 

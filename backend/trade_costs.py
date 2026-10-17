@@ -16,7 +16,7 @@ from pip_utils import base_symbol, pip_size, pip_value_usd_per_lot, price_to_pip
 
 HOUR_MIN_SAMPLES = 30
 HISTORY_DAYS = 14
-SAMPLES_PER_HOUR_PER_DAY = 60
+SAMPLES_PER_HOUR_PER_DAY = 60       # one per UTC minute (v1.60.64 #86)
 GATE_MODES = ("off", "shadow", "enforce")
 DEFAULT_MODE, DEFAULT_MULT, DEFAULT_MAX_COST_PCT = "shadow", 1.5, 12.0
 SESSIONS = (("asia", 0, 7), ("london", 7, 13), ("ny", 13, 21), ("late", 21, 24))
@@ -94,29 +94,42 @@ async def ensure_indexes(db) -> None:
 
 
 async def record_spread_samples(db, account_id: str, spreads: dict | None, now: datetime | None = None) -> int:
-    """Heartbeat hook — one sample per symbol into the (account, symbol, day) doc under its UTC hour; ≤ 60 per hour."""
+    """Heartbeat hook — at most ONE sample per account+symbol per UTC minute, stored under minutes.<hour>.<mm> of the
+    (account, symbol, day) doc, so the ≤ 60 samples of an hour cover the whole hour.
+    v1.60.64 #86: was `$push … $slice -60` per heartbeat (≈ every 5 s), which kept only the LAST ~5 minutes of each
+    hour. Broker names are folded to their base (GOLD#, XAUUSD+ and XAUUSD.crp → XAUUSD): one sample per base."""
     if not spreads:
         return 0
     now = now or datetime.now(timezone.utc)
-    hour = str(now.astimezone(timezone.utc).hour)
-    n = 0
+    utc = now.astimezone(timezone.utc)
+    per_base: dict = {}
     for sym, sp in spreads.items():
         v = _f(sp)
-        if v is None or v < 0:
+        b = base_symbol(sym)
+        if v is None or v < 0 or not b or b in per_base:
             continue
+        per_base[b] = v
+    for b, v in per_base.items():
         await db.spread_history.update_one(
-            {"account_id": str(account_id), "symbol": base_symbol(sym), "day": _day(now)},
-            {"$push": {f"hours.{hour}": {"$each": [round(v, 2)], "$slice": -SAMPLES_PER_HOUR_PER_DAY}},
+            {"account_id": str(account_id), "symbol": b, "day": _day(now)},
+            {"$set": {f"minutes.{utc.hour}.{utc.minute:02d}": round(v, 2)},
              "$setOnInsert": {"expires_at": now + timedelta(days=HISTORY_DAYS + 1)}},
             upsert=True)
-        n += 1
-    return n
+    return len(per_base)
+
+
+def _hour_values(doc: dict, hour: int) -> list:
+    """Samples of one UTC hour: the per-minute map (v1.60.64) plus the legacy pushed list (v1.60.63 docs)."""
+    h = str(int(hour))
+    vals = [float(x) for x in ((doc.get("hours") or {}).get(h) or [])]
+    vals.extend(float(x) for x in ((doc.get("minutes") or {}).get(h) or {}).values())
+    return vals
 
 
 def hour_stats_from_docs(docs: list, hour: int) -> dict:
     vals = []
     for d in docs:
-        vals.extend(float(x) for x in ((d.get("hours") or {}).get(str(int(hour))) or []))
+        vals.extend(_hour_values(d, hour))
     if not vals:
         return {"n": 0, "median": None, "p90": None}
     s = sorted(vals)
@@ -127,7 +140,7 @@ async def hour_stats(db, account_id: str, symbol: str, hour: int, now: datetime 
     now = now or datetime.now(timezone.utc)
     since = _day(now - timedelta(days=HISTORY_DAYS))
     docs = await db.spread_history.find({"account_id": str(account_id), "symbol": base_symbol(symbol), "day": {"$gte": since}},
-                                        {f"hours.{int(hour)}": 1}).to_list(HISTORY_DAYS + 1)
+                                        {f"hours.{int(hour)}": 1, f"minutes.{int(hour)}": 1}).to_list(HISTORY_DAYS + 1)
     return hour_stats_from_docs(docs, hour)
 
 
@@ -140,7 +153,7 @@ async def session_spreads(db, account_id: str, symbol: str, now: datetime | None
         vals = []
         for d in docs:
             for h in range(a, b):
-                vals.extend(float(x) for x in ((d.get("hours") or {}).get(str(h)) or []))
+                vals.extend(_hour_values(d, h))
         out[name] = {"n": len(vals), "avg": round(sum(vals) / len(vals), 2) if vals else None,
                      "median": round(statistics.median(vals), 2) if vals else None}
     return out

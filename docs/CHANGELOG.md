@@ -2,6 +2,9 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.64 — #86 gold spread on broker-renamed symbols (EA 1.67) + per-minute spread history
+- EA 1.67 resolves `TrackedSymbols` to the broker name (`XAUUSD+`, `XAUUSD.crp`, `GOLD#`, `XAUUSDm`) and always adds the chart symbol; pip size by prefix like `pip_utils.base_symbol` (before: 3 of 4 accounts sent NO gold spread). Heartbeat adds the base key (`GOLD#` → `XAUUSD`); spread history keeps one sample per UTC minute (was the newest 60 = last ~5 min of each hour); Bot Health "Spread reported for traded symbols". No order/exit/config change; spread gate stays shadow. Docs: `docs/RELEASE_NOTES_v1.60.64.md`, `docs/EA_1_67_RELEASE.md`.
+
 ## v1.60.63 — #85 trade cost ledger + smart spread gate (SHADOW default; no order/exit change in shadow)
 - Exit slippage (signed vs SL/TP live at close) + `cost_summary` (pips/$/R vs original stop/% of original TP) stamped on every broker close; heartbeat spread history per account+symbol+UTC hour (14 d TTL); Bot Health "Trading costs · spread gate" card + `GET /api/diagnostic/trade-costs` + digest section. Gate: `spread_gate_mode` shadow|off|enforce, `spread_gate_mult` 1.5, `max_cost_pct_of_tp` 12 — spread > mult × hour median (n ≥ 30, else static cap) or expected cost > % of TP; shadow stamps + counts (scoreboard), enforce skips with pulse. Static cap shown in $ too. Docs: `docs/RELEASE_NOTES_v1.60.63.md`.
 
