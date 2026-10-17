@@ -26,9 +26,16 @@ Capability flags are derived from the heartbeat `ea_version` (`backend/ea_capabi
 ## Release path (signed EX5 → candidate → canary → soak → promote)
 
 1. **Compile + sign** — the `ea-release` workflow runs on the merge to `main` (MQ5 path trigger) or Actions → `ea-release` →
-   *Run workflow*. It records `release/ea_release.json` (1.66, `previous` = the signed 1.65) and signs it. CI gates
-   `scripts/check_ea_structure.py` (version 1.66, balanced braces, frontend constants in sync) and
-   `scripts/check_ea_fleet_compat.py` (the record must still accept the 1.65 EX5 the fleet runs) must be green.
+   *Run workflow*. **No human capture:** `docs/RELEASE_HASHES.json#ea`, `release/ea_release.json` and the EX5 are written
+   only by the bot (protected-paths, v1.60.47). On the PR branch the MQ5 version is simply ahead of the recorded 1.65:
+   `check_release_hash_drift.py` prints *pending re-release* (WARN) and `verify_ea_release.py --check` fails closed on the
+   version mismatch (expected until the bot commit — `test_3_gate_runs_in_an_empty_shell_environment` asserts exactly that).
+   On merge the bot's `verify_ea_release.py --sign` **adopts the forward bump**: it captures the new MQ5 hash, records
+   1.66 and carries the signed 1.65 as `previous` (a changed MQ5 under the *same* version is still refused). It commits
+   `release/ea_release.json`, `docs/RELEASE_HASHES.json`, the EX5 back to `main`. **Tag v1.60.61 only after that bot
+   commit** — the server fails closed (`EA_RELEASE_HASH_UNPINNED` for LIVE-attested accounts) while the shipped MQ5 version
+   has no signed record. CI gates `scripts/check_ea_structure.py` (version 1.66, balanced braces, frontend constants in
+   sync) and `scripts/check_ea_fleet_compat.py` (the record must still accept the 1.65 EX5 the fleet runs) must be green.
 2. **Candidate channel** — the new EX5 lands in `candidate`; `stable` keeps **1.65** for instant rollback.
 3. **Canary** — RoboForex Demo first (Admin → EA Release Channel → canary agents). Install 1.66 (guide below). Soak **24 h**:
    heartbeats show `1.66`, Experts tab logs `STOIC history backfill: sent 300 H4 bars for XAUUSD…` within one poll of the

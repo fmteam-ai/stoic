@@ -72,3 +72,12 @@ win, M15 fills newest, ascending, completed only, M15-only ≈ 50 < 200); `engin
 not with a 4-day-old doc); Bot Health row states; Bot Config warning + docs. Unit lane green; ruff CI selection clean;
 local-import-shadow OK; `check_ea_structure.py` OK (1.66, balanced, constants in sync); pip-audit → no known
 vulnerabilities; protected-paths OK.
+
+## EA release process (fixes the first CI run of this PR)
+Since v1.60.47 only the ea-release bot may write `docs/RELEASE_HASHES.json#ea` / `release/ea_release.json` / the EX5, yet
+`check_release_hash_drift.py` and `verify_ea_release.py record()` still demanded a human capture for any MQ5 change.
+Now a MQ5 whose `#property version` moved **forward** of the recorded release is the *pending re-release*: the drift guard
+WARNs (drift under the same version still FAILS), `verify_ea_release.py record()` — run by the bot — captures the new MQ5
+hash itself and carries the signed prior record as `previous` (same-version drift refused), and the empty-shell gate test
+expects `--check` to fail closed on the version mismatch until the bot commit lands. **Sequence:** merge → `ea-release`
+bot commit on `main` (signed 1.66, `previous` = 1.65) → tag `v1.60.61`.

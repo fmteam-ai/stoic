@@ -35,7 +35,19 @@ payload cap / backfill stamp / poll `candles_request`; #80 follow-up `new_tp`), 
 
 ## CI
 Verified locally with the CI commands: `ruff check backend --select E9,F63,F7,F82,F823` ✓ · `check_local_import_shadows.py` ✓ ·
-`check_ea_structure.py` ✓ (1.66, balanced, constants in sync) · `pip-audit -r requirements.txt --no-deps --strict` → no known
-vulnerabilities (**security-scan**) · requirements.txt unchanged since the clean-venv-verified fix (**container-build**) ·
-protected-paths ✓ · unit lane ✓. After merge: Actions → `ea-release` runs on the MQ5 change (compile + sign 1.66, `previous`
-= signed 1.65) — the fleet-compat gate must still accept the 1.65 EX5 the terminals run.
+`check_ea_structure.py` ✓ (1.66, balanced, constants in sync) · `check_release_hash_drift.py` → *WARN pending re-release*,
+exit 0 · `pip-audit -r requirements.txt --no-deps --strict` → no known vulnerabilities (**security-scan**) · requirements.txt
+unchanged since the clean-venv-verified fix (**container-build**) · protected-paths ✓ · unit lane ✓.
+
+**EA release process fix (this PR's first CI run failed on it):** since v1.60.47 a human may not write
+`docs/RELEASE_HASHES.json#ea`, yet `check_release_hash_drift.py` and `verify_ea_release.py record()` demanded a human
+capture for any MQ5 change — contradictory. Now: the drift guard treats a MQ5 whose version moved **forward** of the recorded
+one as the pending re-release (WARN; drift under the same version still FAILS), `verify_ea_release.py record()` (run by the
+bot in `ea-release`) adopts the forward bump (captures the new MQ5 hash, carries the signed 1.65 as `previous`; same-version
+drift still refused), and `test_3_gate_runs_in_an_empty_shell_environment` expects `--check` to fail closed on the version
+mismatch in that state. Tests: `test_record_adopts_a_forward_version_bump_but_refuses_drift_under_the_same_version`,
+`test_drift_guard_warns_on_a_pending_forward_bump_and_fails_on_same_version_drift`.
+
+**After merge:** `ea-release` runs on the MQ5 change → bot commit on `main` (signed 1.66 record, `previous` = 1.65, EX5) →
+**then** tag `v1.60.61`. Until that commit the server fails closed for LIVE-attested accounts (`EA_RELEASE_HASH_UNPINNED`);
+DEMO-attested terminals are unaffected. The fleet-compat gate must still accept the 1.65 EX5 the terminals run.

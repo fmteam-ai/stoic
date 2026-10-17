@@ -4,9 +4,11 @@
     `candles_request`; the EA answers with CopyRates(H4) to /api/bridge/candles; H4 payloads accept 400 bars on the broker
     day grid within a 150-day window; (b) H4_MIN_BARS stays 200 and the bias is NONE with a clear reason until warm;
 (c) Bot Health "GTP: H4 bars n/200"; (d) Bot Config warns that GTP replaces the preset engine for XAUUSD."""
+import json
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
 
 import pytest
 
@@ -237,3 +239,45 @@ def test_bot_config_warns_that_gtp_replaces_the_preset_engine_for_xauusd():
     assert "INSTEAD of\n    # the preset engine" in ai or "INSTEAD of" in ai     # the behaviour the warning describes
     notes = open(os.path.join(ROOT, "..", "docs", "RELEASE_NOTES_v1.60.61.md"), encoding="utf-8").read()
     assert "replaces" in notes and "HOLD" in notes and "h4_history_v1" in notes and "1.66" in notes
+
+
+# ── EA release process: a human may not capture `#ea` (protected-paths) → the bot adopts a FORWARD version bump ──
+from tests.unit.test_v1_60_41_ea_previous_chain import _args, _sign_stable_164, chain  # noqa: E402,F401,F811
+
+
+def test_record_adopts_a_forward_version_bump_but_refuses_drift_under_the_same_version(chain):  # noqa: F811
+    c = chain
+    _sign_stable_164(c)                                           # the fleet's signed stable (same MQ5 hash, version "1.64")
+    doc = json.load(open(c.hashes))
+    doc["ea"]["mq5_sha256"] = "0" * 64                            # the recorded compile was an OLDER source
+    json.dump(doc, open(c.hashes, "w"))
+    ex5 = c.tmp / "new.ex5"; ex5.write_bytes(b"EX5-1.66")
+    with patch.object(c.ver, "mq5_property_version", lambda path=None: "1.64"):      # same version, different MQ5 → refused
+        with pytest.raises(SystemExit) as e:
+            c.ver.record(_args(c, ex5))
+        assert "same version" in str(e.value) and "DIFFERENT MQ5" in str(e.value)
+    assert c.ver.record(_args(c, ex5)) == 0                       # real MQ5 version (1.66) > 1.64 → adopted
+    rec = json.load(open(c.rel))
+    assert rec["version"] == c.ver.mq5_property_version() and rec["mq5_sha256"] == c.ver.sha256_source(c.ver.MQ5)
+    assert rec["previous"]["version"] == "1.64" and rec["previous"]["signature"]["sig_hex"]     # fleet stays admitted
+
+
+def test_drift_guard_warns_on_a_pending_forward_bump_and_fails_on_same_version_drift(tmp_path, capsys):
+    sys.path.insert(0, os.path.join(ROOT, "..", "scripts"))
+    import check_release_hash_drift as D
+    mq5 = tmp_path / "ea.mq5"; mq5.write_text('#property version   "1.66"\nint x;\n')
+    hashes = tmp_path / "RELEASE_HASHES.json"
+    json.dump({"ea": {"version": "1.65", "mq5_sha256": "f" * 64, "ex5_sha256": "e" * 64}}, open(hashes, "w"))
+    assert D.check(str(mq5), str(hashes), str(tmp_path / "none.json")) == []
+    assert "pending re-release" in capsys.readouterr().out
+    json.dump({"ea": {"version": "1.66", "mq5_sha256": "f" * 64, "ex5_sha256": "e" * 64}}, open(hashes, "w"))
+    fails = D.check(str(mq5), str(hashes), str(tmp_path / "none.json"))
+    assert len(fails) == 1 and "drifted" in fails[0]
+    json.dump({"ea": {"version": "1.67", "mq5_sha256": "f" * 64, "ex5_sha256": "e" * 64}}, open(hashes, "w"))
+    fails = D.check(str(mq5), str(hashes), str(tmp_path / "none.json"))
+    assert any("drifted" in f for f in fails) and any("recorded EA version 1.67" in f for f in fails)
+    ok = {"ea": {"version": "1.66", "mq5_sha256": D.sha256_file(str(mq5)), "ex5_sha256": None}}
+    json.dump(ok, open(hashes, "w"))
+    assert D.check(str(mq5), str(hashes), str(tmp_path / "none.json")) == []
+    runbook = open(os.path.join(ROOT, "..", "docs", "EA_1_66_RELEASE.md"), encoding="utf-8").read()
+    assert "capture" in runbook and "bot" in runbook

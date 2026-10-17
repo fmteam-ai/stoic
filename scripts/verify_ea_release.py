@@ -180,10 +180,17 @@ def record(args):
     ea = doc.get("ea") or {}
     mq5_now = sha256_source(MQ5)
     if ea.get("mq5_sha256") and ea["mq5_sha256"] != mq5_now:
-        raise SystemExit(
-            "FAIL: backend/static/EmergentTradingBridge.mq5 does not match the "
-            "recorded RC source hash — you compiled a DIFFERENT MQ5.\n"
-            f"  recorded: {ea['mq5_sha256']}\n  on disk:  {mq5_now}")
+        # v1.60.61 (#81 release) — a human may no longer capture `#ea` (protected-paths, v1.60.47): the bot captures
+        # here. A MQ5 whose #property version moved FORWARD is the pending re-release; the signed prior record becomes
+        # `previous` via resolve_previous(). A changed MQ5 under the SAME (or an older) version is still refused.
+        if _version_tuple(mq5_property_version()) > _version_tuple(ea.get("version")):
+            print(f"OK: MQ5 version bumped {ea.get('version')} → {mq5_property_version()} — capturing the new source "
+                  f"({mq5_now[:16]}…); the recorded release {ea.get('version')} is carried as `previous`")
+        else:
+            raise SystemExit(
+                "FAIL: backend/static/EmergentTradingBridge.mq5 does not match the "
+                "recorded RC source hash — you compiled a DIFFERENT MQ5 under the same version.\n"
+                f"  recorded: {ea['mq5_sha256']}\n  on disk:  {mq5_now}")
     tool = toolchain_from_log(args.compile_log)
     if args.metaeditor_version and tool["metaeditor_version"] and args.metaeditor_version != tool["metaeditor_version"]:
         raise SystemExit(f"FAIL: --metaeditor-version '{args.metaeditor_version}' != compile log "

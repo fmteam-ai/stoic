@@ -162,7 +162,14 @@ def test_3_gate_runs_in_an_empty_shell_environment(tmp_path):
     assert "no release public key" not in out and "revoked-or-unknown" not in out and "does NOT verify" not in out, out
     ea = (json.load(open(os.path.join(ROOT, "docs", "RELEASE_HASHES.json"))).get("ea") or {})
     if ea.get("ex5_sha256") and (ea.get("signature") or {}).get("key_id") == manifest["key_id"]:
-        assert r.returncode == 0 and "signature verified" in out, out       # a tagged checkout: the record verifies
+        sys.path.insert(0, os.path.join(ROOT, "scripts"))
+        from check_release_hash_drift import _version_tuple, mq5_version
+        if _version_tuple(mq5_version()) > _version_tuple(ea.get("version")):
+            # v1.60.61 — pending EA re-release (MQ5 version bumped on this branch; the ea-release bot records + signs
+            # it on merge): the gate must fail closed on the version mismatch, with a readable message, no traceback.
+            assert r.returncode != 0 and "recorded EA version" in out and "Traceback" not in out, out
+        else:
+            assert r.returncode == 0 and "signature verified" in out, out       # a tagged checkout: the record verifies
     # and WITHOUT the file nothing is resolved — the gate stays fail-closed, never a traceback
     r2 = subprocess.run(["env", "-i", f"PATH={os.environ.get('PATH', '/usr/bin:/bin')}", f"STOIC_BACKEND_ENV_FILE={tmp_path / 'none'}",
                          sys.executable, os.path.join(ROOT, "scripts", "verify_ea_release.py"), "--check"], capture_output=True, text=True, timeout=60)
