@@ -297,9 +297,15 @@
 //|         XAUUSD H4 (gold_trend_pulse EMA50 warm-up). Capability   |
 //|         h4_history_v1 — 1.65 terminals never receive the key.    |
 //|         Order send / close / fencing / heartbeat unchanged.       |
+//| v1.67 — #86 heartbeat spreads for broker-renamed symbols: the   |
+//|         TrackedSymbols entries are resolved to the broker name  |
+//|         (XAUUSD+, XAUUSD.crp, GOLD#) and the chart symbol is    |
+//|         always included; pip size by base (XAU/GOLD 0.10, ...). |
+//|         Before 1.67 a suffixed gold symbol sent NO spread.       |
+//|         Order send / close / fencing / heartbeat unchanged.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.66"
+#property version   "1.67"
 #property strict
 // v1.65 — (a) MODIFY_SL may carry new_tp (broker TP follows a fill re-base);
 //         the ack reports confirmed_position_tp. Servers that never send
@@ -310,12 +316,14 @@
 //         fencing logic unchanged from 1.64.
 // v1.66 — server-requested history backfill (ParseCandlesRequest →
 //         SendHistoryCandlesFor). Nothing else changed from 1.65.
+// v1.67 — heartbeat spreads resolved to the broker symbol name (BuildSpreadsJson,
+//         ResolveSpreadSymbol, SymbolPipSize by base). Nothing else changed from 1.66.
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.66"
+#define EA_CLIENT_VERSION "1.67"
 
 input string ServerUrl              = "https://stoicaibot.com";  // auto-loaded from MQL5\Files\STOIC-Server.txt (installer) when left at default
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -374,6 +382,40 @@ string ResolveTickSymbol(string want) {
       }
    }
    return want;
+}
+
+// v1.67 — the broker's name for a base symbol, for the heartbeat spreads only. First the
+// v1.31 order-path resolver (ResolveBrokerSymbol: bare name + known suffix list), so the
+// spread is reported under the SAME name orders are sent to; then a prefix scan (strict before
+// relaxed, see SymbolHasBase) and the GOLD / SILVER alias. "" when the broker has none.
+// A scanned name that turns out to have no tick is removed from Market Watch again.
+string ResolveSpreadSymbol(string want) {
+   string r = ResolveBrokerSymbol(want);
+   if (StringLen(r) > 0) return r;
+   MqlTick probe;
+   int total = SymbolsTotal(false);
+   for (int pass = 0; pass < 4; pass++) {          // base strict, base relaxed, alias strict, alias relaxed
+      string base = want;
+      if (pass >= 2) {
+         if (want == "XAUUSD") base = "GOLD";
+         else if (want == "XAGUSD") base = "SILVER";
+         else break;
+      }
+      bool strict = (pass % 2 == 0);
+      string ubase = base;
+      StringToUpper(ubase);
+      for (int i = 0; i < total; i++) {
+         string s = SymbolName(i, false);
+         string us = s;
+         StringToUpper(us);
+         if (!SymbolHasBase(us, ubase, strict)) continue;
+         bool was_selected = (bool)SymbolInfoInteger(s, SYMBOL_SELECT);
+         if (!was_selected) SymbolSelect(s, true);
+         if (SymbolInfoTick(s, probe) && probe.bid > 0 && probe.ask > 0) return s;
+         if (!was_selected) SymbolSelect(s, false);
+      }
+   }
+   return "";
 }
 
 void TickStreamWarn(string msg) {
@@ -1277,14 +1319,35 @@ string HttpPost(string url, string body) {
    return answer;
 }
 
-// Pip size lookup (must mirror backend pip_utils.PIP_SIZE for XAU/BTC/JPY)
+// Pip size lookup (must mirror backend pip_utils: PIP_SIZE + SYMBOL_ALIASES, matched as a
+// PREFIX of the upper-cased broker name exactly like pip_utils.base_symbol).
+// v1.67 — XAUUSD+, XAUUSD.crp, XAUUSDm and GOLD# get the gold pip (0.10) instead of the FX
+// default (0.0001).
+bool SymbolStartsWith(string u, string base) { return StringFind(u, base) == 0; }
+
 double SymbolPipSize(string sym) {
-   if (sym == "XAUUSD") return 0.10;
-   if (sym == "XAGUSD") return 0.01;
-   if (sym == "BTCUSD") return 1.00;
-   if (sym == "ETHUSD") return 0.10;
-   if (StringFind(sym, "JPY") >= 0) return 0.01;
+   string u = sym;
+   StringToUpper(u);
+   if (SymbolStartsWith(u, "XAUUSD") || SymbolStartsWith(u, "GOLD")) return 0.10;
+   if (SymbolStartsWith(u, "XAGUSD") || SymbolStartsWith(u, "SILVER")) return 0.01;
+   if (SymbolStartsWith(u, "BTCUSD")) return 1.00;
+   if (SymbolStartsWith(u, "ETHUSD")) return 0.10;
+   if (SymbolStartsWith(u, "US30") || SymbolStartsWith(u, "NAS100") || SymbolStartsWith(u, "GER40")
+       || SymbolStartsWith(u, "UK100")) return 1.00;
+   if (SymbolStartsWith(u, "SPX500")) return 0.10;
+   if (StringFind(u, "JPY") >= 0) return 0.01;
    return 0.0001;
+}
+
+// v1.67 — broker-name match for ResolveSpreadSymbol. strict: the next character after the base
+// is not a letter or digit (XAUUSD+, XAUUSD.crp, GOLD#; never GOLDEUR); relaxed: not a digit
+// (XAUUSDm; never US300 for US30). Compared on upper-cased names.
+bool SymbolHasBase(string u, string base, bool strict) {
+   if (StringFind(u, base) != 0) return false;
+   if (StringLen(u) == StringLen(base)) return true;
+   ushort c = StringGetCharacter(u, StringLen(base));
+   if (c >= '0' && c <= '9') return false;
+   return !(strict && c >= 'A' && c <= 'Z');
 }
 
 // v1.28 — Broker-supported filling mode picker.
@@ -1342,29 +1405,49 @@ string ResolveBrokerSymbol(string base_symbol) {
    return "";  // signal "not found"
 }
 
-// Build {"XAUUSD":3.2,"BTCUSD":85.0} from the comma list, using current symbol spread
+// Build {"XAUUSD+":3.2,"BTCUSD":85.0} from the comma list, using current symbol spread.
+// v1.67 — each entry is resolved to the broker's symbol name (the server maps it back
+// to the base with pip_utils.base_symbol) and the chart symbol is always included.
+// Before 1.67 a renamed gold symbol (XAUUSD+, XAUUSD.crp, GOLD#) was skipped silently.
+string AppendSpread(string out, string sym, string &done) {
+   if (StringLen(sym) == 0 || StringFind(done, "|" + sym + "|") >= 0) return out;
+   if (StringFind(sym, "\"") >= 0 || StringFind(sym, "\\") >= 0 || StringFind(sym, "|") >= 0) return out;   // keep the JSON valid
+   MqlTick tick;
+   if (!SymbolInfoTick(sym, tick) || tick.ask <= 0 || tick.bid <= 0) return out;
+   double pip = SymbolPipSize(sym);
+   double spread_pips = (pip > 0) ? (tick.ask - tick.bid) / pip : 0.0;
+   if (StringLen(out) > 1) out += ",";
+   out += StringFormat("\"%s\":%.2f", sym, spread_pips);
+   done += sym + "|";
+   return out;
+}
+
+string   _spread_syms    = "";   // v1.67: resolved broker names, "|" separated
+datetime _spread_syms_at = 0;    // v1.67: re-resolved at most every 5 minutes
+
 string BuildSpreadsJson() {
-   string out = "{";
-   string list = TrackedSymbols;
-   bool first = true;
-   int start = 0;
-   for (int i = 0; i <= StringLen(list); i++) {
-      if (i == StringLen(list) || StringGetCharacter(list, i) == ',') {
-         string sym = StringSubstr(list, start, i - start);
-         StringTrimLeft(sym); StringTrimRight(sym);
-         if (StringLen(sym) > 0) {
-            MqlTick tick;
-            if (SymbolInfoTick(sym, tick) && tick.ask > 0 && tick.bid > 0) {
-               double pip = SymbolPipSize(sym);
-               double spread_pips = (pip > 0) ? (tick.ask - tick.bid) / pip : 0.0;
-               if (!first) out += ",";
-               out += StringFormat("\"%s\":%.2f", sym, spread_pips);
-               first = false;
-            }
+   if (StringLen(_spread_syms) == 0 || TimeCurrent() - _spread_syms_at > 300) {
+      string resolved = "|";
+      string list = TrackedSymbols;
+      int start = 0;
+      for (int i = 0; i <= StringLen(list); i++) {
+         if (i == StringLen(list) || StringGetCharacter(list, i) == ',') {
+            string sym = StringSubstr(list, start, i - start);
+            StringTrimLeft(sym); StringTrimRight(sym);
+            string b = (StringLen(sym) > 0) ? ResolveSpreadSymbol(sym) : "";
+            if (StringLen(b) > 0 && StringFind(resolved, "|" + b + "|") < 0) resolved += b + "|";
+            start = i + 1;
          }
-         start = i + 1;
       }
+      _spread_syms = resolved;
+      _spread_syms_at = TimeCurrent();
    }
+   string out = "{";
+   string done = "|";
+   string parts[];
+   int n = StringSplit(_spread_syms, '|', parts);
+   for (int k = 0; k < n; k++) out = AppendSpread(out, parts[k], done);
+   out = AppendSpread(out, _Symbol, done);
    out += "}";
    return out;
 }

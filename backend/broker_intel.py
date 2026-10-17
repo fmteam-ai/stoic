@@ -54,7 +54,8 @@ def spread_component(current_spreads: dict | None) -> dict:
         return {"score": None, "detail": "no live spread stream"}
     ratios = []
     worst = None
-    for sym, sp in current_spreads.items():
+    from entry_costs import spreads_by_base          # v1.60.64 #86 — GOLD# and its added XAUUSD key count once
+    for sym, sp in spreads_by_base(current_spreads).items():
         try:
             typ = _typical_spread_pips(sym)
             r = float(sp) / typ
