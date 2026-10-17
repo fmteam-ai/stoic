@@ -2,6 +2,9 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.62 — display fixes (no trading logic)
+- **#82** GTP card news line shows weekday + date when the event is not today ("FOMC Wed 28 Oct 18:00 UTC — protect at 17:45 …"). **#83** Exit Rule Scoreboard classifies real broker SL/TP fills (`broker_confirmed`, `…+external_close`) by exit price vs stop/target (15 % of stop distance, ≥ 3 pips; gap-through = stop) instead of only by `close_reason` prefix. **#84** broker stop looser than requested beyond stops_level+1 point → the ack stays adopted as truth, ONE fenced corrective MODIFY_SL (`ack_loosen_correction`, never a loosen); still loose → ops warning `stop_wider_than_planned` (extra risk in R, no retry); new flag `ack_loosen_close_enabled` (OFF) → fenced FULL_CLOSE when > 0.25 R. Docs: `docs/RELEASE_NOTES_v1.60.62.md`.
+
 ## v1.60.61 hotfix — EA release chain fails loudly (run 39030924128 pushed a bare 1.66 EX5)
 - `ea-release.yml` record step: `$ErrorActionPreference='Stop'` + `$PSNativeCommandUseErrorActionPreference=$true` + `$LASTEXITCODE` check after every call; `PYTHONUTF8`/`PYTHONIOENCODING=utf-8`; `verify_ea_release.py` ASCII-only prints + stdout `backslashreplace`; commit step runs `scripts/check_ea_commit_consistency.py --staged` (never an EX5 without its signed record). Record for 1.66 is produced by re-running `ea-release` (workflow_dispatch, main) after the merge; tag v1.60.61 only after `verify_ea_release.py --check` passes on main. Docs: `docs/PR_v1.60.61_hotfix.md`.
 

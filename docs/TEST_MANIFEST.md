@@ -6,12 +6,12 @@ fails when this file drifts from the tree.
 
 | class | meaning | runs in | count |
 |-------|---------|---------|-------|
-| unit | pure logic, no external I/O | every CI job | 1819 |
+| unit | pure logic, no external I/O | every CI job | 1830 |
 | integration | real MongoDB service container | CI `backend-integration` | 267 |
 | http-live | live API server + database | staging/soak (`scripts/run_full_suite.sh`) | 4176 |
 | ui-e2e | real browser via Playwright | CI `frontend-e2e` | 17 |
 
-**Total: 6279 tests across 680 files.**
+**Total: 6290 tests across 682 files.**
 
 | file | class | tests |
 |------|-------|-------|
@@ -693,5 +693,7 @@ fails when this file drifts from the tree.
 | `backend/tests/unit/test_v1_60_61_hotfix_ea_release_chain.py` | unit | 8 |
 | `backend/tests/unit/test_v1_60_61_review_80_tp1_bank_e2e.py` | unit | 5 |
 | `backend/tests/unit/test_v1_60_61_review_81_gtp_h4_history.py` | unit | 11 |
+| `backend/tests/unit/test_v1_60_62_display_fixes_82_83.py` | unit | 4 |
+| `backend/tests/unit/test_v1_60_62_review_84_ack_loosen.py` | unit | 7 |
 | `backend/tests/unit/test_verified_performance_deleted_accounts.py` | unit | 8 |
 | `backend/tests/unit/test_vps_agent_service.py` | unit | 9 |

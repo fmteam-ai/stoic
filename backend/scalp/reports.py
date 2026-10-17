@@ -4,7 +4,7 @@ Pure aggregation helpers over closed scalp-engine trades and scalp_decisions; no
 """
 from datetime import datetime, timedelta, timezone
 
-from pip_utils import pip_value_usd_per_lot, base_symbol
+from pip_utils import pip_size, pip_value_usd_per_lot, base_symbol
 from strategy_engines import SCALP_ENGINES
 
 _SCALP_FILTER = {"$or": [{"engine": {"$in": list(SCALP_ENGINES)}}, {"scope": {"$in": list(SCALP_ENGINES)}}]}
@@ -55,6 +55,48 @@ def classify_exit(trade: dict) -> dict:
     return {"rule": rule, "outcome": outcome, "pnl": round(pnl, 2), "risk": risk, "avoided_loss": avoided}
 
 
+def _f(v):
+    try:
+        return float(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def broker_exit_kind(trade: dict) -> str | None:
+    """v1.60.62 #83 — how a closed trade actually left the market: 'stop_loss' | 'take_profit' | None (neither / unknown).
+
+    Bot-side closes carry an explicit close_reason ('stop…', 'take_profit…'); real broker fills arrive as
+    'broker_confirmed' / 'broker_reconciled_estimated+external_close' / 'external_close' with no deal reason (the EA deal
+    payload has none), so those are classified by the exit price against the stop / target that was live at the close
+    (current level first, original as fallback) within a tolerance of 15 % of the stop distance, at least 3 pips —
+    broker stops fill a little past the level under slippage/spread."""
+    cr = str(trade.get("close_reason") or "")
+    if cr.startswith("stop"):
+        return "stop_loss"
+    if cr.startswith("take_profit"):
+        return "take_profit"
+    exit_px, entry = _f(trade.get("exit_price")), _f(trade.get("entry_price"))
+    if exit_px is None:
+        return None
+    sl = _f(trade.get("stop_loss")) or _f(trade.get("original_stop_loss"))
+    tp = _f(trade.get("take_profit")) or _f(trade.get("original_take_profit"))
+    pip = _f(trade.get("pip_size")) or pip_size(trade.get("symbol"))
+    sl_dist = abs(entry - (_f(trade.get("original_stop_loss")) or sl)) if entry is not None and (sl or _f(trade.get("original_stop_loss"))) else None
+    tol = max(0.15 * sl_dist if sl_dist else 0.0, 3 * pip)
+    d_sl = abs(exit_px - sl) if sl else None
+    d_tp = abs(exit_px - tp) if tp else None
+    if d_sl is not None and d_sl <= tol and (d_tp is None or d_sl <= d_tp):
+        return "stop_loss"
+    if d_tp is not None and d_tp <= tol:
+        return "take_profit"
+    # a broker stop that gapped THROUGH the level (exit beyond the stop in the losing direction) is still a stop fill
+    if sl and entry is not None:
+        losing = (exit_px < sl) if entry > sl else (exit_px > sl)
+        if losing and (tp is None or abs(exit_px - sl) < abs(exit_px - tp)):
+            return "stop_loss"
+    return None
+
+
 def summarise(trades: list[dict], days: int) -> dict:
     groups = {"breakeven_0_5r": {"trades": 0, "be_stop": 0, "target": 0, "pnl_usd": 0.0, "avoided_loss_usd": 0.0},
               "time_stop_90m": {"trades": 0, "pnl_usd": 0.0, "avoided_loss_usd": 0.0, "closed_negative": 0, "closed_positive": 0}}
@@ -76,10 +118,10 @@ def summarise(trades: list[dict], days: int) -> dict:
         else:
             unaffected["trades"] += 1
             unaffected["pnl_usd"] += c["pnl"]
-            cr = str(t.get("close_reason") or "")
-            if cr.startswith("stop"):
+            kind = broker_exit_kind(t)                      # v1.60.62 #83 — broker fills classified by exit price
+            if kind == "stop_loss":
                 unaffected["stop_loss"] += 1
-            elif cr.startswith("take_profit"):
+            elif kind == "take_profit":
                 unaffected["take_profit"] += 1
     for g in list(groups.values()) + [unaffected]:
         for k in ("pnl_usd", "avoided_loss_usd"):
@@ -105,7 +147,9 @@ async def exit_rule_scoreboard(db, user_id: str, days: int = 30) -> dict:
     q = {"user_id": user_id, "status": "closed", "closed_at": {"$gte": cutoff}, **_SCALP_FILTER}
     rows = await db.trades.find(q, {"pnl": 1, "risk_amount": 1, "lot_size": 1, "original_lot_size": 1, "sl_pips": 1,
                                     "symbol": 1, "close_reason": 1, "scalp_exit_rule": 1, "engine": 1, "scope": 1,
-                                    "tp1_bank": 1, "entry_price": 1, "action": 1, "pip_value_usd_per_lot": 1, "pip_size": 1}).to_list(5000)
+                                    "tp1_bank": 1, "entry_price": 1, "action": 1, "pip_value_usd_per_lot": 1, "pip_size": 1,
+                                    "exit_price": 1, "stop_loss": 1, "take_profit": 1, "original_stop_loss": 1,
+                                    "original_take_profit": 1}).to_list(5000)
     out = summarise(rows, days)
     out["tp1_bank_runner"] = tp1_bank_split(rows)          # v1.60.60 #72 — banked vs runner P&L, shown separately
     return out

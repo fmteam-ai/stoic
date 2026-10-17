@@ -249,11 +249,15 @@ def news_pre_action(direction: str, entry: float, sl_dist: float, price: float, 
     return {"action": "keep", "r_now": round(r_now, 2)}
 
 
-def news_plan_text(event: dict, kind: str, release_min: int = NEWS_RELEASE_MIN_DEFAULT) -> str:
+def news_plan_text(event: dict, kind: str, release_min: int = NEWS_RELEASE_MIN_DEFAULT, now: datetime | None = None) -> str:
+    """v1.60.62 #82 — the weekday + date is shown whenever the event is not today (UTC), so Saturday's card reads
+    "FOMC Wed 28 Oct 18:00 UTC — …" instead of looking like an event due in a few hours."""
     t = datetime.fromtimestamp(float(event["when_ts"]), tz=timezone.utc)
     pre = datetime.fromtimestamp(float(event["when_ts"]) - NEWS_PRE_MIN * 60, tz=timezone.utc)
     post = datetime.fromtimestamp(float(event["when_ts"]) + release_min * 60, tz=timezone.utc)
-    return f"{kind} {t:%H:%M} UTC — protect at {pre:%H:%M}, news trades from {post:%H:%M}"
+    today = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).date()
+    when = f"{t:%H:%M}" if t.date() == today else f"{t:%a} {t.day} {t:%b} {t:%H:%M}"
+    return f"{kind} {when} UTC — protect at {pre:%H:%M}, news trades from {post:%H:%M}"
 
 
 def next_news_event(events: list, now: datetime, event_list: list | None = None, release_min: int = NEWS_RELEASE_MIN_DEFAULT) -> dict | None:
@@ -271,4 +275,4 @@ def next_news_event(events: list, now: datetime, event_list: list | None = None,
     ph = news_phase([e], now, event_list, release_min)
     return {"kind": kind, "title": e.get("title"), "time_utc": datetime.fromtimestamp(t, tz=timezone.utc).isoformat(),
             "forecast": e.get("forecast"), "previous": e.get("previous"), "actual": e.get("actual") or None,
-            "phase": ph["phase"] if ph else None, "plan": news_plan_text(e, kind, release_min)}
+            "phase": ph["phase"] if ph else None, "plan": news_plan_text(e, kind, release_min, now)}

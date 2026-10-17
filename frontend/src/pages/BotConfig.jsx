@@ -312,6 +312,7 @@ export default function BotConfig() {
                 gold_bias_gtp_direction_enabled: cfg.gold_bias_gtp_direction_enabled ?? false,
                 gold_bias_block_counter_enabled: cfg.gold_bias_block_counter_enabled ?? false,
                 trend_day_pullback_enabled: cfg.trend_day_pullback_enabled ?? false,
+                ack_loosen_close_enabled: cfg.ack_loosen_close_enabled ?? false,
                 exit_policy: cfg.exit_policy ?? "fixed_tp",
                 tp1_close_fraction: cfg.tp1_close_fraction ?? 0.5,
                 be_plus_offset_price: cfg.be_plus_offset_price ?? 1.0,
@@ -1292,6 +1293,12 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                         <input type="checkbox" checked={cfg.trend_day_pullback_enabled ?? false} onChange={(e) => setCfg({ ...cfg, trend_day_pullback_enabled: e.target.checked })} />
                         TREND DAY → ENTER ONLY AFTER PULLBACK TO EMA20 / VWAP (#75) {(cfg.trend_day_pullback_enabled ?? false) ? "ON" : "OFF — shadow (verdict shown in signal notes)"}
                     </label>
+                    {/* v1.60.62 #84 — broker stop looser than requested */}
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-3" data-testid="ack-loosen-close-toggle">
+                        <input type="checkbox" checked={cfg.ack_loosen_close_enabled ?? false} onChange={(e) => setCfg({ ...cfg, ack_loosen_close_enabled: e.target.checked })} />
+                        BROKER STOP WIDER THAN PLANNED → CLOSE WHEN &gt; 0.25 R AFTER THE CORRECTION (#84) {(cfg.ack_loosen_close_enabled ?? false) ? "ON" : "OFF — correct once, then alert only"}
+                    </label>
+                    <div className="text-[10px] text-white/40 mt-1">When the broker confirms a stop looser than the one requested (beyond its stops-level tolerance), the bot sends one corrective stop move; if the broker still keeps it wider, an ops WARNING is raised. With this ON, a position whose extra risk exceeds 0.25 R after that correction is closed.</div>
                     {/* v1.60.60 #72 — exit policy */}
                     <div className="font-mono text-[10px] text-white/60 mt-4 tracking-widest">EXIT POLICY (#72) — hf_scalp · hf_scalp_fast · breakout_m15 · gold_trend_pulse</div>
                     <select className="bg-black border border-white/20 text-white text-xs p-2 mt-1 w-full" value={cfg.exit_policy ?? "fixed_tp"} data-testid="exit-policy-select"
