@@ -20,3 +20,23 @@ projects `exit_price`, `stop_loss`, `take_profit`, `original_stop_loss`, `origin
 Tests: both close_reason forms, slippage, gap-through, SELL side, breakeven-moved stop, FX pips, 10-fill scoreboard.
 
 Tests: `tests/unit/test_v1_60_62_display_fixes_82_83.py` (4). Unit lane green; ruff CI selection clean.
+
+## #84 Broker stop looser than requested — correct once, then alert (optional close)
+The ack keeps being **adopted as broker truth** (`bridge_routes.modification_ack`, v1.60.37 `ack_loosened_stop` flag
+unchanged) — refusing it would only make our record disagree with the broker while risk, BE and guards assume protection
+that isn't there. New `backend/ack_loosen.py`, called after the ack is adopted (fail-soft, MODIFY_SL success acks only):
+1. confirmed SL looser than the **requested** SL beyond the broker tolerance (`stops_level` + 1 point from the fresh
+   symbol specs; 1 point when specs are absent) → **one** fenced corrective `MODIFY_SL` (`stamp_pending_modification`,
+   reason `ack_loosen_correction`) to the requested stop, clamped to the min-stop distance from the live price when known,
+   and only if it still tightens the confirmed stop (`tightened_sl` — never a loosen request); recorded on the trade as
+   `ack_loosen_correction {requested_sl, confirmed_sl, new_sl, intent_id}`.
+2. the correction's own ack still looser beyond tolerance → ops alert **warning** `stop_wider_than_planned`
+   ("… requested SL x / broker SL y (+d beyond, tolerance t), extra risk r R"), deduped per trade; **no retry loop**.
+3. BotConfig **`ack_loosen_close_enabled`** (default **OFF**, Bot Config toggle, audited through the normal config path):
+   when ON and the extra risk after the correction is > 0.25 R of the original stop distance → fenced `FULL_CLOSE` via
+   `close_commands.mandatory_close(reason="ack_loosen_close")`.
+No change to `fixed_tp` / exit-policy behaviour. Tests `tests/unit/test_v1_60_62_review_84_ack_loosen.py` (7): tolerance;
+BUY/SELL within tolerance → no action; beyond → one correction (requested, clamped, or alert when no tighter stop is
+possible); correction still loose → alert, no second correction, flag OFF never closes, flag ON only > 0.25 R; corrective
+stop never loosens; route e2e through the real `modification_ack` (truth adopted → fenced correction seq 2 → warning → flag
+ON → `mandatory_close` called once, alert deduped) and the within-tolerance no-op.

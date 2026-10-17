@@ -2277,6 +2277,21 @@ async def modification_ack(payload: BridgeModificationAck):
         await stamp_pending_modification(
             db, {"_id": ObjectId(payload.trade_id), "status": "open",
                  "pending_modification": None}, _follow)
+    # v1.60.62 #84 — the adopted broker stop is LOOSER than the requested one beyond the broker tolerance
+    # (stops_level + 1 point): one fenced corrective MODIFY_SL (never a loosen); if the correction's own ack is still
+    # loose → ops WARNING "stop wider than planned" (+ optional fenced FULL_CLOSE when ack_loosen_close_enabled and
+    # the extra risk is > 0.25 R). The ack itself stays adopted as truth above.
+    if payload.success and payload.type == "MODIFY_SL" and (payload.new_sl is not None or payload.requested_sl is not None) \
+            and payload.confirmed_position_sl is not None and trade.get("status") == "open":
+        try:
+            from ack_loosen import handle_ack
+            _al = await handle_ack(db, trade, acc, requested_sl=(payload.requested_sl if payload.requested_sl is not None else payload.new_sl),
+                                   confirmed_sl=payload.confirmed_position_sl,
+                                   pending_reason=(trade.get("pending_modification") or {}).get("reason"))
+            if _al.get("action") != "none":
+                logger.warning("ACK LOOSEN #84 trade=%s %s", str(trade["_id"]), _al)
+        except Exception as _sw:  # noqa: BLE001
+            record_swallow("bridge", "ack_loosen_84", _sw)
     # Scalp fast path (round 18 review item 2): a MODIFY_SL ack promotes the
     # runner's PENDING stop to the CONFIRMED stop — until this ack the bot
     # must keep behaving as if the original stop is live at the broker.
