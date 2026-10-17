@@ -99,3 +99,38 @@ def test_bot_config_page_renders_cap_fit_before_the_pick():
                    "disabled={isApplying || overCap}"):
         assert marker in src, marker
     assert src.count("disabled={isApplying || overCap}") == 2                   # built-in cards AND custom presets
+
+
+def test_78_preset_apply_is_versioned_and_audited(monkeypatch):
+    """#78 — preset-apply goes through config_promotion.apply_config_change: config_version + pointer + audit entry
+    listing the fields the preset changed (previously a bare update_one with no version / audit)."""
+    import routes.bot_routes as br
+    import strategy_presets as sp
+    import config_promotion as cp
+    db = FakeDb()
+    monkeypatch.setattr(br, "get_db", lambda: db)
+    monkeypatch.setattr(cp, "_txn_support", False)
+    oid = ObjectId()
+    _run(db.accounts.insert_one({"_id": oid, "user_id": "u1", "status": "connected"}))
+    _run(db.bot_configs.insert_one({"user_id": "u1", "account_id": str(oid), "risk_level": "low", "strategy_engine": "breakout",
+                                    "strategy_mode": "breakout", "max_risk_per_trade_pct": 0.5}))
+    fake = lambda key: {"label": "Mean reversion", "config": {"strategy_mode": "mean_reversion", "max_risk_per_trade_pct": 0.5}}  # noqa: E731
+    monkeypatch.setattr(sp, "get_preset", fake)
+    monkeypatch.setattr(br, "get_preset", fake)
+    _cap(monkeypatch, 1.0)
+    out = _run(br.apply_strategy_preset("mean_reversion", account_id=str(oid), user={"id": "u1"}))
+    assert out["applied"] == "mean_reversion" and out["config_version_id"]
+    assert out["preset_fields"] == ["active_preset", "max_risk_per_trade_pct", "strategy_mode"]
+    cfg = _run(db.bot_configs.find_one({"user_id": "u1"}))
+    assert cfg["strategy_mode"] == "mean_reversion" and cfg["active_preset"] == "mean_reversion"
+    assert cfg["field_sources"]["strategy_mode"] == "preset_apply" and "max_risk_per_trade_pct" not in cfg.get("field_sources", {})
+    assert len(db.config_versions.rows) == 1 and db.config_versions.rows[0]["label"] == "preset:mean_reversion"
+    assert str(db.config_versions.rows[0]["_id"]) == out["config_version_id"]
+    assert db.config_pointers.rows and db.promotion_journal.rows[0]["status"] == "complete"
+    audit = [a for a in db.audit_log.rows if a["action"] == "config_change_applied"]
+    assert len(audit) == 1
+    d = audit[0]["detail"]
+    assert d["preset_key"] == "mean_reversion" and d["preset_label"] == "Mean reversion" and d["preset_kind"] == "builtin"
+    assert d["preset_fields"] == out["preset_fields"]
+    assert d["changed"]["strategy_mode"] == {"from": "breakout", "to": "mean_reversion"}      # genuinely changed only
+    assert "max_risk_per_trade_pct" not in d["changed"] and d["version_id"] == out["config_version_id"]

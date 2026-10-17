@@ -1296,13 +1296,18 @@ async def apply_strategy_preset(key: str, account_id: Optional[str] = None,
     await _refuse_risk_above_policy_cap(db, current_cfg, {**overlay_config, "active_preset": key})
     overlay = {**overlay_config, "active_preset": key,
                "updated_at": datetime.now(timezone.utc).isoformat()}
-    await db.bot_configs.update_one(
-        _config_filter(user["id"], account_id), {"$set": overlay}
-    )
+    # #78 — same audited path as the Bot Config PATCH: config change + immutable config_version + pointer + audit entry
+    # (action config_change_applied, source "preset_apply", with the preset key/label and the fields it changed).
+    from config_promotion import apply_config_change
+    preset_fields = sorted(k for k in overlay if k != "updated_at")
+    version_id = await apply_config_change(
+        db, user["id"], account_id, overlay, label=f"preset:{key}", source="preset_apply",
+        audit_detail={"preset_key": key, "preset_label": preset_label, "preset_fields": preset_fields,
+                      "preset_kind": "custom" if key.startswith("custom:") else "builtin"})
     cfg = await db.bot_configs.find_one(_config_filter(user["id"], account_id))
     # v1.60.52 — only the fields this preset actually changed (the UI keeps them dirty until the next SAVE)
     return {"applied": key, "label": preset_label, "config": _serialize(cfg),
-            "preset_fields": sorted(k for k in overlay if k != "updated_at")}
+            "preset_fields": preset_fields, "config_version_id": version_id}
 
 
 @router.post("/my-presets")

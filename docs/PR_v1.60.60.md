@@ -24,6 +24,9 @@ behaviour is: a 15-min read-only bias refresh + shadow logging of gold signals +
   BotConfig fields + UI, report split in `/scalp/reports/exit-rules`, read-only `scripts/tp1_bank_shadow.py`.
 * **#74** live model labels + Bot Doctor `ea_fleet` (already in this branch from v1.60.59).
 
+* **#78** preset-apply routed through `apply_config_change` (config_version + audit with preset fields).
+* **#79** news_understanding: headlines untrusted — system rule, 200-char cap, strict `[{i, score, why}]` schema or reject all.
+
 ## Files
 `gold_bias.py`, `exit_policy_tp1.py`, `scripts/tp1_bank_shadow.py` (new); `trade_manager.py`, `bot_runner.py`, `ai_signals.py`,
 `gold_trend_pulse/engine.py`, `economic_calendar.py`, `market_intel.py`, `routes/market_intel_routes.py`, `scalp/reports.py`,
