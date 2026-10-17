@@ -134,3 +134,20 @@ def test_gate_cli_exit_codes_in_a_scratch_repo(tmp_path):
                         "release/ea_release.json", "docs/RELEASE_HASHES.json"], capture_output=True, text=True)
     assert r.returncode == 0 and r.stdout.startswith("OK:")
     assert re.search(r"[^\x00-\x7f]", r.stdout) is None
+
+
+# -- security audit #39 P3: ForexFactory XML - size cap + no DOCTYPE/ENTITY before stdlib ElementTree parses it -------
+def test_calendar_feed_rejects_entity_expansion_and_oversize_but_parses_the_real_shape():
+    import economic_calendar as EC
+    bomb = (b'<?xml version="1.0"?><!DOCTYPE lolz [<!ENTITY lol "lol"><!ENTITY lol2 "&lol;&lol;&lol;&lol;">]>'
+            b"<weeklyevents><event><title>&lol2;</title></event></weeklyevents>")
+    assert EC.parse_feed_xml(bomb) is None
+    assert EC.parse_feed_xml(b"<weeklyevents>" + b"<event/>" * 10 + b"</weeklyevents>" + b" " * EC.FF_FEED_MAX_BYTES) is None
+    assert EC.parse_feed_xml(b"<weeklyevents><event><title>CPI y/y") is None            # malformed -> None, no raise
+    root = EC.parse_feed_xml(b"<weeklyevents><event><title>CPI y/y</title><country>USD</country><impact>High</impact>"
+                             b"<date>10-17-2026</date><time>8:30am</time><forecast>3.1%</forecast><previous>3.0%</previous>"
+                             b"<actual></actual></event></weeklyevents>")
+    assert root is not None and root.findtext("event/title") == "CPI y/y"
+    src = open(os.path.join(ROOT, "backend", "economic_calendar.py"), encoding="utf-8").read()
+    body = src.split("async def _fetch_events(")[1].split("\n    events = []")[0]
+    assert "root = parse_feed_xml(raw)" in body and "ET.fromstring(" not in body

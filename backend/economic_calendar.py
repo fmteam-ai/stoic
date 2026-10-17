@@ -10,6 +10,7 @@ Macro-filter strategy (per Forex Factory convention):
 """
 import os
 import logging
+import re
 import time
 
 logger = logging.getLogger(__name__)
@@ -182,14 +183,28 @@ def _parse_event_time(date_str: str, time_str: str) -> datetime:
         return None
 
 
+FF_FEED_MAX_BYTES = 2_000_000     # audit #39 P3 — the weekly FF XML is ~100 KB; a hostile upstream cannot feed us 100 MB
+_XML_DECL_RE = re.compile(rb"<!(DOCTYPE|ENTITY)", re.I)
+
+
+def parse_feed_xml(raw: bytes):
+    """audit #39 P3 — stdlib ElementTree never resolves external entities, but it does expand INTERNAL ones (billion
+    laughs); the feed has no legitimate DOCTYPE/ENTITY, so reject any declaration and cap the size before parsing."""
+    if len(raw) > FF_FEED_MAX_BYTES or _XML_DECL_RE.search(raw):
+        return None
+    try:
+        return ET.fromstring(raw)
+    except ET.ParseError:
+        return None
+
+
 async def _fetch_events() -> list:
     async with httpx.AsyncClient(timeout=20.0, headers=UA, follow_redirects=True) as c:
         r = await c.get(FF_FEED)
         r.raise_for_status()
-        xml_text = r.text
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
+        raw = r.content
+    root = parse_feed_xml(raw)
+    if root is None:
         return []
     events = []
     for ev in root.findall("event"):

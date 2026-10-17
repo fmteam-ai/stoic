@@ -35,6 +35,11 @@ commit step pushed **585d2ce9 with only the new unsigned 1.66 EX5** while `#ea` 
 3. **Only then tag `v1.60.61`.** Until step 1 lands, LIVE-attested accounts stay fail-closed (`EA_RELEASE_HASH_UNPINNED`);
    the DEMO fleet is unaffected and keeps running 1.65.
 
+## Security audit #39 (this branch)
+PASS / no P0–P2 (`docs/SECURITY_AUDIT_39.md`). P3 applied: `economic_calendar.parse_feed_xml()` — 2 MB cap + DOCTYPE/ENTITY rejection
+before stdlib ElementTree (entity-expansion DoS from a hostile feed host), stdlib only, unit test. Other P3s (credential-less wildcard
+CORS baseline, EA-reported loosened stop flagged-not-rejected) unchanged / noted.
+
 ## CI
 `ruff check backend --select E9,F63,F7,F82,F823` ✓ · `check_local_import_shadows.py` ✓ · unit lane ✓ · YAML parses ·
 secret_scan 0 · protected-paths ✓ (no protected file in the diff) · `requirements.txt` unchanged.
