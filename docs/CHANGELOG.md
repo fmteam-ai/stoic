@@ -2,6 +2,9 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.61 hotfix — EA release chain fails loudly (run 39030924128 pushed a bare 1.66 EX5)
+- `ea-release.yml` record step: `$ErrorActionPreference='Stop'` + `$PSNativeCommandUseErrorActionPreference=$true` + `$LASTEXITCODE` check after every call; `PYTHONUTF8`/`PYTHONIOENCODING=utf-8`; `verify_ea_release.py` ASCII-only prints + stdout `backslashreplace`; commit step runs `scripts/check_ea_commit_consistency.py --staged` (never an EX5 without its signed record). Record for 1.66 is produced by re-running `ea-release` (workflow_dispatch, main) after the merge; tag v1.60.61 only after `verify_ea_release.py --check` passes on main. Docs: `docs/PR_v1.60.61_hotfix.md`.
+
 ## v1.60.61 — TP1 bank fix (#80) · #75 / #76 / #77 · GTP H4 history (#81, EA 1.66) (new flag OFF; no guard/sizing change)
 - **#80** `tp1_bank_runner`: broker order carries SL + **TP2** from entry (TP1 is bot-side); PARTIAL_CLOSE follow-up MODIFY_SL carries TP2 (EA ignores SL/TP on PARTIAL_CLOSE). `fixed_tp` unchanged (TP1 at the broker).
 - **#75** `trend_day_pullback_enabled` (OFF): trend-day entries only after a pullback to EMA20 / session VWAP (≤ 0.35 × ATR15); shadow verdict in every signal's notes. **#76** news veto shows *inactive — news cache stale (> 6 h)*. **#77** anti-tilt banner states the enforced real-loss rule with per-scope streaks.
