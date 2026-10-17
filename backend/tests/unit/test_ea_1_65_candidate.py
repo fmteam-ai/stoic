@@ -33,12 +33,13 @@ def _body(name: str) -> str:
     return SRC[i:SRC.index("\n}\n", i) + 3]
 
 
-def test_ea_version_is_1_65_and_structure_ok():
-    assert '#property version   "1.65"' in SRC and '#define EA_CLIENT_VERSION "1.65"' in SRC
+def test_ea_version_is_current_and_structure_ok():
+    # v1.60.61 #81 — the shipped EA is 1.66 (1.65 + history backfill); the 1.65 scope guards below still hold
+    assert '#property version   "1.66"' in SRC and '#define EA_CLIENT_VERSION "1.66"' in SRC
     for fe in ("pages/Accounts.jsx", "components/EaVersionStrip.jsx"):
-        assert 'LATEST_EA_VERSION = "1.65"' in open(os.path.join(ROOT, "..", "frontend", "src", fe), encoding="utf-8").read()
+        assert 'LATEST_EA_VERSION = "1.66"' in open(os.path.join(ROOT, "..", "frontend", "src", fe), encoding="utf-8").read()
     from ea_capabilities import latest_ea_version
-    assert latest_ea_version() == "1.65"
+    assert latest_ea_version() == "1.66"
 
 
 @pytest.mark.parametrize("name,digest", sorted(FROZEN_1_64.items()))
@@ -65,7 +66,7 @@ def test_m1_stream_is_batched_on_the_slow_lane_after_heartbeat():
     assert "TimeCurrent() - _last_m1_sent >= M1StreamSeconds" in timer
     sender = _body("void SendM1CandlesFor(")
     assert "PERIOD_M1" in sender and '\\"timeframe\\":\\"M1\\"' in sender and "(M1StreamBars > 120) ? 120" in sender
-    assert SRC.count('"/api/bridge/candles"') == 2       # M15 sender + M1 sender, same endpoint
+    assert SRC.count('"/api/bridge/candles"') == 3       # M15 sender + M1 sender + 1.66 history backfill, same endpoint
 
 
 def test_capability_flags_let_1_64_and_1_65_coexist():

@@ -1234,6 +1234,9 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                             <input type="checkbox" checked={cfg.gold_trend_pulse_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_enabled: e.target.checked })} />
                             GOLD TREND PULSE {(cfg.gold_trend_pulse_enabled ?? false) ? "ON" : "OFF"}
                         </label>
+                        <span className="text-[10px] text-[#F5C542]/90 basis-full" data-testid="gtp-replaces-engine-warning">
+                            ⚠ Enabling GTP on this account <b>replaces its preset engine for XAUUSD</b>: gold is evaluated by the trend-pulse rules only. In shadow mode every gold cycle returns HOLD (decisions are logged, no XAUUSD orders) until demo_live passes its gate. Other symbols keep the preset engine.
+                        </span>
                         <label className="flex items-center gap-2" data-testid="gtp-mode-select">MODE
                             <select className="bg-black/40 border border-white/10 rounded px-2 py-1" value={cfg.gold_trend_pulse_mode ?? "shadow"} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_mode: e.target.value })}>
                                 <option value="shadow">shadow</option><option value="demo_live">demo_live (after gate)</option>

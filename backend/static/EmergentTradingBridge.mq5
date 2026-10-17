@@ -290,9 +290,16 @@
 //|         installer's STOIC-Server.txt / https://stoicaibot.com;   |
 //|         (2) U18 HTTP 410 account_deleted stops the EA (no more   |
 //|         401 storms from a removed account).                      |
+//| v1.66 — #81 server-requested history backfill: the poll-trades   |
+//|         response may carry "candles_request":{symbol,timeframe,  |
+//|         bars}; the EA answers with CopyRates on that timeframe   |
+//|         (completed bars only) to /api/bridge/candles. Used for   |
+//|         XAUUSD H4 (gold_trend_pulse EMA50 warm-up). Capability   |
+//|         h4_history_v1 — 1.65 terminals never receive the key.    |
+//|         Order send / close / fencing / heartbeat unchanged.       |
 //+------------------------------------------------------------------+
 #property copyright "STOIC AI Trading"
-#property version   "1.65"
+#property version   "1.66"
 #property strict
 // v1.65 — (a) MODIFY_SL may carry new_tp (broker TP follows a fill re-base);
 //         the ack reports confirmed_position_tp. Servers that never send
@@ -301,12 +308,14 @@
 //         M1StreamBars closed+forming M1 bars once per M1StreamSeconds,
 //         on the slow lane AFTER the heartbeat. Order send / close /
 //         fencing logic unchanged from 1.64.
+// v1.66 — server-requested history backfill (ParseCandlesRequest →
+//         SendHistoryCandlesFor). Nothing else changed from 1.65.
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
 // one of the two causes the dashboard to show a stale EA version even
 // though MT5 itself loads the new binary.
-#define EA_CLIENT_VERSION "1.65"
+#define EA_CLIENT_VERSION "1.66"
 
 input string ServerUrl              = "https://stoicaibot.com";  // auto-loaded from MQL5\Files\STOIC-Server.txt (installer) when left at default
 input string BridgeToken            = "PASTE_YOUR_BRIDGE_TOKEN_HERE";
@@ -1627,6 +1636,68 @@ void PollPendingTrades() {
 
    // -------- 3. v1.39: server-requested deep broker-history sync --------
    ParseSyncRequest(resp);
+
+   // -------- 4. v1.66 (#81): server-requested candle history backfill --------
+   ParseCandlesRequest(resp);
+}
+
+// ----- v1.66: CANDLE HISTORY BACKFILL (#81) -----
+// The server sets "candles_request":{"symbol":"XAUUSD","timeframe":"H4","bars":300}
+// on the poll-trades response when its stored XAUUSD H4 history is short
+// (gold_trend_pulse needs 200 completed H4 bars for the EMA50) or once a day.
+// We answer with CopyRates on that timeframe, COMPLETED bars only (start at
+// shift 1), posted to the same /api/bridge/candles endpoint as the M15/M1
+// feeds; the server validates, merges by bar time and stamps the backfill.
+datetime _last_candles_request = 0;
+
+ENUM_TIMEFRAMES HistoryPeriod(string tf) {
+   if (tf == "D1") return PERIOD_D1;
+   if (tf == "H1") return PERIOD_H1;
+   if (tf == "M30") return PERIOD_M30;
+   if (tf == "M15") return PERIOD_M15;
+   return PERIOD_H4;
+}
+
+void ParseCandlesRequest(string resp) {
+   int s = StringFind(resp, "\"candles_request\":{");
+   if (s < 0) return;
+   // Local guard: one history answer per 60 s even if the server re-asks
+   // (its own re-dispatch window is 600 s).
+   if (_last_candles_request > 0 && TimeCurrent() - _last_candles_request < 60) return;
+   string sym = ExtractString(resp, "\"symbol\":\"", s);
+   string tf  = ExtractString(resp, "\"timeframe\":\"", s);
+   int bars   = (int)ExtractDouble(resp, "\"bars\":", s);
+   if (StringLen(sym) == 0) return;
+   if (StringLen(tf) == 0) tf = "H4";
+   if (bars < 50) bars = 50;
+   if (bars > 400) bars = 400;
+   _last_candles_request = TimeCurrent();
+   string resolved = ResolveTickSymbol(sym);
+   if (StringLen(resolved) == 0) resolved = sym;
+   SendHistoryCandlesFor(resolved, tf, bars);
+}
+
+void SendHistoryCandlesFor(string sym, string tf, int want) {
+   MqlRates rates[];
+   int n = CopyRates(sym, HistoryPeriod(tf), 1, want, rates);   // shift 1 = skip the forming bar
+   if (n < 10) {
+      Print("STOIC history backfill: ", sym, " ", tf, " returned ", n, " bars (requested ", want, ")");
+      return;
+   }
+   string bars = "[";
+   for (int i = 0; i < n; i++) {
+      if (i > 0) bars += ",";
+      bars += StringFormat(
+         "{\"t\":%I64d,\"o\":%.5f,\"h\":%.5f,\"l\":%.5f,\"c\":%.5f,\"v\":%I64d}",
+         (long)rates[i].time, rates[i].open, rates[i].high, rates[i].low,
+         rates[i].close, rates[i].tick_volume);
+   }
+   bars += "]";
+   string body = StringFormat(
+      "{\"bridge_token\":\"%s\",\"symbol\":\"%s\",\"timeframe\":\"%s\",\"bars\":%s}",
+      EffectiveToken, sym, tf, bars);
+   HttpPost(g_server_url + "/api/bridge/candles", body);
+   Print("STOIC history backfill: sent ", n, " ", tf, " bars for ", sym);
 }
 
 // ----- v1.39: DEEP BROKER SYNC -----

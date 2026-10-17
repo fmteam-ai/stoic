@@ -1344,12 +1344,14 @@ def broker_offset_sec(acc: dict) -> tuple[int, str]:
     return 0, "unknown"
 
 
-def validate_bars(raw: list, timeframe: str) -> tuple[list[dict], int]:
+def validate_bars(raw: list, timeframe: str, grid_offset_sec: int = 0) -> tuple[list[dict], int]:
     """Fix plan A1 — bars validated at ingest: numeric, finite, positive prices,
     high ≥ max(open, close), low ≤ min(open, close), epoch aligned to the
-    timeframe and within ±30 days of now, de-duplicated by timestamp."""
+    timeframe and within the timeframe's history window, de-duplicated by timestamp.
+    #81 — H4/D1 bars open on the BROKER day grid: alignment is checked at t + grid_offset_sec."""
     import math
     tf_s = timeframe_seconds(timeframe)
+    max_age = history_window_sec(timeframe)
     now = int(datetime.now(timezone.utc).timestamp())
     out: dict[int, dict] = {}
     dropped = 0
@@ -1363,13 +1365,26 @@ def validate_bars(raw: list, timeframe: str) -> tuple[list[dict], int]:
                 raise ValueError("non-finite or non-positive")
             if h < max(o, c) or lo > min(o, c) or h < lo:
                 raise ValueError("ohlc geometry")
-            if t % tf_s != 0 or abs(now - t) > 30 * 86400 + 50400:
+            if (t + grid_offset_sec) % tf_s != 0 or abs(now - t) > max_age + 50400:
                 raise ValueError("timestamp")
         except (KeyError, TypeError, ValueError):
             dropped += 1
             continue
         out[t] = {"t": t, "o": o, "h": h, "l": lo, "c": c, "v": v}
     return [out[t] for t in sorted(out)], dropped
+
+
+_HISTORY_TF = ("H4", "D1")
+
+
+def history_window_sec(timeframe: str) -> int:
+    """#81 — 300 H4 bars span ~10 calendar weeks; intraday feeds keep the ±30-day window."""
+    return 150 * 86400 if str(timeframe).upper() in _HISTORY_TF else 30 * 86400
+
+
+def payload_cap(timeframe: str) -> int:
+    """#81 — an H4/D1 history payload may carry up to 400 bars; the streaming feeds stay at 200."""
+    return 400 if str(timeframe).upper() in _HISTORY_TF else 200
 
 
 def retention_bars(timeframe: str) -> int:
@@ -1417,8 +1432,9 @@ async def receive_candles(payload: BridgeCandles):
             return dict(b, t=int(float(b["t"])) - offset)
         except (KeyError, TypeError, ValueError):
             return b
-    raw = [_shift(b) if isinstance(b, dict) else b for b in (payload.bars or [])[-200:]]
-    bars, dropped = validate_bars(raw, payload.timeframe)
+    raw = [_shift(b) if isinstance(b, dict) else b for b in (payload.bars or [])[-payload_cap(payload.timeframe):]]
+    _is_history = str(payload.timeframe).upper() in _HISTORY_TF
+    bars, dropped = validate_bars(raw, payload.timeframe, grid_offset_sec=offset if _is_history else 0)
     now_ts = int(datetime.now(timezone.utc).timestamp())
     # Fix plan A10 — the forming bar's close IS the broker's live tick.
     forming = [b for b in bars if int(b["t"]) + timeframe_seconds(payload.timeframe) > now_ts]
@@ -1475,6 +1491,9 @@ async def receive_candles(payload: BridgeCandles):
                    "broker_offset_sec": offset, "offset_source": offset_source}
         if last_tick:
             set_doc["last_tick"] = last_tick
+        if _is_history:          # #81 — an H4/D1 payload is a server-requested backfill: stamp it so the daily refresh is scheduled
+            set_doc["backfill_at"] = now_iso
+            set_doc["backfill_bars"] = len(bars)
         await db.intraday_candles.update_one(
             {"user_id": account["user_id"], "symbol": base,
              "timeframe": payload.timeframe},
@@ -1917,6 +1936,16 @@ async def poll_trades(payload: PollRequest):
             resp["sync_request"] = {
                 "lookback_seconds": int(pending_sync.get("lookback_seconds") or 604800),
             }
+
+    # #81 — XAUUSD H4 history backfill for gold_trend_pulse: EA ≥ 1.66 (`h4_history_v1`) answers with CopyRates(H4);
+    # 1.65 terminals never get the key. Fail-soft: a lookup error must not delay trade/modification dispatch.
+    try:
+        from gold_h4_history import pending_request as _h4_pending
+        _h4_req = await _h4_pending(db, acc)
+        if _h4_req:
+            resp["candles_request"] = _h4_req
+    except Exception as _h4_e:  # noqa: BLE001
+        logger.debug("h4 history request skipped: %s", _h4_e)
 
     return resp
 

@@ -222,6 +222,28 @@ async def _check_risk_state(db, user_id: str) -> dict:
     else:
         checks.append(_mk("Anti-tilt freeze", "pass", "No active freeze · " + "; ".join(streaks) + (f" · rule: {rule}" if rule else "")))
 
+    # #81 — GTP H4 warm-up: "GTP: H4 bars n/200" for every config that has gold_trend_pulse enabled
+    for tc in cfgs:
+        if not tc.get("gold_trend_pulse_enabled"):
+            continue
+        try:
+            from gold_h4_history import health_check as _h4_health
+            acc = None
+            if tc.get("account_id"):
+                from bson import ObjectId
+                try:
+                    acc = await db.accounts.find_one({"_id": ObjectId(str(tc["account_id"]))})
+                except Exception:  # noqa: BLE001
+                    acc = None
+            if acc is None:
+                acc = await db.accounts.find_one({"user_id": user_id, "status": "connected"}) or await db.accounts.find_one({"user_id": user_id})
+            row = await _h4_health(db, user_id, acc, now)
+            if len(cfgs) > 1:
+                row["label"] = f"GTP: H4 bars ({(acc or {}).get('label') or tc.get('account_id') or 'default'})"
+            checks.append(row)
+        except Exception as _h4e:  # noqa: BLE001
+            checks.append(_mk("GTP: H4 bars", "warn", f"could not read the XAUUSD H4 history: {_h4e}"))
+
     # Safety Guardian: confirm hard-floors are active + report recent blocks.
     try:
         from safety_guardian import get_guardian_config

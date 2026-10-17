@@ -44,9 +44,14 @@ async def load_bars(db, user_id: str, account: dict | None, now: datetime) -> di
     if m15:
         ts = now.timestamp()
         out["h1"] = R.completed(R.resample(m15, 3600), 3600, ts)               # #67 — completed H1/H4 bars only
-        h4doc = await load_user_candles(SYMBOL, user_id, "H4", last_n=400, max_age_min=6 * 60)
-        h4 = list((h4doc or {}).get("bars") or []) or R.resample(m15, 14400)
-        out["h4"] = R.completed(h4, 14400, ts)
+        # #81 — EA H4 history (EA ≥ 1.66 backfill, see gold_h4_history) merged with the M15 resample on the broker
+        # day grid; the M15-only fallback (~50 bars) keeps the bias at "NONE — H4 warm-up" until the backfill lands.
+        from gold_h4_history import DOC_MAX_AGE_SEC, merge_h4
+        from routes.bridge_routes import broker_offset_sec as _boff
+        h4doc = await load_user_candles(SYMBOL, user_id, "H4", last_n=400, max_age_min=DOC_MAX_AGE_SEC // 60)
+        stored = R.completed(list((h4doc or {}).get("bars") or []), 14400, ts)
+        off = _boff(account or {})[0] if (account and out["t_basis"] == "utc") else 0
+        out["h4"], out["h4_source"] = merge_h4(stored, m15, off, ts)
         out["h4_warm"] = len(out["h4"]) >= H4_MIN_BARS
         if out["t_basis"] == "broker_unknown":                                   # #67 — no UTC anchor → no daily levels
             out["today_open"] = out["prior_day_mid"] = None
@@ -389,11 +394,12 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         if data.get("t_basis") == "broker_unknown":
             tracker.update({"bias": "NONE", "reasons": [{"ok": False, "text": "broker clock offset unknown (t_basis=broker_unknown) — no daily open / prior-day mid"}]}, now)
         elif not data.get("h4_warm", True):
-            tracker.update({"bias": "NONE", "reasons": [{"ok": False, "text": f"H4 warm-up: {len(data['h4'])}/{H4_MIN_BARS} completed H4 bars for EMA50"}]}, now)
+            tracker.update({"bias": "NONE", "reasons": [{"ok": False, "text": f"H4 warm-up: {len(data['h4'])}/{H4_MIN_BARS} completed H4 bars for EMA50 ({data.get('h4_source') or 'no bars'})"}]}, now)
         else:
             tracker.update(R.daily_bias(data["h4"], data["h1"], price, data["today_open"], data["prior_day_mid"]), now)
     res["bias"], res["reasons"] = tracker.bias, tracker.reasons
-    upd = {"bias": tracker.to_dict(), "last_eval": now.isoformat(), "user_id": user_id, "bars_source": data["source"]}
+    upd = {"bias": tracker.to_dict(), "last_eval": now.isoformat(), "user_id": user_id, "bars_source": data["source"],
+           "h4_bars": len(data["h4"]), "h4_source": data.get("h4_source")}      # #81 — warm-up visible in gtp_state
 
     async def _done(note: str):
         res["note"] = note

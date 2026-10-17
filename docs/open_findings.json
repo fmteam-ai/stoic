@@ -95,7 +95,7 @@
       "P1-05-r16",
       "P1-03-r17"
     ],
-    "production_state_2026_10_14": "v1.60.32 healthy · MongoDB rs0 (transactions) · EA 1.65 candidate (new_tp + M1 stream; stable channel keeps the previous signed build for rollback) · active policy demo-rules-v2 (demo_only=true) · live authority CLOSE_ONLY until P0-01/P0-02/P1-01/P1-03"
+    "production_state_2026_10_14": "v1.60.32 healthy · MongoDB rs0 (transactions) · EA 1.66 candidate (1.65 new_tp + M1 stream, + H4 history backfill #81; stable channel keeps the previous signed build for rollback) · active policy demo-rules-v2 (demo_only=true) · live authority CLOSE_ONLY until P0-01/P0-02/P1-01/P1-03"
   },
   {
     "id": "P1-04-r18",
