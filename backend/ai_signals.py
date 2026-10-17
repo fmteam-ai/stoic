@@ -96,6 +96,10 @@ def news_veto_state(sentiment: dict | None, mtf_mode: bool) -> dict:
     available = bool(s.get("available")) and s.get("score") is not None
     mode = "hard" if mtf_mode else "advisory"
     if available:
+        from news_understanding import news_cache_stale
+        stale, age_h = news_cache_stale(s.get("fetched_at") or s.get("scored_at")) if (s.get("fetched_at") or s.get("scored_at")) else (False, None)
+        if stale:   # #76
+            return {"active": False, "mode": mode, "note": "news veto inactive — news cache stale (> 6 h)", "why": f"last score {age_h} h old"}
         return {"active": True, "mode": mode, "note": ""}
     return {"active": False, "mode": mode, "note": NEWS_VETO_INACTIVE_NOTE,
             "why": str(s.get("summary") or "no sentiment score")[:160]}

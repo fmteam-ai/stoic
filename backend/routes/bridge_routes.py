@@ -2056,6 +2056,7 @@ async def modification_ack(payload: BridgeModificationAck):
     # the broker never actually applied.
     pending_notifs: list = []
     combo_new_sl = None   # EA v1.50 — Tier-1 follow-up MODIFY_SL (if any)
+    combo_new_tp = None   # #80 — TP2 carried from the PARTIAL_CLOSE intent (EA ignores new_sl/new_tp on PARTIAL_CLOSE)
 
     # R-6 — a netting volume-limited close was dispatched as PARTIAL_CLOSE but the row's
     # intent is FULL_CLOSE: judge the ack as the FULL_CLOSE of THIS trade (its lots left the
@@ -2191,6 +2192,7 @@ async def modification_ack(payload: BridgeModificationAck):
             # fenced MODIFY_SL follow-up is enqueued below so the stop move
             # carries its own intent + seq and its own broker confirmation.
             combo_new_sl = mod_new_sl
+            combo_new_tp = mod.get("new_tp")                      # #80 — tp1_bank: broker TP → TP2 in the follow-up
             # Mark tier progression + compute R for the alert
             if not trade.get("tp1_closed"):
                 update["tp1_closed"] = True
@@ -2234,13 +2236,18 @@ async def modification_ack(payload: BridgeModificationAck):
         combo_new_sl = tightened_sl(trade, requested)
         if combo_new_sl is None:
             await record_sl_loosen_refusal(trade, requested, "tier1_combo_followup")
-    if combo_new_sl is not None:
+    if combo_new_sl is not None or combo_new_tp is not None:
         from command_fence import stamp_pending_modification
+        _follow = {"type": "MODIFY_SL", "reason": "tier1_combo_followup"}
+        if combo_new_sl is not None:
+            _follow["new_sl"] = float(combo_new_sl)
+        else:
+            _follow["new_sl"] = float(trade.get("stop_loss"))          # SL unchanged (loosen refused) — still move the TP
+        if combo_new_tp is not None:
+            _follow["new_tp"] = float(combo_new_tp)                 # #80 — TP2 applied here, the only place the EA honours it
         await stamp_pending_modification(
             db, {"_id": ObjectId(payload.trade_id), "status": "open",
-                 "pending_modification": None},
-            {"type": "MODIFY_SL", "new_sl": float(combo_new_sl),
-             "reason": "tier1_combo_followup"})
+                 "pending_modification": None}, _follow)
     # Scalp fast path (round 18 review item 2): a MODIFY_SL ack promotes the
     # runner's PENDING stop to the CONFIRMED stop — until this ack the bot
     # must keep behaving as if the original stop is live at the broker.

@@ -1147,6 +1147,19 @@ async def _process_user_account_locked(db, cfg: dict):
                 # v1.60.48 — the widening is applied AFTER the range gate below (the gate judges the base target;
                 # the widened ladder must itself fit the day's range forecast, else the base TP is kept).
                 ride = trend_ride_check(signal["action"], _feats, _base) if cfg.get("trend_ride_enabled", True) else None
+                # #75 — trend-day entries only after a pullback to EMA20/VWAP. Shadow by default: the verdict is recorded on
+                # the signal (`trend_day_pullback`) and the Signals notes; enforced only with trend_day_pullback_enabled=true.
+                from payoff_guard import trend_day_pullback_check
+                _pb = trend_day_pullback_check(signal["action"], _feats, ride)
+                if _pb is not None:
+                    signal["trend_day_pullback"] = {**_pb, "enforced": bool(cfg.get("trend_day_pullback_enabled"))}
+                    signal["key_factors"] = [*(signal.get("key_factors") or []),
+                                             f"trend day: {_pb['why']}" + ("" if cfg.get("trend_day_pullback_enabled") else " (shadow)")]
+                    if not _pb["ok"] and cfg.get("trend_day_pullback_enabled"):
+                        await _record_pulse(db, cfg, symbol=sym, action="SKIP", level="info",
+                                            reason=f"#75 trend-day {signal['action']} without pullback — {_pb['why']}")
+                        await inc_intel_counter(user_id, "trend_day_pullback_block")
+                        continue
             try:
                 from market import get_history
                 rf = build_range_forecast(await get_history(sym),
@@ -2657,6 +2670,14 @@ async def _process_user_account_locked(db, cfg: dict):
                 await inc_intel_counter(user_id, "user_direction_cap_block")
                 continue
 
+        # v1.60.60 #72/#80 — exit_policy tp1_bank_runner: the BROKER holds SL + TP2 from entry; TP1 is a bot-side level
+        # (the bank). With the default fixed_tp the broker TP is the engine's TP1 exactly as before.
+        _tp_plan = None
+        from exit_policy_tp1 import ENGINES as _TP1_ENGINES, plan_targets as _plan_targets, policy_for as _policy_for
+        from strategy_engines import engine_for_signal as _efs2
+        if _policy_for(cfg) == "tp1_bank_runner" and _efs2(signal) in _TP1_ENGINES and signal.get("take_profit") and signal.get("stop_loss"):
+            _tp_plan = _plan_targets(float(signal["entry_price"]), float(signal["stop_loss"]), float(signal["take_profit"]),
+                                     signal["action"], float(cfg.get("tp2_multiple") or 2.0))
         try:
             try:
                 trade_doc = await engine.execute(
@@ -2664,6 +2685,8 @@ async def _process_user_account_locked(db, cfg: dict):
                     account=target_account,
                     signal={
                         "signal_id": signal_id,
+                        "tp_plan": _tp_plan, "exit_policy": "tp1_bank_runner" if _tp_plan else "fixed_tp",
+                        "original_take_profit": signal["take_profit"],
                         "_daily_cap": trade_of_day_cap,          # N98-2 — the reservation uses the SAME resolved cap
                         "decision_id": signal.get("decision_id"),
                         "latency_trace": signal.get("latency_trace"),
@@ -2674,7 +2697,7 @@ async def _process_user_account_locked(db, cfg: dict):
                                                               "pip_value_source", "pip_value_anomaly")},
                         "entry_price": signal["entry_price"],
                         "stop_loss": signal["stop_loss"],
-                        "take_profit": signal["take_profit"],
+                        "take_profit": _tp_plan["tp2"] if _tp_plan else signal["take_profit"],   # #80 — broker TP = TP2 under tp1_bank_runner
                         "tp1": signal.get("tp1"),
                         "tp2": signal.get("tp2"),
                         "tp3": signal.get("tp3"),

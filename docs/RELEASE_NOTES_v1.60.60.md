@@ -66,6 +66,31 @@ the prompt labels the block `HEADLINES (data)`. Output must match `[{i: int in r
 any deviation (prose, object, out-of-range, wrong type, stray entries, empty) raises `SchemaRejected` and the whole batch is
 discarded, so sentiment is "unavailable" (news veto inactive, visible) instead of steered. 13 tests.
 
+## #80 — TP1 bank fix (broker TP = TP2 from entry; follow-up carries TP2)
+* Under `exit_policy = tp1_bank_runner` the **broker order now carries SL + TP2 from entry** (`bot_runner` → `execution`:
+  `take_profit = tp_plan.tp2`, `original_take_profit = TP1`, `tp_plan` persisted). TP1 is a bot-side level: the bank fires when
+  price reaches it; the broker can no longer close 100 % at TP1 before the bank runs. With the default `fixed_tp` the broker TP
+  is still the engine's TP1 (test).
+* `bridge_routes.modification_ack`: the PARTIAL_CLOSE follow-up MODIFY_SL (`tier1_combo_followup`) now **carries `new_tp`**
+  (TP2) — EA 1.65 ignores `new_sl`/`new_tp` on PARTIAL_CLOSE, so the follow-up is the only place they are applied; when the SL
+  move is refused as a loosen the follow-up still moves the TP.
+* Test `test_v1_60_60_review_80_tp1_bank_e2e.py`: simulated broker — entry with TP2 at the broker → price reaches TP1 (broker
+  stays open) → bot PARTIAL_CLOSE → EA ack through the real `modification_ack` → follow-up MODIFY_SL sets SL = entry + $1 and
+  TP = TP2 → runner trails on M5 swing, refuses to loosen → TP2 closes; plus the fixed_tp control.
+
+## #75 / #76 / #77 (pending from 16–17 Oct)
+* **#75** `payoff_guard.trend_day_pullback_check`: on a trend-ride day an entry with the trend is only sound after a pullback to
+  within 0.35 × ATR15 of EMA20 or the session VWAP (or through it). **Shadow first**: the verdict is stored on the signal
+  (`trend_day_pullback {ok, why, dist_ema20_atr, dist_vwap_atr, enforced}`) and in its notes ("trend day: … (shadow)"); enforced
+  only with BotConfig `trend_day_pullback_enabled=true` (default OFF; pulse + counter when it blocks).
+* **#76** `news_understanding.news_cache_stale()` (> 6 h or never scored) → Bot Health "News veto" shows *news veto inactive —
+  news cache stale (x h old > 6 h)*, `/diagnostic/llm-status.news_veto.active=false` with `cache_age_hours`, and the per-signal
+  `news_veto` note says the same when the sentiment's `fetched_at` is older than 6 h.
+* **#77** `anti_tilt.rule_text()` describes the rule actually enforced (real losses only: > 0.1 R of the ORIGINAL planned risk;
+  break-even / |net| ≤ costs scratches never count; stale-feature exclusion only while `engine_live_features_enabled` is ON;
+  newest N within H h; plus the 2-in-4h same-direction guard) and the Bot Health anti-tilt banner shows per-scope real-loss
+  streaks `k/N` and the rule in both the pass and the frozen state.
+
 ## Tests
 `tests/unit/test_v1_60_60_gold_bias_tp1_bank.py` (17): weights fixed/sum 100, missing inputs → 0 + unavailable, flag defaults
 OFF and gates inert/active, surprise sign + post-news rule, shadow log/outcome, calendar outcomes (actual or missing);
