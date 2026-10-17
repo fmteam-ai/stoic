@@ -200,6 +200,7 @@ async def _fetch_events() -> list:
         impact = (ev.findtext("impact") or "").strip().lower()
         forecast = (ev.findtext("forecast") or "").strip()
         previous = (ev.findtext("previous") or "").strip()
+        actual = (ev.findtext("actual") or "").strip()          # v1.60.60 #71 — present once the event has printed; "" = missing
         when = _parse_event_time(date_str, time_str)
         if not when or not title:
             continue
@@ -211,6 +212,7 @@ async def _fetch_events() -> list:
             "when_ts": when.timestamp(),
             "forecast": forecast,
             "previous": previous,
+            "actual": actual or None,
         })
     return events
 
@@ -567,3 +569,33 @@ async def macro_freeze_check(symbol: str, cfg: dict | None = None) -> dict:
                     "kind": w["kind"], "next_freeze": next_freeze(symbol, events, cfg, now)}
     return {"frozen": False, "reason": "", "event": None, "kind": None,
             "next_freeze": next_freeze(symbol, events, cfg, now)}
+
+
+# ── v1.60.60 #71 — calendar outcomes: surprise = actual − forecast for CPI / NFP / FOMC (and other mapped prints) ──
+def _num(v):
+    try:
+        return float(str(v).replace("%", "").replace("K", "").replace("k", "").replace(",", "").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+async def record_calendar_outcomes(db, events: list | None = None) -> int:
+    """Persist {event, ts, forecast, previous, actual, surprise, surprise_value, why} for printed USD HIGH events.
+    `actual` missing → stored with surprise None (never invented). Idempotent per (title, when_ts)."""
+    from gold_bias import surprise, surprise_value
+    import time as _t
+    events = events if events is not None else await get_events()
+    n = 0
+    for ev in events:
+        if str(ev.get("country") or "").upper() != "USD" or str(ev.get("impact") or "").lower() != "high":
+            continue
+        if float(ev.get("when_ts") or 0) > _t.time():
+            continue
+        actual, fcst = _num(ev.get("actual")), _num(ev.get("forecast"))
+        sv, why = surprise_value(ev.get("title") or "", actual, fcst)
+        doc = {"event": ev.get("title"), "ts": ev.get("when_ts"), "when": ev.get("when"), "forecast": fcst, "previous": _num(ev.get("previous")),
+               "actual": actual, "actual_missing": actual is None, "surprise": surprise(actual, fcst), "surprise_value": sv, "why": why,
+               "source": "forexfactory"}
+        await db.calendar_outcomes.update_one({"event": doc["event"], "ts": doc["ts"]}, {"$set": doc}, upsert=True)
+        n += 1
+    return n

@@ -104,8 +104,29 @@ async def exit_rule_scoreboard(db, user_id: str, days: int = 30) -> dict:
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     q = {"user_id": user_id, "status": "closed", "closed_at": {"$gte": cutoff}, **_SCALP_FILTER}
     rows = await db.trades.find(q, {"pnl": 1, "risk_amount": 1, "lot_size": 1, "original_lot_size": 1, "sl_pips": 1,
-                                    "symbol": 1, "close_reason": 1, "scalp_exit_rule": 1, "engine": 1, "scope": 1}).to_list(5000)
-    return summarise(rows, days)
+                                    "symbol": 1, "close_reason": 1, "scalp_exit_rule": 1, "engine": 1, "scope": 1,
+                                    "tp1_bank": 1, "entry_price": 1, "action": 1, "pip_value_usd_per_lot": 1, "pip_size": 1}).to_list(5000)
+    out = summarise(rows, days)
+    out["tp1_bank_runner"] = tp1_bank_split(rows)          # v1.60.60 #72 — banked vs runner P&L, shown separately
+    return out
+
+
+def tp1_bank_split(rows: list[dict]) -> dict:
+    """#72 — trades closed under exit_policy tp1_bank_runner: banked (TP1 partial) and runner P&L reported separately."""
+    from exit_policy_tp1 import split_pnl
+    banked = runner = 0.0
+    n = sl_only = failed = 0
+    for t in rows:
+        if not t.get("tp1_bank"):
+            continue
+        sp = split_pnl(t)
+        n += 1
+        banked += sp["banked_pnl"]
+        runner += sp["runner_pnl"]
+        sl_only += 1 if (t.get("tp1_bank") or {}).get("sl_only") else 0
+        failed += 1 if t.get("tp1_bank_failed") else 0
+    return {"trades": n, "banked_pnl": round(banked, 2), "runner_pnl": round(runner, 2), "total_pnl": round(banked + runner, 2),
+            "sl_only": sl_only, "partial_failed_full_close": failed}
 
 
 # ── Shadow Expectancy Report ──────────────────────────────────────────────────────────────────────────────────────

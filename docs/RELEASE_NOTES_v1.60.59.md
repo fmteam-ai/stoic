@@ -41,6 +41,17 @@ Co-Pilot, NL Commander, weekly digest, journal cards.
   off-host 403 wording, per-feature counter table, NEWS VETO ACTIVE/INACTIVE badge); the "Claude LLM" diagnostic check now
   reports provider + last error; Co-Pilot 503 message mentions both keys.
 
+## #74 (cosmetic) — live model labels + explicit EA fleet for Bot Doctor
+* No more hard-coded "Claude Sonnet 4.5": `llm_models.pretty_name()` / `pretty_models()` turn the live tier model into a
+  display name ("Claude Sonnet 5.5"); `GET /api/diagnostic/llm-models` (any signed-in user; ids + pretty names + provider,
+  nothing secret) feeds the `useLlmModel(tier)` hook used by BotDoctorPanel, WeeklyDigestPanel, Agents, FAQ and Guide;
+  `/diagnostic/llm-status` (admin) also carries `models_pretty`. Docstrings in bot_doctor, copilot, ai_signals, nl_commander,
+  agents/strategy_agent, insights_routes, ai_optimizer now reference the tier, not a model.
+* Bot Doctor telemetry gets an explicit `ea_fleet` block (shipped/previous version from the signed release record, per
+  terminal: `ea_version` from the heartbeat's client_version, `ea_version_reported_at`, build current/previous/other/unknown,
+  EX5 accepted, heartbeat age; paper accounts excluded; `terminals_by_version`), and the system prompt instructs the model to
+  quote EA versions per label verbatim and never infer one terminal's build from another. Test: `test_v1_60_59_review_74_labels.py` (3).
+
 ## Default behaviour: unchanged on every account
 No flag or default changed. **No change to trading logic, gates or guards** — deterministic engines never call the LLM;
 if the LLM is unavailable every feature fails closed exactly as before (narration skipped, sentiment unavailable →

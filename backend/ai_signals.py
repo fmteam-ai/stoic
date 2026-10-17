@@ -2,7 +2,7 @@
 
 Three-tier verification (per 2026 best practice):
   Engine 1 (Quant)      : indicators + regime + entropy
-  Engine 2 (Semantic)   : Claude Sonnet 4.5 + news sentiment
+  Engine 2 (Semantic)   : Claude (`analysis` tier, llm_models.model_for) + news sentiment
   Engine 3 (Meta-Label) : binary classifier P(true_signal | engines)
 
 Plus dynamic Regime Swapping — SL/TP/Kelly mutate based on live regime.
@@ -83,6 +83,11 @@ def _parse_ai_json(text: str) -> dict:
 
 
 NEWS_VETO_INACTIVE_NOTE = "news veto inactive — LLM unavailable"
+
+
+def alignment_of(bias, action):
+    from gold_bias import alignment
+    return alignment(bias, action)
 
 
 def news_veto_state(sentiment: dict | None, mtf_mode: bool) -> dict:
@@ -540,6 +545,19 @@ async def analyze_symbol(symbol: str, risk_level: str,
     _, veto_reason = _apply_dual_veto(action, confidence, sentiment)
     # v1.60.59 — the veto can only fire when news_understanding (LLM) returned a score: say so when it did not
     news_veto = news_veto_state(sentiment, mtf_mode)
+    # v1.60.60 #71 — Gold Daily Bias in every gold signal's notes (shadow: no trading effect)
+    gold_bias_snap = None
+    if "XAU" in str(symbol).upper():
+        try:
+            from gold_bias import latest as _gb_latest, alignment as _gb_align
+            from database import get_db as _gb_db
+            gold_bias_snap = await _gb_latest(_gb_db())
+            if gold_bias_snap:
+                _al = _gb_align(gold_bias_snap, action)
+                key_factors = [*key_factors, f"gold bias {gold_bias_snap.get('bias')} {gold_bias_snap.get('score'):+.0f}"
+                               + (f" — {action} {_al} bias" if _al != "n/a" else "")]
+        except Exception:  # noqa: BLE001 — advisory only
+            gold_bias_snap = None
     if not news_veto["active"]:
         key_factors = [*key_factors, news_veto["note"]]
     if veto_reason and not mtf_mode:
@@ -671,6 +689,8 @@ async def analyze_symbol(symbol: str, risk_level: str,
         "indicators": indicators,
         "sentiment": sentiment,
         "news_veto": news_veto,
+        "gold_bias": gold_bias_snap and {"bias": gold_bias_snap.get("bias"), "score": gold_bias_snap.get("score"),
+                                         "alignment": alignment_of(gold_bias_snap, action), "reasons": gold_bias_snap.get("reasons")},
         "session": session,
         "session_bias": session_bias,
         "regime": regime,

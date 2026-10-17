@@ -652,6 +652,12 @@ async def evaluate(db, cfg: dict, account: dict, now: datetime | None = None, *,
         return await _done("no sweep-and-reclaim / pullback / micro-breakout on the last M5 close")
     if cand.get("blocked"):
         return await _done(cand["blocked"])
+    # v1.60.60 #71 — optional: enter only in the Gold Daily Bias direction (flag default OFF → no effect)
+    if cfg.get("gold_bias_gtp_direction_enabled"):
+        from gold_bias import gtp_direction_allowed, latest as _bias_latest
+        _ok, _why = gtp_direction_allowed(await _bias_latest(db), cand["direction"], cfg)
+        if not _ok:
+            return await _done(_why)
     if cand["trigger"] == "sweep":                      # item 13 — scalp leg (+ optional ½-size runner to the pre-drop high)
         plan = R.plan_sweep_exit(cand["direction"], cand["entry"], cand["sweep_low"], cand["pre_drop_high"], cand["atr"], runner=runner_on(cfg))
         setup_id = uuid.uuid4().hex[:12]

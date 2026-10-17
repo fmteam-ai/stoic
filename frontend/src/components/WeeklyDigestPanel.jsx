@@ -5,6 +5,7 @@ import {
     Sparkles, Mail, CheckCircle2, AlertCircle,
 } from "lucide-react";
 import { formatApiError } from "@/lib/api";
+import { useLlmModel } from "@/hooks/useLlmModel";
 
 /* Weekly AI Digest — a 7-day recap of the user's bot activity.
    Surfaces win rate, P&L, best/worst trade, auto-heal action count, top HOLD
@@ -50,6 +51,7 @@ const HOLD_REASON_COLORS = {
 };
 
 export default function WeeklyDigestPanel() {
+    const llm = useLlmModel("analysis");
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [err, setErr] = useState(null);
@@ -231,7 +233,7 @@ export default function WeeklyDigestPanel() {
                     <div className="border border-[#FFD700]/20 bg-[#FFD700]/5 p-4 space-y-2"
                          data-testid="digest-ai-reflection">
                         <div className="font-mono text-[10px] text-[#FFD700] tracking-widest flex items-center gap-1.5">
-                            <Sparkles className="w-3 h-3" /> AI REFLECTION · CLAUDE SONNET 4.5
+                            <Sparkles className="w-3 h-3" /> AI REFLECTION · <span data-testid="digest-model-label">{llm.labelUpper}</span>
                         </div>
                         <div className="text-[13px] text-[#FAFAFA] leading-relaxed whitespace-pre-line"
                              style={{ fontFamily: "Georgia, serif" }}>

@@ -1,7 +1,7 @@
 """StrategyAgent — fuses indicators + research into a candidate signal.
 
 This is a thin orchestration wrapper around the existing
-`ai_signals.analyze_symbol` (Claude Sonnet 4.5 + Logistic Regression +
+`ai_signals.analyze_symbol` (Claude — `analysis` tier via llm_client — + Logistic Regression +
 10-layer veto cascade). The wrapper keeps the existing veto pipeline intact —
 its only job is to standardise the entry/exit interface so the RiskAgent and
 Orchestrator can compose around it.

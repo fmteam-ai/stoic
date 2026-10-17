@@ -2,7 +2,7 @@
 
 Reads the last hour of operational telemetry (trade failures, bot pulses,
 veto stats, account heartbeats, blocked accounts) and asks Claude
-Sonnet 4.5 to produce a structured diagnosis.
+(the `analysis` tier from llm_models, via llm_client) to produce a structured diagnosis.
 
 This is the LITE version: NO auto-apply. The diagnosis surfaces on the
 dashboard as a tile with human-readable findings + ranked remediation
@@ -74,7 +74,49 @@ RULES:
     critical  = capital at risk, immediate human attention needed
 - If you cannot diagnose with confidence, return status="watch" and say so
 - Stay focused on the SINGLE biggest issue — don't list every minor thing
+- EA builds: `ea_fleet.terminals[*].ea_version` is the authoritative per-terminal build from the heartbeat table.
+  When you mention an EA version, quote it per account label exactly as given (and `ea_fleet.shipped_version` for
+  the release). Never infer or generalise one terminal's version to another.
 """
+
+
+def _ea_fleet(accounts: list[dict], now: datetime) -> dict:
+    """#74 — per-account EA build straight from the heartbeat table, compared with the signed release record."""
+    try:
+        from ea_capabilities import _signed_release_record, accepted_ea_sha256s
+        rec = _signed_release_record() or {}
+        accepted = set(accepted_ea_sha256s())
+    except Exception:  # noqa: BLE001 — release record optional
+        rec, accepted = {}, set()
+    shipped = str(rec.get("version") or "") or None
+    previous = str((rec.get("previous") or {}).get("version") or "") or None
+    terminals = []
+    for a in accounts:
+        if a.get("mode") == "paper":
+            continue
+        ver = str(a.get("ea_version") or "") or None
+        hb = a.get("last_heartbeat")
+        age = None
+        if hb:
+            try:
+                age = int((now - datetime.fromisoformat(str(hb).replace("Z", "+00:00"))).total_seconds())
+            except Exception:  # noqa: BLE001
+                pass
+        h = str(a.get("ea_binary_sha256") or "").lower()
+        terminals.append({
+            "label": a.get("label"), "ea_version": ver, "ea_version_reported_at": a.get("ea_version_updated_at"),
+            "heartbeat_age_seconds": age, "trading_enabled": bool(a.get("trading_enabled")),
+            "build": ("current" if shipped and ver == shipped else "previous" if previous and ver == previous
+                      else "unknown" if not ver else "other"),
+            "ex5_accepted": (h in accepted) if h else None,
+        })
+    by_version: dict[str, list[str]] = {}
+    for t in terminals:
+        by_version.setdefault(t["ea_version"] or "unreported", []).append(str(t["label"]))
+    return {"shipped_version": shipped, "previous_version": previous, "terminals": terminals,
+            "terminals_by_version": by_version,
+            "note": "Authoritative per-terminal EA build (heartbeat client_version). Quote ea_version per label verbatim; "
+                    "never infer a terminal's version from another account or from the shipped version."}
 
 
 async def _collect_telemetry(db, user_id: str,
@@ -113,12 +155,13 @@ async def _collect_telemetry(db, user_id: str,
     if account_id:
         acct_q["_id"] = account_id
     acct_cursor = db.accounts.find(acct_q, projection={
-        "label": 1, "broker": 1, "status": 1, "ea_version": 1,
-        "trading_blocked": 1, "block_reason": 1, "block_retcode_label": 1,
+        "label": 1, "broker": 1, "status": 1, "ea_version": 1, "ea_version_updated_at": 1, "ea_binary_sha256": 1,
+        "trading_blocked": 1, "block_reason": 1, "block_retcode_label": 1, "trading_enabled": 1,
         "symbol_suffix": 1, "last_heartbeat": 1, "mode": 1,
     })
     accounts = []
-    for a in [a async for a in acct_cursor]:
+    accounts_raw = [a async for a in acct_cursor]
+    for a in accounts_raw:
         hb = a.get("last_heartbeat")
         hb_age = None
         if hb:
@@ -139,6 +182,10 @@ async def _collect_telemetry(db, user_id: str,
             "heartbeat_age_seconds": hb_age,
             "mode": a.get("mode"),
         })
+
+    # 3b. #74 — explicit EA fleet view from the heartbeat table + signed release record, so the diagnosis never
+    #     guesses which terminal runs which build (accounts.ea_version is stamped from the heartbeat's client_version).
+    ea_fleet = _ea_fleet(accounts_raw, now)
 
     # 4. Recent signals (action distribution + veto patterns)
     sig_q = {"user_id": user_id, "created_at": {"$gte": since}}
@@ -186,6 +233,7 @@ async def _collect_telemetry(db, user_id: str,
             "net_pnl": round(sum(t.get("pnl") or 0 for t in closed), 2),
         },
         "accounts": accounts,
+        "ea_fleet": ea_fleet,
         "signal_stats": {
             "total": len(signals),
             "actions": action_counts,

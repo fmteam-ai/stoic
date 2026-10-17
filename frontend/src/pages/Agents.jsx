@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import api, { formatApiError } from "@/lib/api";
+import { useLlmModel } from "@/hooks/useLlmModel";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import AgentReportCard from "@/components/AgentReportCard";
 import { EvidenceBoard } from "@/components/EvidenceBoard";
@@ -21,7 +22,7 @@ const AGENT_META = {
                        blurb: "NewsAPI score + upcoming-events summary, distilled to one directional bias." },
     // Core decision agents
     strategy:        { icon: Brain,      label: "Strategy",           color: "#FFB000",
-                       blurb: "Claude Sonnet 4.5 + Logistic Regression → candidate signal with 10-layer veto." },
+                       blurb: "{{LLM}} + Logistic Regression → candidate signal with 10-layer veto." },
     risk:            { icon: ShieldCheck, label: "Risk",              color: "#FF3B30",
                        blurb: "Portfolio cross-asset correlation veto + Safety Guardian hard floors." },
     // 2 post-decision shapers — adjust lot / timing
@@ -150,6 +151,7 @@ function StrategyGeneratorCta() {
 }
 
 function AgentRoster() {
+    const llm = useLlmModel("analysis");
     // Show only the active 7-agent pipeline (hide legacy + broker_execution).
     const active = Object.entries(AGENT_META).filter(
         ([k]) => !["research", "execution"].includes(k)
@@ -172,7 +174,7 @@ function AgentRoster() {
                                 <Icon className="w-4 h-4" style={{ color: meta.color }} />
                                 <div className="font-display font-bold text-sm tracking-tight">{meta.label}</div>
                             </div>
-                            <p className="text-xs text-[#A1A1AA] leading-relaxed">{meta.blurb}</p>
+                            <p className="text-xs text-[#A1A1AA] leading-relaxed">{meta.blurb.replace("{{LLM}}", llm.label)}</p>
                         </div>
                     );
                 })}

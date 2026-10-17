@@ -31,7 +31,7 @@ Output: plain text only. No markdown, no JSON, no headings."""
 
 
 async def _generate_ai_reflection(digest_payload: dict) -> Optional[str]:
-    """Ask Claude Sonnet 4.5 for a narrative reflection on the digest data."""
+    """Ask Claude (`analysis` tier) for a narrative reflection on the digest data."""
     import llm_client
     if not llm_client.configured():
         return None
@@ -194,7 +194,7 @@ async def weekly_digest(days: int = 7, include_ai: bool = False,
         "suggested_action": _suggest_action(stats),
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
-    # iter-69 · Optional LLM-written reflection (Claude Sonnet 4.5).
+    # iter-69 · Optional LLM-written reflection (Claude, `analysis` tier).
     # Frontend opts in via ?include_ai=true to avoid a slow LLM call on
     # every dashboard refresh.
     if include_ai:

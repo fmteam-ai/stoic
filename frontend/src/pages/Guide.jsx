@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { useLlmModel } from "@/hooks/useLlmModel";
 import { VpsOfferButton } from "@/components/VpsOffer";
+import { EnginesSection, GoldTrendPulseSection, GuardrailsSection, AiProviderSection } from "@/pages/guide/LatestSections";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
     BookOpen, Sparkles, Brain, Target, CheckCircle2, ArrowRight, ShieldCheck,
     Layers, Rocket, Settings as SettingsIcon, Zap, Clock, TrendingUp, AlertTriangle,
     Plane, Power, Repeat, Eye, Cpu, Search, Send, Bookmark, DollarSign, Server, Bitcoin,
-    Stethoscope, Activity, Wand2, BrainCircuit,
+    Stethoscope, Activity, Wand2, BrainCircuit, Crosshair, Gauge, ShieldAlert, KeyRound,
 } from "lucide-react";
 
 // ─── Table-of-contents ──────────────────────────────────────────────────────
@@ -26,15 +28,19 @@ const SECTIONS = [
     { id: "optimizer",    title: "13. AI Strategy Optimizer (NEW)",    icon: BrainCircuit },
     { id: "doctor",       title: "14. Bot Doctor — self-diagnosis",    icon: Stethoscope },
     { id: "auto-broker",  title: "15. Auto Broker Detection (NEW)",    icon: Wand2 },
-    { id: "daily",        title: "16. Daily 5-min routine",            icon: Clock },
-    { id: "advanced",     title: "17. Advanced — tuning & auditing",   icon: SettingsIcon },
-    { id: "presets",      title: "18. Strategy Presets",               icon: Bookmark },
-    { id: "crypto",       title: "19. Crypto · Binance Spot",          icon: Bitcoin },
-    { id: "vps",          title: "20. VPS & Infrastructure",           icon: Server },
-    { id: "governance",   title: "21. Safety Modes & Governance",      icon: Activity },
-    { id: "going-live",   title: "22. Going live (paper → real)",      icon: TrendingUp },
-    { id: "affiliate",    title: "23. Earn 20% recurring (affiliate)", icon: DollarSign },
-    { id: "faq",          title: "24. Quick links",                    icon: Zap },
+    { id: "engines",      title: "16. Scalp Fast Path & engines (NEW)", icon: Crosshair },
+    { id: "gtp",          title: "17. Gold Trend Pulse (NEW)",         icon: Gauge },
+    { id: "guardrails",   title: "18. Guardrails on every mode (NEW)", icon: ShieldAlert },
+    { id: "ai-provider",  title: "19. AI layer — provider & keys (NEW)", icon: KeyRound },
+    { id: "daily",        title: "20. Daily 5-min routine",            icon: Clock },
+    { id: "advanced",     title: "21. Advanced — tuning & auditing",   icon: SettingsIcon },
+    { id: "presets",      title: "22. Strategy Presets",               icon: Bookmark },
+    { id: "crypto",       title: "23. Crypto · Binance Spot",          icon: Bitcoin },
+    { id: "vps",          title: "24. VPS & Infrastructure",           icon: Server },
+    { id: "governance",   title: "25. Safety Modes & Governance",      icon: Activity },
+    { id: "going-live",   title: "26. Going live (paper → real)",      icon: TrendingUp },
+    { id: "affiliate",    title: "27. Earn 20% recurring (affiliate)", icon: DollarSign },
+    { id: "faq",          title: "28. Quick links",                    icon: Zap },
 ];
 
 export default function Guide() {
@@ -106,6 +112,10 @@ export default function Guide() {
                     <OptimizerSection />
                     <BotDoctorSection />
                     <AutoBrokerSection />
+                    <EnginesSection H2={H2} P={P} Callout={Callout} />
+                    <GoldTrendPulseSection H2={H2} P={P} Callout={Callout} />
+                    <GuardrailsSection H2={H2} P={P} Callout={Callout} />
+                    <AiProviderSection H2={H2} P={P} Callout={Callout} />
                     <DailyFlow />
                     <Advanced />
                     <PresetsSection />
@@ -171,6 +181,7 @@ function Step({ n, title, children, testid }) {
 }
 
 function Intro() {
+    const llm = useLlmModel("analysis");
     return (
         <section>
             <H2 id="intro" icon={BookOpen}>1. What is STOIC?</H2>
@@ -184,7 +195,7 @@ function Intro() {
             <P>
                 Unlike typical retail bots that fire on a single indicator, STOIC runs every candidate trade
                 through a <strong className="text-white">10-layer veto cascade</strong> driven by a dual-AI engine
-                (Claude Sonnet 4.5 + a locally-trained Logistic Regression). The result is{" "}
+                ({llm.label} + a locally-trained Logistic Regression). The result is{" "}
                 <em>low frequency, high conviction</em> — STOIC trades less than 10% of the candidate signals it sees.
             </P>
             <Callout kind="good">
@@ -249,6 +260,7 @@ function Edge() {
 }
 
 function Engine() {
+    const llm = useLlmModel("analysis");
     return (
         <section>
             <H2 id="engine" icon={Brain}>3. The Dual-AI engine</H2>
@@ -256,7 +268,7 @@ function Engine() {
             <div className="grid md:grid-cols-2 gap-3 mt-4">
                 <div className="border border-[#1F1F1F] bg-[#0A0A0A] p-4">
                     <div className="font-display font-bold text-base mb-2 flex items-center gap-2">
-                        <span className="text-[#00FF41]">🤖</span> Engine A — Claude Sonnet 4.5
+                        <span className="text-[#00FF41]">🤖</span> Engine A — {llm.label}
                     </div>
                     <div className="text-xs text-[#A1A1AA] leading-relaxed">
                         Reads a structured payload (price action, indicators, news sentiment, COT positioning, TIPS regime, DXY regime, Kalman state) and returns: action (BUY/SELL/HOLD), confidence 0–100, key drivers, full plain-English reasoning, and entry/SL/TP levels.
@@ -280,6 +292,7 @@ function Engine() {
 }
 
 function Agents() {
+    const llm = useLlmModel("analysis");
     const roster = [
         {
             icon: Search, color: "#00FF41",
@@ -301,7 +314,7 @@ function Agents() {
             blurb: "The brain.",
             does: "Fuses Research's macro picture with live technicals into a candidate signal (BUY / SELL / HOLD + confidence + entry / SL / TP).",
             data: [
-                "Claude Sonnet 4.5 — narrative reasoning",
+                `${llm.label} — narrative reasoning`,
                 "Session-specific Logistic Regression — local hit-rate memory",
                 "12 technical indicators (Kalman, ATR, RSI, MACD, Bollinger, MTF…)",
                 "Kelly-criterion sizing + regime-adaptive risk modifier",
@@ -548,9 +561,10 @@ function SetupSteps() {
 }
 
 function Autopilot() {
+    const llm = useLlmModel("analysis");
     const lifecycle = [
         { icon: Repeat,  t: "Tick (every 60s)",     d: "STOIC pulls the latest XAU/BTC price, news, COT, TIPS and DXY data. The clock on Dashboard counts down to the next tick." },
-        { icon: Brain,   t: "Dual-AI vote",         d: "Claude Sonnet 4.5 and the session-specific Logistic Regression each output an opinion. Disagreement → HOLD." },
+        { icon: Brain,   t: "Dual-AI vote",         d: `${llm.label} and the session-specific Logistic Regression each output an opinion. Disagreement → HOLD.` },
         { icon: Layers,  t: "10-layer veto cascade",d: "Sentiment, macro blackout, regime, entropy, meta-labeler, MTF, learned-meta, A+ confluence, R:R, DXY gate." },
         { icon: Target,  t: "Position sizing",      d: "Kelly-fraction × confidence × regime mod ÷ SL distance. Bounded by your max-risk-per-trade." },
         { icon: Power,   t: "Order to EA",          d: "STOIC posts the entry/SL/TP to your bridge. The EA picks it up within 5s, calls MT5 OrderSend(), reports the fill back." },
@@ -777,13 +791,14 @@ function OptimizerSection() {
 }
 
 function BotDoctorSection() {
+    const llm = useLlmModel("analysis");
     return (
         <section id="doctor">
             <H2 id="doctor" icon={Stethoscope}>14. Bot Doctor — self-diagnosis</H2>
             <P>
                 STOIC analyses its own last hour of telemetry every 5 minutes (failed trades, blocked
                 accounts, regime context, vetos, signal patterns, win rate) and produces a structured
-                health diagnosis powered by <strong>Claude Sonnet 4.5</strong>. The result lives at the top
+                health diagnosis powered by <strong>{llm.label}</strong>. The result lives at the top
                 of your Dashboard as the <strong>Bot Doctor</strong> tile.
             </P>
             <div className="space-y-3 mt-4">
@@ -862,7 +877,7 @@ function DailyFlow() {
     ];
     return (
         <section>
-            <H2 id="daily" icon={Clock}>16. Daily 5-min routine</H2>
+            <H2 id="daily" icon={Clock}>20. Daily 5-min routine</H2>
             <P>Autopilot doesn&apos;t mean &quot;set and forget forever&quot;. About <strong className="text-white">5 minutes a day</strong> keeps you in the loop:</P>
             <ol className="space-y-1.5 mt-3 list-decimal list-inside marker:text-[#52525B] marker:font-mono">
                 {checks.map(([t, sub]) => (
@@ -883,7 +898,7 @@ function DailyFlow() {
 function Advanced() {
     return (
         <section>
-            <H2 id="advanced" icon={SettingsIcon}>17. Advanced — tuning & auditing</H2>
+            <H2 id="advanced" icon={SettingsIcon}>21. Advanced — tuning & auditing</H2>
             <div className="space-y-4 mt-3">
                 <div>
                     <div className="font-display font-bold text-base mb-1.5">🔍 Auditing a specific signal</div>
@@ -915,7 +930,7 @@ function Advanced() {
 function GoingLive() {
     return (
         <section>
-            <H2 id="going-live" icon={TrendingUp}>22. Going live (paper → real)</H2>
+            <H2 id="going-live" icon={TrendingUp}>26. Going live (paper → real)</H2>
             <ol className="list-decimal list-inside space-y-2 marker:text-[#52525B] marker:font-mono">
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Paper for 2+ weeks.</strong> Let the learned-meta classifier collect at least 30 closed trades per session before going live. The model needs data to filter your losers.</li>
                 <li className="text-sm text-[#A1A1AA]"><strong className="text-white">Subscribe.</strong> Live execution requires an active paid plan — see the <Link to="/subscription" className="text-[#00FF41] hover:underline">Subscription</Link> page.</li>
@@ -940,7 +955,7 @@ function GoingLive() {
 function VpsSection() {
     return (
         <section>
-            <H2 id="vps" icon={Server}>20. VPS & Infrastructure — 24/7 uptime, fully managed</H2>
+            <H2 id="vps" icon={Server}>24. VPS & Infrastructure — 24/7 uptime, fully managed</H2>
             <P>
                 Autopilot only works while your <strong className="text-white">MT5 terminal is running and online</strong>.
                 If your PC sleeps, closes its lid, reboots, or loses internet — the bot loses contact with your broker,
@@ -1056,7 +1071,7 @@ function PresetsSection() {
     ];
     return (
         <section>
-            <H2 id="presets" icon={Bookmark}>18. Strategy Presets</H2>
+            <H2 id="presets" icon={Bookmark}>22. Strategy Presets</H2>
             <P>
                 Presets are <strong className="text-white">one-click personality profiles</strong> for the bot. They overlay
                 behaviour knobs (confidence floor, trade cap, trailing stop, cooldowns, news protector) onto your config — but
@@ -1099,7 +1114,7 @@ function PresetsSection() {
 function AffiliateSection() {
     return (
         <section>
-            <H2 id="affiliate" icon={DollarSign}>23. Earn 20% recurring (affiliate program)</H2>
+            <H2 id="affiliate" icon={DollarSign}>27. Earn 20% recurring (affiliate program)</H2>
             <P>
                 Refer one trader — get paid every month they stay subscribed. STOIC pays{" "}
                 <strong className="text-[#FFD700]">20% recurring commission</strong> on the base subscription fee for the
@@ -1191,7 +1206,7 @@ function QuickLinks() {
     ];
     return (
         <section>
-            <H2 id="faq" icon={Zap}>24. Quick links</H2>
+            <H2 id="faq" icon={Zap}>28. Quick links</H2>
             <P>Jump straight to any feature page:</P>
             <div className="flex flex-wrap gap-2 mt-3">
                 {links.map(l => (
@@ -1336,7 +1351,7 @@ function ShadowSection() {
 function CryptoSection() {
     return (
         <section>
-            <H2 id="crypto" icon={Bitcoin}>19. Crypto · Binance Spot</H2>
+            <H2 id="crypto" icon={Bitcoin}>23. Crypto · Binance Spot</H2>
             <P>
                 STOIC trades BTC/USDT on Binance Spot via the CCXT REST API — server-side,
                 no EA needed. Runs the same Safety Guardian veto cascade, the same Explainable AI
@@ -1388,7 +1403,7 @@ function GovernanceSection() {
     ];
     return (
         <section>
-            <H2 id="governance" icon={Activity}>21. Safety Modes & Governance</H2>
+            <H2 id="governance" icon={Activity}>25. Safety Modes & Governance</H2>
             <P>
                 STOIC treats going live as a <strong className="text-white">governed promotion</strong>, not a toggle.
                 Every bot walks a mode ladder where promotions are slow, evidence-based, and MFA-confirmed — while

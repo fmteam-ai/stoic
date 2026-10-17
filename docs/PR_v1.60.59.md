@@ -21,6 +21,10 @@ journal cards were silently off.
   "News veto" check; `GET /api/diagnostic/llm-status`; new `LlmProviderCard` (provider, last error, cost counters).
 * Admin → Integrations → AI: `ANTHROPIC_API_KEY` sealed secret + Test button (one tiny call, key never returned).
 
+* **#74** live model labels (`useLlmModel` ← `/api/diagnostic/llm-models`, `llm_models.pretty_name`) replace every hard-coded
+  "Claude Sonnet 4.5"; Bot Doctor receives an explicit per-terminal `ea_fleet` (heartbeat `ea_version` vs signed release) so it
+  cannot misreport which terminals run 1.64/1.65.
+
 ## Files
 `llm_client.py` (new), `llm_models.py` (doc), `copilot.py`, `ai_signals.py`, `news_understanding.py`, `fed_tone.py`,
 `self_evaluation.py`, `loss_postmortem.py`, `loss_advisor.py`, `ai_optimizer.py`, `bot_doctor.py`, `nl_commander.py`,

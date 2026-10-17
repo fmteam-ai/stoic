@@ -253,6 +253,7 @@ export function MarketIntelCard({ compact = false }) {
                 <>
                     <Section title="NEXT EVENTS" testid="intel-next-events"><NextEvents d={d.next_events} /></Section>
                     <Section title="RISK REGIME (ADVISORY)" testid="intel-risk-regime"><Regime r={d.risk_regime} /></Section>
+                    {d.gold_bias && <Section title="GOLD DAILY BIAS (#71)" testid="intel-gold-bias"><GoldBias g={d.gold_bias} /></Section>}
                     {d.gold_trend_pulse?.available && <Section title="GOLD TREND PULSE · DAILY BIAS" testid="intel-gold-trend-pulse">
                         {(d.gold_trend_pulse.accounts || []).map((a) => (
                             <div key={a.account_id} className="text-xs mb-2" data-testid={`intel-gtp-${a.account_id}`}>
@@ -277,3 +278,33 @@ export function MarketIntelCard({ compact = false }) {
 }
 
 export default MarketIntelCard;
+
+
+// v1.60.60 #71 — Gold Daily Bias: bias/score/reasons, shadow tally, next-event news plan. Advisory until the gates are enabled.
+function GoldBias({ g }) {
+    const col = g.bias === "LONG" ? "text-[#00FF41]" : g.bias === "SHORT" ? "text-[#FF3B30]" : "text-[#A1A1AA]";
+    const sh = g.shadow || {};
+    const plan = g.news_plan;
+    return (
+        <div className="text-xs space-y-1">
+            <div className="font-mono" data-testid="intel-gold-bias-headline">
+                <span className={`${col} font-bold`}>{g.bias}</span> <span className="text-white">{g.score > 0 ? "+" : ""}{g.score}</span>
+                {g.strong && <span className="ml-2 text-[10px] text-[#FFB000]">STRONG</span>}
+                {g.computed_at && <span className="ml-2 text-[10px] text-white/40">{String(g.computed_at).slice(11, 16)}Z</span>}
+            </div>
+            <ul className="text-[10px] text-white/70 list-disc pl-4" data-testid="intel-gold-bias-reasons">{(g.reasons || []).slice(0, 8).map((r, i) => <li key={i}>{r}</li>)}</ul>
+            <div className="text-[10px] text-white/50" data-testid="intel-gold-bias-shadow">
+                shadow (2 wk): with bias {sh.with?.n || 0} trades / {sh.with?.wins || 0} wins / ${sh.with?.pnl ?? 0} · against {sh.against?.n || 0} / {sh.against?.wins || 0} / ${sh.against?.pnl ?? 0}
+            </div>
+            {g.note && <div className="text-[10px] text-[#FFB000]">{g.note}</div>}
+            {plan && (
+                <div className="border-t border-white/10 pt-1 mt-1 text-[10px]" data-testid="intel-gold-news-plan">
+                    <div className="text-[#F5C542]">NEWS PLAN · {plan.event} · {String(plan.at || "").slice(0, 16)}Z</div>
+                    <div className="text-white/70">fcst {plan.forecast || "—"} · prev {plan.previous || "—"} · actual {plan.actual || "missing"} · expected vol {String(plan.expected_volatility)}</div>
+                    <div className="text-white/50">open gold trades before freeze: {plan.affected_open_trades?.length ? plan.affected_open_trades.map((t) => `${t.action} ${t.symbol} → ${t.plan}`).join("; ") : "none"}</div>
+                    <div className="text-white/40">post-news entry: {plan.post_news_rule}</div>
+                </div>
+            )}
+        </div>
+    );
+}

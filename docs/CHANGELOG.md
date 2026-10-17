@@ -2,6 +2,29 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.60 — Gold Daily Bias (#71, shadow) + TP1 bank & protected runner (#72) + #74 (every new flag OFF; no guard/sizing change)
+- **#71** `gold_bias.py`: 15-min bias LONG/SHORT/NEUTRAL, score −100…+100, fixed weights, missing inputs = 0 + `unavailable`; Market Intel block + `/market-intel/gold-bias`; note in every gold signal; 2-week shadow log (with/against + outcome); flags `gold_bias_gtp_direction_enabled`, `gold_bias_block_counter_enabled` (OFF); news plan per USD HIGH event + post-news rule; ForexFactory `actual` + `calendar_outcomes` surprise.
+- **#72** BotConfig `exit_policy` (`fixed_tp` default | `tp1_bank_runner`), `tp1_close_fraction` 0.5, `be_plus_offset_price` 1.0, `tp2_multiple` 2.0; `exit_policy_tp1.py` + `trade_manager._tp1_bank_runner_exits` (bank at TP1 floored to lot step / SL-only, SL → entry ± offset with min-stop, broker TP → TP2, M5 swing / ATR trail never loosening, partial fail → retry → full close); report split banked/runner; read-only `scripts/tp1_bank_shadow.py`.
+- Docs: `docs/RELEASE_NOTES_v1.60.60.md`, `docs/PR_v1.60.60.md`.
+
+## v1.60.59 — LLM provider abstraction + Co-Pilot memory + news-veto visibility + #74 (no trading or risk settings changed)
+- **`llm_client.py`** is the single LLM entry point: `ANTHROPIC_API_KEY` → direct Anthropic (official SDK) else `EMERGENT_LLM_KEY` → Emergent Universal Key (works only for Emergent-hosted apps; other hosts get 403) else fail closed. Models only from `llm_models.model_for()`; per-tier `max_tokens` caps, `LLM_DAILY_CALL_CAP` (2000), per-feature daily counters, key redaction, 403 classified as "Universal Key not allowed from this host".
+- **Admin → Integrations → AI**: `ANTHROPIC_API_KEY` sealed secret + Test button (one tiny call). **Bot Health**: LLM PROVIDER · COST card, "Claude LLM" and "News veto" checks, `GET /api/diagnostic/llm-status` (admin) / `llm-models` (user).
+- **Co-Pilot** replays the last 6 turns from `db.copilot_sessions` with every request. **Signals** carry `news_veto` + the note "news veto inactive — LLM unavailable" when sentiment is empty.
+- **#74**: live model labels everywhere (`useLlmModel`), Bot Doctor receives an explicit per-terminal `ea_fleet` (heartbeat EA version vs signed release).
+- Docs: `docs/RELEASE_NOTES_v1.60.59.md`; Guide sections 16–19, FAQ and Help Center refreshed.
+
+## v1.60.58 — review fixes #57–#61 for v1.60.56/57 (no trading or risk settings changed)
+- **#57 BLOCKER**: `/bridge/external-deal` decorator restored onto `external_deal` (ASGI + route-table tests). **#58/#59**: `stale_feature_entry` gated on `engine_live_features_enabled`, projected in `STREAK_FIELDS`. **#60**: cross-account cooldown R from `original_stop_loss` (BE scratch ≠ loss). **#61**: EOD quiet window never pauses panic/protection re-dispatch; friday_flat close Telegram after an earlier tighten.
+- **Gold Trend Pulse #62–#70** (engine still OFF): no trend-ride/vol-retarget for deterministic scopes; spread by broker symbol, fail closed; `demo_live` only on attested DEMO via confirmed route (generic PATCH → 422), enum validated, rolling live gate counting a basket once; layered-leg SL side / 1.3×TP / confirmation; management during macro freezes with ack-based "protected"; complete-M5 / completed H1-H4 / H4 warm-up / `t_basis`; sweep scalp SL cap; scratch outcomes + original-stop R + stored entry costs for BE; whole-word HIGH-impact event match.
+
+## v1.60.57 — Gold Trend Pulse (XAUUSD-only, disabled by default, shadow first) + #56 cross-account loss cooldown
+- **`gold_trend_pulse_enabled=false`, `gold_trend_pulse_mode=shadow`** — nothing changes on any account until enabled. Trend/range modes, layered baskets, sweep-and-reclaim, News Mode (Finnhub calendar, PRE protect / release window / confirmation), cost-aware BE, time stops, replay tools (`scripts/gtp_replay.py`, `scripts/gtp_news_events.py`, read-only).
+- **#56**: a real loss (< −0.1 R) on any account blocks the same symbol+direction on ALL the user's accounts for the loss-cooldown duration (default 30 min). Pulse "cross-account loss cooldown".
+
+## v1.60.56 / v1.60.57a — #55 live-price engine features behind `engine_live_features_enabled=false`
+- Price-dependent features update from the current broker price (EMA logic stays closed-bar); breakout confirmation ≥ 0.2 × ATR15 beyond the level; momentum override of stale FLAT; no SELL on a stale reclaimed breakdown; one-week shadow comparison with the flag OFF.
+
 ## v1.60.39 — background safety loops now have a production owner (no trading or risk settings changed)
 - **Bug**: `scheduled_drill_loop` (deployment bake watch / auto-rollback, candidate auto-promotion, audit-anchor head, scheduled drills), `deploy_watch.loop`, `_heartbeat_watch_loop`, `_mode_guardian_loop`, `_soak_sampler_loop`, `_soak_tracker_loop`, `_billing_loop`, `ops_outbox_loop` and `_broker_intel_loop` were started only in `server.py`'s in-process block (behind the `BACKGROUND_WORKERS_IN_PROCESS` gate). Production runs external workers, so none of them ever ran — the 14 Oct 19:18 promotion's `deploy_watch` stayed pending with no score/status. Same class as the 13 Oct intent-sweep bug.
 - **Fix**: all nine loops now run in `workers/reconciliation.py` (existing compose service — no deploy change), each with its own `loop_progress` heartbeat; `scheduled_drill_loop` records/persists `scheduled_drill_loop` progress.

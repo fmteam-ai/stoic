@@ -1,11 +1,12 @@
 /* BotDoctorPanel — iter-75 LITE dashboard tile.
-   Surfaces Claude Sonnet 4.5's structured diagnosis of the last hour
+   Surfaces Claude's (live `analysis` tier model) structured diagnosis of the last hour
    of bot telemetry. NO auto-apply: every recommendation is presented
    for human action only. */
 import { useEffect, useState, useCallback } from "react";
 import api from "@/lib/api";
 import { Stethoscope, RefreshCw, AlertTriangle, ShieldCheck, Activity, Sparkles, ChevronDown, ChevronUp } from "lucide-react";
 import { formatApiError } from "@/lib/api";
+import { useLlmModel } from "@/hooks/useLlmModel";
 
 const STATUS_STYLES = {
     healthy:  { color: "#00FF41", bg: "bg-[#00FF41]/5",  border: "border-[#00FF41]/30", Icon: ShieldCheck, label: "HEALTHY" },
@@ -34,6 +35,7 @@ function relativeAge(iso) {
 }
 
 export default function BotDoctorPanel() {
+    const llm = useLlmModel("analysis");
     const [diag, setDiag] = useState(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -97,7 +99,7 @@ export default function BotDoctorPanel() {
                         </div>
                         {!llmFailed && (
                             <div className="font-mono text-[9px] text-[#52525B] tracking-widest flex items-center gap-1">
-                                <Sparkles className="w-2.5 h-2.5" /> CLAUDE SONNET 4.5
+                                <Sparkles className="w-2.5 h-2.5" /> <span data-testid="bot-doctor-model-label">{llm.labelUpper}</span>
                             </div>
                         )}
                     </div>

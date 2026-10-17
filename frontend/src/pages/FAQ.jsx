@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { useLlmModel } from "@/hooks/useLlmModel";
 import { Link } from "react-router-dom";
 import { AppLayout, PageHeader } from "@/components/AppLayout";
 import {
@@ -37,7 +38,7 @@ const FAQS = [
 
     // AI Signals ─────────────────────────────────────────────────────────────
     { cat: "signals", q: "How are signals generated?",
-      a: "Two engines run in parallel — Claude Sonnet 4.5 (semantic reasoning over market context, news, macro data) and a locally-trained Logistic Regression (probability-of-win classifier). Their outputs feed a 10-layer veto cascade that kills any signal that doesn't survive every gate." },
+      a: "Two engines run in parallel — {{LLM}} (semantic reasoning over market context, news, macro data) and a locally-trained Logistic Regression (probability-of-win classifier). Their outputs feed a 10-layer veto cascade that kills any signal that doesn't survive every gate." },
     { cat: "signals", q: "What are the 10 vetoes?",
       a: "In order: 1) Sentiment, 2) Macro Event Blackout, 3) Regime, 4) Entropy, 5) Meta-Labeler, 6) Multi-Timeframe Trend, 7) Learned Meta-Classifier, 8) A+ Confluence, 9) Min R:R, 10) DXY Gate (XAU only). A single block = HOLD." },
     { cat: "signals", q: "Why are most signals HOLD?",
@@ -50,6 +51,13 @@ const FAQS = [
       a: "Yes — click 'GENERATE SIGNALS' on the AI Signals page. The bot will analyse all configured symbols and produce fresh signals. Useful for testing or before manually executing." },
     { cat: "signals", q: "How do I execute a signal manually?",
       a: "Each BUY/SELL card has an EXECUTE button. Click it, pick which MT5 account (paper or live), and confirm. The trade flows through the same pipeline as autonomous ones but tagged as `origin=manual_signal`." },
+
+    { cat: "signals", q: "What are the deterministic engines on the Scalp page?",
+      a: "hf_scalp / hf_scalp_fast (tick-driven gold scalps), breakout_m15, range_fade and gold_trend_pulse are rule-based strategies with fixed SL/TP geometry — no LLM in the loop. Pick one per account in Bot Config → Strategy engine; the Scalp page shows each runner's live features, decisions and shadow performance. Guide section 16." },
+    { cat: "signals", q: "What is Gold Trend Pulse and why is it off?",
+      a: "An XAUUSD-only M5 engine (trend pullbacks, range fades, sweep-and-reclaim, News Mode around CPI/NFP/FOMC). It ships disabled and starts in SHADOW mode: it records every decision and basket but sends no orders. demo_live is only allowed on attested DEMO accounts after an explicit confirmation and a rolling gate of ≥ 100 labelled shadow baskets. Guide section 17." },
+    { cat: "signals", q: "Why does a signal say 'news veto inactive — LLM unavailable'?",
+      a: "The dual-AI news veto needs a sentiment score from the AI news reader. When the model cannot be reached (no key, host blocked, daily cap) the score is empty, so the veto cannot fire — the note tells you that plainly instead of pretending it ran. Fix the Claude LLM check on Bot Health (usually: add an Anthropic key under Admin → Integrations → AI)." },
 
     // Risk & Trading ─────────────────────────────────────────────────────────
     { cat: "risk", q: "How does position sizing work?",
@@ -70,6 +78,13 @@ const FAQS = [
       a: "For Gold (XAUUSD) only: during the London-NY overlap (13:00-16:00 UTC) STOIC lowers the min-confidence floor by 3 pts (best liquidity, cleanest trends). In off-hours it raises the floor by 4 pts (wide spreads, choppy fills). BTC trades 24/7 so this only applies to gold." },
     { cat: "risk", q: "How does ATR-Adaptive SL/TP work?",
       a: "Instead of fixed pip stops, STOIC sizes the stop-loss at 1.5 × ATR(14) and take-profit at 5 × ATR. The stops shrink in calm markets (capturing tight trends) and widen in volatile ones (so noise doesn't trigger them). Falls back to 150/300 fixed pips if ATR isn't available." },
+
+    { cat: "risk", q: "What is the cross-account loss cooldown?",
+      a: "When any of your accounts closes a symbol+direction at a real loss (worse than −0.1 R from the original stop), that symbol+direction is blocked for ALL your accounts for the loss-cooldown duration (30 min by default). This stops a second broker from re-opening the trade the first one just lost 40 seconds earlier. Break-even scratches don't trigger it. Pulse: 'cross-account loss cooldown'." },
+    { cat: "risk", q: "What happens around high-impact news for gold?",
+      a: "Two layers. The calendar freeze blocks NEW entries in HIGH-impact windows for the symbol's currencies (USD medium ±5 min, widening when several events stack). Gold Trend Pulse additionally runs News Mode: protect open baskets before the print (break-even or close), wait for the surprise direction to confirm on M5, then trade the release. Management actions (protection, invalidation, breakout closes) keep running during the freeze." },
+    { cat: "risk", q: "Does the EOD quiet window delay emergency closes?",
+      a: "No. Between 23:40 and 00:05 broker time the EA ignores routine full-closes, so STOIC re-issues them when the terminal reopens — but panic, protection and unprotected-position closes are never paused. Friday-flat and EOD-flatten closes wait like any routine close." },
 
     // MT5 Bridge ─────────────────────────────────────────────────────────────
     { cat: "mt5", q: "How does the MT5 EA bridge work?",
@@ -150,6 +165,10 @@ const FAQS = [
       a: "Trades page → CLEAR button. You can clear closed, cancelled, failed trades, or filter by age (>7d, >30d). Open and pending trades are PROTECTED and can never be deleted through this — close them properly first." },
     { cat: "trouble", q: "The dashboard shows BOT STOPPED. How do I start it?",
       a: "Bot Config → toggle 'Bot Active' to ON (top of page). The bot starts polling on the next cycle (within 60 seconds). You'll see the LIVE indicator turn green in the top-right." },
+    { cat: "trouble", q: "Bot Health says 'Universal Key not allowed from this host'. What now?",
+      a: "The Emergent Universal Key only works for apps hosted on Emergent; a self-hosted VPS receives a 403 before the key is even checked. Trading is unaffected (engines and guardrails are deterministic), but narration, news sentiment, post-mortems, Co-Pilot and Bot Doctor's AI narrative pause. Fix: Admin → Integrations → AI → paste an Anthropic API key (sk-ant-…) → Test. The LLM PROVIDER card on Bot Health flips to DIRECT ANTHROPIC immediately." },
+    { cat: "trouble", q: "Which EA version is each terminal running?",
+      a: "Bot Health → EA fleet lists every terminal with its heartbeat-reported EA version, whether its EX5 hash is the signed current or previous release, and the heartbeat age. Bot Doctor receives the same table (ea_fleet) so its findings quote versions per account instead of guessing." },
     { cat: "trouble", q: "Where do I see why a specific signal was blocked?",
       a: "AI Signals page → find the signal card → look for the 'WHY HOLD' banner directly below the Veto Cascade strip. It tells you the exact gate that blocked it in plain English. For VETO cases, the AI Reasoning paragraph below the card has the full explanation." },
 ];
@@ -270,6 +289,7 @@ function CatChip({ id, label, count, active, icon: Icon, onClick }) {
 }
 
 function FAQSection({ cat, items, openIds, toggle }) {
+    const llm = useLlmModel("analysis");
     const Icon = cat.icon;
     return (
         <section className="border border-[#1F1F1F] bg-[#0A0A0A]" data-testid={`faq-section-${cat.id}`}>
@@ -292,7 +312,7 @@ function FAQSection({ cat, items, openIds, toggle }) {
                             </button>
                             {open && (
                                 <div className="px-5 pb-4 pl-12 text-sm text-[#A1A1AA] leading-relaxed">
-                                    {f.a}
+                                    {f.a.replace("{{LLM}}", llm.label)}
                                 </div>
                             )}
                         </div>

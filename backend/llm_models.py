@@ -58,6 +58,27 @@ def optimizer_candidates() -> list[tuple[str, str]]:
     return out
 
 
+def pretty_name(model_id: str) -> str:
+    """'claude-sonnet-5-5' → 'Claude Sonnet 5.5'; 'claude-haiku-4-5-20251001' → 'Claude Haiku 4.5' (#74 — UI labels)."""
+    parts = [p for p in str(model_id or "").split("-") if p]
+    if not parts:
+        return "Claude"
+    words, nums = [], []
+    for p in parts:
+        if p.isdigit():
+            if len(p) >= 8:          # date suffix
+                continue
+            nums.append(p)
+        else:
+            words.append(p.capitalize())
+    return " ".join(words + ([".".join(nums)] if nums else []))
+
+
+def pretty_models() -> dict:
+    return {t: pretty_name(model_for(t)) for t in TIERS}
+
+
+
 def describe() -> dict:
     """Resolved tier → model map + which came from env (for Bot Health diagnostics)."""
     return {

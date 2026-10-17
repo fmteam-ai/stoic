@@ -578,9 +578,20 @@ async def llm_status_view(user=Depends(get_current_user)):
     import llm_client
     from news_understanding import _status as ns
     out = await llm_client.status_with_db(get_db())
+    from llm_models import pretty_models
+    out["models_pretty"] = pretty_models()
     blocked = out.get("last_error_kind") == llm_client.KIND_BLOCKED
     out["news_veto"] = {"active": out["provider"] != llm_client.PROVIDER_NONE and not blocked and not ns.get("last_llm_error"),
                         "note": "news veto inactive — LLM unavailable" if (out["provider"] == llm_client.PROVIDER_NONE or blocked
                                                                            or ns.get("last_llm_error")) else "",
                         "last_scored_at": ns.get("last_scored_at"), "last_llm_error": llm_client.redact(ns.get("last_llm_error") or "") or None}
     return out
+
+
+@router.get("/llm-models")
+async def llm_models_view(user=Depends(get_current_user)):
+    """#74 — tier → model id / display name for UI labels (any signed-in user; no keys, no errors, no counters)."""
+    from llm_models import TIERS, model_for, pretty_models
+    import llm_client
+    return {"models": {t: model_for(t) for t in TIERS}, "models_pretty": pretty_models(),
+            "provider": llm_client.active_provider()}
