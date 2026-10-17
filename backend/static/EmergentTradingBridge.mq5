@@ -317,7 +317,7 @@
 // v1.66 — server-requested history backfill (ParseCandlesRequest →
 //         SendHistoryCandlesFor). Nothing else changed from 1.65.
 // v1.67 — heartbeat spreads resolved to the broker symbol name (BuildSpreadsJson,
-//         ResolveBrokerSymbol, SymbolPipSize by base). Nothing else changed from 1.66.
+//         ResolveSpreadSymbol, SymbolPipSize by base). Nothing else changed from 1.66.
 
 // Single source of truth for the version string we report to STOIC on every
 // heartbeat. Keep this in sync with #property version above. Bumping ONLY
@@ -384,12 +384,15 @@ string ResolveTickSymbol(string want) {
    return want;
 }
 
-// v1.67 — the broker's name for a base symbol (XAUUSD -> XAUUSD+ / XAUUSD.crp / XAUUSDm / GOLD#),
-// or "" when the broker has none. Exact name first, then a suffixed variant (strict before
-// relaxed, see SymbolHasBase), then the alias (GOLD / SILVER) the same way.
-string ResolveBrokerSymbol(string want) {
+// v1.67 — the broker's name for a base symbol, for the heartbeat spreads only. First the
+// v1.31 order-path resolver (ResolveBrokerSymbol: bare name + known suffix list), so the
+// spread is reported under the SAME name orders are sent to; then a prefix scan (strict before
+// relaxed, see SymbolHasBase) and the GOLD / SILVER alias. "" when the broker has none.
+// A scanned name that turns out to have no tick is removed from Market Watch again.
+string ResolveSpreadSymbol(string want) {
+   string r = ResolveBrokerSymbol(want);
+   if (StringLen(r) > 0) return r;
    MqlTick probe;
-   if (SymbolInfoTick(want, probe)) return want;
    int total = SymbolsTotal(false);
    for (int pass = 0; pass < 4; pass++) {          // base strict, base relaxed, alias strict, alias relaxed
       string base = want;
@@ -405,10 +408,11 @@ string ResolveBrokerSymbol(string want) {
          string s = SymbolName(i, false);
          string us = s;
          StringToUpper(us);
-         if (SymbolHasBase(us, ubase, strict)) {
-            SymbolSelect(s, true);
-            if (SymbolInfoTick(s, probe)) return s;
-         }
+         if (!SymbolHasBase(us, ubase, strict)) continue;
+         bool was_selected = (bool)SymbolInfoInteger(s, SYMBOL_SELECT);
+         if (!was_selected) SymbolSelect(s, true);
+         if (SymbolInfoTick(s, probe) && probe.bid > 0 && probe.ask > 0) return s;
+         if (!was_selected) SymbolSelect(s, false);
       }
    }
    return "";
@@ -1335,7 +1339,7 @@ double SymbolPipSize(string sym) {
    return 0.0001;
 }
 
-// v1.67 — broker-name match for ResolveBrokerSymbol. strict: the next character after the base
+// v1.67 — broker-name match for ResolveSpreadSymbol. strict: the next character after the base
 // is not a letter or digit (XAUUSD+, XAUUSD.crp, GOLD#; never GOLDEUR); relaxed: not a digit
 // (XAUUSDm; never US300 for US30). Compared on upper-cased names.
 bool SymbolHasBase(string u, string base, bool strict) {
@@ -1407,6 +1411,7 @@ string ResolveBrokerSymbol(string base_symbol) {
 // Before 1.67 a renamed gold symbol (XAUUSD+, XAUUSD.crp, GOLD#) was skipped silently.
 string AppendSpread(string out, string sym, string &done) {
    if (StringLen(sym) == 0 || StringFind(done, "|" + sym + "|") >= 0) return out;
+   if (StringFind(sym, "\"") >= 0 || StringFind(sym, "\\") >= 0 || StringFind(sym, "|") >= 0) return out;   // keep the JSON valid
    MqlTick tick;
    if (!SymbolInfoTick(sym, tick) || tick.ask <= 0 || tick.bid <= 0) return out;
    double pip = SymbolPipSize(sym);
@@ -1429,7 +1434,7 @@ string BuildSpreadsJson() {
          if (i == StringLen(list) || StringGetCharacter(list, i) == ',') {
             string sym = StringSubstr(list, start, i - start);
             StringTrimLeft(sym); StringTrimRight(sym);
-            string b = (StringLen(sym) > 0) ? ResolveBrokerSymbol(sym) : "";
+            string b = (StringLen(sym) > 0) ? ResolveSpreadSymbol(sym) : "";
             if (StringLen(b) > 0 && StringFind(resolved, "|" + b + "|") < 0) resolved += b + "|";
             start = i + 1;
          }

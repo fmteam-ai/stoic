@@ -5,6 +5,7 @@ VTMarkets (XAUUSD.crp) — EA ≤ 1.66 called SymbolInfoTick on the raw TrackedS
 EA 1.67 resolves the broker name and always adds the chart symbol; the server folds broker names to their base."""
 import asyncio
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 
@@ -35,14 +36,27 @@ def _body(name: str) -> str:
 def test_ea_reports_spreads_under_the_broker_symbol_and_the_chart_symbol():
     assert '#property version   "1.67"' in SRC and '#define EA_CLIENT_VERSION "1.67"' in SRC
     build = _body("string BuildSpreadsJson(")
-    assert "ResolveBrokerSymbol(sym)" in build and "AppendSpread(out, _Symbol, done)" in build
+    assert "ResolveSpreadSymbol(sym)" in build and "AppendSpread(out, _Symbol, done)" in build
     assert "_spread_syms_at" in build and "> 300" in build            # re-resolved at most every 5 min, not per heartbeat
     append = _body("string AppendSpread(")
     assert "SymbolPipSize(sym)" in append and 'StringFind(done, "|" + sym + "|") >= 0' in append   # no duplicate keys
-    resolve = _body("string ResolveBrokerSymbol(")
+    assert 'StringFind(sym, "\\"") >= 0' in append                     # a name with a quote never breaks the JSON
+    resolve = _body("string ResolveSpreadSymbol(")
+    # the order-path resolver (v1.31 suffix list) first → spreads are keyed by the SAME name orders are sent to
+    assert resolve.index("ResolveBrokerSymbol(want)") < resolve.index("SymbolsTotal(false)")
+    assert "if (!was_selected) SymbolSelect(s, false);" in resolve       # a scanned dud leaves Market Watch as it was
     assert 'base = "GOLD"' in resolve and 'base = "SILVER"' in resolve and "SymbolHasBase(us, ubase, strict)" in resolve
     assert "pass < 4" in resolve and "bool strict = (pass % 2 == 0);" in resolve      # strict before relaxed, base before alias
     assert 'return "";' in resolve                                     # not found → nothing sent (never a wrong symbol)
+
+
+def test_every_top_level_mql_function_is_defined_once():
+    # review of #86: a second `string ResolveBrokerSymbol(string)` would not compile ("already defined and has body")
+    import collections
+    names = re.findall(r"^(?:static\s+)?(?:string|bool|int|long|ulong|double|void|datetime|ushort|ENUM_\w+)\s+(\w+)\s*\(", SRC, re.M)
+    dup = [n for n, c in collections.Counter(names).items() if c > 1]
+    assert not dup, dup
+    assert SRC.count("\nstring ResolveBrokerSymbol(") == 1 and SRC.count("\nstring ResolveSpreadSymbol(") == 1
     # the heartbeat itself is untouched (frozen since 1.64): it still sends "spreads": BuildSpreadsJson()
     assert "string spreads = BuildSpreadsJson();" in _body("void SendHeartbeat(")
 
@@ -154,3 +168,21 @@ def test_spread_coverage_flags_missing_gold_while_the_market_is_open():
     assert EC.spread_coverage(accs, cfgs, sat) == []                       # gold closed → nothing to report
     diag = open(os.path.join(ROOT, "routes", "diagnostic_routes.py"), encoding="utf-8").read()
     assert '"Spread reported for traded symbols"' in diag and "spreads_resolved_v1" in diag
+    # a naive timestamp counts as stale instead of breaking the whole row; a paused bot is not reported
+    odd = [dict(accs[2], spreads_updated_at=datetime(2026, 10, 20, 9, 59))]
+    assert EC.spread_coverage(odd, cfgs, tue)[0]["stale"] is True
+    assert EC.spread_coverage(accs[:1], [{"account_id": "a1", "symbols": ["XAUUSD"], "active": False}], tue) == []
+
+
+def test_broker_score_counts_a_broker_named_symbol_once():
+    from broker_intel import spread_component
+    one = spread_component({"XAUUSD": 3.0})
+    both = spread_component(EC.normalize_spread_keys({"GOLD#": 3.0}))          # GOLD# + added XAUUSD
+    assert both == one
+
+
+def test_heartbeat_key_normalisation_is_fail_soft():
+    src = open(os.path.join(ROOT, "routes", "bridge_routes.py"), encoding="utf-8").read()
+    hb = src.split("async def heartbeat(")[1].split("\nasync def ")[0]
+    blk = hb[hb.index("per_base = clean"):hb.index('set_doc["current_spreads"] = clean')]
+    assert "try:" in blk and 'record_swallow("bridge", "heartbeat_spread_keys", _sw)' in blk

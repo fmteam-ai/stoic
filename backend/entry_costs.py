@@ -90,6 +90,8 @@ def spread_coverage(accounts: list, cfgs: list, now=None) -> list:
     out = []
     for a in accounts or []:
         cfg = by_acc.get(str(a.get("_id"))) or default or {}
+        if cfg.get("active") is False:          # bot paused on this account → its spreads are not needed
+            continue
         traded = sorted({base_symbol(s) for s in (cfg.get("symbols") or []) if s})
         traded = [b for b in traded if b and not is_market_closed(b, now)]
         if not traded:
@@ -99,7 +101,7 @@ def spread_coverage(accounts: list, cfgs: list, now=None) -> list:
         ts = a.get("spreads_updated_at")
         try:
             stale = ts is None or (now - datetime.fromisoformat(str(ts).replace("Z", "+00:00"))).total_seconds() > SPREAD_STALE_SEC
-        except ValueError:
+        except (ValueError, TypeError):          # naive / odd timestamp → treat as stale, never break the whole row
             stale = True
         missing = [b for b in traded if b not in have]
         if missing or stale:

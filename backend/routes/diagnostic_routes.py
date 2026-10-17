@@ -101,7 +101,7 @@ async def _check_connectivity(db, user_id: str) -> dict:
         try:
             from ea_capabilities import capabilities_for
             from entry_costs import spread_coverage
-            cfgs = await db.bot_configs.find({"user_id": user_id}, {"account_id": 1, "symbols": 1}).to_list(length=20)
+            cfgs = await db.bot_configs.find({"user_id": user_id}, {"account_id": 1, "symbols": 1, "active": 1}).to_list(length=20)
             gaps = spread_coverage(accs, cfgs, now)
             if gaps:
                 parts = []

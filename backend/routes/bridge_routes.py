@@ -446,9 +446,13 @@ async def heartbeat(payload: BridgeHeartbeat):
         if clean:
             # v1.60.64 #86 — EA 1.67 keys spreads by the BROKER name (GOLD#, XAUUSD+, XAUUSD.crp); add the base key
             # (XAUUSD) so every current_spreads[<base>] reader finds it. Samplers get one value per base symbol.
-            from entry_costs import normalize_spread_keys, spreads_by_base
-            per_base = spreads_by_base(clean)
-            clean = normalize_spread_keys(clean)
+            per_base = clean
+            try:
+                from entry_costs import normalize_spread_keys, spreads_by_base
+                per_base = spreads_by_base(clean)
+                clean = normalize_spread_keys(clean)
+            except Exception as _sw:  # noqa: BLE001 — fail-soft: keep the raw keys as before #86
+                record_swallow("bridge", "heartbeat_spread_keys", _sw)
             set_doc["current_spreads"] = clean
             set_doc["spreads_updated_at"] = now_iso
             try:

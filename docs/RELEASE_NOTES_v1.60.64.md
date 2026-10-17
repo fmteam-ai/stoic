@@ -14,9 +14,11 @@ on those accounts. Separately, #85's `record_spread_samples` pushed every heartb
 the **last ~5 minutes** of each UTC hour.
 
 ## A) EA 1.67 (`backend/static/EmergentTradingBridge.mq5`)
-- `BuildSpreadsJson`: each `TrackedSymbols` entry is resolved to the broker name with the new `ResolveBrokerSymbol`
-  (exact → suffixed variant, strict then relaxed boundary → alias `GOLD` / `SILVER`; `""` when the broker has none, never a
-  wrong symbol); the chart symbol `_Symbol` is always added; duplicates skipped; resolution cached for 5 minutes.
+- `BuildSpreadsJson`: each `TrackedSymbols` entry is resolved with the new `ResolveSpreadSymbol` — first the existing v1.31
+  order-path resolver `ResolveBrokerSymbol` (bare name + known suffix list, so the spread is keyed by the SAME name orders go
+  to), then a prefix scan (strict then relaxed boundary) and the alias `GOLD` / `SILVER`; `""` when the broker has none,
+  never a wrong symbol; a scanned name without a tick is removed from Market Watch again. The chart symbol `_Symbol` is
+  always added; duplicates and names that would break the JSON are skipped; resolution is cached for 5 minutes.
 - `SymbolPipSize` matches the upper-cased broker name by **prefix**, exactly like `pip_utils.base_symbol`
   (`XAUUSD+`, `XAUUSD.crp`, `XAUUSDm`, `GOLD#` → 0.10). A test mirrors the EA table against `pip_utils.pip_size`.
 - Unchanged: the frozen 1.64 functions incl. `SendHeartbeat` (still `"spreads": BuildSpreadsJson()`), order send / close /
@@ -29,11 +31,22 @@ the **last ~5 minutes** of each UTC hour.
 - `trade_costs.record_spread_samples`: one sample per account+symbol per **UTC minute** under `minutes.<hour>.<mm>`
   (`$set`, multi-worker safe, natural 60/hour cap) — the 60 samples now cover the whole hour. Readers merge the new map with
   the legacy `hours.<h>` lists written by v1.60.63.
-- Bot Health → Connectivity → **"Spread reported for traded symbols"**: warns per live account when a traded symbol's market
-  is open and its spread is missing or older than 10 minutes; on EA < 1.67 the fix is "Update the EA to 1.67".
+- Bot Health → Connectivity → **"Spread reported for traded symbols"**: warns per live account (bot not paused) when a
+  traded symbol's market is open and its spread is missing or older than 10 minutes; on EA < 1.67 the fix is "Update the EA
+  to 1.67". Heartbeat key normalisation is fail-soft (falls back to the raw keys).
+- `broker_intel.spread_component` iterates one spread per base, so `GOLD#` + its added `XAUUSD` key never count twice.
+
+## Independent review (before the PR)
+A separate reviewer found a **blocker**: the first draft named the new resolver `ResolveBrokerSymbol`, which already exists
+(v1.31, used by the frozen `ExecuteTrade`) → "function already defined" in MetaEditor. Renamed to `ResolveSpreadSymbol`
+(calls the old one first); new test: every top-level MQL function is defined once. Also fixed from the review: Market Watch
+side-effect of the scan, broker-score double count, heartbeat fail-soft, naive timestamps, paused bots, JSON-unsafe names.
+Note: index spreads (US30/NAS100/GER40/UK100/SPX500) change scale at the 1.67 upgrade to match `pip_utils` (pips of 1.0/0.1
+instead of 0.0001); no account trades indices today.
 
 ## Tests
-`tests/unit/test_v1_60_64_review_86_spreads.py` (8): EA resolver/chart-symbol/no-duplicates/frozen heartbeat; EA pip table
+`tests/unit/test_v1_60_64_review_86_spreads.py` (10, incl. unique MQL function names, broker-score single count and
+heartbeat fail-soft): EA resolver/chart-symbol/no-duplicates/frozen heartbeat; EA pip table
 mirrors `pip_utils.pip_size` for 13 broker names; key normalisation; heartbeat wiring + capability; 720 heartbeats → 60
 per-minute samples covering minute 00…59; legacy + mixed docs read; Bot Health coverage (missing on 1.66 GOLD#, stale,
 market closed). Version asserts moved 1.66 → 1.67 in the existing EA/version tests; #85 history test reads `minutes`.
