@@ -206,18 +206,43 @@ async def _check_risk_state(db, user_id: str) -> dict:
 
     # Anti-tilt freeze — #39: shared evaluation (anti_tilt.evaluate), identical to the runner's gate
     from anti_tilt import evaluate as anti_tilt_evaluate
-    frozen_scopes = []
+    frozen_scopes, streaks, rule = [], [], None
     for tc in cfgs:
         tilt = await anti_tilt_evaluate(db, user_id, tc, now)
+        rule = rule or tilt.get("rule")
+        streaks.append(f"{tc.get('account_id') or 'default'}: {tilt.get('loss_streak', 0)}/{tilt.get('n')} real losses")
         if tilt["active"]:
             frozen_scopes.append(f"{tc.get('account_id') or 'default'} (resumes in {tilt['eta']})")
+    # #77 — the banner states the rule actually enforced (real losses only; scratches never count)
     if frozen_scopes:
         checks.append(_mk("Anti-tilt freeze", "fail",
-                          "Bot frozen on: " + ", ".join(frozen_scopes),
+                          "Bot frozen on: " + ", ".join(frozen_scopes) + (f" · rule: {rule}" if rule else ""),
                           fix_code="release_anti_tilt",
                           fix_label="Release anti-tilt freeze"))
     else:
-        checks.append(_mk("Anti-tilt freeze", "pass", "No active freeze"))
+        checks.append(_mk("Anti-tilt freeze", "pass", "No active freeze · " + "; ".join(streaks) + (f" · rule: {rule}" if rule else "")))
+
+    # #81 — GTP H4 warm-up: "GTP: H4 bars n/200" for every config that has gold_trend_pulse enabled
+    for tc in cfgs:
+        if not tc.get("gold_trend_pulse_enabled"):
+            continue
+        try:
+            from gold_h4_history import health_check as _h4_health
+            acc = None
+            if tc.get("account_id"):
+                from bson import ObjectId
+                try:
+                    acc = await db.accounts.find_one({"_id": ObjectId(str(tc["account_id"]))})
+                except Exception:  # noqa: BLE001
+                    acc = None
+            if acc is None:
+                acc = await db.accounts.find_one({"user_id": user_id, "status": "connected"}) or await db.accounts.find_one({"user_id": user_id})
+            row = await _h4_health(db, user_id, acc, now)
+            if len(cfgs) > 1:
+                row["label"] = f"GTP: H4 bars ({(acc or {}).get('label') or tc.get('account_id') or 'default'})"
+            checks.append(row)
+        except Exception as _h4e:  # noqa: BLE001
+            checks.append(_mk("GTP: H4 bars", "warn", f"could not read the XAUUSD H4 history: {_h4e}"))
 
     # Safety Guardian: confirm hard-floors are active + report recent blocks.
     try:
@@ -354,12 +379,16 @@ async def _check_ea_config(db, user_id: str) -> dict:
         else:
             checks.append(_mk("Claude LLM", "pass", f"{label} · {st['today_calls']}/{st['daily_call_cap']} calls today · {summary}"))
     # news veto depends on the LLM sentiment score
-    from news_understanding import _status as ns
+    from news_understanding import _status as ns, news_cache_stale
+    stale, age_h = news_cache_stale(ns.get("last_scored_at"))
     if ns.get("last_llm_error") or (st["provider"] == llm_client.PROVIDER_NONE) or st.get("last_error_kind") == llm_client.KIND_BLOCKED:
         checks.append(_mk("News veto", "warn", "news veto inactive — LLM unavailable (sentiment empty; MTF hard veto cannot fire)",
                           fix_label="Fix the Claude LLM check above"))
+    elif stale:   # #76 — a score older than 6 h is not a live veto
+        checks.append(_mk("News veto", "warn", f"news veto inactive — news cache stale ({'never scored' if age_h is None else f'{age_h:.1f} h old'} > 6 h)",
+                          fix_label="Check the news feeds / LLM provider"))
     else:
-        checks.append(_mk("News veto", "pass", f"sentiment scored {ns.get('last_scored_at') or 'not yet'}"))
+        checks.append(_mk("News veto", "pass", f"sentiment scored {ns.get('last_scored_at')} ({age_h:.1f} h ago)"))
 
     # Per-user Telegram (notifications collection)
     from notification_settings import get_settings
@@ -581,9 +610,12 @@ async def llm_status_view(user=Depends(get_current_user)):
     from llm_models import pretty_models
     out["models_pretty"] = pretty_models()
     blocked = out.get("last_error_kind") == llm_client.KIND_BLOCKED
-    out["news_veto"] = {"active": out["provider"] != llm_client.PROVIDER_NONE and not blocked and not ns.get("last_llm_error"),
-                        "note": "news veto inactive — LLM unavailable" if (out["provider"] == llm_client.PROVIDER_NONE or blocked
-                                                                           or ns.get("last_llm_error")) else "",
+    from news_understanding import news_cache_stale
+    stale, age_h = news_cache_stale(ns.get("last_scored_at"))
+    llm_down = out["provider"] == llm_client.PROVIDER_NONE or blocked or bool(ns.get("last_llm_error"))
+    out["news_veto"] = {"active": not llm_down and not stale, "cache_age_hours": age_h,
+                        "note": ("news veto inactive — LLM unavailable" if llm_down
+                                 else "news veto inactive — news cache stale (> 6 h)" if stale else ""),
                         "last_scored_at": ns.get("last_scored_at"), "last_llm_error": llm_client.redact(ns.get("last_llm_error") or "") or None}
     return out
 

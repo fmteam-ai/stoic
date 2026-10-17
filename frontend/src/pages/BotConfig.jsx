@@ -311,6 +311,7 @@ export default function BotConfig() {
                 engine_live_features_enabled: cfg.engine_live_features_enabled ?? false,
                 gold_bias_gtp_direction_enabled: cfg.gold_bias_gtp_direction_enabled ?? false,
                 gold_bias_block_counter_enabled: cfg.gold_bias_block_counter_enabled ?? false,
+                trend_day_pullback_enabled: cfg.trend_day_pullback_enabled ?? false,
                 exit_policy: cfg.exit_policy ?? "fixed_tp",
                 tp1_close_fraction: cfg.tp1_close_fraction ?? 0.5,
                 be_plus_offset_price: cfg.be_plus_offset_price ?? 1.0,
@@ -1233,6 +1234,9 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                             <input type="checkbox" checked={cfg.gold_trend_pulse_enabled ?? false} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_enabled: e.target.checked })} />
                             GOLD TREND PULSE {(cfg.gold_trend_pulse_enabled ?? false) ? "ON" : "OFF"}
                         </label>
+                        <span className="text-[10px] text-[#F5C542]/90 basis-full" data-testid="gtp-replaces-engine-warning">
+                            ⚠ Enabling GTP on this account <b>replaces its preset engine for XAUUSD</b>: gold is evaluated by the trend-pulse rules only. In shadow mode every gold cycle returns HOLD (decisions are logged, no XAUUSD orders) until demo_live passes its gate. Other symbols keep the preset engine.
+                        </span>
                         <label className="flex items-center gap-2" data-testid="gtp-mode-select">MODE
                             <select className="bg-black/40 border border-white/10 rounded px-2 py-1" value={cfg.gold_trend_pulse_mode ?? "shadow"} onChange={(e) => setCfg({ ...cfg, gold_trend_pulse_mode: e.target.value })}>
                                 <option value="shadow">shadow</option><option value="demo_live">demo_live (after gate)</option>
@@ -1283,6 +1287,11 @@ function ProfitProtectionSection({ cfg, setCfg }) {
                         GOLD BIAS → BLOCK COUNTER-BIAS SCALPS (|score| ≥ 60) (#71) {(cfg.gold_bias_block_counter_enabled ?? false) ? "ON" : "OFF — shadow"}
                     </label>
                     <div className="text-[10px] text-white/40 mt-1">Gold Daily Bias (−100…+100, every 15 min from D1/H4 trend, DXY, real yields, news, Fed tone, risk regime, COT, calendar surprise) is logged against every gold signal for two weeks first. With both gates OFF it has no trading effect.</div>
+                    {/* #75 — trend-day pullback (shadow first) */}
+                    <label className="flex items-center gap-2 cursor-pointer font-mono text-[10px] text-white/80 mt-3" data-testid="trend-day-pullback-toggle">
+                        <input type="checkbox" checked={cfg.trend_day_pullback_enabled ?? false} onChange={(e) => setCfg({ ...cfg, trend_day_pullback_enabled: e.target.checked })} />
+                        TREND DAY → ENTER ONLY AFTER PULLBACK TO EMA20 / VWAP (#75) {(cfg.trend_day_pullback_enabled ?? false) ? "ON" : "OFF — shadow (verdict shown in signal notes)"}
+                    </label>
                     {/* v1.60.60 #72 — exit policy */}
                     <div className="font-mono text-[10px] text-white/60 mt-4 tracking-widest">EXIT POLICY (#72) — hf_scalp · hf_scalp_fast · breakout_m15 · gold_trend_pulse</div>
                     <select className="bg-black border border-white/20 text-white text-xs p-2 mt-1 w-full" value={cfg.exit_policy ?? "fixed_tp"} data-testid="exit-policy-select"

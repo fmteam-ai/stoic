@@ -69,7 +69,14 @@ def classify(recent: list, cfg: dict, now: datetime | None = None, account: dict
     reason = (f"Anti-tilt freeze — last {st['n']} trades lost. Resumes in <{st['hours']}h." if active else None)
     return {**st, "active": active, "frozen_until": frozen_until, "remaining_seconds": remaining, "eta": eta,
             "reason": reason, "loss_streak": loss_streak, "win_streak": win_streak, "trades": rows,
-            "rule": f"origin=auto · not stats_excluded · loss = gave back > 0.1R of planned risk · newest {st['n']} all losses within {st['hours']}h"}
+            "rule": rule_text(st)}
+
+
+def rule_text(st: dict) -> str:
+    """#77 — the ONE rule, as enforced by streak_losses.classify_loss (#58/#59/#69): real losses only."""
+    return (f"origin=auto · not stats_excluded · a REAL loss = gave back > 0.1 R of the ORIGINAL planned risk (break-even / "
+            f"|net| ≤ costs scratches never count; stale-feature entries excluded only while engine_live_features_enabled is ON) · "
+            f"freeze when the newest {st['n']} judged trades are all real losses within {st['hours']} h · same-direction 2-in-4h guard in bot_runner")
 
 
 async def evaluate(db, user_id: str, cfg: dict, now: datetime | None = None) -> dict:

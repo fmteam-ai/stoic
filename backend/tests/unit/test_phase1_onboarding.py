@@ -112,7 +112,7 @@ def test_u3_server_edit_admin_only():
 # ── U8 / U18 EA ─────────────────────────────────────────────────────────────────────────────────────────
 def test_u8_u18_ea_1_64():
     mq5 = _read("backend", "static", "EmergentTradingBridge.mq5")
-    assert '#define EA_CLIENT_VERSION "1.65"' in mq5 and '#property version   "1.65"' in mq5
+    assert '#define EA_CLIENT_VERSION "1.66"' in mq5 and '#property version   "1.66"' in mq5
     assert "bool IsLegacyDefaultUrl(string u)" in mq5
     for legacy in ('"https://www.stoicaibot.com"', '"https://your-app.preview.emergentagent.com"', '".preview.emergentagent.com"'):
         assert legacy in mq5.split("bool IsLegacyDefaultUrl")[1].split("\n}\n")[0], legacy

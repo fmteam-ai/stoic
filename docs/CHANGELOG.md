@@ -2,6 +2,12 @@
 
 All notable operator-facing changes. Release tags: `vMAJOR.MINOR.PATCH` (signed CI releases).
 
+## v1.60.61 — TP1 bank fix (#80) · #75 / #76 / #77 · GTP H4 history (#81, EA 1.66) (new flag OFF; no guard/sizing change)
+- **#80** `tp1_bank_runner`: broker order carries SL + **TP2** from entry (TP1 is bot-side); PARTIAL_CLOSE follow-up MODIFY_SL carries TP2 (EA ignores SL/TP on PARTIAL_CLOSE). `fixed_tp` unchanged (TP1 at the broker).
+- **#75** `trend_day_pullback_enabled` (OFF): trend-day entries only after a pullback to EMA20 / session VWAP (≤ 0.35 × ATR15); shadow verdict in every signal's notes. **#76** news veto shows *inactive — news cache stale (> 6 h)*. **#77** anti-tilt banner states the enforced real-loss rule with per-scope streaks.
+- **#81** `gold_h4_history.py`: the server asks terminals on **EA ≥ 1.66** (`h4_history_v1`) for 300 XAUUSD H4 bars via the poll-trades `candles_request` (first poll, then daily); engine merges EA H4 + M15 resample on the broker grid; `H4_MIN_BARS` stays 200; Bot Health "GTP: H4 bars n/200"; Bot Config warns that GTP replaces the preset engine for XAUUSD (shadow → HOLD). **EA 1.66** = 1.65 + `ParseCandlesRequest`/`SendHistoryCandlesFor` (`docs/EA_1_66_RELEASE.md`).
+- Docs: `docs/RELEASE_NOTES_v1.60.61.md`, `docs/PR_v1.60.61.md`. v1.60.60 (`0b8f058f`) stays as deployed.
+
 ## v1.60.60 — Gold Daily Bias (#71, shadow) + TP1 bank & protected runner (#72) + #74 (every new flag OFF; no guard/sizing change)
 - **#71** `gold_bias.py`: 15-min bias LONG/SHORT/NEUTRAL, score −100…+100, fixed weights, missing inputs = 0 + `unavailable`; Market Intel block + `/market-intel/gold-bias`; note in every gold signal; 2-week shadow log (with/against + outcome); flags `gold_bias_gtp_direction_enabled`, `gold_bias_block_counter_enabled` (OFF); news plan per USD HIGH event + post-news rule; ForexFactory `actual` + `calendar_outcomes` surprise.
 - **#72** BotConfig `exit_policy` (`fixed_tp` default | `tp1_bank_runner`), `tp1_close_fraction` 0.5, `be_plus_offset_price` 1.0, `tp2_multiple` 2.0; `exit_policy_tp1.py` + `trade_manager._tp1_bank_runner_exits` (bank at TP1 floored to lot step / SL-only, SL → entry ± offset with min-stop, broker TP → TP2, M5 swing / ATR trail never loosening, partial fail → retry → full close); report split banked/runner; read-only `scripts/tp1_bank_shadow.py`.

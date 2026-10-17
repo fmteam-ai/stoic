@@ -239,6 +239,22 @@ def aggregate_scores(items: list, now: datetime | None = None) -> dict | None:
                         for d in drivers]}
 
 
+NEWS_CACHE_MAX_AGE_H = 6.0
+
+
+def news_cache_stale(last_scored_at, now: float | None = None) -> tuple[bool, float | None]:
+    """#76 — (stale, age_hours): True when the last successful sentiment score is older than 6 h or never happened."""
+    if not last_scored_at:
+        return True, None
+    try:
+        ts = datetime.fromisoformat(str(last_scored_at).replace("Z", "+00:00"))
+        ts = ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+        age_h = ((now if now is not None else time.time()) - ts.timestamp()) / 3600.0
+    except (TypeError, ValueError):
+        return True, None
+    return age_h > NEWS_CACHE_MAX_AGE_H, round(age_h, 2)
+
+
 # ── #79 — headlines are UNTRUSTED input ──────────────────────────────────────────────────────────────
 HEADLINE_MAX_CHARS = 200          # cap per headline (title) before it reaches the prompt
 SOURCE_MAX_CHARS = 40

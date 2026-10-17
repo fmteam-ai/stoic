@@ -14,6 +14,7 @@ CAPABILITIES = {
     "trade_mode_v1": (1, 60),           # heartbeat reports ACCOUNT_TRADE_MODE (main98 N98-6)
     "modify_tp_v1": (1, 65),            # MODIFY_SL may carry new_tp; ack reports confirmed_position_tp (EA 1.65)
     "m1_stream_v1": (1, 65),            # M1 bar stream for the scalp symbol, batched once per minute (EA 1.65)
+    "h4_history_v1": (1, 66),           # answers poll-trades `candles_request` with CopyRates(H4) history (EA 1.66, #81)
 }
 LIVE_REQUIRED = ("command_fencing_v1", "nl_close_fence_v1")
 LIVE_MIN_VERSION = max(CAPABILITIES[c] for c in LIVE_REQUIRED)

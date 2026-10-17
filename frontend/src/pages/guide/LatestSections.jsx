@@ -66,6 +66,8 @@ export function GoldTrendPulseSection({ H2, P, Callout }) {
                         <li>• <strong className="text-white">demo_live only on attested DEMO accounts</strong> — the switch needs an explicit confirmation and a rolling live gate (≥ 100 labelled shadow baskets, positive expectancy); each basket counts once.</li>
                         <li>• <strong className="text-white">0.25 % risk per basket</strong>, SL ≤ 1.3 × TP on every leg, cost-aware break-even at 60 % of TP, 45-min (TREND) / 20-min (RANGE) time stops.</li>
                         <li>• <strong className="text-white">Fail closed</strong> — missing or stale spread, incomplete M5 bar, unknown broker time basis or H4 warm-up (&lt; 200 bars) → no entry, with a pulse line telling you why.</li>
+                        <li>• <strong className="text-white">Replaces the preset engine for XAUUSD</strong> — on an account with GTP enabled, gold is evaluated by the trend-pulse rules only (other symbols keep the preset engine). In shadow mode every gold cycle returns HOLD: decisions are logged, no XAUUSD order is sent from that account until demo_live passes its gate. Bot Config shows this warning next to the toggle.</li>
+                        <li>• <strong className="text-white">H4 history (v1.60.61)</strong> — the EMA50(H4) needs 200 completed H4 bars; the M15 stream alone gives ≈ 50. The server asks a terminal on <strong className="text-white">EA ≥ 1.66</strong> for 300 H4 bars (first poll, then daily); Bot Health shows <code>GTP: H4 bars n/200</code>. Terminals on 1.65 keep working but the bias stays NONE until they are updated.</li>
                     </ul>
                 </div>
                 <div className={box}>
